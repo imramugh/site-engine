@@ -3,6 +3,7 @@ import config from '../../../../../payload.config'
 import { withPayloadTransaction } from '../../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { cancelScheduledPublication, reschedulePublication } from '../../../../../src/publishing'
+import { hasRole } from '../../../../../src/access'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -33,4 +34,15 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const message = error instanceof Error ? error.message : 'Scheduled publication request failed.'
     return Response.json({ error: message }, { status: /Owner role|required|Fresh authentication/i.test(message) ? 403 : 400, headers: noStore })
   }
+}
+
+export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+  const { action } = await context.params
+  if (action !== 'list') return Response.json({ error: 'Unknown scheduled publication action.' }, { status: 404, headers: noStore })
+  const payload = await getPayload({ config })
+  const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
+  if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
+  if (!hasRole(authenticated.user as never, ['owner', 'approver'])) return Response.json({ error: 'Reviewer role required.' }, { status: 403, headers: noStore })
+  const schedules = await payload.find({ collection: 'scheduled-publications', sort: 'scheduledFor', depth: 1, overrideAccess: true })
+  return Response.json({ schedules: schedules.docs }, { headers: noStore })
 }
