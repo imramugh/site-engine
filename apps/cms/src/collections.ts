@@ -397,6 +397,28 @@ export const NotificationOutbox: CollectionConfig = {
   ],
 }
 
+/** Local-only reply intent. No provider configuration or send worker exists. */
+export const MailDrafts: CollectionConfig = {
+  slug: 'mail-drafts', admin: { useAsTitle: 'subject', group: 'Private' },
+  access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  fields: [
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true },
+    { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
+    { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
+    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
+  ],
+}
+
+/** One immutable, short-lived human authorization per exact draft revision. */
+export const MailAuthorizations: CollectionConfig = {
+  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true, unique: true },
+    { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
+    { name: 'expiresAt', type: 'date', required: true }, { name: 'revokedAt', type: 'date' }, { name: 'consumedAt', type: 'date' },
+  ],
+}
+
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: { beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data] },
