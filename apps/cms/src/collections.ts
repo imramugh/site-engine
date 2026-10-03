@@ -224,7 +224,7 @@ export const Sections: CollectionConfig = {
     beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
     const id = data.id ?? originalDoc?.id ?? randomUUID()
-    contractError(SectionSchema.safeParse({ id, name: data.name, slug: data.slug, allowedTemplates: data.allowedTemplates, pageIds: relationIds(data.pageIds) }), req, 'sections')
+    contractError(SectionSchema.safeParse({ id, name: data.name, summary: data.summary ?? undefined, slug: data.slug ?? '', landingPageId: relationIds(data.landingPageId)[0], allowedTemplates: data.allowedTemplates, pageIds: relationIds(data.pageIds) }), req, 'sections')
     const pages = await req.payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req })
     fieldErrors(validateSectionTemplatePolicy(treeSection({ ...data, id }), pages.docs.map((page) => treePage(page as unknown as Record<string, unknown>))), req, 'sections')
       return { ...data, id, _status: 'draft' }
@@ -238,7 +238,7 @@ export const Sections: CollectionConfig = {
       fieldErrors(pages.totalDocs ? [{ field: 'sectionId', message: 'Move or delete pages before deleting this section.' }] : [], req, 'sections')
     }],
   },
-  fields: [{ name: 'name', type: 'text', required: true }, { name: 'summary', type: 'textarea', required: true, minLength: 24, maxLength: 300 }, { name: 'slug', type: 'text', required: true, unique: true }, { name: 'allowedTemplates', type: 'select', hasMany: true, required: true, options: ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job'] }, { name: 'pageIds', type: 'relationship', relationTo: 'pages', hasMany: true }],
+  fields: [{ name: 'name', type: 'text', required: true }, { name: 'summary', type: 'textarea', maxLength: 300 }, { name: 'slug', type: 'text', required: true, unique: true, defaultValue: '' }, { name: 'landingPageId', type: 'relationship', relationTo: 'pages' }, { name: 'allowedTemplates', type: 'select', hasMany: true, required: true, options: ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job'] }, { name: 'pageIds', type: 'relationship', relationTo: 'pages', hasMany: true }],
 }
 
 export const Assets: CollectionConfig = {

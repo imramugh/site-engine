@@ -310,6 +310,7 @@ export interface Section {
   name: string;
   summary: string;
   slug: string;
+  landingPageId?: (string | Page) | null;
   allowedTemplates: ('landing' | 'standard' | 'listing' | 'pillar' | 'service' | 'article' | 'job')[];
   pageIds?: (string | Page)[] | null;
   updatedAt: string;
@@ -998,6 +999,7 @@ export interface SectionsSelect<T extends boolean = true> {
   name?: T;
   summary?: T;
   slug?: T;
+  landingPageId?: T;
   allowedTemplates?: T;
   pageIds?: T;
   updatedAt?: T;

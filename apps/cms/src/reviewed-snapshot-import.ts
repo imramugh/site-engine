@@ -71,7 +71,7 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
   // Sections first, without page relations; pages can then reference them.
   for (const section of manifest.settings.sections) {
     const existing = await findDraftByID(payload, req, 'sections', section.id)
-    const { id: _id, pageIds: _pageIds, ...data } = section
+    const { id: _id, pageIds: _pageIds, landingPageId: _landingPageId, ...data } = section
     const saved = existing ? await payload.update({ collection: 'sections', id: section.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true } }) : await payload.create({ collection: 'sections', data: { id: section.id, ...data }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
     capture(changes, 'sections', section.id, baselineFor('sections', baseline, section.id), saved as unknown as Record<string, unknown>)
   }
@@ -89,10 +89,10 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
     capture(changes, 'pages', page.id, baselineFor('pages', baseline, page.id), saved as unknown as Record<string, unknown>)
   }
   for (const section of manifest.settings.sections) {
-    const saved = await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+    const saved = await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds, landingPageId: section.landingPageId }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
     // Relationship updates are persisted separately by Payload and may not be
     // populated in its update result. Capture the reviewed IDs we just wrote.
-    capture(changes, 'sections', section.id, baselineFor('sections', baseline, section.id), { ...(saved as unknown as Record<string, unknown>), pageIds: section.pageIds })
+    capture(changes, 'sections', section.id, baselineFor('sections', baseline, section.id), { ...(saved as unknown as Record<string, unknown>), pageIds: section.pageIds, ...(section.landingPageId ? { landingPageId: section.landingPageId } : {}) })
   }
   for (const redirect of manifest.redirects) {
     const existing = existingRedirects.docs.find(candidate => candidate.from === redirect.from)

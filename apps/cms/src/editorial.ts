@@ -20,7 +20,7 @@ type CapturedChange = {
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
   pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex'],
-  sections: ['name', 'summary', 'slug', 'allowedTemplates', 'pageIds'],
+  sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
   'theme-settings': ['selection', 'settings'],
@@ -76,6 +76,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
       const parentID = idOf(value)
       return parentID ? [[field, parentID]] : []
     }
+    if (field === 'landingPageId') return [[field, idOf(value) ?? undefined]]
     if (field === 'pageIds') return [[field, Array.isArray(value) ? value.map((item) => idOf(item) ?? item) : []]]
     return [[field, value]]
   }))
