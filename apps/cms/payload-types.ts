@@ -79,6 +79,8 @@ export interface Config {
     inquiries: Inquiry;
     applications: Application;
     'change-sets': ChangeSet;
+    'publish-snapshots': PublishSnapshot;
+    'publish-outbox': PublishOutbox;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -98,6 +100,8 @@ export interface Config {
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
+    'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
+    'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -378,10 +382,63 @@ export interface ChangeSet {
     | number
     | boolean
     | null;
+  preview?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
   summary?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-snapshots".
+ */
+export interface PublishSnapshot {
+  id: string;
+  contentHash: string;
+  changeSet: string | ChangeSet;
+  reviewRevision: number;
+  changeHash: string;
+  manifest:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  themeVersion: string;
+  engineVersion: string;
+  contractVersion: string;
+  approvedBy: string | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-outbox".
+ */
+export interface PublishOutbox {
+  id: string;
+  idempotencyKey: string;
+  snapshot: string | PublishSnapshot;
+  changeSet: string | ChangeSet;
+  status: 'pending' | 'processing' | 'failed' | 'completed';
+  attempts: number;
+  nextAttemptAt?: string | null;
+  claimedAt?: string | null;
+  correlationID: string;
+  lastError?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -456,6 +513,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'change-sets';
         value: string | ChangeSet;
+      } | null)
+    | ({
+        relationTo: 'publish-snapshots';
+        value: string | PublishSnapshot;
+      } | null)
+    | ({
+        relationTo: 'publish-outbox';
+        value: string | PublishOutbox;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -665,10 +730,45 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   revision?: T;
   changes?: T;
   quality?: T;
+  preview?: T;
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;
   summary?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-snapshots_select".
+ */
+export interface PublishSnapshotsSelect<T extends boolean = true> {
+  contentHash?: T;
+  changeSet?: T;
+  reviewRevision?: T;
+  changeHash?: T;
+  manifest?: T;
+  themeVersion?: T;
+  engineVersion?: T;
+  contractVersion?: T;
+  approvedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-outbox_select".
+ */
+export interface PublishOutboxSelect<T extends boolean = true> {
+  idempotencyKey?: T;
+  snapshot?: T;
+  changeSet?: T;
+  status?: T;
+  attempts?: T;
+  nextAttemptAt?: T;
+  claimedAt?: T;
+  correlationID?: T;
+  lastError?: T;
   updatedAt?: T;
   createdAt?: T;
 }

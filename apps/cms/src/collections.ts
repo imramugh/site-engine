@@ -277,9 +277,44 @@ export const ChangeSets: CollectionConfig = {
     { name: 'revision', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true } },
     { name: 'changes', type: 'json', defaultValue: [], admin: { readOnly: true, description: 'Field-level before and after images captured from draft saves.' } },
     { name: 'quality', type: 'json', admin: { readOnly: true } },
+    { name: 'preview', type: 'json', admin: { readOnly: true } },
     { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
     { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
     { name: 'staleAt', type: 'date', admin: { readOnly: true } },
     { name: 'summary', type: 'textarea' },
+  ],
+}
+
+/** Immutable release inputs. A worker never receives draft collections directly. */
+export const PublishSnapshots: CollectionConfig = {
+  slug: 'publish-snapshots', admin: { useAsTitle: 'contentHash', group: 'Editorial' },
+  access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
+  fields: [
+    { name: 'contentHash', type: 'text', required: true, unique: true },
+    { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'reviewRevision', type: 'number', required: true, admin: { readOnly: true } },
+    { name: 'changeHash', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'manifest', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'themeVersion', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'engineVersion', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'contractVersion', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'approvedBy', type: 'relationship', relationTo: 'users', required: true, admin: { readOnly: true } },
+  ],
+}
+
+/** Durable work descriptor. Network delivery is deliberately outside its transaction. */
+export const PublishOutbox: CollectionConfig = {
+  slug: 'publish-outbox', admin: { useAsTitle: 'idempotencyKey', group: 'Editorial' },
+  access: { create: () => false, read: staff(['owner', 'approver']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, admin: { readOnly: true } },
+    { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'status', type: 'select', required: true, defaultValue: 'pending', options: ['pending', 'processing', 'failed', 'completed'], admin: { readOnly: true } },
+    { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
+    { name: 'nextAttemptAt', type: 'date', admin: { readOnly: true } },
+    { name: 'claimedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
   ],
 }
