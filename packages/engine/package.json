@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "license": "Apache-2.0",
   "type": "module",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./motion": { "types": "./dist/motion.d.ts", "import": "./dist/motion.js" }
+  },
   "files": ["dist"],
   "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
   "dependencies": { "@site-engine/contract": "workspace:^" }

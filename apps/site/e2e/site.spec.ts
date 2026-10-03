@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createRequire } from 'node:module';
+import { gzipSync } from 'node:zlib';
 const require = createRequire(import.meta.url);
 const axeSource = require.resolve('axe-core/axe.min.js');
 
@@ -25,4 +26,103 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
   await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText('Operations');
   await page.goto('/unknown-route');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+});
+test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {
+  await page.goto('/motion/one');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.goto('/motion/two');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('form [data-motion-effect]')).toHaveAttribute('data-motion-paused', 'true');
+});
+
+test('ENG-015 pauses offscreen and urgent motion', async ({ page }) => {
+ await page.goto('/motion/one'); const off=page.locator('#offscreen'); await expect(off).toHaveCSS('animation-play-state','paused'); await page.evaluate(() => document.querySelector('#offscreen')?.scrollIntoView()); await expect(off).toHaveCSS('animation-play-state','running'); await expect(page.locator('[data-urgent-contact]')).toHaveCSS('animation-play-state','paused');
+ await expect.poll(() => page.getByLabel('Urgent motion fixture video').evaluate((element: HTMLVideoElement) => element.paused)).toBe(true); await expect.poll(() => page.getByLabel('Form motion fixture video').evaluate((element: HTMLVideoElement) => element.paused)).toBe(true);
+ const video = page.getByLabel('Motion fixture video', { exact: true }); await expect(video).toHaveAttribute('poster', '/media/sample-poster.svg'); await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.paused)).toBe(true);
+});
+test('ENG-015 runtime respects OS preference and static CSS starts paused', async ({ page }) => {
+ await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/motion/one'); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByLabel('Motion fixture video', { exact: true })).toHaveAttribute('data-motion-paused', 'true');
+ await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion','allow');
+});
+
+test('ENG-015 no-JS fixture remains readable and paused', async ({ browser }) => { const context=await browser.newContext({ javaScriptEnabled:false }); const page=await context.newPage(); await page.goto('/motion/one'); await expect(page.getByRole('heading')).toBeVisible(); await expect(page.locator('[data-motion-effect]').first()).toHaveCSS('animation-play-state','paused'); await context.close(); });
+test('ENG-015 toggle works when storage is blocked', async ({ page }) => { await page.addInitScript(() => { Storage.prototype.getItem=()=>{throw new Error('blocked')}; Storage.prototype.setItem=()=>{throw new Error('blocked')} }); await page.goto('/motion/one'); await page.getByRole('button',{name:'Reduce motion'}).click(); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByRole('button',{name:'Reduce motion'})).toHaveAttribute('aria-pressed','true'); });
+
+test('ENG-015 motion fixture has no automated accessibility violations', async ({ page }) => {
+  await page.goto('/motion/one');
+  await page.addScriptTag({ path: axeSource });
+  const violations = await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations);
+  expect(violations).toEqual([]);
+});
+
+test('ENG-015 delivers a motion runtime below 10 KiB gzip', async ({ page, request }) => {
+  await page.goto('/motion/one');
+  const modules = await page.locator('script[type="module"]').evaluateAll((scripts) => scripts.map((script) => ({
+    code: script.textContent ?? '',
+    src: script.getAttribute('src'),
+  })));
+  const externalModules = await Promise.all(modules.filter((module) => module.src).map(async (module) => {
+    const response = await request.get(new URL(module.src!, page.url()).toString());
+    expect(response.ok()).toBe(true);
+    return response.body();
+  }));
+  const deliveredCode = Buffer.concat([
+    ...modules.map((module) => Buffer.from(module.code)),
+    ...externalModules,
+  ]);
+  expect(deliveredCode.byteLength).toBeGreaterThan(0);
+  expect(gzipSync(deliveredCode).byteLength).toBeLessThan(10 * 1024);
+});
+
+test('ENG-015 enhances real starter pages for OS preference and persisted choice', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('[data-motion-effect="subtle"]')).toHaveAttribute('data-motion-paused', 'true');
+
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.goto('/general/gallery');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('#motion-offscreen')).toHaveAttribute('data-motion-paused', 'true');
+  await expect(page.locator('[data-block="incidentBar"]')).not.toHaveAttribute('data-motion-effect');
+  await expect(page.locator('[data-block="contact"]')).not.toHaveAttribute('data-motion-effect');
+});
+
+test('ENG-015 lets an explicit Allow motion choice override OS reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  const effect = page.locator('[data-motion-effect="subtle"]');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'allow');
+  await expect(effect).toHaveAttribute('data-motion-paused', 'false');
+  await expect(effect).toHaveCSS('animation-play-state', 'running');
+  await expect(effect).toHaveCSS('animation-duration', '2s');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(effect).toHaveAttribute('data-motion-paused', 'true');
+  await expect(effect).toHaveCSS('animation-play-state', 'paused');
+});
+
+test('ENG-015 starts real starter effects still and pauses no-motion pages without a bundle', async ({ page, browser }) => {
+  await page.goto('/general/gallery');
+  const offscreen = page.locator('#motion-offscreen');
+  await expect(offscreen).toHaveCSS('animation-play-state', 'paused');
+  await page.evaluate(() => document.querySelector('#motion-offscreen')?.scrollIntoView());
+  await expect(offscreen).toHaveCSS('animation-play-state', 'running');
+
+  await page.goto('/general/guide');
+  await expect(page.locator('script[type="module"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reduce motion' })).toHaveCount(0);
+
+  const noJavaScript = await browser.newContext({ javaScriptEnabled: false });
+  const noJavaScriptPage = await noJavaScript.newPage();
+  await noJavaScriptPage.goto('/');
+  await expect(noJavaScriptPage.getByRole('heading', { level: 1 })).toHaveText('Publish clear information');
+  await expect(noJavaScriptPage.locator('[data-motion-effect="subtle"]')).toHaveCSS('animation-play-state', 'paused');
+  await noJavaScript.close();
 });

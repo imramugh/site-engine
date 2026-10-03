@@ -61,7 +61,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     await expect(payload.update({ collection: 'pages', id: page.id, data: { seoDescription: '' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ id: page.id })
     await expect(payload.create({ collection: 'pages', data: { title: 'Never published', summary: 'This attempted publication must be denied because review and publishing are not implemented.', slug: 'never-published', sectionId: section.id, template: 'standard', _status: 'published' }, user: owner, overrideAccess: false })).rejects.toThrow('Publishing is unavailable')
     await expect(payload.update({ collection: 'pages', id: page.id, data: { _status: 'published' }, user: owner, overrideAccess: false })).rejects.toThrow('Publishing is unavailable')
-    await expect(payload.create({ collection: 'change-sets', data: { name: 'Cannot approve', state: 'approved', revision: 0 }, user: owner, overrideAccess: false })).rejects.toThrow('Change-set approval is unavailable')
+    await expect(payload.create({ collection: 'change-sets', data: { name: 'Cannot forge workflow state', actor: owner.id, state: 'approved', revision: 0 }, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.find({ collection: 'pages', overrideAccess: false })).rejects.toThrow('not allowed')
     const disabledOwner = { ...owner, disabled: true }
     await expect(payload.find({ collection: 'pages', user: disabledOwner, overrideAccess: false })).rejects.toThrow('not allowed')
@@ -137,9 +137,11 @@ describe('ENG-003 content-tree and template invariants through the Payload API',
     const pillar = await payload.create({ collection: 'pages', data: pageData('platform-pillar', services.id, 'pillar'), user: owner, overrideAccess: false })
     const service = await payload.create({ collection: 'pages', data: pageData('platform-service', services.id, 'service', pillar.id), user: owner, overrideAccess: false })
     await expect(payload.update({ collection: 'pages', id: pillar.id, data: { template: 'standard' }, draft: true, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'template', message: expect.stringContaining('platform-service') })]) } })
-    await expect(payload.delete({ collection: 'pages', id: pillar.id, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'parentId' })]) } })
+    // Phase-one editorial capture has no reversible deletion representation.
+    // Even an owner cannot bypass that boundary through the Payload API.
+    await expect(payload.delete({ collection: 'pages', id: pillar.id, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.update({ collection: 'sections', id: services.id, data: { allowedTemplates: ['landing', 'pillar'] }, draft: true, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'allowedTemplates' })]) } })
-    await expect(payload.delete({ collection: 'sections', id: services.id, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'sectionId' })]) } })
+    await expect(payload.delete({ collection: 'sections', id: services.id, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
 
     const general = await payload.create({
       collection: 'sections',

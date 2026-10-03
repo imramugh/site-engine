@@ -1,1 +1,1 @@
-{ "name": "starter", "version": "1.0.0", "contract": "1.0.0", "entry": "./dist/index.js" }
+{ "name": "starter", "version": "1.0.0", "contract": "1.0.0", "entry": "./dist/index.js", "motion": { "presets": ["subtle", "ambient", "signature"], "intentFallbacks": {} } }

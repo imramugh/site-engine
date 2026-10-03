@@ -1,0 +1,48 @@
+---
+export function getStaticPaths() { return ['one', 'two'].map((route) => ({ params: { route } })); }
+const { route } = Astro.params;
+---
+<!doctype html>
+<html lang="en" data-motion="allow">
+  <head>
+    <title>Motion fixture</title>
+    <style>
+      @keyframes neutral-motion { to { transform: translateX(1px); } }
+      [data-motion-effect] { animation: neutral-motion 1s infinite; animation-play-state: paused; }
+      [data-motion-effect][data-motion-paused="false"] { animation-play-state: running; }
+      .spacer { height: 1500px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Motion fixture</h1>
+      <button data-motion-toggle aria-pressed="false">Reduce motion</button>
+      <div data-motion-effect="decorative">Motion fixture</div>
+      <video data-motion-effect="video" controls poster="/media/sample-poster.svg" aria-label="Motion fixture video">
+        <source src="/media/sample-video.webm" type="video/webm" />
+        Your browser does not support video.
+      </video>
+      <div class="spacer"></div>
+      <div data-motion-effect="decorative" id="offscreen">Offscreen fixture</div>
+      <div data-urgent-contact data-motion-effect="decorative">
+        Urgent still
+        <video controls poster="/media/sample-poster.svg" aria-label="Urgent motion fixture video">
+          <source src="/media/sample-video.webm" type="video/webm" />
+        </video>
+      </div>
+      <form>
+        <div data-motion-effect="decorative">
+          Form still
+          <video controls poster="/media/sample-poster.svg" aria-label="Form motion fixture video">
+            <source src="/media/sample-video.webm" type="video/webm" />
+          </video>
+        </div>
+      </form>
+      <p>{route}</p>
+    </main>
+    <script>
+      import { mountMotionRuntime } from '@site-engine/engine/motion';
+      mountMotionRuntime(document, window);
+    </script>
+  </body>
+</html>
