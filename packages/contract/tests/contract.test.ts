@@ -54,6 +54,8 @@ describe('ENG-002 versioned contract', () => {
     const manifest = { name: 'neutral', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js', motion: { presets: ['fade'], intentFallbacks: { subtle: 'fade' } } };
     expect(ThemeManifestSchema.safeParse(manifest).success).toBe(true);
     expect(ThemeManifestSchema.safeParse({ ...manifest, motion: { ...manifest.motion, intentFallbacks: { subtle: 'invalid preset' } } }).success).toBe(false);
+    expect(ThemeManifestSchema.safeParse({ ...manifest, motion: { ...manifest.motion, presets: ['fade', 'fade'] } }).success).toBe(false);
+    expect(ThemeManifestSchema.safeParse({ ...manifest, motion: { ...manifest.motion, intentFallbacks: { none: 'fade' } } }).success).toBe(false);
   });
 
   it('requires summaries, a visible landing hero, and compatible blocks', () => {

@@ -92,6 +92,22 @@ test('ENG-015 enhances real starter pages for OS preference and persisted choice
   await expect(page.locator('[data-block="contact"]')).not.toHaveAttribute('data-motion-effect');
 });
 
+test('ENG-015 lets an explicit Allow motion choice override OS reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  const effect = page.locator('[data-motion-effect="subtle"]');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'allow');
+  await expect(effect).toHaveAttribute('data-motion-paused', 'false');
+  await expect(effect).toHaveCSS('animation-play-state', 'running');
+  await expect(effect).toHaveCSS('animation-duration', '2s');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(effect).toHaveAttribute('data-motion-paused', 'true');
+  await expect(effect).toHaveCSS('animation-play-state', 'paused');
+});
+
 test('ENG-015 starts real starter effects still and pauses no-motion pages without a bundle', async ({ page, browser }) => {
   await page.goto('/general/gallery');
   const offscreen = page.locator('#motion-offscreen');

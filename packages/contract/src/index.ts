@@ -84,7 +84,17 @@ export const ChangeSetSchema = z.object({
   state: ChangeSetStateSchema,
   revision: z.number().int().nonnegative(),
 }).strict();
-export const ThemeManifestSchema = z.object({ name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), version: z.string().regex(/^\d+\.\d+\.\d+$/), contract: z.string().regex(/^1\.\d+\.\d+$/), entry: z.string().regex(/^\.\/dist\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.js$/), motion: z.object({ presets: z.array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)).max(16), intentFallbacks: z.partialRecord(MotionIntentSchema, z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)) }).strict().optional() }).strict();
+const MotionPresetSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+const ThemeMotionSchema = z.object({
+  presets: z.array(MotionPresetSchema).max(16).refine((presets) => new Set(presets).size === presets.length, 'Motion presets must be unique'),
+  intentFallbacks: z.partialRecord(MotionIntentSchema, MotionPresetSchema),
+}).strict().superRefine((motion, ctx) => {
+  for (const [intent, preset] of Object.entries(motion.intentFallbacks)) {
+    if (intent === 'none') ctx.addIssue({ code: 'custom', path: ['intentFallbacks', intent], message: 'The none intent cannot have a motion fallback' });
+    if (!motion.presets.includes(preset)) ctx.addIssue({ code: 'custom', path: ['intentFallbacks', intent], message: 'Motion fallback must reference a declared preset' });
+  }
+});
+export const ThemeManifestSchema = z.object({ name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), version: z.string().regex(/^\d+\.\d+\.\d+$/), contract: z.string().regex(/^1\.\d+\.\d+$/), entry: z.string().regex(/^\.\/dist\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.js$/), motion: ThemeMotionSchema.optional() }).strict();
 export const ThemeInstallSchema = z.object({ manifest: ThemeManifestSchema, installedAt: z.string().datetime() }).strict().superRefine(({ manifest }, ctx) => { if (!compatibleContractVersion(manifest.contract)) ctx.addIssue({ code: 'custom', path: ['manifest', 'contract'], message: `Theme requires incompatible contract ${manifest.contract}` }); });
 export const SiteSnapshotSchema = z.object({
   settings: SiteSettingsSchema,
