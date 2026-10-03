@@ -19,7 +19,7 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex', 'businessCase'],
   sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],

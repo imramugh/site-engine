@@ -177,6 +177,7 @@ export const Pages: CollectionConfig = {
       blocks: data.blocks ?? [],
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
       noindex: data.noindex === true,
+      businessCase: data.businessCase,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
     const [sections, pages] = await Promise.all([
@@ -215,6 +216,7 @@ export const Pages: CollectionConfig = {
     { name: 'blocks', type: 'json', defaultValue: [] },
     { name: 'seoDescription', type: 'text', maxLength: 160 },
     { name: 'noindex', type: 'checkbox', defaultValue: false, admin: { description: 'Keep this published page out of search engines and the public site search index.' } },
+    { name: 'businessCase', type: 'json', admin: { description: 'Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.' } },
   ],
 }
 

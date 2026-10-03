@@ -123,4 +123,15 @@ describe('ENG-003 content tree validation', () => {
     snapshot.pages.push({ ...snapshot.pages[0], id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'service', template: 'service', parentId: snapshot.pages[0].id });
     expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
   });
+
+  it('accepts complete article business cases and rejects ambiguous or incompatible metadata', () => {
+    const snapshot = fixture(); const page = { ...snapshot.pages[0]!, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'case-study', title: 'Synthetic case study', template: 'article' as const, blocks: [{ id: blockId, type: 'richText' as const, body: 'A valid synthetic article body.', appearance }] };
+    snapshot.pages.push(page); snapshot.settings.sections[0]!.pageIds.push(page.id); snapshot.settings.sections[0]!.allowedTemplates.push('article');
+    page.businessCase = { client: 'Sample client', industry: 'Services', challenge: 'A clear synthetic challenge.', approach: 'A clear synthetic approach.', outcome: 'A clear synthetic outcome.', services: ['Strategy'], publicationDate: '2026-10-03T12:00:00.000Z' };
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    page.businessCase = { ...page.businessCase, anonymizedClient: 'Anonymous' };
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    page.businessCase = { ...page.businessCase, client: undefined, anonymizedClient: 'Anonymous' }; page.template = 'standard'; snapshot.settings.sections[0]!.allowedTemplates.push('standard');
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
+  });
 });
