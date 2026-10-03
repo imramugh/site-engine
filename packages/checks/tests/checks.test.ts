@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { artifactName, inspectBoundaries, withIsolatedSqlitePath } from '../src/index.js'
+import { inspectPublicProvenance } from '../src/provenance.js'
 
 const workspaces: string[] = []
 
@@ -66,5 +67,24 @@ describe('public package boundaries', () => {
   it('rejects prohibited development dependencies', async () => {
     const root = await fixture(workspaceFiles({}, { starter: manifest(', "devDependencies": { "@site-engine/engine": "workspace:*" }') }))
     await expect(inspectBoundaries(root)).resolves.toContain('@site-engine/theme-starter must not declare @site-engine/engine')
+  })
+})
+
+describe('public provenance', () => {
+  it('allows the exact RFC 7591 DCR field only in OAuth protocol files', async () => {
+    const marker = 'client' + '_name'
+    const root = await fixture({ 'apps/oauth/src/server.ts': `const field = '${marker}'\n`, 'apps/oauth/tests/protocol.test.ts': `const field = '${marker}'\n` })
+    await expect(inspectPublicProvenance(root)).resolves.toEqual([])
+  })
+
+  it('still rejects that marker outside the narrowly allowed protocol files', async () => {
+    const marker = 'client' + '_name'
+    const root = await fixture({ 'apps/site/src/unsafe.ts': `const field = '${marker}'\n` })
+    await expect(inspectPublicProvenance(root)).resolves.toHaveLength(1)
+  })
+
+  it('still rejects client assets and fixtures within OAuth protocol files', async () => {
+    const root = await fixture({ 'apps/oauth/src/server.ts': `const field = '${'client' + '_asset'}'\n`, 'apps/oauth/tests/protocol.test.ts': `const field = '${'client' + '_fixture'}'\n` })
+    await expect(inspectPublicProvenance(root)).resolves.toHaveLength(2)
   })
 })
