@@ -2,7 +2,8 @@ import type { CollectionConfig } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
-import { bootstrapOnly, ownerOrBootstrap, roles, staff } from './access'
+import { bootstrapOnly, freshStaff, ownerOrBootstrap, roles, staff } from './access'
+import { serverSessionStrategy } from './identity'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -21,13 +22,24 @@ function contractError(result: { success: boolean; error?: { issues: { path: Pro
 
 export const Users: CollectionConfig = {
   slug: 'users',
-  auth: { disableLocalStrategy: true },
+  auth: { disableLocalStrategy: true, strategies: [serverSessionStrategy] },
   admin: { useAsTitle: 'email', group: 'Administration' },
   access: {
     create: bootstrapOnly,
     read: ownerOrBootstrap,
-    update: staff(['owner']),
-    delete: staff(['owner']),
+    update: freshStaff(['owner']),
+    delete: freshStaff(['owner']),
+  },
+  hooks: {
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      const disabledNow = doc.disabled === true && previousDoc?.disabled !== true
+      const rolesChanged = operation === 'update' && JSON.stringify(doc.roles) !== JSON.stringify(previousDoc?.roles)
+      if (!disabledNow && !rolesChanged) return doc
+      const event = disabledNow ? 'identity.disabled' : 'identity.roles_changed'
+      await req.payload.update({ collection: 'auth-sessions', where: { user: { equals: doc.id } }, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req })
+      await req.payload.create({ collection: 'audit-events', data: { event, user: doc.id, actor: req.user?.id }, overrideAccess: true, req })
+      return doc
+    }],
   },
   fields: [
     { name: 'email', type: 'email', required: true, unique: true },
@@ -35,6 +47,67 @@ export const Users: CollectionConfig = {
     { name: 'roles', type: 'select', hasMany: true, required: true, options: [...roles] },
     { name: 'disabled', type: 'checkbox', defaultValue: false },
     { name: 'invitedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'provider', type: 'select', options: ['google', 'microsoft'], admin: { readOnly: true } },
+    { name: 'providerIssuer', type: 'text', admin: { readOnly: true } },
+    { name: 'providerSubject', type: 'text', admin: { readOnly: true } },
+    { name: 'emergencyTotpSecret', access: { read: () => false, update: () => false, create: () => false }, type: 'text', admin: { hidden: true } },
+    { name: 'emergencyRecoveryHashes', access: { read: () => false, update: () => false, create: () => false }, type: 'json', admin: { hidden: true } },
+    { name: 'emergencyLastCounter', access: { read: () => false, update: () => false, create: () => false }, type: 'number', admin: { hidden: true } },
+    { name: 'emergencyFailedAt', access: { read: () => false, update: () => false, create: () => false }, type: 'date', admin: { hidden: true } },
+    { name: 'emergencyFailedCount', access: { read: () => false, update: () => false, create: () => false }, type: 'number', defaultValue: 0, admin: { hidden: true } },
+  ],
+}
+
+export const Invitations: CollectionConfig = {
+  slug: 'invitations', admin: { useAsTitle: 'email', group: 'Administration' },
+  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: freshStaff(['owner']) },
+  fields: [
+    { name: 'email', type: 'email', required: true, unique: true },
+    { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
+    { name: 'providerIssuer', type: 'text', required: true, admin: { description: 'Trusted configured issuer for this invite.' } },
+    { name: 'providerSubject', type: 'text', required: true, admin: { description: 'Verified OIDC subject. Email alone never links an identity.' } },
+    { name: 'tokenHash', type: 'text', required: true, unique: true, admin: { readOnly: true, description: 'Opaque invite credential hash; its original value is never shown in admin.' } },
+    { name: 'roles', type: 'select', hasMany: true, required: true, options: [...roles] },
+    { name: 'expiresAt', type: 'date', required: true },
+    { name: 'acceptedAt', type: 'date', admin: { readOnly: true } },
+  ],
+}
+
+export const AuthSessions: CollectionConfig = {
+  slug: 'auth-sessions', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'tokenHash', type: 'text', required: true, unique: true },
+    { name: 'user', type: 'relationship', relationTo: 'users', required: true },
+    { name: 'authenticatedAt', type: 'date', required: true },
+    { name: 'lastSeenAt', type: 'date', required: true },
+    { name: 'expiresAt', type: 'date', required: true },
+    { name: 'revokedAt', type: 'date' },
+  ],
+}
+
+export const AuthTransactions: CollectionConfig = {
+  slug: 'auth-transactions', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'stateHash', type: 'text', required: true, unique: true },
+    { name: 'nonce', type: 'text', required: true },
+    { name: 'verifier', type: 'text', required: true },
+    { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
+    { name: 'invitation', type: 'relationship', relationTo: 'invitations' },
+    { name: 'expiresAt', type: 'date', required: true },
+    { name: 'consumedAt', type: 'date' },
+  ],
+}
+
+export const AuditEvents: CollectionConfig = {
+  slug: 'audit-events', admin: { useAsTitle: 'event', group: 'Administration' },
+  access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'event', type: 'text', required: true },
+    { name: 'user', type: 'relationship', relationTo: 'users' },
+    { name: 'actor', type: 'relationship', relationTo: 'users' },
+    { name: 'detail', type: 'json' },
   ],
 }
 

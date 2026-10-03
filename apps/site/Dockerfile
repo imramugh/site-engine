@@ -2,9 +2,12 @@ FROM node:24.21.0-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@12.8.1 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY patches ./patches
 COPY packages/contract ./packages/contract
+COPY packages/engine ./packages/engine
+COPY packages/theme-starter ./packages/theme-starter
 COPY apps/site ./apps/site
-RUN pnpm install --frozen-lockfile --filter @site-engine/site... && pnpm --filter @site-engine/contract build && pnpm --filter @site-engine/site build
+RUN pnpm install --frozen-lockfile --filter @site-engine/site... && pnpm --filter @site-engine/contract build && pnpm --filter @site-engine/engine build && pnpm --filter @site-engine/theme-starter build && pnpm --filter @site-engine/site build
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
 COPY --from=build /workspace/apps/site/dist /usr/share/nginx/html

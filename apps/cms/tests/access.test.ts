@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { hasRole } from '../src/access.js'
 import { isRetryableSQLiteError } from '../src/sqlite.js'
+import { hasFreshAuthentication, SESSION_IDLE_SECONDS, sessionIsUsable } from '../src/identity'
+import { decryptSecret, encryptSecret, recoveryHash, recoveryMatches } from '../src/totp'
 
 describe('role matrix (ENG-007)', () => {
   it('allows only matching active roles', () => {
@@ -12,5 +14,19 @@ describe('role matrix (ENG-007)', () => {
   it('classifies SQLite lock backpressure as retryable (ENG-036)', () => {
     expect(isRetryableSQLiteError(new Error('SQLITE_BUSY: database is locked'))).toBe(true)
     expect(isRetryableSQLiteError(new Error('validation failed'))).toBe(false)
+  })
+
+  it('enforces eight-hour idle and fifteen-minute sensitive-session policy (ENG-007)', () => {
+    const now = Date.now()
+    expect(sessionIsUsable({ expiresAt: new Date(now + 60_000).toISOString(), lastSeenAt: new Date(now - (SESSION_IDLE_SECONDS * 1000) - 1).toISOString() }, now)).toBe(false)
+    expect(hasFreshAuthentication({ authenticatedAt: new Date(now - (15 * 60 * 1000) - 1).toISOString() }, now)).toBe(false)
+  })
+
+  it('encrypts TOTP material and accepts a recovery code only by its stored hash (ENG-007)', () => {
+    process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64url')
+    expect(decryptSecret(encryptSecret('BASE32SECRET'))).toBe('BASE32SECRET')
+    const hash = recoveryHash('one-time-code')
+    expect(recoveryMatches('one-time-code', hash)).toBe(true)
+    expect(recoveryMatches('wrong-code', hash)).toBe(false)
   })
 })

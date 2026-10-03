@@ -1,18 +1,12 @@
 ---
-import { neutralFixture } from '@site-engine/contract/fixtures';
-const page = neutralFixture.pages[0];
-const hero = page.blocks.find((block) => block.type === 'hero');
-const faq = page.blocks.find((block) => block.type === 'faq');
+import Layout from '@site-engine/theme-starter/components/Layout.astro';
+import BlockRenderer from '@site-engine/theme-starter/components/BlockRenderer.astro';
+import { deriveRoutes } from '@site-engine/engine';
+import { demoHomepageId, demoSnapshot } from '../lib/demo.js';
+const model = deriveRoutes(demoSnapshot, demoHomepageId);
+const route = model.byPath.get('/');
+if (!route) throw new Error('The configured demo homepage is not published.');
 ---
-<!doctype html>
-<html lang="en">
-  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width" /><title>{page.title}</title><meta name="description" content="A synthetic, client-neutral example." /></head>
-  <body>
-    <header><a href="#content">Skip to content</a><p>{neutralFixture.settings.siteName}</p></header>
-    <main id="content">
-      {hero && hero.type === 'hero' && <section aria-labelledby="hero-heading"><h1 id="hero-heading">{hero.heading}</h1><p>{hero.body}</p>{hero.cta && <a href={hero.cta.href}>{hero.cta.label}</a>}</section>}
-      {faq && faq.type === 'faq' && <section aria-labelledby="faq-heading"><h2 id="faq-heading">{faq.heading}</h2>{faq.items.map((item) => <details><summary>{item.question}</summary><p>{item.answer}</p></details>)}</section>}
-    </main>
-    <footer><small>Synthetic fixture for public engine tests.</small></footer>
-  </body>
-</html>
+<Layout route={route} model={model} snapshot={demoSnapshot} title={route.page.title} description={route.page.summary}>
+  {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={demoSnapshot} model={model} />)}
+</Layout>

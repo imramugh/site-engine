@@ -1,0 +1,31 @@
+---
+import type { Block, RouteModel, SiteSnapshot } from '@site-engine/contract';
+const { block, snapshot, model } = Astro.props as { block: Block; snapshot: SiteSnapshot; model: RouteModel };
+const media = new Map(snapshot.media.map((item) => [item.id, item]));
+const mediaSrc = (id: string) => `/media/${media.get(id)?.filename ?? 'missing.svg'}`;
+const resolved = (id: string) => media.get(id);
+const classes = `block block--${block.appearance.background} block--${block.appearance.width} block--${block.appearance.spacing}`;
+const related = block.type === 'relatedServices' ? block.pageIds.map((id) => model.routes.find((route) => route.page.id === id)).filter(Boolean) : [];
+const approvedTestimonials = block.type === 'testimonials' ? block.items.filter((item) => item.permissionConfirmed) : [];
+const paragraphs = block.type === 'richText' ? block.body.split(/\n\s*\n/).filter(Boolean) : [];
+---
+{!block.hidden && <section class={classes} id={block.anchorId} data-block={block.type}><div class="block__inner">
+  {block.type === 'hero' && <><p>{block.eyebrow}</p><h1>{block.heading}</h1><p>{block.body}</p>{block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</>}
+  {block.type === 'incidentBar' && <p role="status">{block.message} {block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</p>}
+  {block.type === 'pillarGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3><a href={item.href}>{item.title}</a></h3><p>{item.body}</p></li>)}</ul></>}
+  {block.type === 'featureGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3>{item.title}</h3><p>{item.body}</p></li>)}</ul></>}
+  {block.type === 'splitList' && <><h2>{block.heading}</h2><ol class="split">{block.items.map((item) => <li><h3>{item.title}</h3><p>{item.body}</p></li>)}</ol></>}
+  {block.type === 'chipList' && <>{block.heading && <h2>{block.heading}</h2>}<ul class="chips">{block.chips.map((chip) => <li>{chip}</li>)}</ul></>}
+  {block.type === 'testimonials' && approvedTestimonials.length > 0 && <><h2>Testimonials</h2>{approvedTestimonials.map((item) => <figure class="quote"><blockquote>{item.quote}</blockquote><figcaption>{item.attribution}{item.role && `, ${item.role}`}</figcaption></figure>)}</>}
+  {block.type === 'faq' && <><h2>{block.heading}</h2>{block.items.map((item) => <details><summary>{item.question}</summary><p>{item.answer}</p></details>)}</>}
+  {block.type === 'callout' && <><h2>{block.heading}</h2><p>{block.body}</p>{block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</>}
+  {block.type === 'relatedServices' && <><h2>{block.heading}</h2><ul>{related.map((route) => route && <li><a href={route.path}>{route.page.title}</a><p>{route.page.summary}</p></li>)}</ul></>}
+  {block.type === 'cta' && <><h2>{block.heading}</h2><p>{block.body}</p><a href={block.cta.href}>{block.cta.label}</a></>}
+  {block.type === 'richText' && <>{paragraphs.map((paragraph) => <p>{paragraph}</p>)}</>}
+  {block.type === 'contact' && <><h2>{block.heading}</h2><p>{block.body}</p></>}
+  {block.type === 'media' && resolved(block.mediaId) && <figure><img class="media" src={mediaSrc(block.mediaId)} width={resolved(block.mediaId)!.width} height={resolved(block.mediaId)!.height} alt={resolved(block.mediaId)!.decorative ? '' : resolved(block.mediaId)!.alt} /><figcaption>{block.caption}</figcaption></figure>}
+  {block.type === 'imageText' && resolved(block.mediaId) && <div class="split"><img class="media" src={mediaSrc(block.mediaId)} width={resolved(block.mediaId)!.width} height={resolved(block.mediaId)!.height} alt={resolved(block.mediaId)!.decorative ? '' : resolved(block.mediaId)!.alt} /><div><h2>{block.heading}</h2><p>{block.body}</p></div></div>}
+  {block.type === 'gallery' && <ul class="cards">{block.mediaIds.map((id) => resolved(id) && <li><img class="media" src={mediaSrc(id)} width={resolved(id)!.width} height={resolved(id)!.height} alt={resolved(id)!.decorative ? '' : resolved(id)!.alt} /></li>)}</ul>}
+  {block.type === 'logoStrip' && <ul class="cards">{block.mediaIds.map((id) => resolved(id) && <li><img class="media" src={mediaSrc(id)} width={resolved(id)!.width} height={resolved(id)!.height} alt={resolved(id)!.decorative ? '' : resolved(id)!.alt} /></li>)}</ul>}
+  {block.type === 'video' && <><video class="video" controls poster={mediaSrc(block.posterMediaId)} aria-label={resolved(block.mediaId)?.alt}><source src={mediaSrc(block.mediaId)} type={resolved(block.mediaId)?.mimeType} /><track kind="captions" src={mediaSrc(block.captionsMediaId)} srclang="en" label="English" default />Your browser does not support video.</video>{block.transcript && <details><summary>Transcript</summary><p>{block.transcript}</p></details>}</>}
+</div></section>}

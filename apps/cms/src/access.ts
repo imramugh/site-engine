@@ -1,6 +1,7 @@
 import type { Access, AccessResult } from 'payload'
 import { timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, SESSION_COOKIE, sessionIsUsable } from './identity'
 
 export const roles = ['owner', 'approver', 'editor', 'sales', 'hiring'] as const
 export type Role = (typeof roles)[number]
@@ -12,6 +13,35 @@ export const hasRole = (actor: Actor, allowed: readonly Role[]) =>
 
 export const staff = (allowed: readonly Role[]): Access => ({ req }): AccessResult =>
   hasRole(req.user as Actor, allowed)
+
+/**
+ * Sensitive identity changes require a recent, server-side session for the
+ * same canonical user. Request user fields alone are never sufficient.
+ */
+export const freshStaff = (allowed: readonly Role[]): Access => async ({ req }) => {
+  const requestUser = req.user as (Actor & { id?: string })
+  if (!requestUser?.id) return false
+  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
+  if (!token) return false
+
+  const sessions = await req.payload.find({
+    collection: 'auth-sessions',
+    where: { tokenHash: { equals: hashOpaqueToken(token) } },
+    limit: 1,
+    overrideAccess: true,
+    req,
+  })
+  const session = sessions.docs[0]
+  const sessionUserID = typeof session?.user === 'string' ? session.user : session?.user?.id
+  if (!session || sessionUserID !== requestUser.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) return false
+
+  try {
+    const canonicalUser = await req.payload.findByID({ collection: 'users', id: sessionUserID, overrideAccess: true, req })
+    return canonicalUser.id === requestUser.id && hasRole(canonicalUser as Actor, allowed)
+  } catch {
+    return false
+  }
+}
 
 /** The bootstrap token is checked by the CLI before it creates a short-lived request context. */
 export const bootstrapOnly: Access = ({ req }) => {

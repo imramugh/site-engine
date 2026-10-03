@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
+import { cookieName, hashOpaqueToken, newOpaqueToken, serverSessionStrategy, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
 const db = join(directory, 'cms.sqlite')
@@ -65,4 +66,37 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     await expect(payload.find({ collection: 'pages', user: disabledOwner, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.delete({ collection: 'pages', id: page.id, user: disabledOwner, overrideAccess: false })).rejects.toThrow()
   })
+
+  it('checks the server session against SQLite on every request and revokes it when disabled', async () => {
+    const owner = await payload.create({
+      collection: 'users',
+      data: { email: 'session-owner@example.test', name: 'Session owner', roles: ['owner'], provider: 'google', providerSubject: 'oidc-session-owner' },
+      overrideAccess: false,
+      context: { bootstrapOperatorToken: 'test-only-bootstrap-token' },
+    })
+    const token = newOpaqueToken()
+    const now = new Date()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now.toISOString(), lastSeenAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString() }, overrideAccess: true })
+    const headers = new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${token}` })
+    await expect(serverSessionStrategy.authenticate({ headers, payload })).resolves.toMatchObject({ user: { id: owner.id } })
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: true }, user: owner, req: { headers }, overrideAccess: false })
+    await expect(serverSessionStrategy.authenticate({ headers, payload })).resolves.toEqual({ user: null })
+    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.disabled' } }, overrideAccess: true })
+    expect(audit.totalDocs).toBeGreaterThan(0)
+  })
+  it('keeps emergency credentials private and rejects owner API edits to those fields', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'private-owner@example.test', name: 'Private owner', roles: ['owner'], emergencyTotpSecret: 'synthetic-encrypted-secret', emergencyRecoveryHashes: ['synthetic-hash'], emergencyLastCounter: 123 }, overrideAccess: true })
+    const token = newOpaqueToken(); const now = new Date().toISOString()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const headers = new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${token}` })
+    const visible = await payload.findByID({ collection: 'users', id: owner.id, user: owner, overrideAccess: false })
+    expect(visible).not.toHaveProperty('emergencyTotpSecret')
+    expect(visible).not.toHaveProperty('emergencyRecoveryHashes')
+    expect(visible).not.toHaveProperty('emergencyLastCounter')
+    await payload.update({ collection: 'users', id: owner.id, data: { emergencyTotpSecret: 'attacker-replacement', emergencyLastCounter: 0 }, user: owner, req: { headers }, overrideAccess: false })
+    const stored = await payload.findByID({ collection: 'users', id: owner.id, overrideAccess: true })
+    expect(stored.emergencyTotpSecret).toBe('synthetic-encrypted-secret')
+    expect(stored.emergencyLastCounter).toBe(123)
+  })
+
 })
