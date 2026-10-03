@@ -716,6 +716,9 @@ export interface ScheduledPublication {
   changeSet: string | ChangeSet;
   scheduledFor: string;
   state: 'scheduled' | 'cancelled' | 'stale' | 'enqueued';
+  outbox?: (string | null) | PublishOutbox;
+  enqueuedAt?: string | null;
+  dispatchReason?: string | null;
   proof:
     | {
         [k: string]: unknown;
@@ -1358,6 +1361,9 @@ export interface ScheduledPublicationsSelect<T extends boolean = true> {
   changeSet?: T;
   scheduledFor?: T;
   state?: T;
+  outbox?: T;
+  enqueuedAt?: T;
+  dispatchReason?: T;
   proof?: T;
   updatedAt?: T;
   createdAt?: T;
