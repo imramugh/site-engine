@@ -33,45 +33,10 @@ const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : mot
   {block.type === 'relatedServices' && <><h2>{block.heading}</h2><ul>{related.map((route) => route && <li><a href={href(route.path)}>{route.page.title}</a><p>{route.page.summary}</p></li>)}</ul></>}
   {block.type === 'cta' && <><h2>{block.heading}</h2><p>{block.body}</p><a href={href(block.cta.href)}>{block.cta.label}</a></>}
   {block.type === 'richText' && <>{paragraphs.map((paragraph) => <p>{paragraph}</p>)}</>}
-  {block.type === 'contact' && <><h2>{block.heading}</h2><p>{block.body}</p>{block.inquiryForm && <form data-inquiry-form data-preview={Boolean(base)} novalidate><p><label>Email <input name="email" type="email" required /></label></p><p><label>Topic <select name="topic"><option value="general">General inquiry</option><option value="active-incident">Active incident</option></select></label></p><p><label>Message <textarea name="message" required /></label></p><p><label><input name="consent" type="checkbox" required /> I consent to the handling of this inquiry.</label></p><button disabled={Boolean(base)}>Send inquiry</button><p role="alert" data-inquiry-error></p><p role="status" data-inquiry-status></p></form>}</>}
+  {block.type === 'contact' && <><h2>{block.heading}</h2><p>{block.body}</p></>}
   {block.type === 'media' && image(block.mediaId, 'hero') && <figure><picture>{image(block.mediaId, 'hero')!.avif && <source srcset={image(block.mediaId, 'hero')!.avif} type="image/avif" />}{image(block.mediaId, 'hero')!.webp && <source srcset={image(block.mediaId, 'hero')!.webp} type="image/webp" />}<img class="media" src={mediaSrc(block.mediaId)} width={image(block.mediaId, 'hero')!.item.width} height={image(block.mediaId, 'hero')!.item.height} alt={image(block.mediaId, 'hero')!.alt} /></picture>{block.caption && <figcaption>{block.caption}</figcaption>}</figure>}
   {block.type === 'imageText' && image(block.mediaId, 'card') && <div class="split"><picture>{image(block.mediaId, 'card')!.avif && <source srcset={image(block.mediaId, 'card')!.avif} type="image/avif" />}{image(block.mediaId, 'card')!.webp && <source srcset={image(block.mediaId, 'card')!.webp} type="image/webp" />}<img class="media" src={mediaSrc(block.mediaId)} width={image(block.mediaId, 'card')!.item.width} height={image(block.mediaId, 'card')!.item.height} alt={image(block.mediaId, 'card')!.alt} /></picture><div><h2>{block.heading}</h2><p>{block.body}</p></div></div>}
   {block.type === 'gallery' && <ul class="cards">{block.mediaIds.map((id) => image(id, 'thumbnail') && <li><picture>{image(id, 'thumbnail')!.avif && <source srcset={image(id, 'thumbnail')!.avif} type="image/avif" />}{image(id, 'thumbnail')!.webp && <source srcset={image(id, 'thumbnail')!.webp} type="image/webp" />}<img class="media" src={mediaSrc(id)} width={image(id, 'thumbnail')!.item.width} height={image(id, 'thumbnail')!.item.height} alt={image(id, 'thumbnail')!.alt} /></picture></li>)}</ul>}
   {block.type === 'logoStrip' && <ul class="cards">{block.mediaIds.map((id) => image(id, 'thumbnail') && <li><picture>{image(id, 'thumbnail')!.avif && <source srcset={image(id, 'thumbnail')!.avif} type="image/avif" />}{image(id, 'thumbnail')!.webp && <source srcset={image(id, 'thumbnail')!.webp} type="image/webp" />}<img class="media" src={mediaSrc(id)} width={image(id, 'thumbnail')!.item.width} height={image(id, 'thumbnail')!.item.height} alt={image(id, 'thumbnail')!.alt} /></picture></li>)}</ul>}
   {block.type === 'video' && <><video class="video" controls poster={mediaSrc(block.posterMediaId)} aria-label={resolved(block.mediaId)?.alt}><source src={mediaSrc(block.mediaId)} type={resolved(block.mediaId)?.mimeType} /><track kind="captions" src={mediaSrc(block.captionsMediaId)} srclang="en" label="English" default />Your browser does not support video.</video>{block.transcript && <details><summary>Transcript</summary><p>{block.transcript}</p></details>}</>}
 </div></section>}
-{!block.hidden && block.type === 'contact' && block.inquiryForm && <script>
-  document.querySelectorAll<HTMLFormElement>('[data-inquiry-form]').forEach((form) => {
-    let pending = false;
-    let accepted = false;
-    // Preserve the key across network retries; the server rejects changed data.
-    let key = crypto.randomUUID().replaceAll('-', '');
-    let previous = '';
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (form.dataset.preview === 'true' || pending || accepted) return;
-      const data = new FormData(form);
-      const fields = { ...Object.fromEntries(data), consent: data.get('consent') === 'on', sourcePage: location.pathname };
-      const fingerprint = JSON.stringify(fields);
-      if (previous && previous !== fingerprint) key = crypto.randomUUID().replaceAll('-', '');
-      previous = fingerprint;
-      const error = form.querySelector<HTMLElement>('[data-inquiry-error]')!;
-      const status = form.querySelector<HTMLElement>('[data-inquiry-status]')!;
-      const button = form.querySelector<HTMLButtonElement>('button')!;
-      pending = true; button.disabled = true; form.setAttribute('aria-busy', 'true');
-      error.textContent = ''; status.textContent = 'Sending inquiry…';
-      try {
-        const response = await fetch('/api/inquiries', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...fields, idempotencyKey: key }) });
-        const result = await response.json();
-        accepted = response.ok && result.accepted === true;
-        error.textContent = accepted ? '' : Object.values(result.errors ?? { form: 'Unable to send inquiry. Please try again.' }).join(' ');
-        status.textContent = accepted ? 'Your inquiry has been received.' : '';
-      } catch {
-        error.textContent = 'Unable to send inquiry. Please check your connection and try again.';
-        status.textContent = '';
-      } finally {
-        pending = false; button.disabled = accepted; form.removeAttribute('aria-busy');
-      }
-    });
-  });
-</script>}
