@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createRequire } from 'node:module';
+import { gzipSync } from 'node:zlib';
 const require = createRequire(import.meta.url);
 const axeSource = require.resolve('axe-core/axe.min.js');
 
@@ -37,11 +38,26 @@ test('ENG-015 neutral runtime persists reduced motion across routes', async ({ p
 
 test('ENG-015 pauses offscreen and urgent motion', async ({ page }) => {
  await page.goto('/motion/one'); const off=page.locator('#offscreen'); await expect(off).toHaveCSS('animation-play-state','paused'); await page.evaluate(() => document.querySelector('#offscreen')?.scrollIntoView()); await expect(off).toHaveCSS('animation-play-state','running'); await expect(page.locator('[data-urgent-contact]')).toHaveCSS('animation-play-state','paused');
+ await expect.poll(() => page.getByLabel('Urgent motion fixture video').evaluate((element: HTMLVideoElement) => element.paused)).toBe(true); await expect.poll(() => page.getByLabel('Form motion fixture video').evaluate((element: HTMLVideoElement) => element.paused)).toBe(true);
+ const video = page.getByLabel('Motion fixture video', { exact: true }); await expect(video).toHaveAttribute('poster', '/media/sample-poster.svg'); await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.paused)).toBe(true);
 });
 test('ENG-015 runtime respects OS preference and static CSS starts paused', async ({ page }) => {
- await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/motion/one'); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce');
+ await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/motion/one'); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByLabel('Motion fixture video', { exact: true })).toHaveAttribute('data-motion-paused', 'true');
  await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion','allow');
 });
 
 test('ENG-015 no-JS fixture remains readable and paused', async ({ browser }) => { const context=await browser.newContext({ javaScriptEnabled:false }); const page=await context.newPage(); await page.goto('/motion/one'); await expect(page.getByRole('heading')).toBeVisible(); await expect(page.locator('[data-motion-effect]').first()).toHaveCSS('animation-play-state','paused'); await context.close(); });
-test('ENG-015 toggle works when storage is blocked', async ({ page }) => { await page.addInitScript(() => { Storage.prototype.getItem=()=>{throw new Error('blocked')}; Storage.prototype.setItem=()=>{throw new Error('blocked')} }); await page.goto('/motion/one'); await page.getByRole('button',{name:'Reduce motion'}).evaluate((button: HTMLButtonElement) => button.click()); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByRole('button',{name:'Reduce motion'})).toHaveAttribute('aria-pressed','true'); });
+test('ENG-015 toggle works when storage is blocked', async ({ page }) => { await page.addInitScript(() => { Storage.prototype.getItem=()=>{throw new Error('blocked')}; Storage.prototype.setItem=()=>{throw new Error('blocked')} }); await page.goto('/motion/one'); await page.getByRole('button',{name:'Reduce motion'}).click(); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByRole('button',{name:'Reduce motion'})).toHaveAttribute('aria-pressed','true'); });
+
+test('ENG-015 motion fixture has no automated accessibility violations', async ({ page }) => {
+  await page.goto('/motion/one');
+  await page.addScriptTag({ path: axeSource });
+  const violations = await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations);
+  expect(violations).toEqual([]);
+});
+
+test('ENG-015 delivers a motion runtime below 10 KiB gzip', async ({ page }) => {
+  await page.goto('/motion/one');
+  const runtime = await page.locator('script[type="module"]').textContent();
+  expect(gzipSync(runtime ?? '').byteLength).toBeLessThan(10 * 1024);
+});
