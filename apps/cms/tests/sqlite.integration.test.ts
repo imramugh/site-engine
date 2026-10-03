@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { cookieName, hashOpaqueToken, newOpaqueToken, serverSessionStrategy, SESSION_COOKIE } from '../src/identity'
+import { handleOAuthSessionBridge } from '../src/oauth-session-bridge'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
 const db = join(directory, 'cms.sqlite')
@@ -26,6 +27,53 @@ afterAll(async () => {
 })
 
 describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036)', () => {
+  it('resolves and revalidates OAuth bridge sessions against current SQLite identity state', async () => {
+    const secret = 'bridge-test-secret'
+    const user = await payload.create({ collection: 'users', data: { email: 'bridge-owner@example.test', name: 'Bridge owner', roles: ['owner'] }, overrideAccess: true })
+    const now = new Date().toISOString()
+    const firstToken = newOpaqueToken()
+    const secondToken = newOpaqueToken()
+    const first = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(firstToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const second = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(secondToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const resolve = (token: string, suppliedSecret = secret) => handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': suppliedSecret, cookie: `${cookieName(SESSION_COOKIE)}=${token}` }, body: JSON.stringify({ operation: 'resolve' }),
+    }), payload, secret)
+
+    const resolved = await resolve(firstToken)
+    expect(resolved.status).toBe(200)
+    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] } })
+    const validated = await handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'validate', sessionId: first.id, userId: user.id }),
+    }), payload, secret)
+    expect(validated.status).toBe(200)
+    const wrongUser = await handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'validate', sessionId: first.id, userId: 'other-user' }),
+    }), payload, secret)
+    expect(wrongUser.status).toBe(401)
+
+    await payload.update({ collection: 'auth-sessions', id: second.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    expect((await resolve(secondToken)).status).toBe(401)
+    await payload.update({ collection: 'users', id: user.id, data: { disabled: true }, overrideAccess: true })
+    expect((await resolve(firstToken)).status).toBe(401)
+
+    const roleUser = await payload.create({ collection: 'users', data: { email: 'bridge-editor@example.test', name: 'Bridge editor', roles: ['editor'] }, overrideAccess: true })
+    const roleToken = newOpaqueToken()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(roleToken), user: roleUser.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    expect((await resolve(roleToken)).status).toBe(200)
+    await payload.update({ collection: 'users', id: roleUser.id, data: { roles: ['approver'] }, overrideAccess: true })
+    expect((await resolve(roleToken)).status).toBe(401)
+  })
+
+  it('rejects unauthenticated, malformed, oversized, and non-POST OAuth bridge requests', async () => {
+    const secret = 'bridge-test-secret'
+    const request = (init: RequestInit) => handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', init), payload, secret)
+    expect((await request({ method: 'GET' })).status).toBe(405)
+    expect((await request({ method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(401)
+    expect((await request({ method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': 'wrong' }, body: '{}' })).status).toBe(401)
+    expect((await request({ method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'resolve', unexpected: true }) })).status).toBe(400)
+    expect((await request({ method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'resolve', padding: 'x'.repeat(4_096) }) })).status).toBe(400)
+  })
+
   it('persists WAL settings and denies unauthenticated reads and writes', async () => {
     const client = (payload.db as unknown as { client: { execute: (sql: string) => Promise<{ rows: Record<string, unknown>[] }> } }).client
     const journalMode = await client.execute('PRAGMA journal_mode')
