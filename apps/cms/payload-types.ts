@@ -68,6 +68,10 @@ export interface Config {
   blocks: {};
   collections: {
     users: User;
+    invitations: Invitation;
+    'auth-sessions': AuthSession;
+    'auth-transactions': AuthTransaction;
+    'audit-events': AuditEvent;
     pages: Page;
     sections: Section;
     assets: Asset;
@@ -83,6 +87,10 @@ export interface Config {
   collectionsJoins: {};
   collectionsSelect: {
     users: UsersSelect<false> | UsersSelect<true>;
+    invitations: InvitationsSelect<false> | InvitationsSelect<true>;
+    'auth-sessions': AuthSessionsSelect<false> | AuthSessionsSelect<true>;
+    'auth-transactions': AuthTransactionsSelect<false> | AuthTransactionsSelect<true>;
+    'audit-events': AuditEventsSelect<false> | AuditEventsSelect<true>;
     pages: PagesSelect<false> | PagesSelect<true>;
     sections: SectionsSelect<false> | SectionsSelect<true>;
     assets: AssetsSelect<false> | AssetsSelect<true>;
@@ -140,9 +148,104 @@ export interface User {
   roles: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[];
   disabled?: boolean | null;
   invitedAt?: string | null;
+  provider?: ('google' | 'microsoft') | null;
+  providerIssuer?: string | null;
+  providerSubject?: string | null;
+  emergencyTotpSecret?: string | null;
+  emergencyRecoveryHashes?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  emergencyLastCounter?: number | null;
+  emergencyFailedAt?: string | null;
+  emergencyFailedCount?: number | null;
   updatedAt: string;
   createdAt: string;
   collection: 'users';
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "invitations".
+ */
+export interface Invitation {
+  id: string;
+  email: string;
+  provider: 'google' | 'microsoft';
+  /**
+   * Trusted configured issuer for this invite.
+   */
+  providerIssuer: string;
+  providerSubject: string;
+  /**
+   * Optional prebound verified OIDC subject. Enrollment always requires the one-time invitation.
+   */
+  requiredSubject?: string | null;
+  /**
+   * Opaque invite credential hash; its original value is never shown in admin.
+   */
+  tokenHash: string;
+  roles: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[];
+  expiresAt: string;
+  acceptedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "auth-sessions".
+ */
+export interface AuthSession {
+  id: string;
+  tokenHash: string;
+  user: string | User;
+  authenticatedAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "auth-transactions".
+ */
+export interface AuthTransaction {
+  id: string;
+  stateHash: string;
+  nonce: string;
+  verifier: string;
+  provider: 'google' | 'microsoft';
+  invitation?: (string | null) | Invitation;
+  expiresAt: string;
+  consumedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "audit-events".
+ */
+export interface AuditEvent {
+  id: string;
+  event: string;
+  user?: (string | null) | User;
+  actor?: (string | null) | User;
+  detail?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -285,6 +388,22 @@ export interface PayloadLockedDocument {
         value: string | User;
       } | null)
     | ({
+        relationTo: 'invitations';
+        value: string | Invitation;
+      } | null)
+    | ({
+        relationTo: 'auth-sessions';
+        value: string | AuthSession;
+      } | null)
+    | ({
+        relationTo: 'auth-transactions';
+        value: string | AuthTransaction;
+      } | null)
+    | ({
+        relationTo: 'audit-events';
+        value: string | AuditEvent;
+      } | null)
+    | ({
         relationTo: 'pages';
         value: string | Page;
       } | null)
@@ -364,6 +483,72 @@ export interface UsersSelect<T extends boolean = true> {
   roles?: T;
   disabled?: T;
   invitedAt?: T;
+  provider?: T;
+  providerIssuer?: T;
+  providerSubject?: T;
+  emergencyTotpSecret?: T;
+  emergencyRecoveryHashes?: T;
+  emergencyLastCounter?: T;
+  emergencyFailedAt?: T;
+  emergencyFailedCount?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "invitations_select".
+ */
+export interface InvitationsSelect<T extends boolean = true> {
+  email?: T;
+  provider?: T;
+  providerIssuer?: T;
+  providerSubject?: T;
+  requiredSubject?: T;
+  tokenHash?: T;
+  roles?: T;
+  expiresAt?: T;
+  acceptedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "auth-sessions_select".
+ */
+export interface AuthSessionsSelect<T extends boolean = true> {
+  tokenHash?: T;
+  user?: T;
+  authenticatedAt?: T;
+  lastSeenAt?: T;
+  expiresAt?: T;
+  revokedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "auth-transactions_select".
+ */
+export interface AuthTransactionsSelect<T extends boolean = true> {
+  stateHash?: T;
+  nonce?: T;
+  verifier?: T;
+  provider?: T;
+  invitation?: T;
+  expiresAt?: T;
+  consumedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "audit-events_select".
+ */
+export interface AuditEventsSelect<T extends boolean = true> {
+  event?: T;
+  user?: T;
+  actor?: T;
+  detail?: T;
   updatedAt?: T;
   createdAt?: T;
 }

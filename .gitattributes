@@ -7,3 +7,4 @@
 *.ico binary
 *.pdf binary
 
+patches/*.patch -whitespace

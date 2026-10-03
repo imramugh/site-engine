@@ -1,0 +1,7 @@
+---
+import Layout from '@site-engine/theme-starter/components/Layout.astro';
+import { deriveRoutes } from '@site-engine/engine';
+import { demoHomepageId, demoSnapshot } from '../lib/demo.js';
+const model = deriveRoutes(demoSnapshot, demoHomepageId);
+---
+<Layout model={model} snapshot={demoSnapshot} title="Page not found" description="The requested page is unavailable."><section class="block"><div class="block__inner"><h1>Page not found</h1><p>The requested page is not available.</p><a href="/">Return home</a></div></section></Layout>

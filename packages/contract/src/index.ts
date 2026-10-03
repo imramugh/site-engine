@@ -73,10 +73,10 @@ export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(),
   if (page.template === 'landing' && page.blocks.find((block) => !block.hidden)?.type !== 'hero') ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Landing pages must begin with a visible Hero' });
   const allowed = TemplateAllowedBlocks[page.template]; page.blocks.forEach((block, index) => { if (!allowed.includes(block.type)) ctx.addIssue({ code: 'custom', path: ['blocks', index, 'type'], message: `${block.type} is not allowed by ${page.template}` }); });
 });
-export const SectionSchema = z.object({ id, name: safeText(80), summary: safeText(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), allowedTemplates: z.array(TemplateSchema).min(1), pageIds: z.array(id).max(100) }).strict();
-export const MediaReferenceSchema = z.object({ id, filename: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,120}$/), alt: safeText(240).optional(), decorative: z.boolean().default(false), width: z.number().int().positive(), height: z.number().int().positive(), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp']) }).strict().superRefine((media, ctx) => { if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); });
+export const SectionSchema = z.object({ id, landingPageId: id.optional(), name: safeText(80), summary: safeText(300).optional(), slug: z.string().regex(/^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$/), allowedTemplates: z.array(TemplateSchema).min(1), pageIds: z.array(id).max(100) }).strict();
+export const MediaReferenceSchema = z.object({ id, filename: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,120}$/), alt: safeText(240).optional(), decorative: z.boolean().default(false), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'video/mp4', 'video/webm', 'text/vtt']) }).strict().superRefine((media, ctx) => { if (media.mimeType.startsWith('image/') && (!media.width || !media.height)) ctx.addIssue({ code: 'custom', path: ['width'], message: 'Images require intrinsic width and height' }); if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); });
 export const RedirectSchema = z.object({ from: InternalPathSchema, to: InternalPathSchema, status: z.literal(301) }).strict();
-export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), defaultLocale: z.enum(['en', 'en-CA']), logo: MediaReferenceSchema.optional(), sections: z.array(SectionSchema).max(20) }).strict();
+export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), logo: MediaReferenceSchema.optional(), sections: z.array(SectionSchema).max(20) }).strict();
 export const ChangeSetSchema = z.object({ id, name: safeText(120), state: z.enum(['draft', 'inReview', 'approved', 'published']), revision: z.number().int().nonnegative() }).strict();
 export const ThemeManifestSchema = z.object({ name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), version: z.string().regex(/^\d+\.\d+\.\d+$/), contract: z.string().regex(/^1\.\d+\.\d+$/), entry: z.string().regex(/^\.\/dist\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.js$/) }).strict();
 export const ThemeInstallSchema = z.object({ manifest: ThemeManifestSchema, installedAt: z.string().datetime() }).strict().superRefine(({ manifest }, ctx) => { if (!compatibleContractVersion(manifest.contract)) ctx.addIssue({ code: 'custom', path: ['manifest', 'contract'], message: `Theme requires incompatible contract ${manifest.contract}` }); });
@@ -92,6 +92,9 @@ export const SiteSnapshotSchema = z.object({
   const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });
   if (sections.size !== snapshot.settings.sections.length) issue(['settings', 'sections'], 'Section IDs must be unique');
   if (pages.size !== snapshot.pages.length) issue(['pages'], 'Page IDs must be unique');
+  if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
+  const assets = new Map(snapshot.media.map((asset) => [asset.id, asset]));
+  if (assets.size !== snapshot.media.length) issue(['media'], 'Media IDs must be unique');
   const siblingSlugs = new Set<string>();
   for (const [index, page] of snapshot.pages.entries()) {
     const section = sections.get(page.sectionId);
@@ -115,11 +118,33 @@ export const SiteSnapshotSchema = z.object({
       if (++depth > 3) { issue(['pages', index, 'parentId'], 'Page tree depth cannot exceed three'); break; }
       current = parent;
     }
+    page.blocks.forEach((block, blockIndex) => {
+      const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
+        const asset = assets.get(assetId);
+        if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);
+      };
+      if (block.type === 'media' || block.type === 'imageText') mediaReference(block.mediaId, 'mediaId', 'image/');
+      if (block.type === 'gallery' || block.type === 'logoStrip') block.mediaIds.forEach((assetId) => mediaReference(assetId, 'mediaIds', 'image/'));
+      if (block.type === 'video') {
+        mediaReference(block.mediaId, 'mediaId', 'video/');
+        mediaReference(block.posterMediaId, 'posterMediaId', 'image/');
+        mediaReference(block.captionsMediaId, 'captionsMediaId', 'text/vtt');
+      }
+      if (block.appearance.backgroundImage) mediaReference(block.appearance.backgroundImage.mediaId, 'appearance.backgroundImage', 'image/');
+      if (block.appearance.backgroundVideo) {
+        mediaReference(block.appearance.backgroundVideo.mediaId, 'appearance.backgroundVideo.mediaId', 'video/');
+        mediaReference(block.appearance.backgroundVideo.posterMediaId, 'appearance.backgroundVideo.posterMediaId', 'image/');
+      }
+      if (block.type === 'relatedServices') block.pageIds.forEach((pageId) => {
+        if (pages.get(pageId)?.template !== 'service') issue(['pages', index, 'blocks', blockIndex, 'pageIds'], 'Related services must reference service pages');
+      });
+    });
     const anchors = page.blocks.map((block) => block.anchorId).filter(Boolean);
     if (new Set(anchors).size !== anchors.length) issue(['pages', index, 'blocks'], 'Block anchors must be unique within a page');
     if (new Set(page.blocks.map((block) => block.id)).size !== page.blocks.length) issue(['pages', index, 'blocks'], 'Block IDs must be unique within a page');
   }
   snapshot.settings.sections.forEach((section, index) => {
+    if (section.landingPageId && pages.get(section.landingPageId)?.sectionId !== section.id) issue(['settings', 'sections', index, 'landingPageId'], 'Section landing page must belong to its section');
     section.pageIds.forEach((pageId, referenceIndex) => {
       if (pages.get(pageId)?.sectionId !== section.id) issue(['settings', 'sections', index, 'pageIds', referenceIndex], 'Section references a missing page or a page in another section');
     });
@@ -128,3 +153,4 @@ export const SiteSnapshotSchema = z.object({
 export type Page = z.infer<typeof PageSchema>;
 export type Section = z.infer<typeof SectionSchema>;
 export type SiteSnapshot = z.infer<typeof SiteSnapshotSchema>;
+export type { PublicRoute, RouteModel } from './render-types.js';

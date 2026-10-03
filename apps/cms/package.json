@@ -10,12 +10,16 @@
     "migrate": "payload migrate --config payload.config.ts",
     "migrate:create": "payload migrate:create --config payload.config.ts",
     "bootstrap:operator": "tsx scripts/bootstrap-operator.ts",
+    "provision:emergency-owner": "tsx scripts/provision-emergency-owner.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:db": "vitest run tests/sqlite.integration.test.ts"
+    "test": "vitest run --root ../.. apps/cms/tests",
+    "test:db": "vitest run --root ../.. apps/cms/tests/sqlite.integration.test.ts",
+    "bootstrap:local-owner": "tsx scripts/bootstrap-local-owner.ts"
   },
   "dependencies": {
     "@site-engine/contract": "workspace:*",
+    "openid-client": "6.8.8",
+    "otpauth": "9.5.2",
     "@libsql/client": "0.18.0",
     "@payloadcms/db-sqlite": "3.90.2",
     "@payloadcms/next": "3.90.2",
@@ -30,6 +34,8 @@
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "jose": "6.2.12",
     "typescript": "7.0.2",
     "tsx": "4.23.15",
     "vitest": "5.0.3"
