@@ -156,10 +156,11 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
+  const occupiedPaths = new Set(newRoutes.map(route => route.path))
   const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))
   const transitions = new Map(oldRoutes.flatMap((route) => {
     const next = nextByID.get(route.page.id)
-    return next && next.path !== route.path ? [[route.path, next.path] as const] : []
+    return next && next.path !== route.path && !occupiedPaths.has(route.path) ? [[route.path, next.path] as const] : []
   }))
   const redirectsWithMovedTargets = candidate.redirects.map((redirect) => ({ ...redirect, to: transitions.get(redirect.to) ?? redirect.to }))
   const addRedirect = (redirect: { from: string; to: string; status: 301 }) => {
@@ -169,7 +170,9 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   }
   for (const oldRoute of oldRoutes) {
     const next = nextByID.get(oldRoute.page.id)
-    if (next && next.path !== oldRoute.path) addRedirect({ from: oldRoute.path, to: next.path, status: 301 })
+    // A reviewed homepage replacement keeps '/' occupied by the new page.
+    // Redirect only vacated paths, never shadow a route in the new snapshot.
+    if (next && next.path !== oldRoute.path && !occupiedPaths.has(oldRoute.path)) addRedirect({ from: oldRoute.path, to: next.path, status: 301 })
     if (!next && candidate.pages.find((page) => page.id === oldRoute.page.id)?.status === 'archived') {
       // An editor-selected redirect is authoritative. Only derive the parent
       // destination when the old route has no selected redirect at all.

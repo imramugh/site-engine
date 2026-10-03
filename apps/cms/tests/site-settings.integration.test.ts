@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
+import { deriveRoutes } from '@site-engine/engine'
 import { buildCandidate } from '../src/publishing'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-site-settings-'))
@@ -16,6 +17,22 @@ beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
 describe('reviewed site settings singleton', () => {
+  it('replaces the homepage without redirecting the root away from the reviewed page', () => {
+    const base = structuredClone(neutralFixture)
+    const previous = base.pages[0]!
+    base.settings.homepageId = previous.id
+    const replacement = { ...structuredClone(previous), id: randomUUID(), slug: 'replacement', title: 'Reviewed replacement homepage' }
+    base.pages.push(replacement)
+    base.settings.sections[0]!.pageIds.push(replacement.id)
+    base.redirects = [{ from: '/legacy-home', to: '/', status: 301 }]
+    const formerReplacementPath = deriveRoutes(base).routes.find(route => route.page.id === replacement.id)!.path
+    const candidate = buildCandidate(base, [{ collection: 'site-settings', id: 'active', before: null, after: { homepageId: replacement.id }, beforeHash: null, afterHash: null }], ['site-settings:active'], { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' })
+    expect(deriveRoutes(candidate).routes.find(route => route.path === '/')?.page.id).toBe(replacement.id)
+    expect(candidate.redirects.some(redirect => redirect.from === '/')).toBe(false)
+    expect(candidate.redirects).toContainEqual({ from: '/legacy-home', to: '/', status: 301 })
+    expect(candidate.redirects).toContainEqual({ from: formerReplacementPath, to: '/', status: 301 })
+    expect(base.settings.homepageId).toBe(previous.id)
+  })
   it('lets only an Owner capture settings and applies them to a frozen candidate without changing its baseline', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: `settings-owner-${randomUUID()}@example.test`, name: 'Settings owner', roles: ['owner'] }, overrideAccess: true })
     const editor = await payload.create({ collection: 'users', data: { email: `settings-editor-${randomUUID()}@example.test`, name: 'Settings editor', roles: ['editor'] }, overrideAccess: true })
