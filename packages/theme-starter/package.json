@@ -1,0 +1,10 @@
+{
+  "name": "@site-engine/theme-starter",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }, "./theme.json": "./theme.json" },
+  "files": ["dist", "theme.json"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
+  "dependencies": { "@site-engine/contract": "workspace:^" }
+}

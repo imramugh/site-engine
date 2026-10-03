@@ -41,3 +41,5 @@ These stories specify future implementation and tests. An unchecked story is not
 | [ENG-035](https://github.com/imramugh/site-engine/issues/35) | launch | Own theme install, switching, and compatibility in the engine |
 | [ENG-036](https://github.com/imramugh/site-engine/issues/36) | foundation | Validate SQLite transactions, migrations, and writer backpressure |
 | [ENG-037](https://github.com/imramugh/site-engine/issues/37) | launch | Enforce retention, deletion, and restore privacy rules |
+
+- [ENG-038: Build the neutral starter theme and public conformance harness](https://github.com/imramugh/site-engine/issues/38)

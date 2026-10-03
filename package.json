@@ -1,0 +1,34 @@
+{
+  "name": "site-engine",
+  "private": true,
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=24.21.0 <25",
+    "pnpm": ">=12.8.1 <13"
+  },
+  "scripts": {
+    "build": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/site build && corepack pnpm@12.8.1 --filter @site-engine/cms build",
+    "dev:site": "corepack pnpm@12.8.1 --filter @site-engine/site dev",
+    "dev:cms": "corepack pnpm@12.8.1 --filter @site-engine/cms dev",
+    "preview:site": "corepack pnpm@12.8.1 --filter @site-engine/site preview",
+    "test": "corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 test:e2e",
+    "test:unit": "vitest run",
+    "test:db": "corepack pnpm@12.8.1 --filter @site-engine/cms test:db",
+    "test:e2e": "corepack pnpm@12.8.1 exec playwright test",
+    "typecheck": "corepack pnpm@12.8.1 -r --if-present typecheck",
+    "lint": "corepack pnpm@12.8.1 -r --if-present lint",
+    "check:boundaries": "tsx packages/checks/src/assert-boundaries.ts",
+    "check:provenance": "tsx packages/checks/src/assert-provenance.ts",
+    "check": "corepack pnpm@12.8.1 build:packages && corepack pnpm@12.8.1 lint && corepack pnpm@12.8.1 typecheck && corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 check:boundaries && corepack pnpm@12.8.1 check:provenance",
+    "build:packages": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "axe-core": "4.13.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  },
+  "type": "module"
+}
