@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:http';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -8,6 +9,8 @@ import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import type { SiteSnapshot } from '@site-engine/contract';
+import { compatibilityReport, getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
+import { runPreviewOnce } from '../scripts/run-preview-worker.mjs';
 
 const renderer = await import('../scripts/build-snapshot.mjs');
 const BASE_PATH = '/preview/changes/test/proposed/';
@@ -531,3 +534,40 @@ describe('static snapshot renderer', () => {
   }, 120_000);
 
 });
+
+
+it('ENG-035 loads trusted components from a packed external theme package', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'packed-theme-'));
+  try {
+    const source = join(root, 'external-theme'); const installed = join(root, 'operator-node_modules', 'external-theme');
+    await mkdir(join(source, 'components'), { recursive: true }); await mkdir(join(source, 'dist'), { recursive: true });
+    await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'external-theme', version: '1.0.0', type: 'module', files: ['components', 'dist', 'theme.json'] }));
+    await writeFile(join(source, 'theme.json'), JSON.stringify({ name: 'external-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }));
+    await writeFile(join(source, 'dist', 'renderer.js'), 'export const packagedExternalTheme = true;\n');
+    await writeFile(join(source, 'components', 'Layout.astro'), `--- const { title } = Astro.props; ---\n<html><head><title>{title}</title></head><body data-packed-external-theme="true"><slot /></body></html>`);
+    await writeFile(join(source, 'components', 'BlockRenderer.astro'), `---\nconst { block } = Astro.props;\nconst supported = block.type === 'hero';\n---\n<section data-packed-block={block.type}>{supported ? <h2>{block.heading}</h2> : <p data-packed-placeholder="unsupported-standard-block">External theme placeholder.</p>}</section>`);
+    const tarball = execFileSync('npm', ['pack', '--json'], { cwd: source, encoding: 'utf8' }); const file = JSON.parse(tarball)[0].filename;
+    await mkdir(installed, { recursive: true }); execFileSync('tar', ['-xzf', join(source, file), '--strip-components=1', '-C', installed]);
+    expect((await lstat(join(installed, 'dist', 'renderer.js'))).isFile()).toBe(true);
+    const manifest = JSON.parse(await readFile(join(installed, 'theme.json'), 'utf8'));
+    const registry = parseThemeRegistry({ themes: [{ manifest, installedAt: '2026-10-03T00:00:00.000Z' }] });
+    const selected = getInstalledTheme(registry, manifest.name, manifest.version)!;
+    const snapshot = fixture('Packed external theme');
+    snapshot.settings.theme = { id: manifest.name, version: manifest.version, contract: manifest.contract, manifestDigest: selected.manifestDigest };
+    const report = compatibilityReport(snapshot, selected.manifest);
+    expect(report).toMatchObject({ compatible: false, actions: expect.arrayContaining([expect.objectContaining({ action: 'hide', reason: 'unsupported-standard-block', blockID: snapshot.pages[0]!.blocks[1]!.id })]) });
+    const pins = { themeVersion: manifest.version, engineVersion: '1.0.0', contractVersion: '1.0.0' };
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: join(installed, 'components'), versionPins: pins });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    expect(html).toContain('data-packed-external-theme="true"'); expect(html).toContain('data-packed-placeholder="unsupported-standard-block"');
+    expect(built.manifest.sourceVersions).toEqual({ contractVersion: '1.0.0', themeVersion: manifest.version, engineVersion: '1.0.0' });
+    const incompatible = structuredClone(snapshot); incompatible.settings.theme!.contract = '1.0.1';
+    let rendered = false;
+    await expect(runPreviewOnce({
+      artifactRoot: join(root, 'preview-artifacts'), publicOrigin: PUBLIC_ORIGIN, versionPins: pins, registry, signal: undefined,
+      api: async (action: string) => action === 'claim' ? { job: { id: randomUUID(), leaseToken: 'packed-theme-preview-token', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live: snapshot, proposed: incompatible, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins } : { ok: true },
+      render: async () => { rendered = true; throw new Error('The renderer must not run for an incompatible frozen selection.'); },
+    })).rejects.toThrow('Frozen theme selection is not installed exactly as reviewed.');
+    expect(rendered).toBe(false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 120_000);
