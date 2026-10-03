@@ -202,4 +202,35 @@ export const SiteSnapshotSchema = z.object({
 export type Page = z.infer<typeof PageSchema>;
 export type Section = z.infer<typeof SectionSchema>;
 export type SiteSnapshot = z.infer<typeof SiteSnapshotSchema>;
+
+/** Formats public snapshot validation failures without serializing page or block content. */
+export function formatSnapshotValidationError(input: unknown, error: z.ZodError): string {
+  const pages = input && typeof input === 'object' && !Array.isArray(input) && Array.isArray((input as { pages?: unknown }).pages)
+    ? (input as { pages: unknown[] }).pages : [];
+  const pathText = (path: readonly PropertyKey[]) => path.map((part) => typeof part === 'number' ? `[${part}]` : String(part)).join('.').replace(/\.\[/g, '[') || '$';
+  const subject = (path: readonly PropertyKey[]) => {
+    if (path[0] !== 'pages' || typeof path[1] !== 'number') return '';
+    const page = pages[path[1]]; const record = page && typeof page === 'object' && !Array.isArray(page) ? page as Record<string, unknown> : undefined;
+    const pageLabel = record && typeof record.title === 'string' && typeof record.id === 'string' ? `page \"${record.title}\" (${record.id})` : `page index ${path[1]}`;
+    const blocksAt = path.findIndex((part) => part === 'blocks');
+    if (blocksAt < 0 || typeof path[blocksAt + 1] !== 'number') return pageLabel;
+    const blocks = record && Array.isArray(record.blocks) ? record.blocks : [];
+    const block = blocks[path[blocksAt + 1] as number]; const blockRecord = block && typeof block === 'object' && !Array.isArray(block) ? block as Record<string, unknown> : undefined;
+    const blockLabel = blockRecord && typeof blockRecord.type === 'string' && typeof blockRecord.id === 'string' ? `block ${blockRecord.type} (${blockRecord.id})` : `block index ${String(path[blocksAt + 1])}`;
+    return `${pageLabel}, ${blockLabel}`;
+  };
+  const issues = error.issues.slice(0, 12).map((issue) => {
+    const path = issue.path as PropertyKey[]; const label = subject(path);
+    return `${label ? `${label}: ` : ''}${pathText(path)}: ${issue.message}`;
+  });
+  return `Snapshot validation failed: ${issues.join('; ')}`;
+}
+
+export function parseSiteSnapshot(input: unknown): SiteSnapshot {
+  const parsed = SiteSnapshotSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  const error = new Error(formatSnapshotValidationError(input, parsed.error));
+  error.name = 'SnapshotValidationError';
+  throw error;
+}
 export type { PublicRoute, RouteModel } from './render-types.js';

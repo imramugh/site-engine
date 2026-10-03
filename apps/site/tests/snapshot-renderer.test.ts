@@ -19,6 +19,21 @@ const stable = (value: unknown): string => Array.isArray(value)
     : JSON.stringify(value);
 const hash = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
 
+it('reports an invalid snapshot build with its public page and block location', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-invalid-diagnostic-'));
+  try {
+    const snapshot = fixture('Invalid diagnostic');
+    const page = snapshot.pages[0]!; const block = page.blocks[0]!;
+    if (block.type !== 'hero') throw new Error('Fixture must start with a hero.');
+    block.heading = '';
+    const input = await writeSnapshot(root, snapshot, 'invalid.json');
+    const priorTheme = process.env.SITE_THEME_VERSION; const priorEngine = process.env.SITE_ENGINE_VERSION;
+    process.env.SITE_THEME_VERSION = '1.0.0'; process.env.SITE_ENGINE_VERSION = '1.0.0';
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow(`page \"${page.title}\" (${page.id}), block hero (${block.id}): pages[0].blocks[0].heading`);
+    process.env.SITE_THEME_VERSION = priorTheme; process.env.SITE_ENGINE_VERSION = priorEngine;
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 function fixture(name: string): SiteSnapshot {
   const snapshot = structuredClone(neutralFixture);
   const section = snapshot.settings.sections[0];
