@@ -310,7 +310,7 @@ describe('static snapshot renderer', () => {
     expect(JSON.parse(scripts[0]![1]!)['@graph'].some((entry: { name?: string }) => entry.name === attack)).toBe(true);
     expect(html).not.toContain('<img id="injected"');
     const job = await readFile(join(built.output, 'docs/safe-role/index.html'), 'utf8');
-    expect(job).toContain('<dt>Location</dt><dd>Example City, CA</dd>');
+    expect(job).toMatch(/<dt\b[^>]*>Location<\/dt><dd\b[^>]*>Example City, CA<\/dd>/);
     expect(job).toContain('full time');
     expect(job).toContain('"@type":"JobPosting"');
   }, 60_000);
