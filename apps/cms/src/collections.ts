@@ -290,7 +290,10 @@ export const PublishSnapshots: CollectionConfig = {
   slug: 'publish-snapshots', admin: { useAsTitle: 'contentHash', group: 'Editorial' },
   access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
   fields: [
-    { name: 'contentHash', type: 'text', required: true, unique: true },
+    // Content identity is deliberately not a version identity: two approved
+    // revisions may render the same manifest and must remain independently
+    // auditable/releasable.
+    { name: 'contentHash', type: 'text', required: true },
     { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
     { name: 'reviewRevision', type: 'number', required: true, admin: { readOnly: true } },
     { name: 'changeHash', type: 'text', required: true, admin: { readOnly: true } },
@@ -299,6 +302,8 @@ export const PublishSnapshots: CollectionConfig = {
     { name: 'engineVersion', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'contractVersion', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'approvedBy', type: 'relationship', relationTo: 'users', required: true, admin: { readOnly: true } },
+    { name: 'baselineSnapshot', type: 'relationship', relationTo: 'publish-snapshots', admin: { readOnly: true } },
+    { name: 'baselineSequence', type: 'number', required: true, min: 0, admin: { readOnly: true } },
   ],
 }
 

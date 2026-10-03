@@ -10,6 +10,7 @@ import * as migration_20261003_135539_editorial_change_set_lifecycle from './202
 import * as migration_20261003_143750 from './20261003_143750';
 import * as migration_20261003_144959 from './20261003_144959';
 import * as migration_20261003_150050 from './20261003_150050';
+import * as migration_20261003_160000_publish_queue_correctness from './20261003_160000_publish_queue_correctness';
 
 export const migrations = [
   {
@@ -71,5 +72,10 @@ export const migrations = [
     up: migration_20261003_150050.up,
     down: migration_20261003_150050.down,
     name: '20261003_150050'
+  },
+  {
+    up: migration_20261003_160000_publish_queue_correctness.up,
+    down: migration_20261003_160000_publish_queue_correctness.down,
+    name: '20261003_160000_publish_queue_correctness',
   },
 ];

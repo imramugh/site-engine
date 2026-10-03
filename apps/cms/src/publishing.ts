@@ -8,8 +8,10 @@ import { markStaleIfNeeded, type CapturedCollection } from './editorial'
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; afterHash: string | null }
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
-type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string }
+type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string; baselineSnapshotID?: string; baselineSequence?: number }
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[] }
+export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
+const MAX_PUBLISH_ATTEMPTS = 3
 
 function stable(value: unknown): string { if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`; if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => String(a).localeCompare(String(b))).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}`; return JSON.stringify(value) }
 export const canonicalHash = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex')
@@ -24,11 +26,22 @@ async function nextOutboxSequence(payload: Payload, req: PayloadRequest): Promis
   return Number(newest.docs[0]?.sequence ?? 0) + 1
 }
 
-async function publishedBaseline(payload: Payload, req: PayloadRequest): Promise<SiteSnapshot | undefined> {
-  const releases = await payload.find({ collection: 'published-releases', sort: '-activatedAt', limit: 1, depth: 1, overrideAccess: true, req })
+type Baseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number }
+
+async function publishedBaseline(payload: Payload, req: PayloadRequest): Promise<Baseline | undefined> {
+  const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
   const source = releases.docs[0]?.snapshot
   const manifest = source && typeof source === 'object' ? source.manifest : undefined
-  return manifest ? SiteSnapshotSchema.parse(manifest) : undefined
+  return manifest ? { manifest: SiteSnapshotSchema.parse(manifest), snapshotID: idOf(source), sequence: Number(releases.docs[0]?.sequence ?? 0) } : undefined
+}
+
+/** The queue head is the next publication baseline, even before it is public. */
+async function approvalBaseline(payload: Payload, req: PayloadRequest, initialBaseline?: SiteSnapshot): Promise<Baseline | undefined> {
+  const queued = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
+  const snapshot = queued.docs[0]?.snapshot
+  const manifest = snapshot && typeof snapshot === 'object' ? snapshot.manifest : undefined
+  if (manifest) return { manifest: SiteSnapshotSchema.parse(manifest), snapshotID: idOf(snapshot), sequence: Number(queued.docs[0]?.sequence ?? 0) }
+  return await publishedBaseline(payload, req) ?? (initialBaseline ? { manifest: initialBaseline, sequence: 0 } : undefined)
 }
 
 export function buildCandidate(base: SiteSnapshot, changes: Change[], includedChangeKeys: readonly string[], versions: Versions): SiteSnapshot {
@@ -87,15 +100,15 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   if (!checks?.length || checks.some((check) => check.status !== 'passed')) throw new Error('Change-set quality checks must pass before approval.')
   const known = new Set(changes.map((change) => `${change.collection}:${change.id}`))
   if (includedChangeKeys.some((key) => !known.has(key))) throw new Error('Approval must explicitly include unique captured changes only.')
-  const base = await publishedBaseline(payload, req) ?? initialBaseline
-  if (!base) throw new Error('An initial contract-valid baseline is required before approval.')
-  const candidate = buildCandidate(base, changes, includedChangeKeys, versions)
+  const baseline = await approvalBaseline(payload, req, initialBaseline)
+  if (!baseline) throw new Error('An initial contract-valid baseline is required before approval.')
+  const candidate = buildCandidate(baseline.manifest, changes, includedChangeKeys, versions)
   const contentHash = canonicalHash(candidate)
   const preview = set.preview as Preview | undefined
-  if (preview?.status !== 'ready' || preview.revision !== expectedRevision || preview.changeHash !== expectedChangeHash || preview.contentHash !== contentHash || preview.contentHash !== previewContentHash || !Array.isArray(preview.includedChangeKeys) || !keysEqual(preview.includedChangeKeys, includedChangeKeys)) throw new Error('A ready private preview for this exact candidate is required before approval.')
+  if (preview?.status !== 'ready' || preview.revision !== expectedRevision || preview.changeHash !== expectedChangeHash || preview.contentHash !== contentHash || preview.contentHash !== previewContentHash || preview.baselineSnapshotID !== baseline.snapshotID || preview.baselineSequence !== baseline.sequence || !Array.isArray(preview.includedChangeKeys) || !keysEqual(preview.includedChangeKeys, includedChangeKeys)) throw new Error('A ready private preview for this exact candidate with its exact baseline is required before approval.')
   const excluded = changes.filter((change) => !includedChangeKeys.includes(`${change.collection}:${change.id}`))
   if (excluded.length) await payload.create({ collection: 'change-sets', data: { name: `${String(set.name)} — remaining changes`, actor: idOf(set.actor), state: 'open', revision: 0, changes: excluded }, overrideAccess: true, req, context: { editorialInternal: true } })
-  const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence }, overrideAccess: true, req, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshotDoc.id, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.update({ collection: 'change-sets', id, data: { state: 'approved', changes: changes.filter((change) => includedChangeKeys.includes(`${change.collection}:${change.id}`)), reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', user: reviewer.id, actor: reviewer.id, detail: { changeSet: id, snapshot: snapshotDoc.id, outbox: outbox.id, includedChangeKeys } }, overrideAccess: true, req })
@@ -103,7 +116,7 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
 }
 
 /** Claims only the oldest unfinished job. A backoff or live lease deliberately blocks later jobs. */
-export async function claimNextPublishJob(payload: Payload, req: PayloadRequest, now = new Date(), leaseMilliseconds = 60_000) {
+export async function claimNextPublishJob(payload: Payload, req: PayloadRequest, now = new Date(), leaseMilliseconds = 60_000, maxAttempts = MAX_PUBLISH_ATTEMPTS) {
   requireTransaction(req, 'Publish claim')
   const result = await payload.find({ collection: 'publish-outbox', where: { status: { in: ['pending', 'processing'] } }, sort: 'sequence', limit: 1, depth: 0, overrideAccess: true, req })
   const job = result.docs[0]
@@ -111,6 +124,11 @@ export async function claimNextPublishJob(payload: Payload, req: PayloadRequest,
   const due = !job.nextAttemptAt || new Date(String(job.nextAttemptAt)).getTime() <= now.getTime()
   const expired = job.status === 'processing' && job.leaseExpiresAt && new Date(String(job.leaseExpiresAt)).getTime() <= now.getTime()
   if ((job.status === 'pending' && !due) || (job.status === 'processing' && !expired)) return null
+  if (job.status === 'processing' && expired && Number(job.attempts ?? 0) >= maxAttempts) {
+    const failed = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: job.id } }, { status: { equals: 'processing' } }, { leaseExpiresAt: { less_than_equal: now.toISOString() } }] }, data: { status: 'failed', errorCode: 'LEASE_EXPIRED', lastError: 'LEASE_EXPIRED', leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+    if (!failed.docs[0]) throw new Error('The publish lease is no longer current.')
+    return null
+  }
   const leaseToken = randomUUID()
   const claimed = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: job.id } }, { status: { equals: job.status } }, ...(job.status === 'processing' ? [{ leaseExpiresAt: { less_than_equal: now.toISOString() } }] : [])] }, data: { status: 'processing', claimedAt: now.toISOString(), leaseToken, leaseExpiresAt: new Date(now.getTime() + leaseMilliseconds).toISOString(), attempts: Number(job.attempts ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } })
   return claimed.docs[0] ?? null
@@ -128,8 +146,17 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   return updated.docs[0]
 }
 
+/** Extends an active lease while slow build or delivery work runs outside the transaction. */
+export async function renewPublishLease(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, now = new Date(), leaseMilliseconds = 60_000) {
+  requireTransaction(req, 'Publish lease renewal')
+  const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }, { leaseExpiresAt: { greater_than: now.toISOString() } }] }, data: { leaseExpiresAt: new Date(now.getTime() + leaseMilliseconds).toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  return updated.docs[0]
+}
+
 function verifyArtifact(snapshot: Record<string, unknown>, artifact: VerifiedArtifact) {
-  if (!/^[a-f0-9]{64}$/i.test(artifact.digest) || !artifact.checks.length || artifact.checks.some((check) => check.status !== 'passed') || artifact.sourceContentHash !== snapshot.contentHash || artifact.themeVersion !== snapshot.themeVersion || artifact.engineVersion !== snapshot.engineVersion || artifact.contractVersion !== snapshot.contractVersion) throw new Error('Verified artifact identity does not match the immutable snapshot.')
+  const names = artifact.checks.map((check) => check.name)
+  if (!/^[a-f0-9]{64}$/i.test(artifact.digest) || names.length !== REQUIRED_PUBLISH_HEALTH_CHECKS.length || new Set(names).size !== names.length || REQUIRED_PUBLISH_HEALTH_CHECKS.some((name) => !names.includes(name)) || artifact.checks.some((check) => check.status !== 'passed') || artifact.sourceContentHash !== snapshot.contentHash || artifact.themeVersion !== snapshot.themeVersion || artifact.engineVersion !== snapshot.engineVersion || artifact.contractVersion !== snapshot.contractVersion) throw new Error('Verified artifact identity does not match the immutable snapshot.')
 }
 
 /** Activates only a verified artifact from the current lease; delivery itself remains outside this transaction. */
@@ -145,6 +172,8 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   if (!snapshot || typeof snapshot !== 'object') throw new Error('Publish job is missing its immutable snapshot.')
   verifyArtifact(snapshot as unknown as Record<string, unknown>, artifact)
   if (job.status !== 'processing' || job.leaseToken !== leaseToken || !job.leaseExpiresAt || new Date(String(job.leaseExpiresAt)).getTime() <= now.getTime()) throw new Error('The publish lease is no longer current.')
+  const oldestUnfinished = await payload.find({ collection: 'publish-outbox', where: { status: { in: ['pending', 'processing'] } }, sort: 'sequence', limit: 1, depth: 0, overrideAccess: true, req })
+  if (oldestUnfinished.docs[0]?.id !== id) throw new Error('Only the oldest unfinished publish job can complete.')
   const latest = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true, req })
   if (latest.docs[0] && Number(latest.docs[0].sequence) >= Number(job.sequence)) throw new Error('An out-of-order publish job cannot activate an older release.')
   const snapshotID = idOf(snapshot)
@@ -152,5 +181,8 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: 'completed', completedAt: now.toISOString(), completionEvidence: artifact, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  const changeSetID = idOf(job.changeSet)
+  if (!changeSetID) throw new Error('Publish job is missing its change set.')
+  await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'published' }, overrideAccess: true, req, context: { editorialInternal: true } })
   return release
 }

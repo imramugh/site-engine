@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, retryPublishJob } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, renewPublishLease, retryPublishJob } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
@@ -48,7 +48,7 @@ async function fixture(label: string, options: { preview?: 'ready' | 'pending'; 
   const set = await payload.create({ collection: 'change-sets', data: { name: label, actor: editor.id, state: 'submitted', revision: 4, changes, quality: { checks: [{ name: 'contract-and-tree', status: 'passed' }] }, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
   const persistedChanges = set.changes as Change[]
   const candidate = buildCandidate(currentBase, persistedChanges, included, versions)
-  const preview = options.preview === 'pending' ? { status: 'pending' } : { status: 'ready', revision: 4, changeHash: changeSetHash(persistedChanges), includedChangeKeys: included, contentHash: canonicalHash(candidate) }
+  const preview = options.preview === 'pending' ? { status: 'pending' } : { status: 'ready', revision: 4, changeHash: changeSetHash(persistedChanges), includedChangeKeys: included, contentHash: canonicalHash(candidate), baselineSequence: 0 }
   const reviewed = await payload.update({ collection: 'change-sets', id: set.id, data: { preview }, overrideAccess: true, context: { editorialInternal: true } })
   const token = newOpaqueToken()
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: reviewer.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
@@ -59,17 +59,33 @@ async function approve(current: Awaited<ReturnType<typeof fixture>>, initialBase
 }
 
 async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
-  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id }, overrideAccess: true, context: { editorialInternal: true } })
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: artifact(snapshot.contentHash) }, overrideAccess: true, context: { editorialInternal: true } })
+  return { snapshot, sequence: 1 }
 }
 
-function artifact(sourceContentHash: string) { return { digest: 'a'.repeat(64), sourceContentHash, ...versions, checks: [{ name: 'health', status: 'passed' as const }] } }
+function artifact(sourceContentHash: string) { return { digest: 'a'.repeat(64), sourceContentHash, ...versions, checks: [{ name: 'artifact-integrity', status: 'passed' as const }, { name: 'public-health', status: 'passed' as const }] } }
+
+async function bindPreview(current: Awaited<ReturnType<typeof fixture>>, base: ReturnType<typeof baseline>, baselineSnapshotID?: string, baselineSequence = 0) {
+  const candidate = buildCandidate(base, current.changes, current.included, versions)
+  await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(current.changes), includedChangeKeys: current.included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence } }, overrideAccess: true, context: { editorialInternal: true } })
+  return candidate
+}
+
+async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixture>>, base: ReturnType<typeof baseline>, baselineSnapshotID: string | undefined, baselineSequence: number, path: string) {
+  const changes: Change[] = [{ collection: 'redirects', id: path, before: null, after: { from: path, to: '/welcome', status: 301 }, beforeHash: null, afterHash: null }]
+  const included = [`redirects:${path}`]
+  const candidate = buildCandidate(base, changes, included, versions)
+  await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes, preview: { status: 'ready', revision: 4, changeHash: changeSetHash(changes), includedChangeKeys: included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence } }, overrideAccess: true, context: { editorialInternal: true } })
+  return { changes, included, candidate }
+}
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
   it('uses a contract-valid frozen candidate, preserves exclusions, and deduplicates retry', async () => {
     const current = await fixture('approved', { excluded: true })
-    await installPublishedBaseline(current)
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
     const untrustedBaseline = structuredClone(current.baseline)
     untrustedBaseline.settings.siteName = 'Untrusted baseline must not win'
     const result = await approve(current, untrustedBaseline)
@@ -113,11 +129,23 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(candidate.redirects).toEqual([{ from: '/new-path', to: '/welcome', status: 301 }])
   })
 
+  it('keeps separate immutable snapshot versions when their content is identical', async () => {
+    const current = await fixture('identical-content')
+    const data = { changeSet: current.set.id, reviewRevision: 4, changeHash: 'same-content-different-version', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }
+    const first = await payload.create({ collection: 'publish-snapshots', data, overrideAccess: true, context: { editorialInternal: true } })
+    const second = await payload.create({ collection: 'publish-snapshots', data, overrideAccess: true, context: { editorialInternal: true } })
+    expect(second.id).not.toBe(first.id)
+    expect(second.contentHash).toBe(first.contentHash)
+  })
+
   it('serializes the SQLite worker head across leases, crash recovery, and backoff', async () => {
     const first = await fixture('lease-first')
     const second = await fixture('lease-second')
     await approve(first)
-    await approve(second)
+    const firstJob = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+    const firstSnapshot = firstJob.docs[0]!.snapshot as unknown as { id: string; manifest: ReturnType<typeof baseline> }
+    const prepared = await prepareRedirectApproval(second, firstSnapshot.manifest, firstSnapshot.id, 1, '/lease-second')
+    await withPayloadTransaction(payload, req => { req.headers = second.headers; return approveChangeSet({ payload, req, actor: second.reviewer, id: second.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(prepared.changes), includedChangeKeys: prepared.included, previewContentHash: canonicalHash(prepared.candidate), versions, initialBaseline: second.baseline }) })
     const started = new Date('2026-10-03T15:05:00.000Z')
     const lease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000))
     expect(typeof lease?.changeSet === 'object' ? lease.changeSet.id : lease?.changeSet).toBe(first.set.id)
@@ -127,12 +155,52 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     const reclaimed = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, reclaimedAt, 1_000))
     expect(reclaimed).toMatchObject({ id: lease!.id, attempts: 2 })
     expect(reclaimed?.leaseToken).not.toBe(lease?.leaseToken)
+    const renewed = await withPayloadTransaction(payload, req => renewPublishLease(payload, req, String(reclaimed!.id), String(reclaimed!.leaseToken), reclaimedAt, 1_000))
+    expect(new Date(String(renewed.leaseExpiresAt)).getTime()).toBe(reclaimedAt.getTime() + 1_000)
     await withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(reclaimed!.id), String(reclaimed!.leaseToken), 'BUILD_TIMEOUT', reclaimedAt))
     expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(reclaimedAt.getTime() + 999), 1_000))).toBeNull()
     const finalLease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(reclaimedAt.getTime() + 2_000), 1_000))
     expect(finalLease).toMatchObject({ id: lease!.id, attempts: 3 })
     const snapshot = typeof finalLease!.snapshot === 'object' ? finalLease!.snapshot : await payload.findByID({ collection: 'publish-snapshots', id: String(finalLease!.snapshot), overrideAccess: true })
     await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(finalLease!.id), String(finalLease!.leaseToken), artifact(snapshot.contentHash), new Date(reclaimedAt.getTime() + 2_001)))
+    expect(await payload.findByID({ collection: 'change-sets', id: first.set.id, overrideAccess: true })).toMatchObject({ state: 'published' })
+  })
+
+  it('composes queued approvals from the queue head and rejects previews for an older baseline', async () => {
+    const first = await fixture('queue-first')
+    const second = await fixture('queue-second')
+    const firstResult = await approve(first)
+    const firstSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: firstResult.snapshotID!, overrideAccess: true })
+    const redirectChange: Change = { collection: 'redirects', id: '/queue-proof', before: null, after: { from: '/queue-proof', to: '/welcome', status: 301 }, beforeHash: null, afterHash: null }
+    const secondChanges = [redirectChange]
+    await payload.update({ collection: 'change-sets', id: second.set.id, data: { changes: secondChanges, preview: { status: 'ready', revision: 4, changeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], contentHash: canonicalHash(buildCandidate(second.baseline, secondChanges, ['redirects:/queue-proof'], versions)), baselineSequence: 0 } }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(withPayloadTransaction(payload, req => { req.headers = second.headers; return approveChangeSet({ payload, req, actor: second.reviewer, id: second.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], previewContentHash: canonicalHash(buildCandidate(second.baseline, secondChanges, ['redirects:/queue-proof'], versions)), versions, initialBaseline: second.baseline }) })).rejects.toThrow('exact baseline')
+    const queuedCandidate = buildCandidate(firstSnapshot.manifest as ReturnType<typeof baseline>, secondChanges, ['redirects:/queue-proof'], versions)
+    await payload.update({ collection: 'change-sets', id: second.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], contentHash: canonicalHash(queuedCandidate), baselineSnapshotID: firstSnapshot.id, baselineSequence: 1 } }, overrideAccess: true, context: { editorialInternal: true } })
+    const secondResult = await withPayloadTransaction(payload, req => { req.headers = second.headers; return approveChangeSet({ payload, req, actor: second.reviewer, id: second.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], previewContentHash: canonicalHash(queuedCandidate), versions, initialBaseline: second.baseline }) })
+    const secondSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: secondResult.snapshotID!, overrideAccess: true })
+    expect((secondSnapshot.manifest as ReturnType<typeof baseline>).pages).toEqual((firstSnapshot.manifest as ReturnType<typeof baseline>).pages)
+    expect((secondSnapshot.manifest as ReturnType<typeof baseline>).redirects).toContainEqual({ from: '/queue-proof', to: '/welcome', status: 301 })
+    const baselineSnapshotID = secondSnapshot.baselineSnapshot && typeof secondSnapshot.baselineSnapshot === 'object' ? secondSnapshot.baselineSnapshot.id : secondSnapshot.baselineSnapshot
+    expect(baselineSnapshotID).toBe(firstSnapshot.id)
+    expect(secondSnapshot.baselineSequence).toBe(1)
+  })
+
+  it('turns an expired final lease into a terminal failure and accepts only named health checks', async () => {
+    const current = await fixture('terminal-lease')
+    await approve(current)
+    const started = new Date('2026-10-03T16:00:00.000Z')
+    const lease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000, 1))
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(started.getTime() + 1_001), 1_000, 1))).toBeNull()
+    const failed = await payload.findByID({ collection: 'publish-outbox', id: String(lease!.id), overrideAccess: true })
+    expect(failed).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED', attempts: 1 })
+    const other = await fixture('invalid-health')
+    const failedSnapshot = typeof failed.snapshot === 'object' ? failed.snapshot as unknown as { id: string; manifest: ReturnType<typeof baseline> } : await payload.findByID({ collection: 'publish-snapshots', id: String(failed.snapshot), overrideAccess: true }) as unknown as { id: string; manifest: ReturnType<typeof baseline> }
+    const prepared = await prepareRedirectApproval(other, failedSnapshot.manifest, failedSnapshot.id, 1, '/invalid-health')
+    await withPayloadTransaction(payload, req => { req.headers = other.headers; return approveChangeSet({ payload, req, actor: other.reviewer, id: other.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(prepared.changes), includedChangeKeys: prepared.included, previewContentHash: canonicalHash(prepared.candidate), versions, initialBaseline: other.baseline }) })
+    const validLease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(started.getTime() + 2_000)))
+    const snapshot = typeof validLease!.snapshot === 'object' ? validLease!.snapshot : await payload.findByID({ collection: 'publish-snapshots', id: String(validLease!.snapshot), overrideAccess: true })
+    await expect(withPayloadTransaction(payload, req => completePublishJob(payload, req, String(validLease!.id), String(validLease!.leaseToken), { ...artifact(snapshot.contentHash), checks: [{ name: 'anything', status: 'passed' }] }, new Date(started.getTime() + 2_001)))).rejects.toThrow('Verified artifact')
   })
 
   it('rolls back snapshots/outbox and keeps delivery outside a claim/retry transaction', async () => {

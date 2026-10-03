@@ -423,6 +423,8 @@ export interface PublishSnapshot {
   engineVersion: string;
   contractVersion: string;
   approvedBy: string | User;
+  baselineSnapshot?: (string | null) | PublishSnapshot;
+  baselineSequence: number;
   updatedAt: string;
   createdAt: string;
 }
@@ -814,6 +816,8 @@ export interface PublishSnapshotsSelect<T extends boolean = true> {
   engineVersion?: T;
   contractVersion?: T;
   approvedBy?: T;
+  baselineSnapshot?: T;
+  baselineSequence?: T;
   updatedAt?: T;
   createdAt?: T;
 }
