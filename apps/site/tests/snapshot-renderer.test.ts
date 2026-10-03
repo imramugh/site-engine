@@ -494,7 +494,7 @@ describe('static snapshot renderer', () => {
             await page.getByLabel('Name').fill('Preview applicant'); await page.getByLabel('Email').fill('preview.applicant@example.test'); await page.getByLabel('Cover letter').fill('A valid public application form submission.');
             await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); await page.getByLabel(/I consent/).check(); await button.click();
             await page.getByRole('alert').waitFor({ state: 'visible' }); await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.getByLabel('Cover letter').fill('A changed public application submission.'); await button.click();
-            await page.getByRole('status').waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
+            await page.getByRole('status').filter({ hasText: 'Your application has been received.' }).waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
           } else {
             expect(await button.isDisabled()).toBe(true);
             await form.evaluate((element: HTMLFormElement) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
