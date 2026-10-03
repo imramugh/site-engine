@@ -149,6 +149,33 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"ProfessionalService"');
   });
 
+  it('escapes structured data and displays the same job metadata described by its schema', async () => {
+    const snapshot = fixture('Safe metadata');
+    const attack = '</script><img id="injected" src=x onerror=alert(1)>';
+    snapshot.pages[0]!.title = attack;
+    const section = snapshot.settings.sections[0]!;
+    section.allowedTemplates.push('job');
+    const jobId = '12345678-1234-4234-8234-123456789abc';
+    section.pageIds.push(jobId);
+    snapshot.pages.push({ id: jobId, sectionId: section.id, parentId: section.landingPageId,
+      title: 'Example role', summary: 'Synthetic role details.', slug: 'safe-role', template: 'job', status: 'published',
+      blocks: [{ id: '12345678-1234-4234-8234-123456789abd', type: 'richText', body: 'A complete visible synthetic role description.', hidden: false,
+        appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }],
+      jobPosting: { datePosted: '2026-01-01T00:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' },
+    });
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'safe-metadata.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    const scripts = [...html.matchAll(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)];
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]![1]).not.toContain('<');
+    expect(JSON.parse(scripts[0]![1]!)['@graph'].some((entry: { name?: string }) => entry.name === attack)).toBe(true);
+    expect(html).not.toContain('<img id="injected"');
+    const job = await readFile(join(built.output, 'docs/safe-role/index.html'), 'utf8');
+    expect(job).toContain('<dt>Location</dt><dd>Example City, CA</dd>');
+    expect(job).toContain('full time');
+    expect(job).toContain('"@type":"JobPosting"');
+  }, 60_000);
+
   it('rejects malformed input and never promotes a partial artifact', async () => {
     const invalidJson = join(root, 'invalid.json'); const invalidSchema = join(root, 'invalid-schema.json');
     const promoted = (await readdir(root)).filter((name) => name.startsWith('snapshot-'));

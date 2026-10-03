@@ -19,7 +19,7 @@ export async function writeIndexNowVerificationFile({ output, key = process.env.
   if (!validKey(key)) return false;
   const root = resolve(output); const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('IndexNow verification output must be a real directory.');
-  await writeFile(join(root, `${key}.txt`), key, { mode: 0o644 });
+  await writeFile(join(root, `${key}.txt`), key, { mode: 0o644, flag: 'wx' });
   return true;
 }
 

@@ -71,7 +71,7 @@ export const SectionPresets = {
 } as const satisfies Record<string, readonly z.infer<typeof TemplateSchema>[]>;
 const JobPostingSchema = z.object({
   datePosted: z.string().datetime(), employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY', 'INTERN', 'OTHER']),
-  location: z.object({ addressLocality: safeText(100), addressRegion: safeText(100).optional(), addressCountry: safeText(2) }).strict(),
+  location: z.object({ addressLocality: safeText(100), addressRegion: safeText(100).optional(), addressCountry: z.string().regex(/^[A-Z]{2}$/) }).strict(),
   validThrough: z.string().datetime().optional(),
 }).strict().superRefine((job, ctx) => { if (job.validThrough && new Date(job.validThrough) <= new Date(job.datePosted)) ctx.addIssue({ code: 'custom', path: ['validThrough'], message: 'Job closing time must be after its posting time.' }); });
 export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(), title: safeText(160), summary: safeText(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), template: TemplateSchema, status: z.enum(['draft', 'published', 'archived']), blocks: z.array(BlockSchema).max(40), seoDescription: safeText(160).optional(), publishedAt: z.string().datetime().optional(), updatedAt: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional() }).strict().superRefine((page, ctx) => {
