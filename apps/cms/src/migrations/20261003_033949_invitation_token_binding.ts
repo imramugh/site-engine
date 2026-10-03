@@ -10,15 +10,15 @@ export async function up({ db, payload, req }: MigrateUpArgs): Promise<void> {
 export async function down({ db, payload, req }: MigrateDownArgs): Promise<void> {
   await db.run(sql`PRAGMA foreign_keys=OFF;`)
   await db.run(sql`CREATE TABLE \`__new_auth_transactions\` (
-  	\`id\` text(36) PRIMARY KEY NOT NULL,
-  	\`state_hash\` text NOT NULL,
-  	\`nonce\` text NOT NULL,
-  	\`verifier\` text NOT NULL,
-  	\`provider\` text NOT NULL,
-  	\`expires_at\` text NOT NULL,
-  	\`consumed_at\` text,
-  	\`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
-  	\`created_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
+    \`id\` text(36) PRIMARY KEY NOT NULL,
+    \`state_hash\` text NOT NULL,
+    \`nonce\` text NOT NULL,
+    \`verifier\` text NOT NULL,
+    \`provider\` text NOT NULL,
+    \`expires_at\` text NOT NULL,
+    \`consumed_at\` text,
+    \`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,
+    \`created_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL
   );
   `)
   await db.run(sql`INSERT INTO \`__new_auth_transactions\`("id", "state_hash", "nonce", "verifier", "provider", "expires_at", "consumed_at", "updated_at", "created_at") SELECT "id", "state_hash", "nonce", "verifier", "provider", "expires_at", "consumed_at", "updated_at", "created_at" FROM \`auth_transactions\`;`)
