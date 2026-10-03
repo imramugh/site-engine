@@ -545,7 +545,7 @@ it('ENG-035 loads trusted components from a packed external theme package', asyn
     await writeFile(join(source, 'theme.json'), JSON.stringify({ name: 'external-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }));
     await writeFile(join(source, 'dist', 'renderer.js'), 'export const packagedExternalTheme = true;\n');
     await writeFile(join(source, 'components', 'Layout.astro'), `--- const { title } = Astro.props; ---\n<html><head><title>{title}</title></head><body data-packed-external-theme="true"><slot /></body></html>`);
-    await writeFile(join(source, 'components', 'BlockRenderer.astro'), `---\nconst { block } = Astro.props;\nconst supported = block.type === 'hero';\n---\n<section data-packed-block={block.type}>{supported ? <h2>{block.heading}</h2> : <p data-packed-fallback="unsupported-standard-block">This block uses the host fallback.</p>}</section>`);
+    await writeFile(join(source, 'components', 'BlockRenderer.astro'), `---\nconst { block } = Astro.props;\nconst supported = block.type === 'hero';\n---\n<section data-packed-block={block.type}>{supported ? <h2>{block.heading}</h2> : <p data-packed-placeholder="unsupported-standard-block">External theme placeholder.</p>}</section>`);
     const tarball = execFileSync('npm', ['pack', '--json'], { cwd: source, encoding: 'utf8' }); const file = JSON.parse(tarball)[0].filename;
     await mkdir(installed, { recursive: true }); execFileSync('tar', ['-xzf', join(source, file), '--strip-components=1', '-C', installed]);
     expect((await lstat(join(installed, 'dist', 'renderer.js'))).isFile()).toBe(true);
@@ -559,12 +559,12 @@ it('ENG-035 loads trusted components from a packed external theme package', asyn
     const pins = { themeVersion: manifest.version, engineVersion: '1.0.0', contractVersion: '1.0.0' };
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: join(installed, 'components'), versionPins: pins });
     const html = await readFile(join(built.output, 'index.html'), 'utf8');
-    expect(html).toContain('data-packed-external-theme="true"'); expect(html).toContain('data-packed-fallback="unsupported-standard-block"');
+    expect(html).toContain('data-packed-external-theme="true"'); expect(html).toContain('data-packed-placeholder="unsupported-standard-block"');
     expect(built.manifest.sourceVersions).toEqual({ contractVersion: '1.0.0', themeVersion: manifest.version, engineVersion: '1.0.0' });
     const incompatible = structuredClone(snapshot); incompatible.settings.theme!.contract = '1.0.1';
     let rendered = false;
     await expect(runPreviewOnce({
-      artifactRoot: join(root, 'preview-artifacts'), publicOrigin: PUBLIC_ORIGIN, versionPins: pins, registry,
+      artifactRoot: join(root, 'preview-artifacts'), publicOrigin: PUBLIC_ORIGIN, versionPins: pins, registry, signal: undefined,
       api: async (action: string) => action === 'claim' ? { job: { id: randomUUID(), leaseToken: 'packed-theme-preview-token', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live: snapshot, proposed: incompatible, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins } : { ok: true },
       render: async () => { rendered = true; throw new Error('The renderer must not run for an incompatible frozen selection.'); },
     })).rejects.toThrow('Frozen theme selection is not installed exactly as reviewed.');
