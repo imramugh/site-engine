@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { createClient } from '@libsql/client'
 
 const scopedSlugMigration = '20261003_133520_scoped_page_slugs'
+const publishQueueMigration = '20261003_160000_publish_queue_correctness'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -22,6 +23,10 @@ describe('production migrations (ENG-036)', () => {
     const sqlite = createClient({ url: databaseURI })
     const tables = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('users', 'payload_migrations')")
     expect(tables.rows.map((row) => row.name)).toEqual(expect.arrayContaining(['users', 'payload_migrations']))
+    const emptySchema = await sqlite.execute("SELECT name FROM pragma_table_info('publish_snapshots') WHERE name IN ('baseline_snapshot_id', 'baseline_sequence')")
+    expect(emptySchema.rows.map((row) => row.name)).toEqual(['baseline_snapshot_id', 'baseline_sequence'])
+    const emptyIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
+    expect(emptyIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
     // Reconstruct the state immediately before the newest migration: all prior
     // migrations are recorded, an existing row uses the old global slug index,
     // and the latest migration has not been recorded yet.
@@ -40,6 +45,24 @@ describe('production migrations (ENG-036)', () => {
     expect(retained.rows).toHaveLength(1)
     const applied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${scopedSlugMigration}'`)
     expect(applied.rows.map((row) => row.name)).toEqual([scopedSlugMigration])
+
+    // Reconstruct the schema at migration 9. The real production command must
+    // add the queue baseline fields without a schema push or an empty-db shortcut.
+    for (const statement of [
+      'DROP INDEX publish_snapshots_baseline_snapshot_idx',
+      'ALTER TABLE publish_snapshots DROP COLUMN baseline_snapshot_id',
+      'ALTER TABLE publish_snapshots DROP COLUMN baseline_sequence',
+      'CREATE UNIQUE INDEX publish_snapshots_content_hash_idx ON publish_snapshots (content_hash)',
+      `DELETE FROM payload_migrations WHERE name = '${publishQueueMigration}'`,
+    ]) await sqlite.execute(statement)
+    const queueForward = migrate()
+    expect(queueForward.status, queueForward.stderr || queueForward.stdout).toBe(0)
+    const queueColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('publish_snapshots') WHERE name IN ('baseline_snapshot_id', 'baseline_sequence')")
+    expect(queueColumns.rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'baseline_snapshot_id' }), expect.objectContaining({ name: 'baseline_sequence', dflt_value: '0' })]))
+    const queueIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
+    expect(queueIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
+    const queueApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${publishQueueMigration}'`)
+    expect(queueApplied.rows.map((row) => row.name)).toEqual([publishQueueMigration])
     await sqlite.close()
 
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')

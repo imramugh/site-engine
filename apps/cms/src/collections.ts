@@ -303,7 +303,7 @@ export const PublishSnapshots: CollectionConfig = {
     { name: 'contractVersion', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'approvedBy', type: 'relationship', relationTo: 'users', required: true, admin: { readOnly: true } },
     { name: 'baselineSnapshot', type: 'relationship', relationTo: 'publish-snapshots', admin: { readOnly: true } },
-    { name: 'baselineSequence', type: 'number', required: true, min: 0, admin: { readOnly: true } },
+    { name: 'baselineSequence', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
   ],
 }
 

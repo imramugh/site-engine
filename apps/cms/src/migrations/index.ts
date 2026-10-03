@@ -71,11 +71,11 @@ export const migrations = [
   {
     up: migration_20261003_150050.up,
     down: migration_20261003_150050.down,
-    name: '20261003_150050'
+    name: '20261003_150050',
   },
   {
     up: migration_20261003_160000_publish_queue_correctness.up,
     down: migration_20261003_160000_publish_queue_correctness.down,
-    name: '20261003_160000_publish_queue_correctness',
+    name: '20261003_160000_publish_queue_correctness'
   },
 ];

@@ -3,10 +3,10 @@ import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole } from './access'
 import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable } from './identity'
-import { markStaleIfNeeded, type CapturedCollection } from './editorial'
+import { markStaleIfNeeded, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
-type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; afterHash: string | null }
+type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
 type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string; baselineSnapshotID?: string; baselineSequence?: number }
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[] }
@@ -44,6 +44,37 @@ async function approvalBaseline(payload: Payload, req: PayloadRequest, initialBa
   return await publishedBaseline(payload, req) ?? (initialBaseline ? { manifest: initialBaseline, sequence: 0 } : undefined)
 }
 
+const owns = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key)
+const same = (left: unknown, right: unknown) => stable(left) === stable(right)
+
+/** Applies only fields changed by the editor, preserving independently queued fields. */
+function mergeCapturedChange(current: Record<string, unknown> | undefined, change: Change): Record<string, unknown> | null {
+  if (change.before === null) {
+    if (current) throw new Error('This approval would overwrite a record in the queued baseline. Refresh the change set before approval.')
+    return change.after === null ? null : structuredClone(change.after)
+  }
+  if (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
+  if (!current) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
+  const currentSnapshot = capturedSnapshot(change.collection, current)
+  if (!currentSnapshot) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
+  if (change.after === null) {
+    if (!same(currentSnapshot, change.before)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
+    return null
+  }
+  const merged = structuredClone(current)
+  for (const key of new Set([...Object.keys(change.before), ...Object.keys(change.after)])) {
+    const before = owns(change.before, key) ? change.before[key] : undefined
+    const after = owns(change.after, key) ? change.after[key] : undefined
+    if (same(before, after)) continue
+    const baseline = owns(currentSnapshot, key) ? currentSnapshot[key] : undefined
+    if (!same(baseline, before) && !same(baseline, after)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
+    if (same(baseline, after)) continue
+    if (owns(change.after, key)) merged[key] = structuredClone(after)
+    else delete merged[key]
+  }
+  return merged
+}
+
 export function buildCandidate(base: SiteSnapshot, changes: Change[], includedChangeKeys: readonly string[], versions: Versions): SiteSnapshot {
   const pages = new Map(base.pages.map((page) => [page.id, structuredClone(page)]))
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
@@ -51,13 +82,21 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
-    if (change.collection === 'pages') change.after === null ? pages.delete(change.id) : pages.set(change.id, { id: change.id, ...change.after, status: 'published' } as SiteSnapshot['pages'][number])
-    if (change.collection === 'sections') change.after === null ? sections.delete(change.id) : sections.set(change.id, { id: change.id, ...change.after } as SiteSnapshot['settings']['sections'][number])
+    if (change.collection === 'pages') {
+      const merged = mergeCapturedChange(pages.get(change.id) as Record<string, unknown> | undefined, change)
+      merged === null ? pages.delete(change.id) : pages.set(change.id, { id: change.id, ...merged, status: 'published' } as SiteSnapshot['pages'][number])
+    }
+    if (change.collection === 'sections') {
+      const merged = mergeCapturedChange(sections.get(change.id) as Record<string, unknown> | undefined, change)
+      merged === null ? sections.delete(change.id) : sections.set(change.id, { id: change.id, ...merged } as SiteSnapshot['settings']['sections'][number])
+    }
     if (change.collection === 'redirects') {
-      if (change.after === null) redirects.delete(String(change.before?.from))
+      const original = String(change.before?.from ?? change.id)
+      const merged = mergeCapturedChange(redirects.get(original) as Record<string, unknown> | undefined, change)
+      if (merged === null) redirects.delete(original)
       else {
-        if (change.before?.from && change.before.from !== change.after.from) redirects.delete(String(change.before.from))
-        redirects.set(String(change.after.from), change.after as SiteSnapshot['redirects'][number])
+        redirects.delete(original)
+        redirects.set(String(merged.from), merged as SiteSnapshot['redirects'][number])
       }
     }
   }

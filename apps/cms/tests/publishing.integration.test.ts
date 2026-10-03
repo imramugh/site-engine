@@ -42,7 +42,9 @@ async function fixture(label: string, options: { preview?: 'ready' | 'pending'; 
   await payload.create({ collection: 'pages', data: { id: page.id, sectionId: page.sectionId, title: page.title, summary: page.summary, slug: page.slug, template: page.template, blocks: page.blocks }, overrideAccess: true })
   const after = { ...page, title: `Approved ${label}`, status: undefined }
   delete (after as { status?: unknown }).status
-  const changes: Change[] = [{ collection: 'pages', id: page.id, before: { ...page, status: undefined }, after, beforeHash: null, afterHash: null }]
+  const before = { ...page, status: undefined }
+  delete (before as { status?: unknown }).status
+  const changes: Change[] = [{ collection: 'pages', id: page.id, before, after, beforeHash: canonicalHash(before), afterHash: null }]
   if (options.excluded) changes.push({ collection: 'redirects', id: '/remaining', before: null, after: { from: '/remaining', to: '/welcome', status: 301 }, beforeHash: null, afterHash: null })
   const included = [`pages:${page.id}`]
   const set = await payload.create({ collection: 'change-sets', data: { name: label, actor: editor.id, state: 'submitted', revision: 4, changes, quality: { checks: [{ name: 'contract-and-tree', status: 'passed' }] }, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
@@ -125,8 +127,23 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
   it('removes the old redirect key when an included redirect is renamed', () => {
     const base = baseline()
     base.redirects = [{ from: '/old-path', to: '/welcome', status: 301 }]
-    const candidate = buildCandidate(base, [{ collection: 'redirects', id: '/old-path', before: { from: '/old-path', to: '/welcome', status: 301 }, after: { from: '/new-path', to: '/welcome', status: 301 }, afterHash: null }], ['redirects:/old-path'], versions)
+    const before = { from: '/old-path', to: '/welcome', status: 301 }
+    const candidate = buildCandidate(base, [{ collection: 'redirects', id: '/old-path', before, after: { from: '/new-path', to: '/welcome', status: 301 }, beforeHash: canonicalHash(before), afterHash: null }], ['redirects:/old-path'], versions)
     expect(candidate.redirects).toEqual([{ from: '/new-path', to: '/welcome', status: 301 }])
+  })
+
+  it('preserves different queued fields and rejects an overlapping same-field approval', () => {
+    const base = baseline()
+    const page = base.pages[0]!
+    const before = { ...page, status: undefined }
+    delete (before as { status?: unknown }).status
+    const first: Change = { collection: 'pages', id: page.id, before, after: { ...before, title: 'Queued title' }, beforeHash: canonicalHash(before), afterHash: null }
+    const firstCandidate = buildCandidate(base, [first], [`pages:${page.id}`], versions)
+    const second: Change = { collection: 'pages', id: page.id, before, after: { ...before, summary: 'Queued summary' }, beforeHash: canonicalHash(before), afterHash: null }
+    const composed = buildCandidate(firstCandidate, [second], [`pages:${page.id}`], versions)
+    expect(composed.pages[0]).toMatchObject({ title: 'Queued title', summary: 'Queued summary' })
+    const conflict: Change = { collection: 'pages', id: page.id, before, after: { ...before, title: 'Conflicting title' }, beforeHash: canonicalHash(before), afterHash: null }
+    expect(() => buildCandidate(firstCandidate, [conflict], [`pages:${page.id}`], versions)).toThrow('conflicts with the queued baseline')
   })
 
   it('keeps separate immutable snapshot versions when their content is identical', async () => {
