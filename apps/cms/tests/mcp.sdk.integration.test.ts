@@ -19,6 +19,7 @@ const tokens = new Map<string, Token>()
 let payload: Awaited<ReturnType<typeof getPayload>>
 let mcpOrigin = ''
 let oauthOrigin = ''
+let introspections = 0
 let mcpServer: ReturnType<typeof createServer>
 let oauthServer: ReturnType<typeof createServer>
 
@@ -63,6 +64,7 @@ beforeAll(async () => {
   const oauth = await startServer(async (incoming, outgoing) => {
     const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
     if (incoming.method !== 'POST' || incoming.url !== '/internal/introspect' || incoming.headers['x-oauth-introspection-secret'] !== 'mcp-sdk-secret') { outgoing.writeHead(404); outgoing.end(); return }
+    introspections += 1
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     const token = typeof input.token === 'string' ? tokens.get(input.token) : undefined
     let sessionActive = false
@@ -143,7 +145,16 @@ test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only cre
   const contentOnlySession = await sessionFor(contentOnly.id)
   tokens.set('content-only-token', { clientId: 'content-only-client', userId: contentOnly.id, sessionId: contentOnlySession.id, scopes: ['mcp:content:read'] })
   const redirectCall = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_redirects', arguments: {} } })
-  expect((await post({ authorization: 'Bearer content-only-token', 'x-mcp-required-scope': 'mcp:content:read' }, redirectCall)).status).toBe(403)
+  const scopeDenied = await post({ authorization: 'Bearer content-only-token', 'x-mcp-required-scope': 'mcp:content:read' }, redirectCall)
+  expect(scopeDenied.status).toBe(403)
+  expect(scopeDenied.headers.get('www-authenticate')).toContain('error="insufficient_scope", scope="mcp:redirects:read"')
+  const secretLikeTool = 'do-not-write-this-tool-name-to-audit'
+  expect((await post({ authorization: 'Bearer content-only-token' }, JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: secretLikeTool, arguments: {} } }))).status).toBe(200)
+  const unknownAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, sort: '-createdAt', limit: 1 })
+  expect(unknownAudit.docs[0]?.detail).toMatchObject({ method: 'tools/call', tool: 'unknown' })
+  expect(JSON.stringify(unknownAudit.docs[0])).not.toContain(secretLikeTool)
+  tokens.set('bad-id-token', { clientId: 'bad identity value', userId: contentOnly.id, sessionId: contentOnlySession.id, scopes: ['mcp:content:read'] })
+  expect((await post({ authorization: 'Bearer bad-id-token' })).status).toBe(401)
   const rateUser = await payload.create({ collection: 'users', data: { email: 'mcp-rate@example.test', name: 'MCP Rate', roles: ['editor'] }, overrideAccess: true })
   const rateSession = await sessionFor(rateUser.id)
   tokens.set('client-rate-token', { clientId: 'same-client', userId: rateUser.id, sessionId: rateSession.id, scopes: ['mcp:content:read'] })
@@ -151,4 +162,20 @@ test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only cre
   expect((await post({ authorization: 'Bearer client-rate-token' })).status).toBe(429)
   tokens.set('user-rate-token', { clientId: 'different-client', userId: rateUser.id, sessionId: rateSession.id, scopes: ['mcp:content:read'] })
   expect((await post({ authorization: 'Bearer user-rate-token' })).status).toBe(429)
+})
+
+test('MCP cancels a chunked body over the limit before introspection, Payload, or audit work', async () => {
+  let cancelled = false
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array(32_769)); },
+    cancel() { cancelled = true },
+  })
+  const before = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, limit: 0 })
+  const introspectionsBefore = introspections
+  const response = await handleMcp(new Request(`${mcpOrigin}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: stream, duplex: 'half' } as RequestInit))
+  expect(response.status).toBe(413)
+  expect(cancelled).toBe(true)
+  expect(introspections).toBe(introspectionsBefore)
+  const after = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, limit: 0 })
+  expect(after.totalDocs).toBe(before.totalDocs)
 })
