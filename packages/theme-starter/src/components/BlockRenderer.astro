@@ -40,7 +40,7 @@ const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : mot
   {block.type === 'logoStrip' && <ul class="cards">{block.mediaIds.map((id) => image(id, 'thumbnail') && <li><picture>{image(id, 'thumbnail')!.avif && <source srcset={image(id, 'thumbnail')!.avif} type="image/avif" />}{image(id, 'thumbnail')!.webp && <source srcset={image(id, 'thumbnail')!.webp} type="image/webp" />}<img class="media" src={mediaSrc(id)} width={image(id, 'thumbnail')!.item.width} height={image(id, 'thumbnail')!.item.height} alt={image(id, 'thumbnail')!.alt} /></picture></li>)}</ul>}
   {block.type === 'video' && <><video class="video" controls poster={mediaSrc(block.posterMediaId)} aria-label={resolved(block.mediaId)?.alt}><source src={mediaSrc(block.mediaId)} type={resolved(block.mediaId)?.mimeType} /><track kind="captions" src={mediaSrc(block.captionsMediaId)} srclang="en" label="English" default />Your browser does not support video.</video>{block.transcript && <details><summary>Transcript</summary><p>{block.transcript}</p></details>}</>}
 </div></section>}
-<script>
+{!block.hidden && block.type === 'contact' && block.inquiryForm && <script>
   document.querySelectorAll<HTMLFormElement>('[data-inquiry-form]').forEach((form) => {
     let pending = false;
     let accepted = false;
@@ -74,4 +74,4 @@ const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : mot
       }
     });
   });
-</script>
+</script>}

@@ -35,5 +35,7 @@ test('public inquiry survives retries and enters the protected staff workflow', 
     const exported = await page.request.get('/api/leads/export')
     expect(exported.status()).toBe(200)
     expect(await exported.text()).toContain(input.email)
+    expect((await page.request.delete(`/api/inquiries/${id}`, { headers })).status()).toBe(200)
+    expect((await (await page.request.get('/api/leads')).json()).leads.some((lead: { id: string }) => lead.id === id)).toBe(false)
   } finally { await visitor.close() }
 })
