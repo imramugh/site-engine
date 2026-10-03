@@ -53,3 +53,4 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
 
 export function childrenOf(route: PublicRoute, model: RouteModel): PublicRoute[] { return model.routes.filter((candidate) => candidate.page.parentId === route.page.id); }
 export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title)); }
+export { effectiveMotion, motionPreferenceKey, mountMotionRuntime, type MotionPreference } from './motion.js';
