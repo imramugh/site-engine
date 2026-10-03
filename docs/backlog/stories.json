@@ -1079,6 +1079,36 @@
         "ENG-021",
         "ENG-022"
       ]
+    },
+    {
+      "id": "ENG-038",
+      "title": "Build the neutral starter theme and public conformance harness",
+      "phase": "foundation",
+      "source_refs": [
+        "Product requirements: theme contract and authoring"
+      ],
+      "user_story": "As a theme author, I want a plain conforming starter so any visual direction has a safe, documented base.",
+      "acceptance": [
+        "Implement every standard template, block, background tone, logo rule, and motion intent from the contract.",
+        "Ship self-hosted font setup, token architecture, component states, and accessible defaults.",
+        "Provide fixtures for long, short, empty, image, and error content.",
+        "Run visual, accessibility, and reduced-motion tests as installability gates.",
+        "Document extension naming for theme-specific blocks and settings.",
+        "Build, pack, install, and test the starter without private repositories, assets, or credentials."
+      ],
+      "testing": {
+        "unit": "Test manifest and token validation.",
+        "integration": "Run contract, visual, and accessibility suites against starter fixtures."
+      },
+      "e2e": [
+        "Given a fresh conforming theme copied from starter, when installed, then the compatibility report passes standard content.",
+        "Given a required contract element is absent, when install validation runs, then it rejects the theme."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-005",
+        "ENG-015"
+      ]
     }
   ]
 }

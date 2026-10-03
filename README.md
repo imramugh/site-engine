@@ -1,27 +1,35 @@
 # Site Engine
 
-This repository will host a reusable publishing engine for static sites with an authenticated preview workflow. It is intentionally a scaffold: no application code, dependency manifests, deployment configuration, or executable product scripts exist yet. It is licensed under Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+An Apache-2.0 publishing engine under active development: an Astro static site, Payload CMS on Next.js, and SQLite WAL storage. The public demonstration uses synthetic content and requires no private repository or credentials.
 
-## Planned layout
+## Workspace
 
-- `apps/site` — Astro static site and authenticated preview (implementation pending)
-- `apps/cms` — Payload CMS on Next.js (implementation pending)
-- `packages/contract` — shared content and API contract (implementation pending)
-- `packages/engine` — reusable engine code (implementation pending)
-- `packages/checks` — quality and accessibility checks (implementation pending)
-- `packages/theme-starter` — starter theme contract (implementation pending)
-- `mcp` — MCP integration (implementation pending)
+- `apps/site`: static neutral demonstration and browser regression tests.
+- `apps/cms`: protected content collections, SQLite migrations, and a health endpoint.
+- `packages/contract`: versioned schemas and content tree validation.
+- `packages/engine`: shared rendering and theme validation utilities.
+- `packages/checks`: regression helpers and dependency/provenance checks.
+- `packages/theme-starter`: neutral starter foundation.
 
-## Local validation
+## Development
 
-Run `make check` to validate scaffold metadata. It uses only the Python standard library and does not install dependencies or run application tests.
+Use Node **24.21.0** and pnpm **12.8.1**. Enable Corepack in your isolated Node installation, then run:
 
-## Quality plan
+```sh
+corepack pnpm@12.8.1 install --frozen-lockfile
+corepack pnpm@12.8.1 check
+corepack pnpm@12.8.1 build
+corepack pnpm@12.8.1 exec playwright install --with-deps chromium firefox webkit
+corepack pnpm@12.8.1 test:e2e
+corepack pnpm@12.8.1 dev:site
+```
 
-Once implementation begins, changes should include unit tests, integration tests against a real SQLite database in WAL mode and permission model, and browser regression tests using Playwright and axe. Browser scenarios should reference the applicable story IDs. Public CI must run without private credentials and must never use a production self-hosted runner.
+`check` rebuilds shared packages before running type checks, unit tests, real SQLite permission tests, and boundary checks. Browser tests run Playwright and axe across three browser engines. `make check` validates repository metadata only. See [CMS setup](apps/cms/README.md) for migrations and runtime configuration.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/release-policy.md](docs/release-policy.md), and [docs/dependency-policy.md](docs/dependency-policy.md).
+Payload requires GraphQL 16; **16.14.2** is pinned as the latest compatible stable release instead of incompatible GraphQL 17. Other direct dependencies are pinned to verified stable releases with a committed lockfile.
 
-## Implementation backlog
+## Current limits
 
-See [the story index](docs/backlog/README.md) for user stories, acceptance criteria, test requirements, and end-to-end scenarios.
+This is a foundation increment, not a complete publishing product. Staff sign-in, authenticated draft preview, review/publish workflows, MCP, private media handling, and provider integrations are not available yet. The static edge denies `/admin`, `/preview`, and `/mcp` until authenticated implementations are ready. CMS collection authorization and draft guards are enforced independently; edits cannot publish the public site.
+
+User stories remain open until their complete acceptance criteria and deployment evidence pass. See [the backlog](docs/backlog/README.md), [CONTRIBUTING.md](CONTRIBUTING.md), [release policy](docs/release-policy.md), and [dependency policy](docs/dependency-policy.md). Engine licensing does not grant rights to third-party theme assets; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

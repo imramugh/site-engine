@@ -5,6 +5,7 @@ dist/
 coverage/
 playwright-report/
 test-results/
+artifacts/
 .env
 .env.*
 !.env.example
@@ -19,3 +20,4 @@ test-results/
 __pycache__/
 *.py[cod]
 
+*.tsbuildinfo

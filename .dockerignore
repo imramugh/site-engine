@@ -9,7 +9,13 @@ coverage
 playwright-report
 test-results
 .env
+.env*
+data
+*.sqlite*
+.runtime
 .env.*
 *.log
 .DS_Store
 
+*.tsbuildinfo
+artifacts

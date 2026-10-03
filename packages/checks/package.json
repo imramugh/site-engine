@@ -1,0 +1,11 @@
+{
+  "name": "@site-engine/checks",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
+  "dependencies": { "@site-engine/contract": "workspace:^" },
+  "devDependencies": { "@types/node": "24.19.1" }
+}

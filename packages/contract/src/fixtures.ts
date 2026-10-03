@@ -1,0 +1,8 @@
+import type { SiteSnapshot } from './index.js';
+import { SiteSnapshotSchema } from './index.js';
+
+export const neutralFixture: SiteSnapshot = SiteSnapshotSchema.parse({
+  settings: { contractVersion: '1.0.0', siteName: 'Sample Studio', defaultLocale: 'en', sections: [{ id: '11111111-1111-4111-8111-111111111111', name: 'General', slug: 'general', allowedTemplates: ['landing', 'service'], pageIds: ['22222222-2222-4222-8222-222222222222'] }] },
+  pages: [{ id: '22222222-2222-4222-8222-222222222222', sectionId: '11111111-1111-4111-8111-111111111111', title: 'A neutral publishing example', summary: 'An example of clear publishing using synthetic content.', slug: 'welcome', template: 'landing', status: 'published', blocks: [{ id: '33333333-3333-4333-8333-333333333333', type: 'hero', heading: 'Publish clear information', body: 'This synthetic demonstration contains no client data.', cta: { label: 'Read the guide', href: '/guide' }, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'spacious', motionIntent: 'none', logoTone: 'default' } }, { id: '44444444-4444-4444-8444-444444444444', type: 'faq', heading: 'Questions', items: [{ question: 'Is this content real?', answer: 'No. It is a neutral test fixture.' }], hidden: false, appearance: { background: 'subtle', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }],
+  media: [], redirects: [], changeSets: [{ id: '55555555-5555-4555-8555-555555555555', name: 'Initial neutral fixture', state: 'approved', revision: 1 }],
+});

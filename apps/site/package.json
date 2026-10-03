@@ -1,0 +1,9 @@
+{
+  "name": "@site-engine/site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "astro dev", "build": "astro build", "preview": "astro preview", "typecheck": "astro build", "lint": "astro build" },
+  "dependencies": { "@site-engine/contract": "workspace:^", "astro": "7.3.5" },
+  "devDependencies": { "@astrojs/check": "0.9.4", "typescript": "7.0.2" }
+}
