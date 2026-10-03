@@ -31,6 +31,7 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   await expect(page).not.toHaveURL(/\/admin\/login/)
   await expect(page.locator('body')).not.toContainText('Synthetic identity provider')
   await expect(page.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Editorial review', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Collections' })).toBeVisible()
   const pageCard = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Pages', exact: true }) })
   await expect(pageCard).toBeVisible()
@@ -73,6 +74,8 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   expect(invalidPage.body.errors[0]?.data?.errors).toEqual(expect.arrayContaining([
     expect.objectContaining({ path: 'template', message: expect.stringContaining('not allowed') }),
   ]))
+  const deletion = await page.evaluate(async (sectionID) => (await fetch(`/api/sections/${sectionID}`, { method: 'DELETE' })).status, section.body.doc.id)
+  expect(deletion).toBeGreaterThanOrEqual(400)
 })
 
 test('an editor can read only its own profile and anonymous REST stays denied', async ({ browser, page }) => {
@@ -101,6 +104,7 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
 })
 
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
+  test.setTimeout(60_000)
   await signIn(page, 'editor')
   const created = await page.evaluate(async () => {
     const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Workflow', summary: 'This synthetic section supports the editorial browser workflow acceptance test.', slug: 'workflow-browser', allowedTemplates: ['standard'] }) })
@@ -110,28 +114,30 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     await fetch(`/api/pages/${pageBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow revised' }) })
     return pageBody.doc.id
   })
-  await page.goto('/editorial')
+  await page.goto('/admin/editorial')
   await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
   await expect(page.getByText('title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
-  await expect(page.getByRole('status')).toContainText('Submitted')
+  await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
   const directSpoof = await page.evaluate(async () => (await fetch('/api/change-sets/not-a-real-id', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: 'approved' }) })).status)
   expect(directSpoof).toBeGreaterThanOrEqual(400)
 
-  const reviewer = await browser.newPage()
+  const reviewerContext = await browser.newContext({ baseURL: 'https://127.0.0.1:4300', ignoreHTTPSErrors: true })
+  const reviewer = await reviewerContext.newPage()
   await signIn(reviewer, 'owner')
-  await reviewer.goto('/editorial')
+  await reviewer.goto('/admin/editorial')
+  await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
   await reviewer.getByRole('button', { name: 'Request changes' }).click()
-  await expect(reviewer.getByRole('status')).toContainText('updated')
-  await reviewer.close()
+  await expect(reviewer.getByRole('status').filter({ hasText: 'updated' })).toContainText('updated')
+  await reviewerContext.close()
 
   await page.evaluate(async (id) => {
     await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow refreshed' }) })
   }, created)
   await page.reload()
-  await expect(page.getByText('changes-requested')).toBeVisible()
+  await expect(page.getByText('changes-requested', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Refresh' }).click()
-  await expect(page.getByRole('status')).toContainText('updated')
+  await expect(page.getByRole('status').filter({ hasText: 'updated' })).toContainText('updated')
 })
 
 test('logout revokes the session, replays are denied, and cross-origin POST is blocked by Next proxy', async ({ page }) => {

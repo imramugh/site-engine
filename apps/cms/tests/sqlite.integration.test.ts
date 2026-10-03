@@ -137,9 +137,11 @@ describe('ENG-003 content-tree and template invariants through the Payload API',
     const pillar = await payload.create({ collection: 'pages', data: pageData('platform-pillar', services.id, 'pillar'), user: owner, overrideAccess: false })
     const service = await payload.create({ collection: 'pages', data: pageData('platform-service', services.id, 'service', pillar.id), user: owner, overrideAccess: false })
     await expect(payload.update({ collection: 'pages', id: pillar.id, data: { template: 'standard' }, draft: true, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'template', message: expect.stringContaining('platform-service') })]) } })
-    await expect(payload.delete({ collection: 'pages', id: pillar.id, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'parentId' })]) } })
+    // Phase-one editorial capture has no reversible deletion representation.
+    // Even an owner cannot bypass that boundary through the Payload API.
+    await expect(payload.delete({ collection: 'pages', id: pillar.id, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.update({ collection: 'sections', id: services.id, data: { allowedTemplates: ['landing', 'pillar'] }, draft: true, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'allowedTemplates' })]) } })
-    await expect(payload.delete({ collection: 'sections', id: services.id, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'sectionId' })]) } })
+    await expect(payload.delete({ collection: 'sections', id: services.id, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
 
     const general = await payload.create({
       collection: 'sections',

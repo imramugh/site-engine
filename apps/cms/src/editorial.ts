@@ -45,6 +45,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
   if (!document) return null
   return Object.fromEntries(mutableFields[collection].flatMap((field) => {
     const value = document[field]
+    if (field === 'seoDescription' && (value === null || value === '')) return []
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
     if (value === undefined) return []
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
@@ -201,7 +202,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     return set
   }
   const details = action === 'submit' ? await quality(payload, req, changes) : undefined
-  if (details?.checks.some((check) => check.status === 'failed')) throw new Error('Change-set quality checks failed.')
+  if (details?.checks.some((check) => check.status === 'failed')) throw new Error(`Change-set quality checks failed: ${details.checks.flatMap((check) => check.errors ?? []).map((error) => error.message).join('; ')}`)
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
   await payload.create({ collection: 'audit-events', data: { event: `editorial.change_set_${action}`, user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, state } }, overrideAccess: true, req })

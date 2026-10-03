@@ -13,7 +13,10 @@ const editorialAccess = {
   create: staff(['owner', 'editor']),
   read: staff(editorialRoles),
   update: staff(['owner', 'editor']),
-  delete: staff(['owner']),
+  // Deletes do not yet have a reversible capture representation. The discard
+  // lifecycle uses an internal, transactional delete for newly created drafts;
+  // ordinary API deletes stay unavailable until archival is implemented.
+  delete: () => false,
 }
 
 const title = { name: 'title', type: 'text' as const, required: true, maxLength: 180 }
