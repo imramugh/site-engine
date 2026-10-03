@@ -25,7 +25,7 @@ process.env.SITE_THEME_REGISTRY_JSON = registryFile
 writeFileSync(registryFile, JSON.stringify(registry))
 
 const { default: config } = await import('../payload.config.js')
-const { parseThemeRegistry } = await import('../../site/scripts/theme-registry.mjs')
+const { parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })

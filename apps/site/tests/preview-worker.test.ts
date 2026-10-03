@@ -36,7 +36,7 @@ function claim() {
 }
 
 function themedClaim() {
-  const input = claim(); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }).get(themeManifest.name).manifestDigest };
+  const input = claim(); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }).get(themeManifest.name)!.manifestDigest };
   input.live.settings.theme = selection;
   input.proposed.settings.theme = selection;
   return { input, selection, registry: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }) };
