@@ -4,6 +4,8 @@ import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { SiteSnapshotSchema } from '@site-engine/contract';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
+import { publishIndexNow } from './indexnow.mjs';
+import { deriveRoutes } from '@site-engine/engine';
 
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -38,6 +40,9 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs });
     const manifest = { snapshotContentHash: sha(stable(snapshot)), sourceVersions: { contractVersion: snapshot.settings.contractVersion, themeVersion, engineVersion }, files: Object.fromEntries(await files(staged)) };
     await writeFile(join(staged, 'snapshot-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    await rename(staged, output); return { output, manifest };
+    await rename(staged, output);
+    const routes = deriveRoutes(snapshot, snapshot.settings.homepageId);
+    await publishIndexNow({ urls: routes.routes.map((route) => new URL(route.canonicalPath, normalizedOrigin).href), publicOrigin: normalizedOrigin, basePath: normalizedBase });
+    return { output, manifest };
   } catch (error) { await rm(output, { recursive: true, force: true }); throw error } finally { await rm(job, { recursive: true, force: true }); }
 }

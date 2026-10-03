@@ -40,7 +40,7 @@ export const demoSnapshot: SiteSnapshot = SiteSnapshotSchema.parse({
     { id: ids.article, sectionId: ids.rootSection, title: 'Article', summary: 'A generic article template fixture.', slug: 'article', template: 'article', status: 'published', blocks: [block('40000000-0000-4000-8000-000000000024', 'richText', { body: 'An article uses generated context and permitted editorial blocks.' })] },
     { id: ids.listing, sectionId: ids.insightSection, title: 'Insights', summary: 'A generic listing template fixture.', slug: 'all', template: 'listing', status: 'published', blocks: [block('40000000-0000-4000-8000-000000000025', 'hero', { heading: 'Insights', body: 'A generic listing page.' })] },
     { id: ids.job, sectionId: ids.careerSection, title: 'Example role', summary: 'A generic job template fixture.', slug: 'example-role', template: 'job', status: 'published', blocks: [block('40000000-0000-4000-8000-000000000026', 'richText', { body: 'A static role description. No application form is active in this demonstration.' })] },
-  ],
+  ].map((page, index) => ({ ...page, publishedAt: `2026-10-${String(index + 1).padStart(2, '0')}T12:00:00.000Z`, updatedAt: `2026-10-${String(index + 2).padStart(2, '0')}T12:00:00.000Z` })),
   media: [
     { id: ids.image, filename: 'sample-image.svg', alt: 'Abstract blue sample illustration', decorative: false, width: 800, height: 500, mimeType: 'image/svg+xml' },
     { id: ids.logo, filename: 'sample-logo.svg', alt: 'Sample Studio mark', decorative: false, width: 240, height: 120, mimeType: 'image/svg+xml' },
