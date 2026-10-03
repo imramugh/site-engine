@@ -46,10 +46,20 @@ export function snapshot(collection: CapturedCollection, document: Record<string
   return Object.fromEntries(mutableFields[collection].flatMap((field) => {
     const value = document[field]
     if (value === undefined) return []
-    if (field === 'sectionId' || field === 'parentId') return [[field, idOf(value) ?? null]]
+    if (field === 'sectionId') return [[field, idOf(value) ?? null]]
+    if (field === 'parentId') {
+      const parentID = idOf(value)
+      return parentID ? [[field, parentID]] : []
+    }
     if (field === 'pageIds' && Array.isArray(value)) return [[field, value.map((item) => idOf(item) ?? item)]]
     return [[field, value]]
   }))
+}
+
+function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
+  // Payload applies partial updates. Explicit nulls clear fields that were absent
+  // from the baseline rather than leaving a later editor's addition behind.
+  return Object.fromEntries(mutableFields[collection].map((field) => [field, field in value ? value[field] : null]))
 }
 
 function equivalent(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
@@ -111,7 +121,8 @@ function currentChange(collection: CapturedCollection, value: Record<string, unk
 
 export async function markStaleIfNeeded(payload: Payload, set: Record<string, unknown>, req: PayloadRequest): Promise<Record<string, unknown>> {
   if (!['open', 'submitted', 'changes-requested'].includes(String(set.state))) return set
-  const expired = Date.now() - new Date(String(set.createdAt)).getTime() > 30 * 24 * 60 * 60 * 1000
+  const baseline = typeof set.reviewedAt === 'string' ? set.reviewedAt : set.createdAt
+  const expired = Date.now() - new Date(String(baseline)).getTime() > 30 * 24 * 60 * 60 * 1000
   const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
   let changed = expired
   if (!expired) for (const change of changes) {
@@ -171,7 +182,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
       if (change.before === null) {
         await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
       } else {
-        await payload.update({ collection: change.collection, id: change.id, data: change.before, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+        await payload.update({ collection: change.collection, id: change.id, data: restoration(change.collection, change.before), draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
       }
     }
   }
@@ -181,9 +192,10 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
       let current: Record<string, unknown> | undefined
       try { current = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { current = undefined }
       const after = currentChange(change.collection, current)
-      if (!equivalent(change.before, after)) rebased.push({ ...change, after, afterHash: hash(after) })
+      if (hash(after) !== change.afterHash) throw new Error('This change set conflicts with a later draft edit. Resolve the conflict before refreshing.')
+      if (!equivalent(change.before, after)) rebased.push(change)
     }
-    set = await payload.update({ collection: 'change-sets', id, data: { state: 'open', changes: rebased, staleAt: null, revision: Number(set.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
+    set = await payload.update({ collection: 'change-sets', id, data: { state: 'open', changes: rebased, staleAt: null, reviewedAt: new Date().toISOString(), revision: Number(set.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
     await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_refresh', user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, rebased: rebased.length } }, overrideAccess: true, req })
     return set
   }
