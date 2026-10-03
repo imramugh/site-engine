@@ -1,7 +1,7 @@
 import { expect, test, type Browser } from '@playwright/test'
 import { createRequire } from 'node:module'
 
-const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 6021)}`
+const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 async function signedIn(browser: Browser, token: string) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -12,7 +12,7 @@ async function openMenu(page: Awaited<ReturnType<typeof signedIn>>['page']) {
   const first = page.locator('button.nav-toggler').first()
   await expect(first).toHaveAttribute('aria-label', 'Open Menu')
   // Payload replaces its server navigation state during hydration.
-  await page.waitForTimeout(300)
+  await expect(page.locator('.template-default--nav-hydrated')).toBeVisible()
   if (await first.getAttribute('aria-label') === 'Open Menu') await first.click()
   await expect(first).toHaveAttribute('aria-label', 'Close Menu')
 }
