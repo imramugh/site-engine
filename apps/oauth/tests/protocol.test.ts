@@ -16,6 +16,7 @@ const challenge = createHash('sha256').update(verifier).digest('base64url');
 const databasePath = join(tmpdir(), `site-engine-oauth-${process.pid}.sqlite`);
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' });
 let currentUser = 'synthetic-user';
+let userEnabled = true;
 
 const service = createOAuthService({
   issuer,
@@ -24,8 +25,8 @@ const service = createOAuthService({
   cookieKeys: ['test-cookie-key-one', 'test-cookie-key-two'],
   jwks: { keys: [{ ...signingKey, kid: 'test-key', use: 'sig', alg: 'RS256' }] },
   sessionBridge: {
-    resolve: async () => ({ id: currentUser, enabled: true, scopes: ['mcp:content:read'] }),
-    find: async (id) => ['synthetic-user', 'other-user'].includes(id) ? { id, enabled: true, scopes: ['mcp:content:read'] } : undefined,
+    resolve: async () => ({ id: currentUser, enabled: userEnabled, scopes: ['mcp:content:read'] }),
+    find: async (id) => ['synthetic-user', 'other-user'].includes(id) ? { id, enabled: userEnabled, scopes: ['mcp:content:read'] } : undefined,
   },
 });
 
@@ -132,13 +133,29 @@ try {
   const tokens = await token.json() as { access_token: string; refresh_token: string; token_type: string };
   assert.equal(tokens.token_type, 'Bearer');
   assert.ok(tokens.access_token && tokens.refresh_token, `token response fields: ${Object.keys(tokens).join(', ')}`);
+  const sqlite = await import('node:sqlite');
+  const db = new sqlite.DatabaseSync(databasePath);
+  const issuedRows = db.prepare('SELECT model, payload FROM oidc_records').all() as Array<{ model: string; payload: string }>;
+  assert.ok(issuedRows.some((row) => row.model === 'AccessToken'));
+  assert.ok(issuedRows.some((row) => row.model === 'RefreshToken'));
+  assert.ok(issuedRows.some((row) => row.model === 'AuthorizationCode'));
+  const issuedPayloads = issuedRows.map((row) => row.payload).join('\n');
+  for (const secret of [tokens.access_token, tokens.refresh_token, code]) assert.equal(issuedPayloads.includes(secret), false);
+  assert.equal(issuedPayloads.includes('__adapter_lookup_id__'), true);
 
   const refreshed = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(refreshed.status, 200);
-  const rotated = await refreshed.json() as { refresh_token: string };
+  const rotated = await refreshed.json() as { access_token: string; refresh_token: string };
   assert.ok(rotated.refresh_token);
+  const descendant = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rotated.refresh_token, client_id: client.client_id, resource }) });
+  assert.equal(descendant.status, 200);
+  const descendantTokens = await descendant.json() as { access_token: string; refresh_token: string };
+  const liveDescendant = db.prepare('SELECT COUNT(*) AS count FROM oidc_records WHERE model IN (?, ?) AND id_hash IN (?, ?)').get('AccessToken', 'RefreshToken', createHash('sha256').update(descendantTokens.access_token).digest('base64url'), createHash('sha256').update(descendantTokens.refresh_token).digest('base64url')) as { count: number };
+  assert.equal(liveDescendant.count, 2);
   const reusedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(reusedRefresh.status, 400);
+  const revokedDescendant = db.prepare('SELECT COUNT(*) AS count FROM oidc_records WHERE model IN (?, ?) AND id_hash IN (?, ?)').get('AccessToken', 'RefreshToken', createHash('sha256').update(descendantTokens.access_token).digest('base64url'), createHash('sha256').update(descendantTokens.refresh_token).digest('base64url')) as { count: number };
+  assert.equal(revokedDescendant.count, 0);
 
   // A CMS session changing after authorization must not grant a second account
   // access to the first account's pending provider interaction.
@@ -157,14 +174,16 @@ try {
   const crossAccountConfirm = await fetch(crossAccountInteraction, { method: 'POST', redirect: 'manual', headers: { cookie: [...cookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: crossAccountCsrf, decision: 'allow' }) });
   assert.equal(crossAccountConfirm.status, 400);
   currentUser = 'synthetic-user';
+  userEnabled = false;
+  const disabledAuthorization = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(disabledAuthorization.status, 401);
+  userEnabled = true;
 
   const reusedCode = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier, resource }) });
   assert.equal(reusedCode.status, 400);
   const invalidVerifier = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: 'not-a-code', redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: 'invalid', resource }) });
   assert.equal(invalidVerifier.status, 400);
 
-  const sqlite = await import('node:sqlite');
-  const db = new sqlite.DatabaseSync(databasePath);
   const records = db.prepare('SELECT payload FROM oidc_records').all() as Array<{ payload: string }>;
   const persisted = records.map((record) => record.payload).join('\n');
   assert.equal(persisted.includes(tokens.access_token), false);

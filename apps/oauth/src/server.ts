@@ -164,6 +164,10 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     if (requestUrl.pathname === `${prefix}/auth` && !exactResource(options.resource, requestUrl.searchParams.get('resource'))) {
       return invalidRequest(response, 'an exact resource indicator is required');
     }
+    if (requestUrl.pathname === `${prefix}/auth`) {
+      const sessionUser = await bridge.resolve(request);
+      if (sessionUser && !sessionUser.enabled) return json(response, 401, { error: 'login_required' });
+    }
     if (requestUrl.pathname === `${prefix}/token`) {
       if (request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
       try {
