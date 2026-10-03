@@ -1,0 +1,7 @@
+---
+export function getStaticPaths() { return ['one', 'two'].map((route) => ({ params: { route } })); }
+const { route } = Astro.params;
+---
+<!doctype html><html data-motion="allow"><head><style>[data-motion][data-motion-paused="true"]{animation-play-state:paused}</style></head><body><button data-motion-toggle aria-pressed="false">Reduce motion</button><div data-motion="decorative">Motion fixture</div><form><div data-motion="decorative">Form still</div></form><script>
+import { mountMotionRuntime } from '@site-engine/engine'; mountMotionRuntime(document, window)
+</script><p>{route}</p></body></html>

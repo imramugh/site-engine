@@ -26,3 +26,11 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
   await page.goto('/unknown-route');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
 });
+test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {
+  await page.goto('/motion/one');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.goto('/motion/two');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('form [data-motion]')).toHaveAttribute('data-motion-paused', 'true');
+});
