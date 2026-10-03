@@ -2,7 +2,7 @@ import type { CollectionConfig } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
-import { bootstrapOnly, freshStaff, ownerOrBootstrap, roles, staff } from './access'
+import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
@@ -26,7 +26,7 @@ export const Users: CollectionConfig = {
   admin: { useAsTitle: 'email', group: 'Administration' },
   access: {
     create: bootstrapOnly,
-    read: ownerOrBootstrap,
+    read: ownerOrSelfOrBootstrap,
     update: freshStaff(['owner']),
     delete: freshStaff(['owner']),
   },
@@ -65,7 +65,8 @@ export const Invitations: CollectionConfig = {
     { name: 'email', type: 'email', required: true, unique: true },
     { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
     { name: 'providerIssuer', type: 'text', required: true, admin: { description: 'Trusted configured issuer for this invite.' } },
-    { name: 'providerSubject', type: 'text', required: true, admin: { description: 'Verified OIDC subject. Email alone never links an identity.' } },
+    { name: 'providerSubject', type: 'text', required: true, defaultValue: () => `unbound:${randomUUID()}`, admin: { hidden: true, readOnly: true } },
+    { name: 'requiredSubject', type: 'text', admin: { description: 'Optional prebound verified OIDC subject. Enrollment always requires the one-time invitation.' } },
     { name: 'tokenHash', type: 'text', required: true, unique: true, admin: { readOnly: true, description: 'Opaque invite credential hash; its original value is never shown in admin.' } },
     { name: 'roles', type: 'select', hasMany: true, required: true, options: [...roles] },
     { name: 'expiresAt', type: 'date', required: true },

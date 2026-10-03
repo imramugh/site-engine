@@ -36,7 +36,15 @@ export async function authorizationURL(settings: ProviderSettings, state: string
 
 export async function validateCallback(provider: IdentityProvider, settings: ProviderSettings, request: Request, state: string, nonce: string, verifier: string) {
   const config = await oidcConfiguration(settings)
-  const tokens = await oidc.authorizationCodeGrant(config, new URL(request.url), {
+  const received = new URL(request.url)
+  const callbackURL = new URL(settings.redirectURI)
+  // The application can sit behind a reverse proxy, whose internal request
+  // origin is not the registered public redirect URI. Keep the provider
+  // exchange pinned to the configured canonical URI and accept only the route
+  // path that registered it; never derive the redirect URI from Host headers.
+  if (received.pathname !== callbackURL.pathname) throw new Error('Unexpected callback path.')
+  callbackURL.search = received.search
+  const tokens = await oidc.authorizationCodeGrant(config, callbackURL, {
     pkceCodeVerifier: verifier,
     expectedState: state,
     expectedNonce: nonce,

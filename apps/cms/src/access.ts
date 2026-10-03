@@ -57,3 +57,10 @@ export const bootstrapOnly: Access = ({ req }) => {
 
 export const ownerOrBootstrap: Access = ({ req }) =>
   hasRole(req.user as Actor, ['owner']) || bootstrapOnly({ req })
+
+/** Staff can load their own profile (including Payload /me); Owners manage all users. */
+export const ownerOrSelfOrBootstrap: Access = async ({ req }) => {
+  if (await ownerOrBootstrap({ req })) return true
+  if (!req.user || req.user.disabled) return false
+  return { id: { equals: req.user.id } }
+}

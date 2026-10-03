@@ -180,10 +180,11 @@ export interface Invitation {
    * Trusted configured issuer for this invite.
    */
   providerIssuer: string;
-  /**
-   * Verified OIDC subject. Email alone never links an identity.
-   */
   providerSubject: string;
+  /**
+   * Optional prebound verified OIDC subject. Enrollment always requires the one-time invitation.
+   */
+  requiredSubject?: string | null;
   /**
    * Opaque invite credential hash; its original value is never shown in admin.
    */
@@ -502,6 +503,7 @@ export interface InvitationsSelect<T extends boolean = true> {
   provider?: T;
   providerIssuer?: T;
   providerSubject?: T;
+  requiredSubject?: T;
   tokenHash?: T;
   roles?: T;
   expiresAt?: T;

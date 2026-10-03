@@ -55,11 +55,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
       const existing = await payload.find({ collection: 'users', where: { and: [{ provider: { equals: provider } }, { providerIssuer: { equals: settings.issuer } }, { providerSubject: { equals: identity.subject } }] }, limit: 1, overrideAccess: true, req })
       const invitationID = typeof currentTransaction.invitation === 'string' ? currentTransaction.invitation : currentTransaction.invitation?.id
       const invitation = invitationID ? await payload.findByID({ collection: 'invitations', id: invitationID, overrideAccess: true, req }) : undefined
-      const invitationMatchesIdentity = invitation && invitation.provider === provider && invitation.providerIssuer === settings.issuer && invitation.providerSubject === identity.subject && invitation.email === identity.email && !invitation.acceptedAt && new Date(invitation.expiresAt).getTime() > now.getTime()
+      const normalizedEmail = identity.email.trim().toLowerCase()
+      const legacySubject = invitation?.providerSubject?.startsWith('unbound:') ? undefined : invitation?.providerSubject
+      const requiredSubject = invitation?.requiredSubject ?? legacySubject
+      const invitationMatchesIdentity = invitation && invitation.provider === provider && invitation.providerIssuer === settings.issuer && (!requiredSubject || requiredSubject === identity.subject) && invitation.email.trim().toLowerCase() === normalizedEmail && !invitation.acceptedAt && new Date(invitation.expiresAt).getTime() > now.getTime()
       if ((!existing.docs[0] && !invitationMatchesIdentity) || (invitation && !invitationMatchesIdentity)) throw new CallbackFailure(403, 'This verified identity has not been invited.')
-      const sameEmail = await payload.find({ collection: 'users', where: { email: { equals: identity.email } }, limit: 1, overrideAccess: true, req })
+      const sameEmail = await payload.find({ collection: 'users', where: { email: { equals: normalizedEmail } }, limit: 1, overrideAccess: true, req })
       if (!existing.docs[0] && sameEmail.docs[0]) throw new CallbackFailure(403, 'This email is already bound to a different identity.')
-      const user = existing.docs[0] || await payload.create({ collection: 'users', data: { email: identity.email, name: identity.name, roles: invitation!.roles, invitedAt: now.toISOString(), provider, providerIssuer: settings.issuer, providerSubject: identity.subject }, overrideAccess: true, req })
+      const user = existing.docs[0] || await payload.create({ collection: 'users', data: { email: normalizedEmail, name: identity.name || normalizedEmail, roles: invitation!.roles, invitedAt: now.toISOString(), provider, providerIssuer: settings.issuer, providerSubject: identity.subject }, overrideAccess: true, req })
       if (user.disabled) throw new CallbackFailure(403, 'This identity is disabled.')
       if (invitation) {
         const redeemed = await payload.update({ collection: 'invitations', where: { and: [{ id: { equals: invitation.id } }, { acceptedAt: { equals: null } }] }, data: { acceptedAt: now.toISOString() }, overrideAccess: true, req })
@@ -68,7 +71,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
       await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: now.toISOString(), lastSeenAt: now.toISOString(), expiresAt: new Date(now.getTime() + SESSION_ABSOLUTE_SECONDS * 1000).toISOString() }, overrideAccess: true, req })
       await payload.create({ collection: 'audit-events', data: { event: 'identity.signed_in', user: user.id, detail: { provider } }, overrideAccess: true, req })
     })
-    const response = NextResponse.redirect(new URL('/admin', request.url))
+    const response = NextResponse.redirect(new URL('/admin', settings.redirectURI))
     response.cookies.set(cookieName(SESSION_COOKIE), token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: SESSION_ABSOLUTE_SECONDS })
     response.cookies.delete(cookieName(OIDC_TRANSACTION_COOKIE))
     return response

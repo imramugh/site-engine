@@ -59,7 +59,9 @@ export const serverSessionStrategy: AuthStrategy = {
     if (Date.now() - new Date(session.lastSeenAt).getTime() > 60_000) {
       await payload.update({ collection: 'auth-sessions', id: session.id, data: { lastSeenAt: new Date().toISOString() }, overrideAccess: true })
     }
-    return { user: { ...user, collection: 'users', _strategy: 'server-session' } }
+    // Authenticated user objects can reach admin client props. Never include
+    // credential material fetched with the trusted Local API.
+    return { user: { id: user.id, email: user.email, name: user.name, roles: user.roles, disabled: user.disabled, createdAt: user.createdAt, updatedAt: user.updatedAt, collection: 'users', _strategy: 'server-session' } }
   },
 }
 

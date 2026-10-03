@@ -82,7 +82,7 @@ async function createSignIn(email: string, subject: string) {
   issuerState.subject = subject
   const invitation = await payload.create({
     collection: 'invitations',
-    data: { email, provider: 'google', providerIssuer: issuerState.issuer, providerSubject: subject, roles: ['editor'], tokenHash: hashOpaqueToken(`invite-${subject}`), expiresAt: new Date(Date.now() + 60_000).toISOString() },
+    data: { email, provider: 'google', providerIssuer: issuerState.issuer, providerSubject: subject, requiredSubject: subject, roles: ['editor'], tokenHash: hashOpaqueToken(`invite-${subject}`), expiresAt: new Date(Date.now() + 60_000).toISOString() },
     overrideAccess: true,
   })
   const state = `state-${subject}`
@@ -162,5 +162,32 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
     expect(untouchedInvitation.acceptedAt).toBeNull()
     expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(sessionsBefore.totalDocs)
     expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(auditBefore.totalDocs)
+  })
+
+  it('enrolls a first owner from an unbound bootstrap invitation once', async () => {
+    issuerState.email = 'bootstrap-owner@example.test'
+    issuerState.subject = 'bootstrap-owner-subject'
+    const invitation = await payload.create({ collection: 'invitations', data: { email: issuerState.email, provider: 'google', providerIssuer: issuerState.issuer, providerSubject: 'unbound:bootstrap', roles: ['owner'], tokenHash: hashOpaqueToken('bootstrap-invite'), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const state = 'bootstrap-state'
+    await payload.create({ collection: 'auth-transactions', data: { stateHash: hashOpaqueToken(state), nonce: issuerState.nonce, verifier: issuerState.verifier, provider: 'google', invitation: invitation.id, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const request = () => new Request(`http://localhost/api/auth/callback/google?code=accepted-code&state=${state}`, { headers: { cookie: `${cookieName(OIDC_TRANSACTION_COOKIE)}=${hashOpaqueToken(state)}` } })
+    expect((await invoke(request())).status).toBe(307)
+    expect((await invoke(request())).status).toBe(400)
+    const users = await payload.find({ collection: 'users', where: { providerSubject: { equals: issuerState.subject } }, overrideAccess: true })
+    expect(users.docs[0]).toMatchObject({ email: issuerState.email, roles: ['owner'], providerIssuer: issuerState.issuer })
+  })
+
+  it('denies a callback when the invitation email, issuer, or required subject differs', async () => {
+    const cases = [
+      { email: 'wrong-email@example.test', issuer: issuerState.issuer, subject: 'case-email', mutate: () => { issuerState.email = 'actual-email@example.test' } },
+      { email: 'issuer@example.test', issuer: 'https://wrong-issuer.example.test', subject: 'case-issuer', mutate: () => undefined },
+      { email: 'subject@example.test', issuer: issuerState.issuer, subject: 'case-subject', mutate: () => { issuerState.subject = 'different-subject' } },
+    ]
+    for (const entry of cases) {
+      const { invitation, request } = await createSignIn(entry.email, entry.subject)
+      await payload.update({ collection: 'invitations', id: invitation.id, data: { providerIssuer: entry.issuer }, overrideAccess: true })
+      entry.mutate()
+      expect((await invoke(request())).status).toBe(403)
+    }
   })
 })

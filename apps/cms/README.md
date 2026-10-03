@@ -11,11 +11,11 @@ capacity or multi-instance needs require a separately tested migration.
 
 For production, create and review an expand/contract migration with `pnpm migrate:create`,
 commit it, back up the database, then apply it with `pnpm migrate`. The migration command is
-the deployment hook; production config disables schema push. The initial operator is created
-once through `BOOTSTRAP_OPERATOR_TOKEN_FILE=/secure/token pnpm bootstrap:operator email name provider verified-subject`,
-using the Payload Local API with `overrideAccess: false`. The restricted operator-readable file is the only
-bootstrap secret source. This initial CLI still needs a preverified provider subject; a usable
-invitation-first enrollment flow is required before exposing staff sign-in.
+the deployment hook; production config disables schema push. Initial enrollment is created
+once through `BOOTSTRAP_OPERATOR_TOKEN_FILE=/secure/token pnpm bootstrap:operator email name provider [prebound-subject]`.
+It creates no account: it emits a one-time, 24-hour invitation link, and the first verified OIDC callback
+creates the Owner account. A supplied subject is enforced. The restricted operator-readable file is the only
+bootstrap secret source; copy the link through an approved channel and remove the mount.
 
 Google and Microsoft OIDC callbacks validate issuer, nonce, state, PKCE, invitation binding,
 and browser state. Accounts bind to an exact provider/issuer/subject tuple; email never
@@ -26,12 +26,18 @@ roles revokes sessions and writes an audit event in the same transaction.
 
 Emergency Owner authentication uses an encrypted TOTP seed and single-use recovery codes.
 Credential consumption, rate counters, sessions, and audit writes are transactional;
-secret fields are excluded from ordinary API reads and writes. Provisioning is an operator
-CLI action, not a public enrollment endpoint. There is no emergency-login UI yet.
+secret fields are excluded from ordinary API reads and writes and from the authenticated
+profile passed to the admin client. Provisioning is an operator CLI action. The login
+page accepts a TOTP or recovery code through the existing emergency-owner endpoint.
 
 The configured deployment still denies public admin and auth routes. Real provider
-registration, initial enrollment, browser-level staff journeys, approval workflows,
+registration, initial enrollment on the deployed instance, approval workflows,
 preview, publishing, and MCP remain unfinished. There is no `/mcp` placeholder route.
+
+`pnpm test:e2e:cms` builds and runs the actual CMS against an isolated SQLite
+database and a synthetic TLS OIDC issuer. It exercises browser navigation,
+session cookies, profile permissions, logout, callback replay, and CSRF. These
+tests do not establish connectivity to a real Google or Microsoft registration.
 
 ## SQLite transaction compatibility pin
 

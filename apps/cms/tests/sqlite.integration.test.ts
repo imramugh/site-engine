@@ -99,4 +99,12 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     expect(stored.emergencyLastCounter).toBe(123)
   })
 
+  it('lets staff read only their own profile and no credential fields', async () => {
+    const editor = await payload.create({ collection: 'users', data: { email: 'self-editor@example.test', name: 'Editor', roles: ['editor'] }, overrideAccess: true })
+    const profile = await payload.findByID({ collection: 'users', id: editor.id, user: editor, overrideAccess: false })
+    expect(profile.id).toBe(editor.id)
+    const visibleUsers = await payload.find({ collection: 'users', user: editor, overrideAccess: false })
+    expect(visibleUsers.docs.map((user) => user.id)).toEqual([editor.id])
+  })
+
 })

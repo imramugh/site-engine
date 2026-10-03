@@ -23,7 +23,7 @@ beforeAll(async () => {
       let body = ''
       for await (const chunk of request) body += chunk
       const parameters = new URLSearchParams(body)
-      if (parameters.get('code') !== 'accepted-code' || parameters.get('code_verifier') !== issuerState.verifier) { response.statusCode = 400; response.end(JSON.stringify({ error: 'invalid_grant' })); return }
+      if (parameters.get('code') !== 'accepted-code' || parameters.get('code_verifier') !== issuerState.verifier || parameters.get('redirect_uri') !== 'http://localhost/api/auth/callback/google') { response.statusCode = 400; response.end(JSON.stringify({ error: 'invalid_grant' })); return }
       const token = await new SignJWT({ email: 'invited@example.test', email_verified: true, nonce: issuerState.nonce })
         .setProtectedHeader({ alg: 'RS256', kid: issuerState.kid })
         .setIssuer(issuerState.issuer).setAudience('test-client').setSubject('provider-subject').setIssuedAt().setExpirationTime('5m').sign(issuerState.key!)
@@ -54,5 +54,11 @@ describe('local OIDC issuer callback validation (ENG-007)', () => {
     await expect(validateCallback('google', settings(), new Request('http://localhost/api/auth/callback/google?code=accepted-code&state=wrong-state'), 'expected-state', issuerState.nonce, issuerState.verifier)).rejects.toThrow()
     await expect(validateCallback('google', settings(), new Request('http://localhost/api/auth/callback/google?code=accepted-code&state=expected-state'), 'expected-state', 'wrong-nonce', issuerState.verifier)).rejects.toThrow()
     await expect(validateCallback('google', settings(), new Request('http://localhost/api/auth/callback/google?code=accepted-code&state=expected-state'), 'expected-state', issuerState.nonce, 'wrong-verifier')).rejects.toThrow()
+  })
+
+  it('uses the registered callback origin behind a reverse proxy and rejects the wrong path', async () => {
+    const result = await validateCallback('google', settings(), new Request('http://internal-cms:3001/api/auth/callback/google?code=accepted-code&state=expected-state'), 'expected-state', issuerState.nonce, issuerState.verifier)
+    expect(result.subject).toBe('provider-subject')
+    await expect(validateCallback('google', settings(), new Request('http://internal-cms:3001/api/auth/callback/microsoft?code=accepted-code&state=expected-state'), 'expected-state', issuerState.nonce, issuerState.verifier)).rejects.toThrow()
   })
 })
