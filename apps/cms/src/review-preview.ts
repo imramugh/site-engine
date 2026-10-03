@@ -6,6 +6,7 @@ import { buildCandidate, canonicalHash, changeSetHash } from './publishing'
 import { markStaleIfNeeded } from './editorial'
 
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
+type PreviewVersions = Versions & { liveThemeVersion?: string }
 type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings' | 'site-settings'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
 type Baseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
@@ -13,7 +14,7 @@ const MAX_BODY_BYTES = 16 * 1024
 
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
-const versionsEqual = (left: unknown, right: Versions) => Boolean(left && typeof left === 'object' && (left as Versions).themeVersion === right.themeVersion && (left as Versions).engineVersion === right.engineVersion && (left as Versions).contractVersion === right.contractVersion)
+const versionsEqual = (left: unknown, right: PreviewVersions) => Boolean(left && typeof left === 'object' && (left as PreviewVersions).themeVersion === right.themeVersion && (left as PreviewVersions).engineVersion === right.engineVersion && (left as PreviewVersions).contractVersion === right.contractVersion && (left as PreviewVersions).liveThemeVersion === right.liveThemeVersion)
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 
 function selectionFromJob(job: Record<string, unknown>) {
@@ -50,6 +51,19 @@ async function queueHead(payload: Payload, req: PayloadRequest): Promise<Baselin
   return { manifest: SiteSnapshotSchema.parse(snapshot.manifest), snapshotID: idOf(snapshot), sequence: Number(job.sequence), versions: { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion) } }
 }
 
+/** The candidate's selection is authoritative for approval and publication.
+ * Keep a distinct live pin only while the comparison renders an older theme. */
+function previewVersions(live: Baseline, proposed: SiteSnapshot, base: Baseline): PreviewVersions {
+  const themeVersion = proposed.settings.theme?.version ?? base.versions.themeVersion
+  const liveThemeVersion = live.manifest.settings.theme?.version ?? live.versions.themeVersion
+  return {
+    themeVersion,
+    engineVersion: base.versions.engineVersion,
+    contractVersion: base.versions.contractVersion,
+    ...(liveThemeVersion === themeVersion ? {} : { liveThemeVersion }),
+  }
+}
+
 /** Prepares exact immutable worker inputs; callers load the configured file before opening SQLite. */
 export async function prepareReviewPreview(input: { payload: Payload; req: PayloadRequest; actor: { id: string; roles?: string[] }; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; initialBaseline?: Baseline }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, initialBaseline } = input
@@ -69,14 +83,15 @@ export async function prepareReviewPreview(input: { payload: Payload; req: Paylo
   const base = await queueHead(payload, req) ?? live
   if (!live || !base) throw new Error('Review preview is unavailable until an initial server-configured baseline is installed.')
   const proposed = buildCandidate(base.manifest, changes, includedChangeKeys, base.versions)
+  const pinnedVersions = previewVersions(live, proposed, base)
   const liveManifestHash = canonicalHash(live.manifest); const proposedManifestHash = canonicalHash(proposed)
   const existing = await payload.find({ collection: 'preview-render-jobs', where: { and: [{ changeSet: { equals: id } }, { reviewRevision: { equals: expectedRevision } }, { changeHash: { equals: expectedChangeHash } }, { proposedManifestHash: { equals: proposedManifestHash } }, { liveManifestHash: { equals: liveManifestHash } }, { baselineSequence: { equals: base.sequence } }, { liveSequence: { equals: live.sequence } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true, req })
   const duplicate = existing.docs[0]
-  if (duplicate && duplicate.status !== 'failed' && Array.isArray(duplicate.includedChangeKeys) && keysEqual(duplicate.includedChangeKeys as string[], includedChangeKeys) && idOf(duplicate.baselineSnapshot) === base.snapshotID && idOf(duplicate.liveSnapshot) === live.snapshotID && versionsEqual(duplicate.versionPins, base.versions)) {
+  if (duplicate && duplicate.status !== 'failed' && Array.isArray(duplicate.includedChangeKeys) && keysEqual(duplicate.includedChangeKeys as string[], includedChangeKeys) && idOf(duplicate.baselineSnapshot) === base.snapshotID && idOf(duplicate.liveSnapshot) === live.snapshotID && versionsEqual(duplicate.versionPins, pinnedVersions)) {
     await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(duplicate as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
     return duplicate
   }
-  const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, baselineSnapshot: base.snapshotID, baselineSequence: base.sequence, liveSnapshot: live.snapshotID, liveSequence: live.sequence, liveManifest: live.manifest, proposedManifest: proposed, liveManifestHash, proposedManifestHash, versionPins: base.versions, status: 'pending', attempts: 0 }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, baselineSnapshot: base.snapshotID, baselineSequence: base.sequence, liveSnapshot: live.snapshotID, liveSequence: live.sequence, liveManifest: live.manifest, proposedManifest: proposed, liveManifestHash, proposedManifestHash, versionPins: pinnedVersions, status: 'pending', attempts: 0 }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(job as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
   return job
 }

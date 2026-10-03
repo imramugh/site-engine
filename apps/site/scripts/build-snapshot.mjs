@@ -124,16 +124,21 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string }} options */
-export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot }) {
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string } }} options */
+export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, versionPins }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
   const normalizedOrigin = normalizePublicOrigin(publicOrigin); const normalizedBase = normalizeBasePath(basePath);
   const snapshot = parseSiteSnapshot(JSON.parse(await readFile(resolve(input), 'utf8')));
-  const themeVersion = process.env.SITE_THEME_VERSION; const engineVersion = process.env.SITE_ENGINE_VERSION;
+  // Workers pass immutable pins for each render. The standalone renderer keeps
+  // the legacy configured-version fallback only when no pins were supplied.
+  const pins = versionPins === undefined
+    ? { themeVersion: process.env.SITE_THEME_VERSION, engineVersion: process.env.SITE_ENGINE_VERSION, contractVersion: snapshot.settings.contractVersion }
+    : versionPins;
+  const { themeVersion, engineVersion } = pins;
   const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-  if (!themeVersion || !engineVersion || !semver.test(themeVersion) || !semver.test(engineVersion)) throw new Error('SITE_THEME_VERSION and SITE_ENGINE_VERSION must be immutable semantic versions.');
+  if (typeof themeVersion !== 'string' || typeof engineVersion !== 'string' || !themeVersion || !engineVersion || !semver.test(themeVersion) || !semver.test(engineVersion) || (pins.contractVersion !== undefined && pins.contractVersion !== snapshot.settings.contractVersion)) throw new Error('Explicit immutable version pins are invalid.');
   const root = resolve(outputRoot); const rootInfo = await lstat(root); if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('outputRoot must be a real directory.');
   // Build input and output stay in a private staging directory. Only a completed,
   // validated artifact is renamed into outputRoot under its public snapshot name.

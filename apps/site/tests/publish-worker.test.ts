@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import { runPublishOnce } from '../scripts/run-publish-worker.mjs';
 import { createPublicServer } from '../scripts/public-server.mjs';
-import { parseThemeRegistry } from '../scripts/theme-registry.mjs';
+import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
 const roots: string[] = []; const pins = { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' };
 const job = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', leaseToken: 'b'.repeat(36), leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), sequence: 1 };
@@ -15,13 +15,25 @@ afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).ma
 describe('publish worker', () => {
   it('builds, renews immediately before atomic activation, health checks, and completes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
-    const snapshot = structuredClone(neutralFixture); const registry = parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: registry.get(themeManifest.name)!.manifestDigest }; snapshot.settings.theme = selection; const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = []; const renders: Array<Record<string, unknown>> = [];
+    const snapshot = structuredClone(neutralFixture); const registry = parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: getInstalledTheme(registry, themeManifest.name, themeManifest.version)!.manifestDigest }; snapshot.settings.theme = selection; const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = []; const renders: Array<Record<string, unknown>> = [];
     const api = async (action: string, body: Record<string, unknown> = {}) => { calls.push(action); if (action === 'claim') return { job, snapshot, contentHash, versionPins: pins }; if (action === 'renew') return { job }; if (action === 'complete') return { job: { status: 'completed' } }; return { job: {} }; };
     const releasesRoot = join(root, 'releases'); const server = createPublicServer({ releasesRoot }); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Test server did not listen.');
     const render = async (rendererOptions: Parameters<typeof import('../scripts/build-snapshot.mjs').buildSnapshot>[0] & Record<string, unknown>) => { renders.push(rendererOptions); return (await import('../scripts/build-snapshot.mjs')).buildSnapshot(rendererOptions); };
     try { await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${address.port}`, versionPins: pins, registry, render })).resolves.toBe(true); }
     finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
     expect(calls).toEqual(['claim', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
+  }, 60_000);
+  it('publishes a selected upgrade with its job pin while the worker has an older configured theme', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', '1.0.0'); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
+    const older = { ...themeManifest, version: '1.0.0' }; const newer = { ...themeManifest, version: '1.0.1' };
+    const registry = parseThemeRegistry({ themes: [{ manifest: older, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest: newer, installedAt: '2026-10-04T00:00:00.000Z' }] });
+    const snapshot = structuredClone(neutralFixture); snapshot.settings.theme = { id: newer.name, version: newer.version, contract: newer.contract, manifestDigest: getInstalledTheme(registry, newer.name, newer.version)!.manifestDigest };
+    const upgradedPins = { ...pins, themeVersion: newer.version }; const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const renders: Array<Record<string, unknown>> = [];
+    const api = async (action: string) => action === 'claim' ? { job, snapshot, contentHash, versionPins: upgradedPins } : action === 'renew' ? { job } : { job: {} };
+    const render = async (options: Parameters<typeof import('../scripts/build-snapshot.mjs').buildSnapshot>[0] & Record<string, unknown>) => { renders.push(options); return (await import('../scripts/build-snapshot.mjs')).buildSnapshot(options); };
+    await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, registry, render, healthProbe: async () => true })).resolves.toBe(true);
+    expect(renders[0]?.versionPins).toEqual(upgradedPins);
+    expect(JSON.parse(await readFile(join(root, 'releases', 'current', 'snapshot-manifest.json'), 'utf8')).sourceVersions.themeVersion).toBe('1.0.1');
   }, 60_000);
   it('fails closed when a custom renderer returns an artifact with a bad manifest proof', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
