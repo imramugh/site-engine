@@ -111,6 +111,9 @@ describe('static snapshot renderer', () => {
     expect(await readFile(join(alphaBuild.output, 'snapshot-manifest.json'), 'utf8')).toContain(alphaBuild.manifest.snapshotContentHash);
     expect(await artifactContents(alphaBuild.output)).not.toContain('DRAFT_MARKER_MUST_NOT_RENDER');
     expect(await artifactContents(alphaBuild.output)).not.toContain('ARCHIVE_MARKER_MUST_NOT_RENDER');
+    expect(await artifactContents(alphaBuild.output)).not.toContain('Motion fixture');
+    expect(await artifactContents(alphaBuild.output)).not.toContain('Synthetic content for public engine validation.');
+    expect(Object.keys(alphaBuild.manifest.files)).not.toEqual(expect.arrayContaining(['motion/one/index.html', 'motion/two/index.html']));
     expect(await readdir(alphaBuild.output)).not.toContain('input.json');
     browserOutput = alphaBuild.output;
   }, 180_000);
@@ -121,6 +124,18 @@ describe('static snapshot renderer', () => {
     await writeFile(invalidJson, '{'); await writeFile(invalidSchema, JSON.stringify({ settings: {} }));
     await expect(renderer.buildSnapshot({ input: invalidJson, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow();
     await expect(renderer.buildSnapshot({ input: invalidSchema, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow();
+    expect((await readdir(root)).filter((name) => name.startsWith('snapshot-'))).toEqual(promoted);
+  });
+
+  it('rejects unsafe preview bases and public origins before promoting an artifact', async () => {
+    const input = await writeSnapshot(root, fixture('Unsafe config'), 'unsafe-config.json');
+    const promoted = (await readdir(root)).filter((name) => name.startsWith('snapshot-'));
+    for (const basePath of ['relative', '/preview/../escape/', '/preview/%2e%2e/escape/', '/preview\\escape/', '/preview?query', '//preview/']) {
+      await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root })).rejects.toThrow();
+    }
+    for (const publicOrigin of ['ftp://public.example.test', 'https://user@public.example.test', 'https://public.example.test/path', 'https://public.example.test?query', 'https://public.example.test#fragment']) {
+      await expect(renderer.buildSnapshot({ input, publicOrigin, basePath: BASE_PATH, outputRoot: root })).rejects.toThrow();
+    }
     expect((await readdir(root)).filter((name) => name.startsWith('snapshot-'))).toEqual(promoted);
   });
 
@@ -156,6 +171,16 @@ describe('static snapshot renderer', () => {
     }
     await rm(target, { recursive: true, force: true });
   });
+
+  it('terminates a timed-out Astro process before it can promote an artifact', async () => {
+    const input = await writeSnapshot(root, fixture('Timeout'), 'timeout.json');
+    const before = new Set(await readdir(root));
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, timeoutMs: 1 })).rejects.toThrow('timed out');
+    await new Promise((done) => setTimeout(done, 100));
+    const after = await readdir(root);
+    expect(after.filter((name) => name.startsWith('snapshot-'))).toEqual([...before].filter((name) => name.startsWith('snapshot-')));
+    expect(after.filter((name) => name.startsWith('.snapshot-staging-'))).toHaveLength(0);
+  }, 30_000);
 
   it('crawls the generated preview in Chromium with prefix-safe links, assets, canonical URLs, and no-JS readability', async () => {
     const served = await staticServer(browserOutput, BASE_PATH); server = served.server; serverOrigin = served.origin;
