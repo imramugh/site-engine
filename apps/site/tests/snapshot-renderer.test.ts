@@ -92,7 +92,7 @@ async function customThemeComponents(root: string): Promise<string> {
 import './theme.css';
 const { title, description } = Astro.props;
 ---
-<!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main></body></html>\n`);
+<!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main><script>document.documentElement.dataset.customThemeEnhancement = 'active';</script></body></html>\n`);
   await writeFile(join(components, 'BlockRenderer.astro'), `---
 const { block } = Astro.props;
 ---
@@ -105,7 +105,7 @@ async function artifactContents(directory: string): Promise<string> {
   return (await Promise.all(entries.map(async (entry) => entry.isDirectory() ? artifactContents(join(directory, entry.name)) : (await readFile(join(directory, entry.name))).toString('utf8')))).join('');
 }
 
-function staticServer(root: string, mount: string): Promise<{ server: Server; origin: string }> {
+function staticServer(root: string, mount: string, headers: Record<string, string> = {}): Promise<{ server: Server; origin: string }> {
   const rootPath = resolve(root);
   const server = createServer(async (request, response) => {
     const requestPath = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
@@ -113,7 +113,7 @@ function staticServer(root: string, mount: string): Promise<{ server: Server; or
     const isPagePath = pathname.endsWith('/') || !pathname.split('/').at(-1)?.includes('.');
     const filePath = resolve(rootPath, `.${isPagePath ? `${pathname.replace(/\/$/, '')}/index.html` : pathname}`);
     if (filePath !== rootPath && !filePath.startsWith(`${rootPath}${sep}`)) { response.writeHead(400).end(); return; }
-    try { const body = await readFile(filePath); response.writeHead(200, { 'content-type': filePath.endsWith('.js') ? 'text/javascript' : filePath.endsWith('.css') ? 'text/css' : filePath.endsWith('.avif') ? 'image/avif' : filePath.endsWith('.svg') ? 'image/svg+xml' : filePath.endsWith('.webm') ? 'video/webm' : filePath.endsWith('.vtt') ? 'text/vtt' : 'text/html' }); response.end(body); } catch { response.writeHead(404).end('Not found'); }
+    try { const body = await readFile(filePath); response.writeHead(200, { ...headers, 'content-type': filePath.endsWith('.js') ? 'text/javascript' : filePath.endsWith('.css') ? 'text/css' : filePath.endsWith('.avif') ? 'image/avif' : filePath.endsWith('.svg') ? 'image/svg+xml' : filePath.endsWith('.webm') ? 'video/webm' : filePath.endsWith('.vtt') ? 'text/vtt' : 'text/html' }); response.end(body); } catch { response.writeHead(404).end('Not found'); }
   });
   return new Promise((resolveServer) => server.listen(0, '127.0.0.1', () => {
     const address = server.address();
@@ -230,17 +230,20 @@ describe('static snapshot renderer', () => {
       renderer.buildSnapshot({ input: await writeSnapshot(root, defaultSnapshot, 'default-theme.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
     ]);
     expect(await readFile(join(customBuild.output, 'index.html'), 'utf8')).toContain('data-custom-theme-layout="true"');
+    expect(await readFile(join(customBuild.output, 'index.html'), 'utf8')).toMatch(/<script\b/i);
+    expect(await readFile(join(customPreviewBuild.output, 'index.html'), 'utf8')).toMatch(/<script[^>]+src=/i);
     expect(await readFile(join(defaultBuild.output, 'index.html'), 'utf8')).not.toContain('data-custom-theme-layout="true"');
     expect(await readFile(join(customBuild.output, 'search-index.json'), 'utf8')).toContain('Custom theme host home');
     expect(await readFile(join(customBuild.output, 'machine-readable.json'), 'utf8')).toContain('Custom theme host home');
     expect(await readFile(join(customBuild.output, 'sitemap.xml'), 'utf8')).toContain('custom-theme-job');
     expect(await readFile(join(customBuild.output, 'docs/custom-theme-job/index.html'), 'utf8')).toContain('data-application-form');
     expect(await readFile(join(customComponents, 'BlockRenderer.astro'), 'utf8')).not.toContain('data-inquiry-form');
-    const browser = await chromium.launch(); const publicServer = await staticServer(customBuild.output, '/'); const previewServer = await staticServer(customPreviewBuild.output, BASE_PATH);
+    const browser = await chromium.launch(); const publicServer = await staticServer(customBuild.output, '/'); const previewServer = await staticServer(customPreviewBuild.output, BASE_PATH, { 'content-security-policy': "default-src 'self'" });
     try {
       const publicPage = await browser.newPage(); let publicSubmissions = 0;
       await publicPage.route('**/api/inquiries', async (request) => { publicSubmissions += 1; await request.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
       await publicPage.goto(`${publicServer.origin}/docs/custom-theme-inquiry/`, { waitUntil: 'networkidle' });
+      expect(await publicPage.locator('html').getAttribute('data-custom-theme-enhancement')).toBe('active');
       await publicPage.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
       for (const width of [1280, 390]) {
         await publicPage.setViewportSize({ width, height: 900 });
@@ -254,7 +257,8 @@ describe('static snapshot renderer', () => {
       await publicPage.getByRole('button', { name: 'Send inquiry' }).click();
       await publicPage.getByRole('status').filter({ hasText: 'received' }).waitFor();
       expect(publicSubmissions).toBe(1);
-      const previewPage = await browser.newPage(); let previewSubmissions = 0;
+      const previewPage = await browser.newPage(); let previewSubmissions = 0; const cspErrors: string[] = [];
+      previewPage.on('console', (message) => { if (message.type() === 'error') cspErrors.push(message.text()); });
       await previewPage.route('**/api/inquiries', async (request) => { previewSubmissions += 1; await request.abort(); });
       await previewPage.goto(`${previewServer.origin}${BASE_PATH}docs/custom-theme-inquiry/`, { waitUntil: 'networkidle' });
       const previewForm = previewPage.locator('[data-inquiry-form]');
@@ -263,6 +267,8 @@ describe('static snapshot renderer', () => {
       await previewForm.evaluate((form: HTMLFormElement) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
       await previewPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       expect(previewSubmissions).toBe(0);
+      expect(await previewPage.locator('html').getAttribute('data-custom-theme-enhancement')).toBe('active');
+      expect(cspErrors.filter((message) => /content security policy|inline script/i.test(message))).toEqual([]);
     } finally { publicServer.server.closeAllConnections(); publicServer.server.close(); previewServer.server.closeAllConnections(); previewServer.server.close(); await browser.close(); }
   }, 180_000);
 
