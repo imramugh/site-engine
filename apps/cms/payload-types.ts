@@ -529,6 +529,8 @@ export interface IntegrationConfiguration {
   model: string;
   fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
   monthlyCap?: number | null;
+  monthlyUsage?: number | null;
+  usageMonth?: string | null;
   encryptedCredential?: string | null;
   credentialFingerprint?: string | null;
   health: 'unknown' | 'connected' | 'unavailable' | 'rejected' | 'revoked';
@@ -1319,6 +1321,8 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
   model?: T;
   fallbackProvider?: T;
   monthlyCap?: T;
+  monthlyUsage?: T;
+  usageMonth?: T;
   encryptedCredential?: T;
   credentialFingerprint?: T;
   health?: T;

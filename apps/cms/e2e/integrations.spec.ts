@@ -21,7 +21,7 @@ test('ENG-023 Owner rotates a masked credential without a connection claim', asy
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/admin'); await openMenu(owner.page)
   await owner.page.getByRole('link', { name: 'Integrations' }).click(); await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
-  await expect(owner.page.getByText('Provider connection tests are unavailable')).toBeVisible()
+  await expect(owner.page.getByText('Provider jobs use encrypted credentials only at execution time')).toBeVisible()
   await owner.page.getByLabel('Model').fill('synthetic-model'); await owner.page.getByLabel('Credential').fill('synthetic-browser-credential')
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
   await owner.page.getByRole('button', { name: 'Save credential rotation' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('Credential rotation saved.')

@@ -599,6 +599,8 @@ export const IntegrationConfigurations: CollectionConfig = {
     { name: 'model', type: 'text', required: true, maxLength: 160 },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
     { name: 'monthlyCap', type: 'number', min: 0, max: 1_000_000 },
+    { name: 'monthlyUsage', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
+    { name: 'usageMonth', type: 'text', maxLength: 7, admin: { readOnly: true } },
     { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
     { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },

@@ -49,6 +49,8 @@ export function publicIntegration(doc: Record<string, unknown>) {
     model: doc.model ?? null,
     fallbackProvider: doc.fallbackProvider ?? null,
     monthlyCap: doc.monthlyCap ?? null,
+    monthlyUsage: doc.monthlyUsage ?? 0,
+    usageMonth: doc.usageMonth ?? null,
     health: doc.health ?? 'unknown',
     testedAt: doc.testedAt ?? null,
     credentialConfigured: typeof doc.encryptedCredential === 'string' && doc.encryptedCredential.length > 0,
