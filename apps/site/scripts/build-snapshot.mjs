@@ -64,6 +64,7 @@ function terminate(child, signal) {
   try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { child.kill(signal); }
 }
 const requiredThemeComponents = ['Layout.astro', 'BlockRenderer.astro'];
+const isReviewComparisonBase = (basePath) => basePath.startsWith('/preview/changes/');
 
 async function trustedThemeComponentsRoot(themeComponentsRoot) {
   const starterRoot = dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro'));
@@ -113,7 +114,7 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
     let timedOut = false; let aborted = false; let forceTimer;
-    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...process.env, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
+    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...process.env, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
     const stop = () => { terminate(child, 'SIGTERM'); forceTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 5_000); };
     const abort = () => { aborted = true; stop(); };
     const cleanup = () => { clearTimeout(timeout); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort); };
