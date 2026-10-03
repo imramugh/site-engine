@@ -3,7 +3,7 @@ import { buildConfig } from 'payload'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, Inquiries, NotificationOutbox, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
+import { Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, Inquiries, MailAuthorizations, MailDrafts, NotificationOutbox, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
 import { databaseURI } from './src/sqlite'
 
 const secret = process.env.PAYLOAD_SECRET
@@ -19,7 +19,7 @@ export default buildConfig({
     components: { afterNavLinks: ['./app/(payload)/admin/editorial-nav-link#EditorialNavLink'] },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
-  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, Redirects, ThemeSettings, SiteSettings, StyleGuides, Inquiries, NotificationOutbox, Applications, ChangeSets, PublishSnapshots, PublishOutbox, PreviewRenderJobs, PublishedReleases],
+  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, Redirects, ThemeSettings, SiteSettings, StyleGuides, Inquiries, NotificationOutbox, MailDrafts, MailAuthorizations, Applications, ChangeSets, PublishSnapshots, PublishOutbox, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
     client: { url: databaseURI() },
     // The Payload CLI otherwise resolves migrations from the caller's cwd. Keep
