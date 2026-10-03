@@ -7,6 +7,10 @@ import * as migration_20261003_034628_emergency_totp_and_csrf from './20261003_0
 import * as migration_20261003_042858_invitation_required_subject from './20261003_042858_invitation_required_subject';
 import * as migration_20261003_133520_scoped_page_slugs from './20261003_133520_scoped_page_slugs';
 import * as migration_20261003_135539_editorial_change_set_lifecycle from './20261003_135539_editorial_change_set_lifecycle';
+import * as migration_20261003_143750 from './20261003_143750';
+import * as migration_20261003_144959 from './20261003_144959';
+import * as migration_20261003_150050 from './20261003_150050';
+import * as migration_20261003_160000_publish_queue_correctness from './20261003_160000_publish_queue_correctness';
 
 export const migrations = [
   {
@@ -52,6 +56,26 @@ export const migrations = [
   {
     up: migration_20261003_135539_editorial_change_set_lifecycle.up,
     down: migration_20261003_135539_editorial_change_set_lifecycle.down,
-    name: '20261003_135539_editorial_change_set_lifecycle'
+    name: '20261003_135539_editorial_change_set_lifecycle',
+  },
+  {
+    up: migration_20261003_143750.up,
+    down: migration_20261003_143750.down,
+    name: '20261003_143750',
+  },
+  {
+    up: migration_20261003_144959.up,
+    down: migration_20261003_144959.down,
+    name: '20261003_144959',
+  },
+  {
+    up: migration_20261003_150050.up,
+    down: migration_20261003_150050.down,
+    name: '20261003_150050',
+  },
+  {
+    up: migration_20261003_160000_publish_queue_correctness.up,
+    down: migration_20261003_160000_publish_queue_correctness.down,
+    name: '20261003_160000_publish_queue_correctness'
   },
 ];

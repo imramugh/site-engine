@@ -79,6 +79,9 @@ export interface Config {
     inquiries: Inquiry;
     applications: Application;
     'change-sets': ChangeSet;
+    'publish-snapshots': PublishSnapshot;
+    'publish-outbox': PublishOutbox;
+    'published-releases': PublishedRelease;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -98,6 +101,9 @@ export interface Config {
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
+    'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
+    'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
+    'published-releases': PublishedReleasesSelect<false> | PublishedReleasesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -378,10 +384,121 @@ export interface ChangeSet {
     | number
     | boolean
     | null;
+  preview?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
   summary?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-snapshots".
+ */
+export interface PublishSnapshot {
+  id: string;
+  contentHash: string;
+  changeSet: string | ChangeSet;
+  reviewRevision: number;
+  changeHash: string;
+  manifest:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  themeVersion: string;
+  engineVersion: string;
+  contractVersion: string;
+  approvedBy: string | User;
+  baselineSnapshot?: (string | null) | PublishSnapshot;
+  baselineSequence: number;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-outbox".
+ */
+export interface PublishOutbox {
+  id: string;
+  idempotencyKey: string;
+  sequence: number;
+  snapshot: string | PublishSnapshot;
+  changeSet: string | ChangeSet;
+  reviewRevision: number;
+  changeHash: string;
+  includedChangeKeys:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  status: 'pending' | 'processing' | 'failed' | 'completed';
+  attempts: number;
+  nextAttemptAt?: string | null;
+  claimedAt?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  completedAt?: string | null;
+  completionEvidence?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  errorCode?: string | null;
+  correlationID: string;
+  lastError?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "published-releases".
+ */
+export interface PublishedRelease {
+  id: string;
+  outbox: string | PublishOutbox;
+  sequence: number;
+  snapshot: string | PublishSnapshot;
+  activatedAt: string;
+  healthEvidence:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  artifact:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -456,6 +573,18 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'change-sets';
         value: string | ChangeSet;
+      } | null)
+    | ({
+        relationTo: 'publish-snapshots';
+        value: string | PublishSnapshot;
+      } | null)
+    | ({
+        relationTo: 'publish-outbox';
+        value: string | PublishOutbox;
+      } | null)
+    | ({
+        relationTo: 'published-releases';
+        value: string | PublishedRelease;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -665,10 +794,70 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   revision?: T;
   changes?: T;
   quality?: T;
+  preview?: T;
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;
   summary?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-snapshots_select".
+ */
+export interface PublishSnapshotsSelect<T extends boolean = true> {
+  contentHash?: T;
+  changeSet?: T;
+  reviewRevision?: T;
+  changeHash?: T;
+  manifest?: T;
+  themeVersion?: T;
+  engineVersion?: T;
+  contractVersion?: T;
+  approvedBy?: T;
+  baselineSnapshot?: T;
+  baselineSequence?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "publish-outbox_select".
+ */
+export interface PublishOutboxSelect<T extends boolean = true> {
+  idempotencyKey?: T;
+  sequence?: T;
+  snapshot?: T;
+  changeSet?: T;
+  reviewRevision?: T;
+  changeHash?: T;
+  includedChangeKeys?: T;
+  status?: T;
+  attempts?: T;
+  nextAttemptAt?: T;
+  claimedAt?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  completedAt?: T;
+  completionEvidence?: T;
+  errorCode?: T;
+  correlationID?: T;
+  lastError?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "published-releases_select".
+ */
+export interface PublishedReleasesSelect<T extends boolean = true> {
+  outbox?: T;
+  sequence?: T;
+  snapshot?: T;
+  activatedAt?: T;
+  healthEvidence?: T;
+  artifact?: T;
   updatedAt?: T;
   createdAt?: T;
 }
