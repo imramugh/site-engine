@@ -13,6 +13,19 @@ async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string)
   return callbackURL
 }
 
+async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-recovery-code-02'): Promise<void> {
+  const providerRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().startsWith('https://127.0.0.1:4301/')) providerRequests.push(request.url())
+  })
+  await page.goto('/admin/login')
+  await page.locator('#emergency-email').fill('emergency-owner.synthetic@example.test')
+  await page.locator('#emergency-code').fill(recoveryCode)
+  await page.getByTestId('emergency-sign-in').click()
+  await page.waitForURL(/\/admin(?:\?.*)?$/)
+  expect(providerRequests).toEqual([])
+}
+
 test('an invited Google identity creates an owner session and loads admin', async ({ page }) => {
   await signIn(page, 'owner', ownerInvite)
   await expect(page).not.toHaveURL(/\/admin\/login/)
@@ -99,4 +112,47 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
   await page.locator('#emergency-code').fill('synthetic-recovery-code-01')
   await page.getByTestId('emergency-sign-in').click()
   await expect(page.getByTestId('emergency-sign-in-message')).toHaveText('Emergency sign-in was not accepted. Check your email and code, then try again.')
+})
+
+test('a locally provisioned owner uses the authenticator without OIDC, browses collections, and is disabled authoritatively', async ({ page }) => {
+  await signInLocalOwner(page)
+  await expect(page.getByRole('heading', { name: 'Collections' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Sections', exact: true })).toBeVisible()
+
+  const me = await page.request.get('/api/users/me')
+  expect(me.ok()).toBeTruthy()
+  const meBody = await me.json() as { user?: { email?: string; provider?: unknown; providerIssuer?: unknown; providerSubject?: unknown } }
+  expect(meBody.user?.email).toBe('emergency-owner.synthetic@example.test')
+  expect(meBody.user?.provider).toBeNull()
+  expect(meBody.user?.providerIssuer).toBeNull()
+  expect(meBody.user?.providerSubject).toBeNull()
+
+  for (const collection of ['pages', 'sections']) {
+    const response = await page.goto(`/admin/collections/${collection}`)
+    expect(response?.ok()).toBeTruthy()
+    await expect(page).toHaveURL(new RegExp(`/admin/collections/${collection}(?:\\?.*)?$`))
+  }
+
+  const oldSession = (await page.context().cookies()).find((cookie) => cookie.name === '__Host-site_engine_session')
+  expect(oldSession?.value).toBeTruthy()
+  const logoutRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('logout')) logoutRequests.push(`${request.method()} ${new URL(request.url()).pathname}`)
+  })
+  const logout = page.getByRole('link', { name: 'Log out' })
+  await page.getByRole('button', { name: 'Open Menu' }).click()
+  await logout.click()
+  await page.waitForURL(/\/admin\/login/)
+  expect(logoutRequests).toContain('POST /api/auth/logout')
+  const replayedSession = await page.request.get('/api/users/me', { headers: { cookie: `${oldSession!.name}=${oldSession!.value}` } })
+  expect((await replayedSession.json() as { user?: unknown }).user ?? null).toBeNull()
+
+  await signInLocalOwner(page, 'synthetic-local-recovery-code-03')
+  const disabled = await page.request.post('/__e2e/local-owner/disable')
+  expect(disabled.status()).toBe(204)
+  const disabledMe = await page.request.get('/api/users/me')
+  expect((await disabledMe.json() as { user?: unknown }).user ?? null).toBeNull()
+  await page.goto('/admin')
+  await expect(page).toHaveURL(/\/admin\/login/)
 })

@@ -30,13 +30,16 @@ secret fields are excluded from ordinary API reads and writes and from the authe
 profile passed to the admin client. Provisioning is an operator CLI action. The login
 page accepts a TOTP or recovery code through the existing emergency-owner endpoint.
 
-The configured deployment still denies public admin and auth routes. Real provider
-registration, initial enrollment on the deployed instance, approval workflows,
-preview, publishing, and MCP remain unfinished. There is no `/mcp` placeholder route.
+The deployment edge controls exposure of admin and authentication routes. A
+verified local Owner can use the authenticator path before external providers
+are registered. Real provider integration, approval workflows, preview,
+publishing, and MCP remain unfinished. There is no `/mcp` placeholder route.
 
 `pnpm test:e2e:cms` builds and runs the actual CMS against an isolated SQLite
 database and a synthetic TLS OIDC issuer. It exercises browser navigation,
-session cookies, profile permissions, logout, callback replay, and CSRF. These
+session cookies, profile permissions, logout, callback replay, and CSRF. A local
+Owner journey also verifies collection navigation, the actual admin logout
+link, revoked-cookie rejection, and immediate disablement. These
 tests do not establish connectivity to a real Google or Microsoft registration.
 
 ## SQLite transaction compatibility pin
@@ -51,3 +54,7 @@ commit failure rolls back and is surfaced. Keep the exact Payload pin, override,
 patch together until an upstream release contains both fixes; do not remove either
 without running `tests/transaction-failure.integration.test.ts` and the identity
 transaction tests.
+
+### Local owner bootstrap
+
+Only before any user or live invitation exists, an operator may run `pnpm bootstrap:local-owner <email> <name>` with `ALLOW_LOCAL_OWNER_BOOTSTRAP=true`, `PAYLOAD_SECRET`, `EMERGENCY_TOTP_ENCRYPTION_KEY`, a protected `BOOTSTRAP_OPERATOR_TOKEN_FILE`, and a new `LOCAL_OWNER_CREDENTIALS_FILE`. The command writes the TOTP handoff material only to that exclusive 0600 file; it never prints credentials.

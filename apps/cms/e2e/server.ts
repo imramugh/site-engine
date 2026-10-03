@@ -20,6 +20,8 @@ const encryptedFixture = 'synthetic-encrypted-secret-sentinel'
 const recoveryFixture = 'synthetic-recovery-hash-sentinel'
 const emergencyEmail = 'emergency-owner.synthetic@example.test'
 const emergencyRecoveryCode = 'synthetic-recovery-code-01'
+const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
+const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -56,6 +58,7 @@ let cmsProxy: ReturnType<typeof createServer>
 let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
+let localOwnerID: string | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -140,11 +143,18 @@ async function seed(): Promise<void> {
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
   await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
-  await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode)] }, overrideAccess: true })
+  const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
+  localOwnerID = String(localOwner.id)
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'POST' && request.url === '/__e2e/local-owner/disable') {
+    void payload.update({ collection: 'users', id: localOwnerID!, data: { disabled: true }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable local owner.') })
+    return
+  }
   const upstream = requestUpstream({
     hostname: '127.0.0.1', port: 4302, method: request.method, path: request.url,
     headers: { ...request.headers, host: '127.0.0.1:4300', 'x-forwarded-host': '127.0.0.1:4300', 'x-forwarded-proto': 'https' },

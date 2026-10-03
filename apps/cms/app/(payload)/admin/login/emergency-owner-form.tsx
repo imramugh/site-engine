@@ -37,8 +37,8 @@ export function EmergencyOwnerForm() {
   }
 
   return <section aria-labelledby="emergency-owner-heading">
-    <h2 id="emergency-owner-heading">Emergency Owner sign-in</h2>
-    <p>Use your Owner email and a current TOTP or recovery code.</p>
+    <h2 id="emergency-owner-heading">Owner authenticator sign-in</h2>
+    <p>Use your Owner email with a current authenticator or recovery code.</p>
     <form onSubmit={submit}>
       <label htmlFor="emergency-email">Owner email</label>
       <input id="emergency-email" name="email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} disabled={pending} />
