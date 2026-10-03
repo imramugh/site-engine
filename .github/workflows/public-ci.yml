@@ -21,9 +21,9 @@ jobs:
           package-manager-cache: false
       - run: corepack enable && corepack prepare pnpm@12.8.1 --activate
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm check
       - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm test:e2e
       - run: pnpm test:e2e:cms
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
