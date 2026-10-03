@@ -146,7 +146,14 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     if (siteSettings[field] === null) delete siteSettings[field]
   }
   // Keep editor-maintained navigation distinct from derived section membership.
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  // Captures use null to represent an explicit editor clear. The immutable
+  // public contract represents optional page metadata by omission.
+  const candidatePages = [...pages.values()].map((page) => {
+    if (page.seoDescription !== null) return page
+    const { seoDescription: _seoDescription, ...withoutSEODescription } = page
+    return withoutSEODescription
+  })
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))

@@ -8,6 +8,7 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { importReviewedSnapshot } from '../src/reviewed-snapshot-import'
 import { buildCandidate, canonicalHash } from '../src/publishing'
+import { transitionChangeSet } from '../src/editorial'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-reviewed-import-'))
@@ -133,6 +134,26 @@ describe('reviewed snapshot reconciliation', () => {
     await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Blocked redirect', manifest: desired, baseline }) })).rejects.toThrow('pending editorial change')
     expect((await payload.findByID({ collection: 'redirects', id: redirect.id, draft: true, overrideAccess: true })).to).toBe('/')
     await payload.update({ collection: 'change-sets', id: blocked.id, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+  })
+
+  it('submits an imported SEO clear and removes the baseline description from its candidate', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `import-clear-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.pages[0]!.seoDescription = 'A frozen description that the reviewed import deliberately clears.'
+    const desired = structuredClone(baseline); delete desired.pages[0]!.seoDescription
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Clear imported SEO', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as Array<{ collection: string; id: string; after: Record<string, unknown> | null }>
+    expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'pages', id: baseline.pages[0]!.id, after: expect.objectContaining({ seoDescription: null }) })]))
+    const candidate = buildCandidate(baseline, changes as never, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0' })
+    expect(candidate.pages[0]).not.toHaveProperty('seoDescription')
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+    await payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+  })
+
+  it('rejects draft pages instead of silently promoting them during import', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `import-draft-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); const draft = structuredClone(baseline); draft.pages[0]!.status = 'draft'
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Draft import', manifest: draft, baseline }) })).rejects.toThrow('Only published pages')
+    await expect(payload.findByID({ collection: 'pages', id: baseline.pages[0]!.id, draft: true, overrideAccess: true })).rejects.toThrow()
   })
 
   it('enforces same-origin, authentication, and owner-only HTTP snapshot imports', async () => {

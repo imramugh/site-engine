@@ -16,11 +16,22 @@ function baselineFor(collection: CapturedCollection, baseline: SiteSnapshot, id:
   return undefined
 }
 function capture(changes: Captured[], collection: CapturedCollection, id: string, beforeDocument: Record<string, unknown> | undefined, afterDocument: Record<string, unknown>) {
-  const before = snapshot(collection, beforeDocument)
-  const after = snapshot(collection, afterDocument)
-  if (same(before, after)) return
-  const next: Captured = { collection, id, before, after, beforeHash: before ? canonicalHash(before) : null, afterHash: after ? canonicalHash(after) : null }
+  let before = snapshot(collection, beforeDocument)
+  let after = snapshot(collection, afterDocument)
+  // Payload materializes an omitted optional SEO description as null. Keep
+  // null only when it clears a description present in the frozen baseline.
+  if (collection === 'pages') {
+    if (before?.seoDescription === null) { const { seoDescription: _seoDescription, ...normalized } = before; before = normalized }
+    if (after?.seoDescription === null && !(before && 'seoDescription' in before)) { const { seoDescription: _seoDescription, ...normalized } = after; after = normalized }
+  }
   const existing = changes.findIndex(change => change.collection === collection && change.id === id)
+  if (same(before, after)) {
+    // A later relationship write can restore the frozen value after an
+    // earlier intermediate save was captured; remove that transient change.
+    if (existing >= 0 && same(changes[existing]!.before, after)) changes.splice(existing, 1)
+    return
+  }
+  const next: Captured = { collection, id, before, after, beforeHash: before ? canonicalHash(before) : null, afterHash: after ? canonicalHash(after) : null }
   if (existing >= 0) { next.before = changes[existing]!.before; next.beforeHash = changes[existing]!.beforeHash; changes[existing] = next } else changes.push(next)
 }
 async function findDraftByID(payload: Payload, req: PayloadRequest, collection: 'sections' | 'pages', id: string): Promise<Record<string, unknown> | undefined> {
@@ -42,7 +53,7 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
   const manifest = SiteSnapshotSchema.parse(input.manifest)
   const baseline = SiteSnapshotSchema.parse(input.baseline)
   if (manifest.media.some(asset => !baseline.media.some(existing => existing.id === asset.id))) throw new Error('Import new media through the asset upload workflow before snapshot reconciliation.')
-  if (manifest.pages.some(page => page.status === 'archived')) throw new Error('Archived pages must use the archival workflow, not snapshot reconciliation.')
+  if (manifest.pages.some(page => page.status !== 'published')) throw new Error('Only published pages may be reconciled through snapshot import.')
   const [siteSettings, existingRedirects] = await Promise.all([
     payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
     manifest.redirects.length ? payload.find({ collection: 'redirects', where: { from: { in: manifest.redirects.map(redirect => redirect.from) } }, limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }) : Promise.resolve({ docs: [] }),
@@ -79,7 +90,9 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
   }
   for (const section of manifest.settings.sections) {
     const saved = await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
-    capture(changes, 'sections', section.id, baselineFor('sections', baseline, section.id), saved as unknown as Record<string, unknown>)
+    // Relationship updates are persisted separately by Payload and may not be
+    // populated in its update result. Capture the reviewed IDs we just wrote.
+    capture(changes, 'sections', section.id, baselineFor('sections', baseline, section.id), { ...(saved as unknown as Record<string, unknown>), pageIds: section.pageIds })
   }
   for (const redirect of manifest.redirects) {
     const existing = existingRedirects.docs.find(candidate => candidate.from === redirect.from)
