@@ -1,5 +1,7 @@
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
 import { buildConfig } from 'payload'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Assets, Applications, ChangeSets, Inquiries, Pages, Redirects, Sections, Users } from './src/collections'
 import { databaseURI } from './src/sqlite'
 
@@ -14,6 +16,7 @@ export default buildConfig({
   collections: [Users, Pages, Sections, Assets, Redirects, Inquiries, Applications, ChangeSets],
   db: sqliteAdapter({
     client: { url: databaseURI() },
+    migrationDir: resolve(dirname(fileURLToPath(import.meta.url)), 'src/migrations'),
     idType: 'uuid',
     allowIDOnCreate: true,
     wal: true,

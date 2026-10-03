@@ -7,9 +7,10 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const payload = await getPayload({ config })
-    await (payload.db as unknown as { client: { execute: (sql: string) => Promise<unknown> } }).client.execute('SELECT 1')
-    return NextResponse.json({ status: 'ok', database: 'sqlite' }, { status: 200 })
+    // Touch an application table so a missing production migration cannot appear healthy.
+    await payload.count({ collection: 'users', overrideAccess: true })
+    return NextResponse.json({ status: 'ok', database: 'sqlite' }, { status: 200, headers: { 'cache-control': 'no-store' } })
   } catch {
-    return NextResponse.json({ status: 'unavailable' }, { status: 503 })
+    return NextResponse.json({ status: 'unavailable' }, { status: 503, headers: { 'cache-control': 'no-store' } })
   }
 }
