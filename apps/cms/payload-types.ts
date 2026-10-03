@@ -310,9 +310,9 @@ export interface Page {
 export interface Section {
   id: string;
   name: string;
-  summary: string;
+  summary?: string | null;
   slug: string;
-  landingPageId?: (string | Page) | null;
+  landingPageId?: (string | null) | Page;
   allowedTemplates: ('landing' | 'standard' | 'listing' | 'pillar' | 'service' | 'article' | 'job')[];
   pageIds?: (string | Page)[] | null;
   updatedAt: string;
