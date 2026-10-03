@@ -191,6 +191,10 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"ProfessionalService"');
   });
 
+  it('does not embed analytics collection without an explicitly configured endpoint', async () => {
+    expect(await readFile(join(browserOutput, 'index.html'), 'utf8')).not.toContain('site-analytics-consent');
+  });
+
   it('keeps search unavailable until an Owner-reviewed setting enables it', async () => {
     const snapshot = fixture('Search disabled');
     snapshot.settings.searchEnabled = false;
@@ -281,6 +285,20 @@ describe('static snapshot renderer', () => {
     await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: `${components}/../${components.split('/').at(-1)}` })).rejects.toThrow('absolute normalized');
     await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: linked })).rejects.toThrow('real directory');
     await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: missing })).rejects.toThrow('missing required BlockRenderer.astro');
+  });
+
+  it('hosts consent hooks outside custom theme layouts and excludes them from private previews', async () => {
+    const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
+    const components = await customThemeComponents(root); const input = await writeSnapshot(root, fixture('Analytics custom theme'), 'analytics-custom.json');
+    try {
+      const [publicBuild, previewBuild] = await Promise.all([
+        renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: components }),
+        renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components })
+      ]);
+      const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
+      expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+src="\/_astro\//);
+      expect(await artifactContents(previewBuild.output)).not.toContain('data-analytics-consent');
+    } finally { process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; }
   });
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
@@ -502,17 +520,32 @@ describe('static snapshot renderer', () => {
     } finally { await browser.close(); }
   }, 120_000);
 
-  it('keeps analytics disabled until consent, emits only allowlisted conversion data, and stops after revocation', async () => {
+  it('keeps analytics disabled until consent, sends allowlisted CTA, navigation, phone and form outcomes, and stops after revocation', async () => {
     const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
     const snapshot = fixture('Analytics'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
     const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
     snapshot.pages.push(inquiry); snapshot.settings.sections[0]!.pageIds.push(inquiry.id);
     const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
-    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }));
+    let inquiries = 0;
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => { inquiries += 1; await route.fulfill(inquiries === 1 ? { status: 400, contentType: 'application/json', body: JSON.stringify({ errors: { form: 'Try again.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
     try {
       await page.goto(`${served.origin}/`); await page.locator('[data-primary-cta]').click(); expect(events).toEqual([]);
-      await page.evaluate(() => localStorage.setItem('site-analytics-consent', 'granted')); await page.goto(`${served.origin}/analytics-inquiry/?utm_source=search-test`); await page.getByRole('button', { name: 'Send inquiry' }).click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor(); expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'page_view', attribution: 'search-test' }), expect.objectContaining({ event: 'form_accepted', form: 'inquiry' })])); expect(JSON.stringify(events)).not.toMatch(/message|email|Synthetic analytics contact/);
-      await page.evaluate(() => { window.dispatchEvent(new Event('analytics-consent-revoked')); window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })) }); const count = events.length; expect(events).toHaveLength(count);
+      await page.getByRole('button', { name: 'Allow optional measurement' }).click(); await expect.poll(() => events.some((item: any) => item.event === 'page_view')).toBe(true);
+      await page.goto(`${served.origin}/docs/analytics-inquiry/?utm_source=search-test`);
+      await page.getByLabel('Email').fill('analytics@example.test'); await page.getByLabel('Message').fill('This must never be sent to analytics.'); await page.getByLabel(/I consent/).check();
+      const submit = page.locator('[data-inquiry-form] button');
+      await submit.click(); await page.getByRole('alert').filter({ hasText: 'Try again.' }).waitFor();
+      await submit.click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
+      await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Home', exact: true }).click();
+      await page.locator('[data-primary-cta]').click();
+      await page.evaluate(() => { const phone = document.createElement('a'); phone.href = 'tel:+15550100'; phone.textContent = 'Call'; document.body.append(phone); });
+      await page.locator('a[href="tel:+15550100"]').click({ noWaitAfter: true });
+      await expect.poll(() => ['form_failed', 'form_accepted', 'navigation', 'primary_cta', 'phone_tap'].every(event => events.some((item: any) => item.event === event))).toBe(true);
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'page_view', attribution: 'search' }), expect.objectContaining({ event: 'form_failed', form: 'inquiry' }), expect.objectContaining({ event: 'form_accepted', form: 'inquiry' }), expect.objectContaining({ event: 'navigation' }), expect.objectContaining({ event: 'primary_cta' }), expect.objectContaining({ event: 'phone_tap' })])); expect(JSON.stringify(events)).not.toMatch(/message|email|This must never be sent|search-test/);
+      const count = events.length;
+      await page.getByRole('button', { name: 'Disable optional measurement' }).click();
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })));
+      await page.waitForTimeout(100); expect(events).toHaveLength(count);
     } finally { process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
   }, 120_000);
 

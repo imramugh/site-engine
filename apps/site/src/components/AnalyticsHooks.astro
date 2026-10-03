@@ -1,0 +1,53 @@
+---
+import { crawlerMode } from '../lib/crawler-config.js';
+import { renderBase } from '../lib/snapshot.js';
+interface Props { path: string }
+const { path } = Astro.props;
+const configured = import.meta.env.PUBLIC_ANALYTICS_ENDPOINT;
+const preview = crawlerMode(renderBase) === 'preview';
+let endpoint: string | undefined;
+if (configured && !preview) {
+  try { const parsed = new URL(configured); if (parsed.protocol === 'https:' && !parsed.username && !parsed.password) endpoint = parsed.href; } catch { /* Invalid deployment configuration leaves collection disabled. */ }
+}
+const consentRequired = import.meta.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'false';
+---
+{endpoint && <section data-analytics-consent data-endpoint={endpoint} data-path={path} data-consent-required={String(consentRequired)} aria-label="Optional measurement">
+  <p data-analytics-consent-status>Optional measurement is off.</p>
+  <button type="button" data-analytics-grant>Allow optional measurement</button>
+  <button type="button" data-analytics-revoke>Disable optional measurement</button>
+</section>}
+<script>
+  type Consent = 'granted' | 'revoked' | undefined;
+  type HookWindow = Window & typeof globalThis & { siteAnalyticsConsent?: { grant: () => void; revoke: () => void } };
+  const root = document.querySelector<HTMLElement>('[data-analytics-consent]');
+  if (root) {
+    const endpoint = root.dataset.endpoint!;
+    const path = root.dataset.path!;
+    const consentRequired = root.dataset.consentRequired === 'true';
+    const allowed = new Set(['page_view', 'primary_cta', 'navigation', 'phone_tap', 'form_accepted', 'form_failed']);
+    const storageKey = 'site-analytics-consent';
+    const readConsent = (): Consent => { try { const value = localStorage.getItem(storageKey); return value === 'granted' || value === 'revoked' ? value : undefined; } catch { return undefined; } };
+    const writeConsent = (value: Exclude<Consent, undefined>) => { try { localStorage.setItem(storageKey, value); } catch { /* Storage is optional; consent stays in this page only. */ } };
+    const allowedByConsent = () => { const value = readConsent(); return value === 'revoked' ? false : value === 'granted' || !consentRequired; };
+    const attribution = () => {
+      const source = new URLSearchParams(location.search).get('utm_source')?.toLowerCase();
+      if (source && /google|bing|duckduckgo|search/.test(source)) return 'search';
+      if (source && /chatgpt|perplexity|claude|copilot|ai/.test(source)) return 'ai_assistant';
+      if (source) return 'campaign';
+      if (!document.referrer) return 'direct';
+      try { const host = new URL(document.referrer).hostname; return /google|bing|duckduckgo/.test(host) ? 'search' : /chatgpt|perplexity|claude|copilot/.test(host) ? 'ai_assistant' : 'referral'; } catch { return 'direct'; }
+    };
+    const emit = (event: string, detail: Record<string, string> = {}) => { if (!allowed.has(event) || !allowedByConsent()) return; void fetch(endpoint, { method: 'POST', keepalive: true, credentials: 'omit', referrerPolicy: 'no-referrer', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event, path, attribution: attribution(), ...detail }) }).catch(() => undefined); };
+    const status = root.querySelector<HTMLElement>('[data-analytics-consent-status]')!;
+    const refresh = () => { status.textContent = allowedByConsent() ? 'Optional measurement is on.' : 'Optional measurement is off.'; };
+    const grant = () => { writeConsent('granted'); refresh(); emit('page_view'); };
+    const revoke = () => { writeConsent('revoked'); refresh(); };
+    (window as HookWindow).siteAnalyticsConsent = { grant, revoke };
+    root.querySelector<HTMLElement>('[data-analytics-grant]')!.addEventListener('click', grant);
+    root.querySelector<HTMLElement>('[data-analytics-revoke]')!.addEventListener('click', revoke);
+    window.addEventListener('analytics-consent-revoked', revoke);
+    document.addEventListener('click', (event) => { const link = (event.target as Element | null)?.closest('a'); if (!link) return; if (link.matches('[data-primary-cta]')) emit('primary_cta'); else if (link.href.startsWith('tel:')) emit('phone_tap'); else if (link.closest('nav') && link.origin === location.origin) emit('navigation'); });
+    window.addEventListener('site-conversion', (event: Event) => { const detail = (event as CustomEvent<{ accepted?: boolean; form?: string }>).detail; emit(detail?.accepted ? 'form_accepted' : 'form_failed', { form: detail?.form === 'application' ? 'application' : 'inquiry' }); });
+    refresh(); if (allowedByConsent()) emit('page_view');
+  }
+</script>
