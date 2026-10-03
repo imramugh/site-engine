@@ -39,10 +39,11 @@ export function EditorialWorkflow() {
     setActing(true)
     setMessage('')
     try {
-      const response = await fetch(`/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id }) })
+      const preview = action === 'prepare-preview'
+      const response = await fetch(preview ? '/api/editorial/prepare-preview' : `/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(preview ? { id: set.id, includedChangeKeys: set.changes?.map((change) => `${change.collection}:${change.id}`) ?? [] } : { id: set.id }) })
       const body = await response.json() as { error?: string }
       if (!response.ok) { setMessage(body.error ?? 'The workflow action was not accepted.'); return }
-      setMessage(action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
+      setMessage(preview ? 'Private comparison queued. It will remain unavailable until the renderer completes.' : action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
       await load()
     } catch {
       setMessage('Unable to update the change set. Try again.')
@@ -60,7 +61,7 @@ export function EditorialWorkflow() {
         {set.state === 'stale' && <p role="alert">This change set is stale. Refresh it before review.</p>}
         <div aria-label="Workflow actions">
           {owns && (set.state === 'open' || set.state === 'changes-requested') && <button disabled={acting} onClick={() => action('submit')}>Submit for review</button>}
-          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
+          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button><button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'stale') && <button disabled={acting} onClick={() => action('refresh')}>Refresh</button>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'rejected') && <button disabled={acting} onClick={() => action('discard')}>Discard</button>}
         </div>

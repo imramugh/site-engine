@@ -4,7 +4,7 @@ import { serverSessionStrategy } from '../../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
 
-const previewRoles = new Set(['owner', 'approver', 'editor'])
+const previewRoles = new Set(['owner', 'approver'])
 const headers = { 'Cache-Control': 'no-store' }
 
 function response(status: 204 | 401 | 403): Response {
@@ -14,6 +14,8 @@ function response(status: 204 | 401 | 403): Response {
 /** Internal Nginx auth_request check for the protected draft-preview upstream. */
 export async function GET(request: Request): Promise<Response> {
   try {
+    const original = request.headers.get('x-original-uri')
+    if (!original || !/^\/preview\/changes\/[0-9a-f-]{36}\/(live|proposed)(\/|$)/i.test(original)) return response(403)
     const payload = await getPayload({ config })
     const result = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     const user = result.user
