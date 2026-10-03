@@ -90,6 +90,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
   let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
   let siteSettings = structuredClone(base.settings) as Record<string, unknown>
+  let styleGuide = structuredClone(base.styleGuide) as Record<string, unknown> | undefined
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
@@ -129,6 +130,13 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       if (!merged) throw new Error('Site settings cannot be removed.')
       siteSettings = merged
     }
+    if (change.collection === 'style-guides') {
+      const merged = change.before === null
+        ? structuredClone(change.after)
+        : mergeCapturedChange(styleGuide, change)
+      if (!merged) throw new Error('Style guide cannot be removed.')
+      styleGuide = merged
+    }
     if (change.collection === 'assets') {
       const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
       if (merged === null) media.delete(change.id)
@@ -153,7 +161,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     const { seoDescription: _seoDescription, ...withoutSEODescription } = page
     return withoutSEODescription
   })
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const occupiedPaths = new Set(newRoutes.map(route => route.path))

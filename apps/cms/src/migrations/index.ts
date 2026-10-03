@@ -1,3 +1,4 @@
+import * as migration_20261003_220000_style_guides from './20261003_220000_style_guides';
 import * as migration_20261003_230000_section_landing_page from './20261003_230000_section_landing_page';
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
@@ -125,5 +126,6 @@ export const migrations = [
   },
   { up: migration_20261003_200100_site_settings.up, down: migration_20261003_200100_site_settings.down, name: '20261003_200100_site_settings' },
   { up: migration_20261003_210000_search_controls.up, down: migration_20261003_210000_search_controls.down, name: '20261003_210000_search_controls' },
+  { up: migration_20261003_220000_style_guides.up, down: migration_20261003_220000_style_guides.down, name: '20261003_220000_style_guides' },
   { up: migration_20261003_230000_section_landing_page.up, down: migration_20261003_230000_section_landing_page.down, name: '20261003_230000_section_landing_page' },
 ];

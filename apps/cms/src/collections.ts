@@ -1,7 +1,7 @@
 import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
@@ -560,5 +560,29 @@ export const SiteSettings: CollectionConfig = {
     { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 160 },
     { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
     { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
+  ],
+}
+
+/** Owner-reviewed private style settings. They join a change set and become
+ * effective only in its frozen reviewed snapshot. */
+export const StyleGuides: CollectionConfig = {
+  slug: 'style-guides', admin: { useAsTitle: 'key', group: 'Editorial' },
+  access: { create: staff(['owner']), read: staff(editorialRoles), update: staff(['owner']), delete: () => false },
+  hooks: {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      if (operation === 'update' && originalDoc && data.key !== undefined && data.key !== originalDoc.key) throw new Error('Style guide key is immutable.')
+      const editable = { ...originalDoc, ...data }
+      for (const key of ['id', 'key', 'createdAt', 'updatedAt', '_status']) delete editable[key]
+      contractError(StyleGuideSchema.safeParse(editable), req, 'style-guides')
+      return { ...originalDoc, ...data, key: originalDoc?.key ?? 'active' }
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'style-guides', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
+  },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active', admin: { readOnly: true } },
+    { name: 'bannedPhrases', type: 'json', defaultValue: [] }, { name: 'preferredTerms', type: 'json', defaultValue: [] },
+    { name: 'canadianSpelling', type: 'select', required: true, defaultValue: 'off', options: ['off', 'warn'] },
+    { name: 'maximumSentenceWords', type: 'number', required: true, defaultValue: 30, min: 5, max: 100 },
+    { name: 'minimumReadingEase', type: 'number', required: true, defaultValue: 30, min: 0, max: 121 },
   ],
 }

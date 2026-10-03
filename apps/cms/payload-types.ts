@@ -78,6 +78,7 @@ export interface Config {
     redirects: Redirect;
     'theme-settings': ThemeSetting;
     'site-settings': SiteSetting;
+    'style-guides': StyleGuide;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     applications: Application;
@@ -104,6 +105,7 @@ export interface Config {
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
+    'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -468,6 +470,37 @@ export interface SiteSetting {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "style-guides".
+ */
+export interface StyleGuide {
+  id: string;
+  key: string;
+  bannedPhrases?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  preferredTerms?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  canadianSpelling: 'off' | 'warn';
+  maximumSentenceWords: number;
+  minimumReadingEase: number;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -820,6 +853,10 @@ export interface PayloadLockedDocument {
         value: string | SiteSetting;
       } | null)
     | ({
+        relationTo: 'style-guides';
+        value: string | StyleGuide;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -1134,6 +1171,20 @@ export interface SiteSettingsSelect<T extends boolean = true> {
   seoDescription?: T;
   searchEnabled?: T;
   contractVersion?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "style-guides_select".
+ */
+export interface StyleGuidesSelect<T extends boolean = true> {
+  key?: T;
+  bannedPhrases?: T;
+  preferredTerms?: T;
+  canadianSpelling?: T;
+  maximumSentenceWords?: T;
+  minimumReadingEase?: T;
   updatedAt?: T;
   createdAt?: T;
 }

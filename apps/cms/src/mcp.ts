@@ -43,23 +43,6 @@ const blockLibrary = {
   templates: Object.fromEntries(TemplateSchema.options.map((template) => [template, TemplateAllowedBlocks[template]])),
   appearance: { backgrounds: BackgroundSchema.options, widths: WidthSchema.options, motionIntents: MotionIntentSchema.options },
 }
-const glossary = {
-  source: 'public-neutral-contract',
-  terms: [
-    { term: 'section', definition: 'A top-level content grouping with an allowed-template policy.' },
-    { term: 'page', definition: 'A draftable content record in a section and optional parent-page tree.' },
-    { term: 'block', definition: 'A typed, ordered page component validated by the public contract.' },
-    { term: 'draft', definition: 'Editable content that is not a public release.' },
-    { term: 'published', definition: 'A release state; this MCP server cannot create it.' },
-    { term: 'archived', definition: 'Content retained outside ordinary published use.' },
-  ],
-}
-const styleGuide = {
-  status: 'not-configured',
-  source: 'public-neutral-contract',
-  note: 'This engine does not persist a client style guide or glossary. The data below describes only neutral structural constraints.',
-  structuralRules: ['Use a template allowed by the section.', 'Use only blocks allowed by the template.', 'Keep page ancestry in one section and at most three levels deep.'],
-}
 
 type RpcRequest = { jsonrpc: '2.0'; id?: string | number | null; method: string; params?: Record<string, unknown> }
 
@@ -148,8 +131,22 @@ export async function handleMcp(request: Request): Promise<Response> {
   const unavailable = () => ({ isError: true, ...text({ error: 'read_failed' }) })
   const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
   const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, value))
-  registerReadResource('style-guide', 'site-engine://contract/style-guide', 'Style guide availability', styleGuide)
-  registerReadResource('glossary', 'site-engine://contract/glossary', 'Contract glossary', glossary)
+  const styleGuide = async () => {
+    try {
+      const result = await payload.find({ collection: 'style-guides', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
+      const guide = result.docs[0]
+      return guide ? { source: 'reviewed-cms-style-guide', bannedPhrases: guide.bannedPhrases ?? [], canadianSpelling: guide.canadianSpelling, maximumSentenceWords: guide.maximumSentenceWords, minimumReadingEase: guide.minimumReadingEase } : { status: 'not-configured' }
+    } catch { return { error: 'read_failed' } }
+  }
+  const glossary = async () => {
+    try {
+      const result = await payload.find({ collection: 'style-guides', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
+      const terms = result.docs[0]?.preferredTerms
+      return { source: 'reviewed-cms-style-guide', terms: Array.isArray(terms) ? terms.map((term) => ({ avoid: (term as { avoid?: unknown }).avoid, prefer: (term as { prefer?: unknown }).prefer })) : [] }
+    } catch { return { error: 'read_failed' } }
+  }
+  server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await styleGuide()))
+  server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await glossary()))
   registerReadResource('block-library', 'site-engine://contract/block-library', 'Block library', blockLibrary)
   server.registerResource('site-summary', 'site-engine://site/summary', { title: 'Site summary', description: `Read-only scoped content totals. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => {
     try {
