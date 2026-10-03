@@ -173,7 +173,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     // A reviewed homepage replacement keeps '/' occupied by the new page.
     // Redirect only vacated paths, never shadow a route in the new snapshot.
     if (next && next.path !== oldRoute.path && !occupiedPaths.has(oldRoute.path)) addRedirect({ from: oldRoute.path, to: next.path, status: 301 })
-    if (!next && candidate.pages.find((page) => page.id === oldRoute.page.id)?.status === 'archived') {
+    if (!next && candidate.pages.find((page) => page.id === oldRoute.page.id)?.status === 'archived' && !occupiedPaths.has(oldRoute.path)) {
       // An editor-selected redirect is authoritative. Only derive the parent
       // destination when the old route has no selected redirect at all.
       if (redirectsWithMovedTargets.some((redirect) => redirect.from === oldRoute.path)) continue

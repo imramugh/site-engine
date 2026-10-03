@@ -2,6 +2,7 @@ import { RedirectSchema, SiteSnapshotSchema, type Page, type SiteSnapshot } from
 import { deriveRoutes } from '@site-engine/engine'
 import type { Payload, PayloadRequest } from 'payload'
 import { captureChange, openSet } from './editorial'
+import { buildCandidate } from './publishing'
 
 export type RedirectInput = { from: string; to: string; status?: number }
 export type ReferenceLocation = { collection: 'pages' | 'navigation'; id: string; field: string }
@@ -46,11 +47,19 @@ function walk(value: unknown, target: string, field: string, pageID: string, fou
 }
 
 /** Finds live ID, navigation, and public-path references that must be removed before archival. */
-export function archiveReferences(pageID: string, pages: readonly Pick<Page, 'id' | 'parentId' | 'blocks'>[], baseline?: SiteSnapshot): ReferenceLocation[] {
+export function archiveReferences(pageID: string, pages: readonly (Pick<Page, 'id' | 'parentId' | 'blocks'> & { status?: Page['status'] })[], baseline?: SiteSnapshot, publishedBaseline = baseline): ReferenceLocation[] {
   const found: ReferenceLocation[] = []
-  const oldPath = baseline ? deriveRoutes(baseline).routes.find((route) => route.page.id === pageID)?.path : undefined
+  const publishedPath = publishedBaseline ? deriveRoutes(publishedBaseline).routes.find((route) => route.page.id === pageID)?.path : undefined
+  // A reviewed replacement that already occupies the old public URL changes
+  // what an href reaches. Those links remain live links to the replacement,
+  // not references to the retired record.
+  const replacementOccupiesOldPath = Boolean(publishedPath && baseline && deriveRoutes(baseline).routes.some((route) => route.path === publishedPath && route.page.id !== pageID))
+  const oldPath = replacementOccupiesOldPath ? undefined : publishedPath
   for (const page of pages) {
-    if (page.id === pageID) continue
+    // A child already retired into this same reviewed set cannot block its
+    // parent. It remains in the candidate for audit history, but is no longer
+    // a live relationship or public link.
+    if (page.id === pageID || page.status === 'archived') continue
     if (page.parentId === pageID) found.push({ collection: 'pages', id: page.id, field: 'parentId' })
     walk(page.blocks, pageID, 'blocks', page.id, found)
     if (oldPath) walk(page.blocks, oldPath, 'blocks', page.id, found)
@@ -63,6 +72,20 @@ export function archiveReferences(pageID: string, pages: readonly Pick<Page, 'id
     }
   }
   return found
+}
+
+function candidateForOpenSet(baseline: SiteSnapshot, set: Record<string, unknown>): SiteSnapshot {
+  const changes = Array.isArray(set.changes) ? set.changes as Parameters<typeof buildCandidate>[1] : []
+  const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+  // Only contractVersion is applied by buildCandidate. The remaining pins are
+  // deliberately inert here: this is an in-transaction reference check, not
+  // an approval or publication operation.
+  return buildCandidate(baseline, changes, includedChangeKeys, { themeVersion: 'archive-reference-check', engineVersion: 'archive-reference-check', contractVersion: baseline.settings.contractVersion })
+}
+
+function hasReplacementAtPublishedRoute(published: SiteSnapshot, candidate: SiteSnapshot, pageID: string): boolean {
+  const oldPath = deriveRoutes(published).routes.find((route) => route.page.id === pageID)?.path
+  return Boolean(oldPath && deriveRoutes(candidate).routes.some((route) => route.path === oldPath && route.page.id !== pageID))
 }
 
 export function formatArchiveReferences(references: readonly ReferenceLocation[]): string {
@@ -111,10 +134,24 @@ export async function archivePage(input: { payload: Payload; req: PayloadRequest
   const pages = await payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req })
   let baseline = input.baseline
   if (!baseline) baseline = await queueBaseline(payload, req)
-  const removedSectionID = baseline && input.removeNavigationReference ? await removeLegacyNavigationReference(payload, req, baseline, pageID) : undefined
-  const references = archiveReferences(pageID, pages.docs as Pick<Page, 'id' | 'parentId' | 'blocks'>[], baseline).filter(reference => !(removedSectionID === reference.id && reference.collection === 'navigation' && reference.field.startsWith('pageIds.')))
+  const actor = req.user as { id?: string } | undefined
+  const requestedSet = req.headers.get('x-site-engine-change-set')
+  // A named set may already contain navigation and homepage replacements from
+  // reviewed import. Resolve references against that exact candidate, without
+  // opening a set during a rejected ordinary archive attempt.
+  if (requestedSet && !/^[0-9a-f-]{36}$/i.test(requestedSet)) throw new Error('The selected change set is invalid.')
+  if (requestedSet && !actor?.id) throw new Error('Authentication is required.')
+  // openSet reads the same validated header and only returns that exact open
+  // set when it belongs to this editor; it never falls back to another set.
+  const selectedSet = baseline && requestedSet ? await openSet(input.payload, actor as never, req) : undefined
+  const effectiveBaseline = baseline && selectedSet ? candidateForOpenSet(baseline, selectedSet) : baseline
+  const removedSectionID = effectiveBaseline && input.removeNavigationReference ? await removeLegacyNavigationReference(payload, req, effectiveBaseline, pageID) : undefined
+  const references = archiveReferences(pageID, pages.docs as Pick<Page, 'id' | 'parentId' | 'blocks' | 'status'>[], effectiveBaseline, baseline).filter(reference => !(removedSectionID === reference.id && reference.collection === 'navigation' && reference.field.startsWith('pageIds.')))
   if (references.length) throw new Error(`Archive blocked by references: ${formatArchiveReferences(references)}`)
-  const redirect = baseline ? redirectForPublishedChange(baseline, pageID, target) : undefined
+  // Redirect source paths always come from the frozen published release. A
+  // reviewed homepage replacement keeps '/' live, so no redirect (and never
+  // a self-redirect) is created for the retired homepage.
+  const redirect = baseline && !(effectiveBaseline && hasReplacementAtPublishedRoute(baseline, effectiveBaseline, pageID)) ? redirectForPublishedChange(baseline, pageID, target) : undefined
   await payload.update({ collection: 'pages', id: page.id, data: { status: 'archived' }, draft: true, overrideAccess: true, req, context: { archiveInternal: true } })
   // Payload reuses the request context from the nested change-set update made
   // by captureChange. Restore this outer editorial operation before creating
