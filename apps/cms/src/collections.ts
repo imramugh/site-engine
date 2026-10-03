@@ -8,7 +8,7 @@ import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, ty
 import { captureChange } from './editorial'
 import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
-import { loadThemeRegistry, verifyInstalledThemeSelection } from '../../site/scripts/theme-registry.mjs'
+import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const

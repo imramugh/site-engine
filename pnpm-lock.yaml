@@ -329,6 +329,10 @@ importers:
       '@site-engine/contract':
         specifier: workspace:^
         version: link:../contract
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.1
+        version: 24.19.1
 
   packages/theme-starter:
     dependencies:
