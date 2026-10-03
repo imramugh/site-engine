@@ -6,8 +6,8 @@ const manifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', e
 
 test('ENG-035 owner proposes an installed theme through browser HTTP and freezes it in the preview candidate', async ({ page }) => {
   await page.goto('/admin/login')
-  await page.locator('#emergency-email').fill('content-owner.synthetic@example.test')
-  await page.locator('#emergency-code').fill('synthetic-content-owner-code-05')
+  await page.locator('#emergency-email').fill('theme-owner.synthetic@example.test')
+  await page.locator('#emergency-code').fill('synthetic-theme-owner-code-08')
   await page.getByTestId('emergency-sign-in').click()
   await page.waitForURL(/\/admin(?:\?.*)?$/)
   const result = await page.evaluate(async ({ manifest }) => {
