@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
-import { rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +17,9 @@ async function port(): Promise<number> {
 
 test('compiled CLI starts when Node receives its relative Docker command path', async () => {
   const listenPort = await port()
-  const databasePath = join(tmpdir(), `site-engine-oauth-entrypoint-${process.pid}.sqlite`)
+  assert(existsSync(join(import.meta.dirname, '../dist/server.js')), 'Build workspace packages before running the compiled CLI test.')
+  const directory = mkdtempSync(join(tmpdir(), 'site-engine-oauth-entrypoint-'))
+  const databasePath = join(directory, 'oauth.sqlite')
   const jwk = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' })
   const child = spawn(process.execPath, ['apps/oauth/dist/server.js'], {
     cwd: join(import.meta.dirname, '../../..'),
@@ -27,17 +29,19 @@ test('compiled CLI starts when Node receives its relative Docker command path', 
     },
     stdio: 'ignore',
   })
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
   try {
     let response: Response | undefined
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      assert.equal(child.exitCode, null, 'Compiled OAuth server exited before becoming ready.')
       try { response = await fetch(`http://127.0.0.1:${listenPort}/.well-known/oauth-protected-resource/mcp`) } catch {}
       if (response?.ok) break
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
     assert.equal(response?.status, 200)
   } finally {
-    child.kill('SIGTERM')
-    await new Promise<void>((resolve) => child.once('exit', () => resolve()))
-    rmSync(databasePath, { force: true })
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+    await exited
+    rmSync(directory, { recursive: true, force: true })
   }
-})
+}, 20_000)

@@ -7,7 +7,7 @@
     "pnpm": ">=12.8.1 <13"
   },
   "scripts": {
-    "build": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/site build && corepack pnpm@12.8.1 --filter @site-engine/cms build",
+    "build": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/site build && corepack pnpm@12.8.1 --filter @site-engine/cms build && corepack pnpm@12.8.1 --filter @site-engine/oauth build",
     "dev:site": "corepack pnpm@12.8.1 --filter @site-engine/site dev",
     "dev:cms": "corepack pnpm@12.8.1 --filter @site-engine/cms dev",
     "preview:site": "corepack pnpm@12.8.1 --filter @site-engine/site preview",
@@ -21,7 +21,7 @@
     "check:boundaries": "tsx packages/checks/src/assert-boundaries.ts",
     "check:provenance": "tsx packages/checks/src/assert-provenance.ts",
     "check": "corepack pnpm@12.8.1 build:packages && corepack pnpm@12.8.1 lint && corepack pnpm@12.8.1 typecheck && corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 check:boundaries && corepack pnpm@12.8.1 check:provenance",
-    "build:packages": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build"
+    "build:packages": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/oauth build"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

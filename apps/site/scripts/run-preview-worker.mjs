@@ -134,6 +134,7 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
       for (const variant of ['live', 'proposed']) {
         const inputPath = join(scratch, `${variant}.json`);
         await writeFile(inputPath, canonical(input[variant]), { mode: 0o600 });
+        if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
         const result = await render({ input: inputPath, outputRoot: scratch, publicOrigin: origin, basePath: `/preview/changes/${input.job.id}/${variant}/`, signal: controller.signal });
         if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
         const output = resolve(result.output);
