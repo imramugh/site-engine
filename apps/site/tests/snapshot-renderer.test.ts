@@ -122,7 +122,7 @@ function staticServer(root: string, mount: string, headers: Record<string, strin
   }));
 }
 
-describe('static snapshot renderer', () => {
+describe('static snapshot renderer', { concurrent: false }, () => {
   let root: string;
   let browserOutput: string;
   let server: Server | undefined;
@@ -294,14 +294,12 @@ describe('static snapshot renderer', () => {
     const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
     const components = await customThemeComponents(root); const input = await writeSnapshot(root, fixture('Analytics custom theme'), 'analytics-custom.json');
     try {
-      const [publicBuild, previewBuild] = await Promise.all([
-        renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: components }),
-        renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components })
-      ]);
+      const publicBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: components });
+      const previewBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components });
       const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
-      expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+src="\/_astro\//);
+      expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+type="module"/);
       expect(await artifactContents(previewBuild.output)).not.toContain('data-analytics-consent');
-    } finally { process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; }
+    } finally { if (prior === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; }
   });
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
@@ -555,7 +553,81 @@ describe('static snapshot renderer', () => {
       await page.getByRole('button', { name: 'Disable optional measurement' }).click();
       await page.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })));
       await page.waitForTimeout(100); expect(events).toHaveLength(count);
-    } finally { process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+    } finally { if (prior === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+  }, 120_000);
+
+  it('keeps consent decisions effective for the current page when browser storage is unavailable', async () => {
+    const priorEndpoint = process.env.PUBLIC_ANALYTICS_ENDPOINT;
+    const priorConsentRequired = process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
+    process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
+    const snapshot = fixture('Analytics storage unavailable');
+    const input = await writeSnapshot(root, snapshot, 'analytics-storage-unavailable.json');
+    const browser = await chromium.launch();
+    try {
+      process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = 'false';
+      const optionalBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+      const optionalServer = await staticServer(optionalBuild.output, '/');
+      const optionalContext = await browser.newContext();
+      const optionalPage = await optionalContext.newPage();
+      const optionalEvents: { event: string }[] = [];
+      await optionalContext.addInitScript(() => {
+        Object.defineProperty(Storage.prototype, 'getItem', { configurable: true, value: () => { throw new Error('storage disabled'); } });
+        Object.defineProperty(Storage.prototype, 'setItem', { configurable: true, value: () => { throw new Error('storage disabled'); } });
+      });
+      await optionalPage.route('https://analytics.example.test/events', async route => { optionalEvents.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); });
+      try {
+        await optionalPage.goto(`${optionalServer.origin}/`, { waitUntil: 'networkidle' });
+        await expect.poll(() => optionalEvents.filter(({ event }) => event === 'page_view')).toHaveLength(1);
+        await optionalPage.getByRole('button', { name: 'Allow optional measurement' }).click();
+        await optionalPage.waitForTimeout(100);
+        expect(optionalEvents.filter(({ event }) => event === 'page_view')).toHaveLength(1);
+        await optionalPage.getByRole('button', { name: 'Disable optional measurement' }).click();
+        await optionalPage.locator('[data-primary-cta]').evaluate((link: HTMLAnchorElement) => {
+          link.addEventListener('click', event => event.preventDefault(), { once: true });
+          link.click();
+        });
+        await optionalPage.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: true } })));
+        await optionalPage.waitForTimeout(100);
+        expect(optionalEvents.map(({ event }) => event)).toEqual(['page_view']);
+      } finally {
+        await optionalContext.close();
+        optionalServer.server.closeAllConnections();
+        optionalServer.server.close();
+      }
+
+      delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
+      const requiredBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+      const requiredServer = await staticServer(requiredBuild.output, '/');
+      const requiredContext = await browser.newContext();
+      const requiredPage = await requiredContext.newPage();
+      const requiredEvents: { event: string }[] = [];
+      await requiredContext.addInitScript(() => {
+        Object.defineProperty(Storage.prototype, 'getItem', { configurable: true, value: () => { throw new Error('storage disabled'); } });
+        Object.defineProperty(Storage.prototype, 'setItem', { configurable: true, value: () => { throw new Error('storage disabled'); } });
+      });
+      await requiredPage.route('https://analytics.example.test/events', async route => { requiredEvents.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); });
+      try {
+        await requiredPage.goto(`${requiredServer.origin}/`, { waitUntil: 'networkidle' });
+        expect(requiredEvents).toEqual([]);
+        await requiredPage.getByRole('button', { name: 'Allow optional measurement' }).click();
+        await expect.poll(() => requiredEvents.filter(({ event }) => event === 'page_view')).toHaveLength(1);
+        await requiredPage.getByRole('button', { name: 'Allow optional measurement' }).click();
+        await requiredPage.waitForTimeout(100);
+        expect(requiredEvents.filter(({ event }) => event === 'page_view')).toHaveLength(1);
+        await requiredPage.getByRole('button', { name: 'Disable optional measurement' }).click();
+        await requiredPage.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: true } })));
+        await requiredPage.waitForTimeout(100);
+        expect(requiredEvents.map(({ event }) => event)).toEqual(['page_view']);
+      } finally {
+        await requiredContext.close();
+        requiredServer.server.closeAllConnections();
+        requiredServer.server.close();
+      }
+    } finally {
+      if (priorEndpoint === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = priorEndpoint;
+      if (priorConsentRequired === undefined) delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED; else process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = priorConsentRequired;
+      await browser.close();
+    }
   }, 120_000);
 
   it('renders application forms only as a disabled, non-enhanced control in private previews', async () => {
