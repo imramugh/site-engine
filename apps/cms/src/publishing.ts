@@ -279,7 +279,13 @@ type ScheduledPublication = { id: string; idempotencyKey: string; state?: string
 async function skipScheduledPublication(payload: Payload, req: PayloadRequest, schedule: ScheduledPublication, reason: string) {
   const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'stale', dispatchReason: reason }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) return false
-  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_skipped', detail: { scheduledPublication: schedule.id, reason } }, overrideAccess: true, req })
+  const snapshot = schedule.snapshot as Record<string, unknown> | undefined
+  const changeSetID = idOf(snapshot?.changeSet)
+  if (changeSetID) {
+    const set = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    if (set.state === 'approved') await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'changes-requested', revision: Number(set.revision ?? 0) + 1, quality: undefined, preview: undefined, reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  }
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_skipped', detail: { scheduledPublication: schedule.id, reason, changeSet: changeSetID, reopenedForReview: Boolean(changeSetID) } }, overrideAccess: true, req })
   return true
 }
 

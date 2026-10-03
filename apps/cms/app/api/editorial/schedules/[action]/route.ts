@@ -43,7 +43,9 @@ export async function GET(request: Request, context: { params: Promise<{ action:
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
   if (!hasRole(authenticated.user as never, ['owner', 'approver'])) return Response.json({ error: 'Reviewer role required.' }, { status: 403, headers: noStore })
-  const schedules = await payload.find({ collection: 'scheduled-publications', sort: 'scheduledFor', depth: 1, limit: 25, overrideAccess: true })
+  const requestedPage = Number(new URL(request.url).searchParams.get('page') ?? '1')
+  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const schedules = await payload.find({ collection: 'scheduled-publications', sort: 'scheduledFor', depth: 1, limit: 25, page, overrideAccess: true })
   return Response.json({
     schedules: schedules.docs.map((schedule) => ({
       id: schedule.id,

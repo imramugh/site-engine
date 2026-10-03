@@ -159,6 +159,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))).toMatchObject({ sequence: 2 })
     expect(await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 0, skipped: 1 })
     expect(await payload.findByID({ collection: 'scheduled-publications', id: scheduled.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'stale', dispatchReason: 'BASELINE_STALE' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
     expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.scheduled_publication_skipped' } }, overrideAccess: true })).docs).toHaveLength(1)
   })
 
@@ -170,6 +171,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await payload.update({ collection: 'users', id: current.reviewer.id, data: { disabled: true }, overrideAccess: true })
     expect(await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 0, skipped: 1 })
     expect(await payload.findByID({ collection: 'scheduled-publications', id: scheduled.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'stale', dispatchReason: 'APPROVAL_AUTHORITY_REVOKED' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
   })
 
   it('lets only a fresh owner cancel or reschedule a pre-enqueue schedule through the same-origin API', async () => {
