@@ -3,22 +3,42 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import config from '../../payload.config'
 import { hasRole } from '../../src/access'
+import { buildContentTree, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../src/content-tree'
 import { serverSessionStrategy } from '../../src/identity'
 import { StaffShell } from '../components/staff-shell'
 
-type Page = { id: string; title: string; template: string; _status?: string | null; parentId?: string | { id?: string } | null; sectionId?: string | { id?: string } | null }
-type Section = { id: string; name: string }
-const idOf = (value: Page['parentId'] | Page['sectionId']) => typeof value === 'string' ? value : value?.id
+function PageNode({ node }: { node: ContentTreeNode }) {
+  const { page } = node
+  return <li>
+    <a href={`/admin/collections/pages/${page.id}`}>{page.title}</a> <span>{page._status ?? 'draft'} · {page.template}</span>
+    {node.cycle ? <span role="note"> Hierarchy cycle detected.</span> : null}
+    {node.children.length ? <ul>{node.children.map((child) => <PageNode key={`${page.id}:${child.page.id}`} node={child} />)}</ul> : null}
+  </li>
+}
+
+function PageList({ nodes }: { nodes: ContentTreeNode[] }) {
+  return nodes.length ? <ul>{nodes.map((node, index) => <PageNode key={`${node.page.id}:${index}`} node={node} />)}</ul> : null
+}
 
 export default async function ContentTreePage() {
-  const payload = await getPayload({ config }); const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user
+  const payload = await getPayload({ config })
+  const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user
   if (!hasRole(user as never, ['owner', 'editor', 'approver'])) redirect('/admin/login')
-  const [sections, pages] = await Promise.all([payload.find({ collection: 'sections', limit: 100, depth: 0, draft: true, user, overrideAccess: false }), payload.find({ collection: 'pages', limit: 100, depth: 0, draft: true, user, overrideAccess: false })])
-  const items = pages.docs as unknown as Page[]; const byParent = new Map<string, Page[]>(); const roots: Page[] = []
-  for (const page of items) { const parent = idOf(page.parentId); if (parent && items.some(item => item.id === parent)) byParent.set(parent, [...(byParent.get(parent) ?? []), page]); else roots.push(page) }
-  const render = (page: Page, seen = new Set<string>()): React.ReactNode => {
-    const cycle = seen.has(page.id); const next = new Set(seen).add(page.id); const children = cycle ? [] : (byParent.get(page.id) ?? [])
-    return <li key={page.id}><a href={`/admin/collections/pages/${page.id}`}>{page.title}</a> <span>{page._status ?? 'draft'} · {page.template}</span>{cycle ? <span role="note"> Hierarchy cycle detected.</span> : children.length ? <ul>{children.map(child => render(child, next))}</ul> : null}</li>
-  }
-  return <StaffShell><main><h1>Content tree</h1><p>Pages are grouped by their saved hierarchy. Select a page to edit it in the standard CMS form.</p>{(sections.docs as unknown as Section[]).map(section => <section key={section.id}><h2>{section.name}</h2><ul>{roots.filter(page => idOf(page.sectionId) === section.id).map(page => render(page))}</ul></section>)}{!items.length && <p role="status">No pages have been created.</p>}</main></StaffShell>
+  const [sections, pages] = await Promise.all([
+    payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
+    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
+  ])
+  const tree = buildContentTree(sections.docs as unknown as ContentTreeSection[], pages.docs as unknown as ContentTreePage[])
+  const hasPages = pages.docs.length > 0
+  return <StaffShell><main>
+    <h1>Content tree</h1>
+    <p>Pages are grouped by their saved hierarchy. Select a page to edit it in the standard CMS form.</p>
+    {tree.sections.map(({ section, roots, unplaced }) => <section key={section.id}>
+      <h2>{section.name}</h2>
+      <PageList nodes={roots} />
+      {unplaced.length ? <><h3>Unplaced pages</h3><p role="note">These pages have a cyclic or otherwise malformed hierarchy.</p><PageList nodes={unplaced} /></> : null}
+    </section>)}
+    {tree.unassigned.length ? <section><h2>Unassigned pages</h2><p role="note">These pages reference a section that is unavailable.</p><PageList nodes={tree.unassigned} /></section> : null}
+    {!hasPages ? <p role="status">No pages have been created.</p> : null}
+  </main></StaffShell>
 }

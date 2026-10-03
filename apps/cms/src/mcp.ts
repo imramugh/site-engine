@@ -140,36 +140,48 @@ export async function handleMcp(request: Request): Promise<Response> {
     if (!setting) return { status: 'not-configured' }
     return { siteName: setting.siteName, homepageId: setting.homepageId, defaultLocale: setting.defaultLocale, organizationType: setting.organizationType, contactEmail: setting.contactEmail, contactPhone: setting.contactPhone, seoDescription: setting.seoDescription, searchEnabled: setting.searchEnabled }
   }
+  const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' ? value.id : undefined
+  /** Published releases only retain a relationship ID at depth 0. Resolve the
+   * immutable snapshot through the caller-scoped collection read instead of
+   * relying on populated relationship data. */
+  const publishedManifest = async (): Promise<Record<string, unknown> | undefined> => {
+    const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, user: current, overrideAccess: false })
+    const snapshotID = relationID((releases.docs[0] as { snapshot?: unknown } | undefined)?.snapshot)
+    if (!snapshotID) return undefined
+    const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: snapshotID, depth: 0, user: current, overrideAccess: false }) as unknown as { manifest?: unknown }
+    return snapshot.manifest && typeof snapshot.manifest === 'object' && !Array.isArray(snapshot.manifest) ? snapshot.manifest as Record<string, unknown> : undefined
+  }
   const installedThemes = async () => {
     if (!owner) return { error: 'owner_access_required' }
-    const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, user: current, overrideAccess: false })
-    const manifest = (releases.docs[0] as { snapshot?: { manifest?: unknown } } | undefined)?.snapshot?.manifest
+    const manifest = await publishedManifest()
     if (!manifest) return { status: 'not-configured', themes: [] }
     return { themes: [...(await loadThemeRegistry()).values()].map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
   }
   const frozenPageQuality = async (id: string) => {
-    const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, user: current, overrideAccess: false })
-    const manifest = (releases.docs[0] as { snapshot?: { manifest?: unknown } } | undefined)?.snapshot?.manifest as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
+    const manifest = await publishedManifest() as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
     if (!manifest || !manifest.pages?.some((page) => page.id === id)) return { error: 'page_not_in_published_snapshot' }
     const report = checkSiteSnapshot(manifest, { style: manifest.styleGuide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style'] })
     return { source: 'frozen-published-snapshot', pageId: id, publishable: report.publishable, blockers: report.blockers.filter((issue) => issue.pageId === id), warnings: report.warnings.filter((issue) => issue.pageId === id), styleGuide: manifest.styleGuide ?? null }
   }
-  const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
-  const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, value))
   const styleGuide = async () => {
     try {
-      const result = await payload.find({ collection: 'style-guides', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
-      const guide = result.docs[0]
-      return guide ? { source: 'reviewed-cms-style-guide', bannedPhrases: guide.bannedPhrases ?? [], canadianSpelling: guide.canadianSpelling, maximumSentenceWords: guide.maximumSentenceWords, minimumReadingEase: guide.minimumReadingEase } : { status: 'not-configured' }
+      const manifest = await publishedManifest() as { styleGuide?: unknown } | undefined
+      if (!manifest?.styleGuide || typeof manifest.styleGuide !== 'object' || Array.isArray(manifest.styleGuide)) return { status: 'not-configured' }
+      const guide = manifest.styleGuide as Record<string, unknown>
+      return { source: 'frozen-published-snapshot', bannedPhrases: Array.isArray(guide.bannedPhrases) ? guide.bannedPhrases : [], canadianSpelling: guide.canadianSpelling, maximumSentenceWords: guide.maximumSentenceWords, minimumReadingEase: guide.minimumReadingEase }
     } catch { return { error: 'read_failed' } }
   }
   const glossary = async () => {
     try {
-      const result = await payload.find({ collection: 'style-guides', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
-      const terms = result.docs[0]?.preferredTerms
-      return { source: 'reviewed-cms-style-guide', terms: Array.isArray(terms) ? terms.map((term) => ({ avoid: (term as { avoid?: unknown }).avoid, prefer: (term as { prefer?: unknown }).prefer })) : [] }
+      const manifest = await publishedManifest() as { styleGuide?: unknown } | undefined
+      const guide = manifest?.styleGuide
+      if (!guide || typeof guide !== 'object' || Array.isArray(guide)) return { status: 'not-configured', terms: [] }
+      const terms = (guide as Record<string, unknown>).preferredTerms
+      return { source: 'frozen-published-snapshot', terms: Array.isArray(terms) ? terms.map((term) => ({ avoid: (term as { avoid?: unknown }).avoid, prefer: (term as { prefer?: unknown }).prefer })) : [] }
     } catch { return { error: 'read_failed' } }
   }
+  const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
+  const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, value))
   server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await styleGuide()))
   server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await glossary()))
   registerReadResource('block-library', 'site-engine://contract/block-library', 'Block library', blockLibrary)
