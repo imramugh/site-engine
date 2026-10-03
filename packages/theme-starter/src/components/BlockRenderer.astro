@@ -21,7 +21,7 @@ const paragraphs = block.type === 'richText' ? block.body.split(/\n\s*\n/).filte
 const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : motionPreset;
 ---
 {!block.hidden && <section class={classes} id={block.anchorId} data-block={block.type} data-motion-effect={effect}><div class="block__inner">
-  {block.type === 'hero' && <><p>{block.eyebrow}</p><h1>{block.heading}</h1><p>{block.body}</p>{block.cta && <a href={href(block.cta.href)}>{block.cta.label}</a>}</>}
+  {block.type === 'hero' && <><p>{block.eyebrow}</p><h1>{block.heading}</h1><p>{block.body}</p>{block.cta && <a data-primary-cta href={href(block.cta.href)}>{block.cta.label}</a>}</>}
   {block.type === 'incidentBar' && <p role="status">{block.message} {block.cta && <a href={href(block.cta.href)}>{block.cta.label}</a>}</p>}
   {block.type === 'pillarGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3><a href={href(item.href)}>{item.title}</a></h3><p>{item.body}</p></li>)}</ul></>}
   {block.type === 'featureGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3>{item.title}</h3><p>{item.body}</p></li>)}</ul></>}
