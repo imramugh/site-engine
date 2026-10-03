@@ -19,6 +19,21 @@ const stable = (value: unknown): string => Array.isArray(value)
     : JSON.stringify(value);
 const hash = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
 
+it('reports an invalid snapshot build with its public page and block location', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-invalid-diagnostic-'));
+  try {
+    const snapshot = fixture('Invalid diagnostic');
+    const page = snapshot.pages[0]!; const block = page.blocks[0]!;
+    if (block.type !== 'hero') throw new Error('Fixture must start with a hero.');
+    block.heading = '';
+    const input = await writeSnapshot(root, snapshot, 'invalid.json');
+    const priorTheme = process.env.SITE_THEME_VERSION; const priorEngine = process.env.SITE_ENGINE_VERSION;
+    process.env.SITE_THEME_VERSION = '1.0.0'; process.env.SITE_ENGINE_VERSION = '1.0.0';
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow(`page \"${page.title}\" (${page.id}), block hero (${block.id}): pages[0].blocks[0].heading`);
+    process.env.SITE_THEME_VERSION = priorTheme; process.env.SITE_ENGINE_VERSION = priorEngine;
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 function fixture(name: string): SiteSnapshot {
   const snapshot = structuredClone(neutralFixture);
   const section = snapshot.settings.sections[0];
@@ -226,6 +241,15 @@ describe('static snapshot renderer', () => {
       const publicPage = await browser.newPage(); let publicSubmissions = 0;
       await publicPage.route('**/api/inquiries', async (request) => { publicSubmissions += 1; await request.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
       await publicPage.goto(`${publicServer.origin}/docs/custom-theme-inquiry/`, { waitUntil: 'networkidle' });
+      await publicPage.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      for (const width of [1280, 390]) {
+        await publicPage.setViewportSize({ width, height: 900 });
+        const violations = await publicPage.evaluate(async () => {
+          const axe = (window as typeof window & { axe: { run: (context: string, options: unknown) => Promise<{ violations: unknown[] }> } }).axe;
+          return (await axe.run('nav[aria-label="Breadcrumb"]', { runOnly: { type: 'rule', values: ['target-size'] } })).violations;
+        });
+        expect(violations).toEqual([]);
+      }
       expect(await publicPage.locator('[data-inquiry-form]').count()).toBe(1);
       await publicPage.getByRole('button', { name: 'Send inquiry' }).click();
       await publicPage.getByRole('status').filter({ hasText: 'received' }).waitFor();
@@ -286,7 +310,7 @@ describe('static snapshot renderer', () => {
     expect(JSON.parse(scripts[0]![1]!)['@graph'].some((entry: { name?: string }) => entry.name === attack)).toBe(true);
     expect(html).not.toContain('<img id="injected"');
     const job = await readFile(join(built.output, 'docs/safe-role/index.html'), 'utf8');
-    expect(job).toContain('<dt>Location</dt><dd>Example City, CA</dd>');
+    expect(job).toMatch(/<dt\b[^>]*>Location<\/dt><dd\b[^>]*>Example City, CA<\/dd>/);
     expect(job).toContain('full time');
     expect(job).toContain('"@type":"JobPosting"');
   }, 60_000);

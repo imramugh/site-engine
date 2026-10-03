@@ -90,6 +90,21 @@ export const RedirectSchema = z.object({ from: InternalPathSchema, to: InternalP
 const ThemeNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const ThemeSettingValueSchema = z.union([z.string().max(2_000), z.number().finite(), z.boolean()]);
 export const ThemeSelectionSchema = z.object({ id: ThemeNameSchema, version: z.string().regex(/^\d+\.\d+\.\d+$/), contract: z.string().regex(/^1\.\d+\.\d+$/), manifestDigest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const StylePhraseSchema = safeText(120);
+const PreferredTermSchema = z.object({ avoid: safeText(80), prefer: safeText(80) }).strict().refine((term) => term.avoid.toLocaleLowerCase() !== term.prefer.toLocaleLowerCase(), 'Preferred and avoided terms must differ.');
+/** Private editorial configuration consumed by deterministic review checks. */
+export const StyleGuideSchema = z.object({
+  bannedPhrases: z.array(StylePhraseSchema).max(100).optional(),
+  preferredTerms: z.array(PreferredTermSchema).max(100).optional(),
+  canadianSpelling: z.enum(['off', 'warn']).optional(),
+  maximumSentenceWords: z.number().int().min(5).max(100).optional(),
+  minimumReadingEase: z.number().min(0).max(121).optional(),
+}).strict().superRefine((guide, ctx) => {
+  const phrases = guide.bannedPhrases ?? [];
+  if (new Set(phrases.map((phrase) => phrase.toLocaleLowerCase())).size !== phrases.length) ctx.addIssue({ code: 'custom', path: ['bannedPhrases'], message: 'Banned phrases must be unique.' });
+  const terms = guide.preferredTerms ?? [];
+  if (new Set(terms.map((term) => term.avoid.toLocaleLowerCase())).size !== terms.length) ctx.addIssue({ code: 'custom', path: ['preferredTerms'], message: 'Preferred terms must have unique avoided terms.' });
+});
 export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).optional(), logo: MediaReferenceSchema.optional(), contactEmail: z.string().email().optional(), contactPhone: safeText(40).optional(), seoDescription: safeText(160).optional(), searchEnabled: z.boolean().optional(), sections: z.array(SectionSchema).max(20), theme: ThemeSelectionSchema.optional(), themeSettings: z.record(ThemeNameSchema, z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), ThemeSettingValueSchema)).default({}) }).strict();
 /** Fields an Owner may propose through the CMS singleton. Sections and contract
  * version are separately controlled by editorial collections and operators. */
@@ -115,6 +130,7 @@ export const ThemeManifestSchema = z.object({ name: ThemeNameSchema, version: z.
 export const ThemeInstallSchema = z.object({ manifest: ThemeManifestSchema, installedAt: z.string().datetime() }).strict().superRefine(({ manifest }, ctx) => { if (!compatibleContractVersion(manifest.contract)) ctx.addIssue({ code: 'custom', path: ['manifest', 'contract'], message: `Theme requires incompatible contract ${manifest.contract}` }); });
 export const SiteSnapshotSchema = z.object({
   settings: SiteSettingsSchema,
+  styleGuide: StyleGuideSchema.optional(),
   pages: z.array(PageSchema),
   media: z.array(MediaReferenceSchema),
   redirects: z.array(RedirectSchema),
@@ -186,4 +202,35 @@ export const SiteSnapshotSchema = z.object({
 export type Page = z.infer<typeof PageSchema>;
 export type Section = z.infer<typeof SectionSchema>;
 export type SiteSnapshot = z.infer<typeof SiteSnapshotSchema>;
+
+/** Formats public snapshot validation failures without serializing page or block content. */
+export function formatSnapshotValidationError(input: unknown, error: z.ZodError): string {
+  const pages = input && typeof input === 'object' && !Array.isArray(input) && Array.isArray((input as { pages?: unknown }).pages)
+    ? (input as { pages: unknown[] }).pages : [];
+  const pathText = (path: readonly PropertyKey[]) => path.map((part) => typeof part === 'number' ? `[${part}]` : String(part)).join('.').replace(/\.\[/g, '[') || '$';
+  const subject = (path: readonly PropertyKey[]) => {
+    if (path[0] !== 'pages' || typeof path[1] !== 'number') return '';
+    const page = pages[path[1]]; const record = page && typeof page === 'object' && !Array.isArray(page) ? page as Record<string, unknown> : undefined;
+    const pageLabel = record && typeof record.title === 'string' && typeof record.id === 'string' ? `page \"${record.title}\" (${record.id})` : `page index ${path[1]}`;
+    const blocksAt = path.findIndex((part) => part === 'blocks');
+    if (blocksAt < 0 || typeof path[blocksAt + 1] !== 'number') return pageLabel;
+    const blocks = record && Array.isArray(record.blocks) ? record.blocks : [];
+    const block = blocks[path[blocksAt + 1] as number]; const blockRecord = block && typeof block === 'object' && !Array.isArray(block) ? block as Record<string, unknown> : undefined;
+    const blockLabel = blockRecord && typeof blockRecord.type === 'string' && typeof blockRecord.id === 'string' ? `block ${blockRecord.type} (${blockRecord.id})` : `block index ${String(path[blocksAt + 1])}`;
+    return `${pageLabel}, ${blockLabel}`;
+  };
+  const issues = error.issues.slice(0, 12).map((issue) => {
+    const path = issue.path as PropertyKey[]; const label = subject(path);
+    return `${label ? `${label}: ` : ''}${pathText(path)}: ${issue.message}`;
+  });
+  return `Snapshot validation failed: ${issues.join('; ')}`;
+}
+
+export function parseSiteSnapshot(input: unknown): SiteSnapshot {
+  const parsed = SiteSnapshotSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  const error = new Error(formatSnapshotValidationError(input, parsed.error));
+  error.name = 'SnapshotValidationError';
+  throw error;
+}
 export type { PublicRoute, RouteModel } from './render-types.js';

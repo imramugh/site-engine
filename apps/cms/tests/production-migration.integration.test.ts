@@ -15,6 +15,7 @@ const mediaMigration = '20261003_171753_media_library'
 const applicationsMigration = '20261003_181059'
 const siteSettingsMigration = '20261003_200100_site_settings'
 const searchControlsMigration = '20261003_210000_search_controls'
+const styleGuidesMigration = '20261003_220000_style_guides'
 const sectionLandingMigration = '20261003_230000_section_landing_page'
 
 describe('production migrations (ENG-036)', () => {
@@ -174,6 +175,14 @@ describe('production migrations (ENG-036)', () => {
     expect(settingsSearchColumns.rows).toEqual([expect.objectContaining({ name: 'search_enabled', dflt_value: 'false' })])
     const searchControlsApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${searchControlsMigration}'`)
     expect(searchControlsApplied.rows.map((row) => row.name)).toEqual([searchControlsMigration])
+    for (const statement of [
+      'DROP INDEX payload_locked_documents_rels_style_guides_id_idx',
+      'ALTER TABLE payload_locked_documents_rels DROP COLUMN style_guides_id',
+      'DROP TABLE style_guides',
+      `DELETE FROM payload_migrations WHERE name = '${styleGuidesMigration}'`,
+    ]) await sqlite.execute(statement)
+    expect(migrate().status).toBe(0)
+    expect((await sqlite.execute("SELECT name FROM pragma_table_info('style_guides') WHERE name = 'key'")).rows).toHaveLength(1)
     for (const statement of [
       'DROP INDEX sections_landing_page_id_idx',
       'ALTER TABLE sections DROP COLUMN landing_page_id_id',

@@ -9,6 +9,7 @@ export function EditorialNavLink({ user }: EditorialNavProps) {
   return <>
     {owner && <a className="nav__link" href="/operations">Operations</a>}
     {owner && <a className="nav__link" href="/themes">Themes</a>}
+    {editorial && <a className="nav__link" href="/content-tree">Content tree</a>}
     {editorial && <a className="nav__link" href="/admin/editorial">Editorial review</a>}
     {sales && <a className="nav__link" href="/leads">Lead pipeline</a>}
     {hiring && <a className="nav__link" href="/applications">Applications</a>}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BlockSchema, PageSchema, SiteSnapshotSchema, ThemeInstallSchema,
-  ThemeManifestSchema, compatibleContractVersion,
+  ThemeManifestSchema, compatibleContractVersion, formatSnapshotValidationError,
 } from '../src/index.js';
 import { neutralFixture } from '../src/fixtures.js';
 
@@ -17,6 +17,21 @@ describe('ENG-002 versioned contract', () => {
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
+  });
+
+  it('names invalid page blocks without serializing their content', () => {
+    const snapshot = fixture();
+    const page = snapshot.pages[0]!;
+    const block = page.blocks[0]!;
+    if (block.type !== 'hero') throw new Error('Fixture must begin with a hero.');
+    block.heading = '';
+    const parsed = SiteSnapshotSchema.safeParse(snapshot);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const diagnostic = formatSnapshotValidationError(snapshot, parsed.error);
+    expect(diagnostic).toContain(`page \"${page.title}\" (${page.id}), block hero (${block.id})`);
+    expect(diagnostic).toContain('pages[0].blocks[0].heading');
+    expect(diagnostic).not.toContain(block.body);
   });
 
   it('accepts legacy published snapshots without SEO timestamps', () => {

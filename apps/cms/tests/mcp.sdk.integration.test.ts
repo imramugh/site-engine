@@ -3,11 +3,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
+import { neutralFixture } from '@site-engine/contract/fixtures'
+import { canonicalHash } from '../src/publishing'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -67,6 +70,14 @@ async function clientFor(token: string) {
   return { client, transport }
 }
 
+async function publishFrozenSnapshot(ownerID: string, manifest: typeof neutralFixture): Promise<void> {
+  const sequence = (await payload.find({ collection: 'published-releases', limit: 0, overrideAccess: true })).totalDocs + 1
+  const set = await payload.create({ collection: 'change-sets', data: { name: `Frozen MCP baseline ${randomUUID()}`, actor: ownerID, state: 'published', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 0, changeHash: 'frozen-mcp-baseline', manifest, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', approvedBy: ownerID, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `mcp-baseline:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 0, changeHash: 'frozen-mcp-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', checks: [] } }, overrideAccess: true, context: { editorialInternal: true } })
+}
+
 beforeAll(async () => {
   payload = await getPayload({ config })
   const oauth = await startServer(async (incoming, outgoing) => {
@@ -104,17 +115,24 @@ afterAll(async () => {
 test('real MCP SDK clients receive bounded allowed content and remain isolated', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-editor@example.test', name: 'MCP Editor', roles: ['editor'] }, overrideAccess: true })
   const approver = await payload.create({ collection: 'users', data: { email: 'mcp-approver@example.test', name: 'MCP Approver', roles: ['approver'] }, overrideAccess: true })
+  const owner = await payload.create({ collection: 'users', data: { email: 'mcp-owner@example.test', name: 'MCP Owner', roles: ['owner'] }, overrideAccess: true })
+  const mutableGuide = await payload.create({ collection: 'style-guides', data: { bannedPhrases: ['synthetic banned phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn', maximumSentenceWords: 24, minimumReadingEase: 40 }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
   const section = await payload.create({ collection: 'sections', data: { name: 'MCP', summary: 'A synthetic section used to verify MCP returns bounded editorial content.', slug: 'mcp', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
   const page = await payload.create({ collection: 'pages', data: { title: 'SDK page', summary: 'A synthetic page used to verify the real MCP SDK client receives blocks.', slug: 'sdk-page', sectionId: section.id, template: 'standard', blocks: [{ id: '11111111-1111-4111-8111-111111111111', type: 'hero', heading: 'MCP block', body: 'This block must be present in a bounded MCP response.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'redirects', data: { from: '/sdk-page', to: '/mcp/sdk-page' }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'inquiries', data: { email: 'private@example.test', message: 'Private inquiry content must never appear in MCP output.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-private-inquiry-0001', stage: 'new' }, overrideAccess: true })
   await payload.update({ collection: 'users', id: editor.id, data: { emergencyTotpSecret: 'never-expose-this-secret' }, overrideAccess: true })
-  const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id)
+  const frozen = structuredClone(neutralFixture)
+  frozen.styleGuide = { bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 }
+  await publishFrozenSnapshot(owner.id, frozen)
+  const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id)
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:redirects:read'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
-  const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token')
+  tokens.set('owner-token', { clientId: 'owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
+  await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', defaultLocale: 'en-CA', homepageId: page.id, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
+  const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'get_change_set', 'get_page', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_page'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'get_block_library', 'get_change_set', 'get_page', 'get_page_quality', 'get_site_settings', 'list_installed_themes', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_page'])
     for (const tool of editorTools.tools) {
       expect(tool.description).toContain('cannot publish, approve, manage users, send email')
       if (!['create_change_set', 'submit_change_set', 'create_page', 'update_page'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
@@ -122,7 +140,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     }
     const [resources, templates, prompts] = await Promise.all([editorClient.client.listResources(), editorClient.client.listResourceTemplates(), editorClient.client.listPrompts()])
     expect(resources.resources.map((entry) => entry.uri).sort()).toEqual(expect.arrayContaining([
-      'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/page-tree', 'site-engine://site/summary', `site-engine://page/${page.id}`,
+      'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
     ]))
     expect(templates.resourceTemplates).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'page', uriTemplate: 'site-engine://page/{id}' })]))
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['plan-page', 'review-content'])
@@ -133,7 +151,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       editorClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Explain the synthetic service.' } }),
     ])
     expect(resourceJson(library)).toMatchObject({ contractVersion: '1.0.0', blockTypes: expect.arrayContaining(['hero', 'video']) })
-    expect(resourceJson(configuredStyle)).toMatchObject({ status: 'not-configured', source: 'public-neutral-contract' })
+    expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
+    expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
     expect(resourceJson(scopedPage)).toMatchObject({ id: page.id, title: 'SDK page' })
     expect(JSON.stringify(planned)).toContain('untrusted data')
     const [sections, found, selected, redirects] = await Promise.all([
@@ -147,6 +166,13 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(selected)).toEqual(expect.objectContaining({ id: page.id, blocks: [expect.objectContaining({ type: 'hero', heading: 'MCP block' })] }))
     expect(resultJson(redirects)).toEqual([expect.objectContaining({ from: '/sdk-page', to: '/mcp/sdk-page', status: 301 })])
     const text = JSON.stringify([sections, found, selected, redirects]); expect(text).not.toContain('private@example.test'); expect(text).not.toContain('never-expose-this-secret')
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ siteName: 'MCP site', defaultLocale: 'en-CA' })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_block_library', arguments: {} }))).toMatchObject({ blockTypes: expect.arrayContaining(['hero']) })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'list_installed_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_page_quality', arguments: { id: frozen.pages[0]!.id } }))).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, styleGuide: expect.objectContaining({ bannedPhrases: ['frozen phrase'] }) })
+    await payload.update({ collection: 'style-guides', id: mutableGuide.id, data: { bannedPhrases: ['draft-only phrase'] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/style-guide' }))).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'] })
+    expect(resultJson(await editorClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ error: 'owner_access_required' })
     await expect(approverClient.client.callTool({ name: 'list_redirects', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, limit: 100 })
     expect(audit.docs.some((event) => event.detail && JSON.stringify(event.detail).includes('clientIdHash'))).toBe(true)
@@ -156,7 +182,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
-  } finally { await Promise.all([editorClient.transport.close(), approverClient.transport.close()]) }
+  } finally { await Promise.all([editorClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close()]) }
 })
 
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {

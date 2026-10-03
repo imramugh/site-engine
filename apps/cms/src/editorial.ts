@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
-import { PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 
-export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings'
+export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings' | 'style-guides'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
@@ -24,6 +24,7 @@ const mutableFields: Record<CapturedCollection, readonly string[]> = {
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
   'theme-settings': ['selection', 'settings'],
+  'style-guides': ['bannedPhrases', 'preferredTerms', 'canadianSpelling', 'maximumSentenceWords', 'minimumReadingEase'],
   'site-settings': ['siteName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'contactEmail', 'contactPhone', 'seoDescription', 'searchEnabled'],
 }
 

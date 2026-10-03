@@ -5,7 +5,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlin
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { SiteSnapshotSchema } from '@site-engine/contract';
+import { parseSiteSnapshot } from '@site-engine/contract';
 import { deriveRoutes } from '@site-engine/engine';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
 import { writeIndexNowVerificationFile } from './indexnow.mjs';
@@ -130,7 +130,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
   const normalizedOrigin = normalizePublicOrigin(publicOrigin); const normalizedBase = normalizeBasePath(basePath);
-  const snapshot = SiteSnapshotSchema.parse(JSON.parse(await readFile(resolve(input), 'utf8')));
+  const snapshot = parseSiteSnapshot(JSON.parse(await readFile(resolve(input), 'utf8')));
   const themeVersion = process.env.SITE_THEME_VERSION; const engineVersion = process.env.SITE_ENGINE_VERSION;
   const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
   if (!themeVersion || !engineVersion || !semver.test(themeVersion) || !semver.test(engineVersion)) throw new Error('SITE_THEME_VERSION and SITE_ENGINE_VERSION must be immutable semantic versions.');

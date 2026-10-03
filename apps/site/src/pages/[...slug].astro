@@ -28,3 +28,10 @@ const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
   {route.page.template === 'job' && route.page.jobPosting && <section class="block"><div class="block__inner"><h2>Application information</h2><dl><dt>Employment type</dt><dd>{route.page.jobPosting.employmentType.replaceAll('_', ' ').toLowerCase()}</dd><dt>Location</dt><dd>{[route.page.jobPosting.location.addressLocality, route.page.jobPosting.location.addressRegion, route.page.jobPosting.location.addressCountry].filter(Boolean).join(', ')}</dd><dt>Posted</dt><dd><time datetime={route.page.jobPosting.datePosted}>{route.page.jobPosting.datePosted.slice(0, 10)}</time></dd>{route.page.jobPosting.validThrough && <><dt>Closing date</dt><dd><time datetime={route.page.jobPosting.validThrough}>{route.page.jobPosting.validThrough.slice(0, 10)}</time></dd></>}</dl><h2>Apply for this role</h2><ApplicationForm jobId={route.page.id} enabled={applicationsEnabled} /></div></section>}
   <MotionRuntime enabled={motionEnabled} />
 </Layout>
+
+<style>
+  /* Breadcrumbs belong to the host, including their minimum touch targets
+     when a theme supplies its own layout and typography. */
+  nav[aria-label="Breadcrumb"] ol { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; list-style: none; padding: 0; }
+  nav[aria-label="Breadcrumb"] a { display: inline-flex; align-items: center; min-height: 2.75rem; padding-inline: .25rem; }
+</style>
