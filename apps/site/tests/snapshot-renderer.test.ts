@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:http';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -531,3 +532,23 @@ describe('static snapshot renderer', () => {
   }, 120_000);
 
 });
+
+
+it('ENG-035 loads trusted components from a packed external theme package', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'packed-theme-'));
+  try {
+    const source = join(root, 'external-theme'); const installed = join(root, 'operator-node_modules', 'external-theme');
+    await mkdir(join(source, 'components'), { recursive: true });
+    await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'external-theme', version: '1.0.0', type: 'module', files: ['components', 'theme.json'] }));
+    await writeFile(join(source, 'theme.json'), JSON.stringify({ name: 'external-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'] }));
+    await writeFile(join(source, 'components', 'Layout.astro'), `--- const { title } = Astro.props; ---\n<html><head><title>{title}</title></head><body data-packed-external-theme="true"><slot /></body></html>`);
+    await writeFile(join(source, 'components', 'BlockRenderer.astro'), `--- const { block } = Astro.props; ---\n<section data-packed-block={block.type}>{block.heading}</section>`);
+    const tarball = execFileSync('npm', ['pack', '--json'], { cwd: source, encoding: 'utf8' }); const file = JSON.parse(tarball)[0].filename;
+    await mkdir(installed, { recursive: true }); execFileSync('tar', ['-xzf', join(source, file), '--strip-components=1', '-C', installed]);
+    const manifest = JSON.parse(await readFile(join(installed, 'theme.json'), 'utf8'));
+    expect(manifest.contract).toBe('1.0.0'); expect(() => { if (manifest.contract !== '1.0.0') throw new Error('incompatible contract'); }).not.toThrow();
+    const snapshot = fixture('Packed external theme'); const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: join(installed, 'components'), versionPins: { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0' } });
+    expect(await readFile(join(built.output, 'index.html'), 'utf8')).toContain('data-packed-external-theme="true"');
+    manifest.contract = '9.0.0'; expect(() => { if (manifest.contract !== '1.0.0') throw new Error('incompatible contract'); }).toThrow('incompatible contract');
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 120_000);
