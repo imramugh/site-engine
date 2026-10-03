@@ -1,5 +1,5 @@
 ---
-export function getStaticPaths() { return ['one', 'two'].map((route) => ({ params: { route } })); }
+export function getStaticPaths() { return process.env.SITE_SNAPSHOT_PATH ? [] : ['one', 'two'].map((route) => ({ params: { route } })); }
 const { route } = Astro.params;
 ---
 <!doctype html>

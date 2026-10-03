@@ -2,15 +2,15 @@
 import Layout from '@site-engine/theme-starter/components/Layout.astro';
 import BlockRenderer from '@site-engine/theme-starter/components/BlockRenderer.astro';
 import { deriveRoutes } from '@site-engine/engine';
-import { demoHomepageId, demoSnapshot } from '../lib/demo.js';
+import { siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
 import MotionRuntime from '../components/MotionRuntime.astro';
 import { pageHasEnabledMotion, resolveStarterMotion } from '../lib/motion.js';
-const model = deriveRoutes(demoSnapshot, demoHomepageId);
+const model = deriveRoutes(siteSnapshot, siteHomepageId);
 const route = model.byPath.get('/');
 if (!route) throw new Error('The configured demo homepage is not published.');
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 ---
-<Layout route={route} model={model} snapshot={demoSnapshot} title={route.page.title} description={route.page.summary} motionEnabled={motionEnabled}>
-  {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={demoSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />)}
+<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.summary} motionEnabled={motionEnabled}>
+  {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />)}
   <MotionRuntime enabled={motionEnabled} />
 </Layout>
