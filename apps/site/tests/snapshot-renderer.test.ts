@@ -122,6 +122,11 @@ describe('static snapshot renderer', () => {
     expect(await artifactContents(alphaBuild.output)).not.toContain('Synthetic content for public engine validation.');
     expect(Object.keys(alphaBuild.manifest.files)).not.toEqual(expect.arrayContaining(['motion/one/index.html', 'motion/two/index.html']));
     expect(await readdir(alphaBuild.output)).not.toContain('input.json');
+    const html = await readFile(join(alphaBuild.output, 'index.html'), 'utf8');
+    // Private previews use strict CSP: stylesheet rules must be same-origin files.
+    expect(html).not.toMatch(/<style(?:\s|>)/i);
+    expect(html).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="\/preview\//);
+    expect(Object.keys(alphaBuild.manifest.files).some(path => path.endsWith('.css'))).toBe(true);
     browserOutput = alphaBuild.output;
   }, 180_000);
 
