@@ -9,9 +9,10 @@ describe('ENG-023 credential envelopes', () => {
   it('encrypts at rest, decrypts only at the adapter boundary, and exposes a masked serializer', async () => {
     process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = key
     const secret = 'synthetic-secret-must-not-escape'
-    const encryptedCredential = encryptCredential(secret)
+    const encryptedCredential = encryptCredential(secret, 'openai')
     expect(encryptedCredential).not.toContain(secret)
-    expect(decryptCredential(encryptedCredential)).toBe(secret)
+    expect(decryptCredential(encryptedCredential, 'openai')).toBe(secret)
+    expect(() => decryptCredential(encryptedCredential, 'anthropic')).toThrow()
     const visible = publicIntegration({ id: 'one', provider: 'openai', model: 'synthetic-model', encryptedCredential, credentialFingerprint: '0123456789ab' })
     expect(JSON.stringify(visible)).not.toContain(secret)
     expect(visible).toMatchObject({ credentialConfigured: true, credentialHint: 'configured • 0123456789ab' })
@@ -20,7 +21,7 @@ describe('ENG-023 credential envelopes', () => {
 
   it('does not turn a transport failure into a credential disclosure', async () => {
     process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = key
-    const encryptedCredential = encryptCredential('synthetic-secret-must-not-escape')
+    const encryptedCredential = encryptCredential('synthetic-secret-must-not-escape', 'openai')
     await expect(testConnection({ provider: 'openai', encryptedCredential }, async () => { throw new Error('synthetic-secret-must-not-escape') })).resolves.toEqual({ ok: false, code: 'rejected' })
   })
 })

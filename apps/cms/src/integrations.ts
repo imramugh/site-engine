@@ -14,18 +14,18 @@ function key(): Buffer {
 }
 
 /** AES-GCM envelope. The master key is supplied only by the deployment runtime. */
-export function encryptCredential(value: string): string {
+export function encryptCredential(value: string, provider: IntegrationProvider): string {
   if (!value || Buffer.byteLength(value, 'utf8') > 16_384) throw new Error('Credential must contain 1 to 16384 bytes.')
-  const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key(), iv)
+  const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key(), iv); cipher.setAAD(Buffer.from(provider, 'utf8'))
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
   return `v1.${Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64url')}`
 }
 
-export function decryptCredential(envelope: string): string {
+export function decryptCredential(envelope: string, provider: IntegrationProvider): string {
   if (!envelope.startsWith('v1.')) throw new Error('Credential envelope is invalid.')
   const value = Buffer.from(envelope.slice(3), 'base64url')
   if (value.length < 29) throw new Error('Credential envelope is invalid.')
-  const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12)); decipher.setAuthTag(value.subarray(12, 28))
+  const decipher = createDecipheriv('aes-256-gcm', key(), value.subarray(0, 12)); decipher.setAAD(Buffer.from(provider, 'utf8')); decipher.setAuthTag(value.subarray(12, 28))
   return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8')
 }
 
@@ -33,9 +33,12 @@ export const credentialFingerprint = (value: string) => createHash('sha256').upd
 
 /** No production provider is contacted by this foundation. Adapters inject this seam when approved. */
 export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
-  const credential = decryptCredential(input.encryptedCredential)
+  const credential = decryptCredential(input.encryptedCredential, input.provider)
   if (!transport) return { ok: false, code: 'unavailable' }
-  try { return await transport({ provider: input.provider, credential, model: input.model }) }
+  try {
+    const result = await transport({ provider: input.provider, credential, model: input.model })
+    return result?.ok === true && result.code === 'connected' ? { ok: true, code: 'connected' } : result?.code === 'unavailable' ? { ok: false, code: 'unavailable' } : { ok: false, code: 'rejected' }
+  }
   catch { return { ok: false, code: 'rejected' } }
 }
 
