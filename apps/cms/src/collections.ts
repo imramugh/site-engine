@@ -278,6 +278,7 @@ export const ChangeSets: CollectionConfig = {
     { name: 'changes', type: 'json', defaultValue: [], admin: { readOnly: true, description: 'Field-level before and after images captured from draft saves.' } },
     { name: 'quality', type: 'json', admin: { readOnly: true } },
     { name: 'preview', type: 'json', admin: { readOnly: true } },
+    { name: 'reviewComments', type: 'json', defaultValue: [], admin: { readOnly: true } },
     { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
     { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
     { name: 'staleAt', type: 'date', admin: { readOnly: true } },
@@ -330,6 +331,35 @@ export const PublishOutbox: CollectionConfig = {
     { name: 'errorCode', type: 'text', admin: { readOnly: true } },
     { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
+  ],
+}
+
+/** Immutable, private renderer input. The worker never reads draft collections. */
+export const PreviewRenderJobs: CollectionConfig = {
+  slug: 'preview-render-jobs', admin: { useAsTitle: 'id', group: 'Editorial' },
+  access: { create: () => false, read: staff(['owner', 'approver']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'reviewRevision', type: 'number', required: true, admin: { readOnly: true } },
+    { name: 'changeHash', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'includedChangeKeys', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'baselineSnapshot', type: 'relationship', relationTo: 'publish-snapshots', admin: { readOnly: true } },
+    { name: 'baselineSequence', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
+    { name: 'liveSnapshot', type: 'relationship', relationTo: 'publish-snapshots', admin: { readOnly: true } },
+    { name: 'liveSequence', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
+    { name: 'liveManifest', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'proposedManifest', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'liveManifestHash', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'proposedManifestHash', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'versionPins', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'status', type: 'select', required: true, defaultValue: 'pending', options: ['pending', 'processing', 'failed', 'completed'], admin: { readOnly: true } },
+    { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
+    { name: 'nextAttemptAt', type: 'date', admin: { readOnly: true } },
+    { name: 'leaseToken', type: 'text', admin: { readOnly: true } },
+    { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
+    { name: 'completedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'artifactDigest', type: 'text', admin: { readOnly: true } },
+    { name: 'errorCode', type: 'text', admin: { readOnly: true } },
   ],
 }
 

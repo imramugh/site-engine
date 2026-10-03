@@ -7,3 +7,5 @@ allowBuilds:
   esbuild: true
 patchedDependencies:
   '@payloadcms/drizzle@3.90.2': patches/@payloadcms__drizzle@3.90.2.patch
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk@1.32.0'

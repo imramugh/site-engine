@@ -8,11 +8,13 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 
-const cmsOrigin = 'https://127.0.0.1:4300'
-const issuerOrigin = 'https://127.0.0.1:4301'
+const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
 const clientSecret = 'synthetic-browser-secret'
 const inviteToken = 'synthetic-browser-owner-invite'
@@ -22,6 +24,8 @@ const emergencyEmail = 'emergency-owner.synthetic@example.test'
 const emergencyRecoveryCode = 'synthetic-recovery-code-01'
 const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
+const reviewOwnerEmail = 'review-owner.synthetic@example.test'
+const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -31,7 +35,9 @@ const serverCertificate = join(temporaryDirectory, 'synthetic-issuer.pem')
 const serverKey = join(temporaryDirectory, 'synthetic-issuer.key')
 const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
+const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
+writeFileSync(initialPreviewBaseline, JSON.stringify(neutralFixture))
 
 Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
@@ -42,6 +48,11 @@ process.env.OIDC_GOOGLE_ISSUER_URL = issuerOrigin
 process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
+process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
+process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'
+process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
+process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -59,6 +70,7 @@ let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
 let localOwnerID: string | undefined
+let reviewOwnerID: string | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -145,19 +157,38 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
+  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
+  reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
+    html(response, '<!doctype html><title>Synthetic private comparison</title><main>Authenticated private comparison fixture</main>')
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
+    void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable owner.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/local-owner/disable') {
     void payload.update({ collection: 'users', id: localOwnerID!, data: { disabled: true }, overrideAccess: true })
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to disable local owner.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/review-owner/disable') {
+    void payload.update({ collection: 'users', id: reviewOwnerID!, data: { disabled: true }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable review owner.') })
+    return
+  }
   const upstream = requestUpstream({
-    hostname: '127.0.0.1', port: 4302, method: request.method, path: request.url,
-    headers: { ...request.headers, host: '127.0.0.1:4300', 'x-forwarded-host': '127.0.0.1:4300', 'x-forwarded-proto': 'https' },
+    hostname: '127.0.0.1', port: e2ePort + 2, method: request.method, path: request.url,
+    headers: { ...request.headers, host: `127.0.0.1:${e2ePort}`, 'x-forwarded-host': `127.0.0.1:${e2ePort}`, 'x-forwarded-proto': 'https' },
   }, (upstreamResponse) => {
     response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers)
     upstreamResponse.pipe(response)
@@ -193,10 +224,10 @@ async function main(): Promise<void> {
   jwk = await exportJWK(pair.publicKey)
   createCertificates()
   issuer = createServer({ key: readFileSync(serverKey), cert: readFileSync(serverCertificate) }, (request, response) => { void provider(request, response).catch(() => html(response, 'Synthetic provider failed.', 500)) })
-  issuer.listen(4301, '127.0.0.1')
+  issuer.listen(e2ePort + 1, '127.0.0.1')
   await once(issuer, 'listening')
   cmsProxy = createServer({ key: readFileSync(serverKey), cert: readFileSync(serverCertificate) }, forwardCMS)
-  cmsProxy.listen(4300, '127.0.0.1')
+  cmsProxy.listen(e2ePort, '127.0.0.1')
   await once(cmsProxy, 'listening')
   await seed()
   await runNext(['build'])
@@ -209,7 +240,7 @@ async function main(): Promise<void> {
   if (existsSync(join(appDirectory, 'public'))) cpSync(join(appDirectory, 'public'), join(standaloneDirectory, 'public'), { recursive: true })
   next = spawn(process.execPath, [join(standaloneDirectory, 'server.js')], {
     cwd: process.cwd(),
-    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: '4302' },
+    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: String(e2ePort + 2) },
     stdio: 'inherit',
   })
   next.once('exit', (status) => { if (!stopping) void stop(status ?? 1) })
@@ -217,13 +248,13 @@ async function main(): Promise<void> {
     const retry = () => Date.now() > deadline ? reject(new Error('CMS standalone server did not become ready.')) : setTimeout(check, 100)
     const deadline = Date.now() + 30_000
     const check = () => {
-      const probe = requestUpstream({ hostname: '127.0.0.1', port: 4302, path: '/api/health' }, (response) => { response.resume(); response.statusCode === 200 ? resolve() : retry() })
+      const probe = requestUpstream({ hostname: '127.0.0.1', port: e2ePort + 2, path: '/api/health' }, (response) => { response.resume(); response.statusCode === 200 ? resolve() : retry() })
       probe.once('error', retry).end()
     }
     check()
   })
   readiness = createHTTPServer((_request, response) => { response.writeHead(200); response.end('ready') })
-  readiness.listen(4303, '127.0.0.1')
+  readiness.listen(e2ePort + 3, '127.0.0.1')
   await once(readiness, 'listening')
 }
 

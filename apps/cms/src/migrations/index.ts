@@ -10,7 +10,9 @@ import * as migration_20261003_135539_editorial_change_set_lifecycle from './202
 import * as migration_20261003_143750 from './20261003_143750';
 import * as migration_20261003_144959 from './20261003_144959';
 import * as migration_20261003_150050 from './20261003_150050';
+import * as migration_20261003_155740_review_preview_jobs from './20261003_155740_review_preview_jobs';
 import * as migration_20261003_160000_publish_queue_correctness from './20261003_160000_publish_queue_correctness';
+import * as migration_20261003_160100_review_comments from './20261003_160100_review_comments';
 
 export const migrations = [
   {
@@ -74,8 +76,18 @@ export const migrations = [
     name: '20261003_150050',
   },
   {
+    up: migration_20261003_155740_review_preview_jobs.up,
+    down: migration_20261003_155740_review_preview_jobs.down,
+    name: '20261003_155740_review_preview_jobs',
+  },
+  {
     up: migration_20261003_160000_publish_queue_correctness.up,
     down: migration_20261003_160000_publish_queue_correctness.down,
-    name: '20261003_160000_publish_queue_correctness'
+    name: '20261003_160000_publish_queue_correctness',
+  },
+  {
+    up: migration_20261003_160100_review_comments.up,
+    down: migration_20261003_160100_review_comments.down,
+    name: '20261003_160100_review_comments'
   },
 ];

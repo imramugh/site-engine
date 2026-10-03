@@ -81,6 +81,7 @@ export interface Config {
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
     'publish-outbox': PublishOutbox;
+    'preview-render-jobs': PreviewRenderJob;
     'published-releases': PublishedRelease;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
@@ -103,6 +104,7 @@ export interface Config {
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
     'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
+    'preview-render-jobs': PreviewRenderJobsSelect<false> | PreviewRenderJobsSelect<true>;
     'published-releases': PublishedReleasesSelect<false> | PublishedReleasesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -393,6 +395,15 @@ export interface ChangeSet {
     | number
     | boolean
     | null;
+  reviewComments?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
@@ -468,6 +479,68 @@ export interface PublishOutbox {
   errorCode?: string | null;
   correlationID: string;
   lastError?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "preview-render-jobs".
+ */
+export interface PreviewRenderJob {
+  id: string;
+  changeSet: string | ChangeSet;
+  reviewRevision: number;
+  changeHash: string;
+  includedChangeKeys:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  baselineSnapshot?: (string | null) | PublishSnapshot;
+  baselineSequence: number;
+  liveSnapshot?: (string | null) | PublishSnapshot;
+  liveSequence: number;
+  liveManifest:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  proposedManifest:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  liveManifestHash: string;
+  proposedManifestHash: string;
+  versionPins:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  status: 'pending' | 'processing' | 'failed' | 'completed';
+  attempts: number;
+  nextAttemptAt?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  completedAt?: string | null;
+  artifactDigest?: string | null;
+  errorCode?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -581,6 +654,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'publish-outbox';
         value: string | PublishOutbox;
+      } | null)
+    | ({
+        relationTo: 'preview-render-jobs';
+        value: string | PreviewRenderJob;
       } | null)
     | ({
         relationTo: 'published-releases';
@@ -795,6 +872,7 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   changes?: T;
   quality?: T;
   preview?: T;
+  reviewComments?: T;
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;
@@ -844,6 +922,35 @@ export interface PublishOutboxSelect<T extends boolean = true> {
   errorCode?: T;
   correlationID?: T;
   lastError?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "preview-render-jobs_select".
+ */
+export interface PreviewRenderJobsSelect<T extends boolean = true> {
+  changeSet?: T;
+  reviewRevision?: T;
+  changeHash?: T;
+  includedChangeKeys?: T;
+  baselineSnapshot?: T;
+  baselineSequence?: T;
+  liveSnapshot?: T;
+  liveSequence?: T;
+  liveManifest?: T;
+  proposedManifest?: T;
+  liveManifestHash?: T;
+  proposedManifestHash?: T;
+  versionPins?: T;
+  status?: T;
+  attempts?: T;
+  nextAttemptAt?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  completedAt?: T;
+  artifactDigest?: T;
+  errorCode?: T;
   updatedAt?: T;
   createdAt?: T;
 }

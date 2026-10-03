@@ -1,0 +1,22 @@
+{
+  "name": "@site-engine/oauth",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "start": "node dist/server.js",
+    "test:protocol": "vitest run tests/protocol.test.ts"
+  },
+  "dependencies": {
+    "oidc-provider": "9.12.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

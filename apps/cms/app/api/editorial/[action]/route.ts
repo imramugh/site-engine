@@ -3,6 +3,8 @@ import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { createNamedChangeSet, transitionChangeSet } from '../../../../src/editorial'
 import { serverSessionStrategy } from '../../../../src/identity'
+import { changeSetHash } from '../../../../src/publishing'
+import { SiteSnapshotSchema } from '@site-engine/contract'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +16,21 @@ function sameOrigin(request: Request): boolean {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Editorial workflow request failed.'
+}
+
+function routeForPreview(manifest: unknown, includedChangeKeys: unknown): string {
+  const snapshot = SiteSnapshotSchema.parse(manifest)
+  const pageID = Array.isArray(includedChangeKeys) ? includedChangeKeys.find((key): key is string => typeof key === 'string' && key.startsWith('pages:'))?.slice('pages:'.length) : undefined
+  const page = snapshot.pages.find((candidate) => candidate.id === pageID)
+  if (!page) return '/'
+  if (page.id === snapshot.settings.homepageId) return '/'
+  const section = snapshot.settings.sections.find((candidate) => candidate.id === page.sectionId)
+  if (!section) return '/'
+  const pages = new Map(snapshot.pages.map((candidate) => [candidate.id, candidate]))
+  const ancestors: string[] = []
+  let parent = page.parentId ? pages.get(page.parentId) : undefined
+  while (parent && parent.id !== section.landingPageId) { ancestors.unshift(parent.slug); parent = parent.parentId ? pages.get(parent.parentId) : undefined }
+  return `/${[section.slug, ...ancestors, page.slug].filter(Boolean).join('/')}`
 }
 
 /** Server-owned lifecycle API. Collection REST updates are denied so clients
@@ -32,6 +49,15 @@ export async function POST(request: Request, context: { params: Promise<{ action
         if (typeof body.name !== 'string') throw new Error('A change-set name is required.')
         return createNamedChangeSet(payload, req, authenticated.user as never, body.name)
       }
+      if (action === 'comment' && typeof body.id === 'string' && typeof (body as { comment?: unknown }).comment === 'string') {
+        const actor = authenticated.user as { id: string; roles?: string[] }
+        if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
+        const comment = (body as { comment: string }).comment.trim()
+        if (!comment || comment.length > 2_000) throw new Error('A review comment must contain at most 2,000 characters.')
+        const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req })
+        const comments = Array.isArray(set.reviewComments) ? set.reviewComments : []
+        return payload.update({ collection: 'change-sets', id: body.id, data: { reviewComments: [...comments, { id: crypto.randomUUID(), author: actor.id, body: comment, createdAt: new Date().toISOString() }] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      }
       if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
       return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })
     })
@@ -45,12 +71,22 @@ export async function POST(request: Request, context: { params: Promise<{ action
 
 export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   const { action } = await context.params
-  if (action !== 'list') return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
+  if (!['list', 'preview-route'].includes(action)) return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
   try {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
     const actor = authenticated.user as { id: string; roles?: string[] }
+    if (action === 'preview-route') {
+      if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) return Response.json({ error: 'Reviewer role required.' }, { status: 403 })
+      const id = new URL(request.url).searchParams.get('jobID')
+      if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: 'Preview job is required.' }, { status: 400 })
+      const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true })
+      const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
+      const preview = set.preview as { status?: string; jobID?: string; revision?: number; changeHash?: string } | undefined
+      if (job.status !== 'completed' || preview?.status !== 'ready' || preview.jobID !== job.id || preview.revision !== job.reviewRevision || preview.changeHash !== job.changeHash || Number(set.revision) !== job.reviewRevision || changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) !== job.changeHash) return Response.json({ error: 'Preview is not current.' }, { status: 403 })
+      return Response.json({ path: routeForPreview(job.proposedManifest, job.includedChangeKeys) }, { headers: { 'Cache-Control': 'no-store' } })
+    }
     const result = await payload.find({ collection: 'change-sets', limit: 100, depth: 0, user: authenticated.user, overrideAccess: false })
     return Response.json({ sets: result.docs, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
   } catch {

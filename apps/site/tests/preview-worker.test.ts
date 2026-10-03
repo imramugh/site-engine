@@ -74,6 +74,7 @@ describe('durable preview rendering worker', () => {
       return { ok: true };
     };
     const render = async ({ signal }: { signal?: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      if (signal!.aborted) return reject(new Error('cancelled'));
       signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
     });
     await expect(runPreviewOnce({ ...options(), api, render, heartbeatMs: 5 })).rejects.toThrow('LEASE_LOST');

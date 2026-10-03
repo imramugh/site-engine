@@ -160,7 +160,7 @@ async function quality(payload: Payload, req: PayloadRequest, changes: CapturedC
       errors.push(...treeErrors.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.field}: ${issue.message}` })))
     }
   }
-  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: ['Preview generation is pending until the preview workflow is installed.'] }
+  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: ['A private comparison can be prepared after review submission.'] }
 }
 
 export async function transitionChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; action: 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' }): Promise<Record<string, unknown>> {
@@ -206,7 +206,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, preview: action === 'submit' ? { status: 'pending' } : undefined, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
   await payload.create({ collection: 'audit-events', data: { event: `editorial.change_set_${action}`, user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, state } }, overrideAccess: true, req })
-  return { ...set, preview: action === 'submit' ? { status: 'pending', reason: 'Preview generation is not installed.' } : undefined }
+  return set
 }
 
 export async function createNamedChangeSet(payload: Payload, req: PayloadRequest, actor: Actor | undefined, name: string): Promise<Record<string, unknown>> {
