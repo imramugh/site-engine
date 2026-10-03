@@ -182,13 +182,14 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     oldHome.id = randomUUID(); oldHome.sectionId = section.id; oldHome.slug = `starter-${suffix}`
     baseline.settings.homepageId = oldHome.id
     const child = { ...structuredClone(oldHome), id: randomUUID(), parentId: oldHome.id, title: 'Starter child', summary: 'A temporary child is archived before its temporary parent.', slug: `child-${suffix}`, template: 'standard' as const, blocks: [] }
+    const retiringRoot = { ...structuredClone(oldHome), id: randomUUID(), title: 'Starter guide', summary: 'A temporary root page proves its explicit redirect is captured before the next archive.', slug: `guide-${suffix}`, template: 'standard' as const, blocks: [] }
     const authored = { ...structuredClone(oldHome), id: randomUUID(), title: 'Authored page', summary: 'An authored page remains outside the explicit starter retirement set.', slug: `authored-${suffix}`, template: 'standard' as const, blocks: [] }
     const replacement = { ...structuredClone(oldHome), id: randomUUID(), title: 'Client homepage', summary: 'A reviewed client homepage replaces the original starter root.', slug: `client-home-${suffix}`, template: 'landing' as const }
-    baseline.pages.push(child, authored)
-    section.pageIds = [oldHome.id, child.id, authored.id]
+    baseline.pages.push(child, retiringRoot, authored)
+    section.pageIds = [oldHome.id, child.id, retiringRoot.id, authored.id]
     const editor = await payload.create({ collection: 'users', data: { email: `retire-${suffix}@example.test`, name: 'Retirement editor', roles: ['editor'] }, overrideAccess: true })
     await payload.create({ collection: 'sections', data: { id: section.id, name: section.name, summary: section.summary ?? 'A section for atomic starter retirement coverage.', slug: section.slug, allowedTemplates: section.allowedTemplates, pageIds: [] }, overrideAccess: true })
-    for (const page of [oldHome, child, authored, replacement]) {
+    for (const page of [oldHome, child, retiringRoot, authored, replacement]) {
       // A landing page cannot be persisted empty. The importer materializes
       // this temporary starter as a standard page; the coalesced archive still
       // retains the frozen landing before-image in the reviewed change.
@@ -198,21 +199,27 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds }, overrideAccess: true })
     const oldBefore = snapshot('pages', oldHome as never)!
     const stagedOld = { ...oldBefore, template: 'standard', blocks: [] }
+    const retiringBefore = snapshot('pages', retiringRoot as never)!
     const stagedReplacement = snapshot('pages', replacement as never)!
     const sectionBefore = snapshot('sections', section as never)!
     const stagedSection = { ...sectionBefore, pageIds: [replacement.id, authored.id] }
     const settingsBefore = snapshot('site-settings', baseline.settings as never)!
     const stagedSettings = { ...settingsBefore, homepageId: replacement.id }
     const set = await payload.create({ collection: 'change-sets', data: {
-      name: 'Imported starter retirement', actor: editor.id, state: 'open', revision: 4,
+      name: 'Imported starter retirement', actor: editor.id, state: 'open', revision: 5,
       changes: [
         { collection: 'pages', id: oldHome.id, before: oldBefore, after: stagedOld, beforeHash: canonicalHash(oldBefore), afterHash: canonicalHash(stagedOld) },
+        { collection: 'pages', id: retiringRoot.id, before: retiringBefore, after: retiringBefore, beforeHash: canonicalHash(retiringBefore), afterHash: canonicalHash(retiringBefore) },
         { collection: 'pages', id: replacement.id, before: null, after: stagedReplacement, beforeHash: null, afterHash: canonicalHash(stagedReplacement) },
         { collection: 'sections', id: section.id, before: sectionBefore, after: stagedSection, beforeHash: canonicalHash(sectionBefore), afterHash: canonicalHash(stagedSection) },
         { collection: 'site-settings', id: 'site-settings:active', before: settingsBefore, after: stagedSettings, beforeHash: canonicalHash(settingsBefore), afterHash: canonicalHash(stagedSettings) },
       ],
     }, overrideAccess: true, context: { editorialInternal: true } })
 
+    await withPayloadTransaction(payload, async req => {
+      req.user = editor; req.headers.set('x-site-engine-change-set', set.id)
+      await archivePage({ payload, req, pageID: retiringRoot.id, target: '/', baseline })
+    })
     await expect(withPayloadTransaction(payload, async req => {
       req.user = editor; req.headers.set('x-site-engine-change-set', set.id)
       return archivePage({ payload, req, pageID: oldHome.id, baseline })
@@ -228,6 +235,7 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     expect(retiredHome.redirect).toBeUndefined()
     const captured = await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })
     const changes = captured.changes as Array<{ collection: string; id: string; before: unknown; after: unknown }>
+    expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'redirects', after: expect.objectContaining({ from: `/retire-${suffix}/guide-${suffix}`, to: '/' }) })]))
     expect(changes.find(change => change.collection === 'pages' && change.id === oldHome.id)).toMatchObject({ before: oldBefore, after: expect.objectContaining({ status: 'archived' }) })
     const candidate = buildCandidate(baseline, changes as never[], changes.map(change => `${change.collection}:${change.id}`), versions)
     expect(candidate.settings.homepageId).toBe(replacement.id)
