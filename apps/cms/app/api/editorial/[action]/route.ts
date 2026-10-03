@@ -42,3 +42,18 @@ export async function POST(request: Request, context: { params: Promise<{ action
     return Response.json({ error: text }, { status })
   }
 }
+
+export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+  const { action } = await context.params
+  if (action !== 'list') return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
+  try {
+    const payload = await getPayload({ config })
+    const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
+    if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
+    const actor = authenticated.user as { id: string; roles?: string[] }
+    const result = await payload.find({ collection: 'change-sets', limit: 100, depth: 0, user: authenticated.user, overrideAccess: false })
+    return Response.json({ sets: result.docs, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
+  } catch {
+    return Response.json({ error: 'Unable to load change sets.' }, { status: 403 })
+  }
+}

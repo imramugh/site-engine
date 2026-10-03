@@ -100,6 +100,40 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
   expect(adminHTML).not.toContain('synthetic-recovery-hash-sentinel')
 })
 
+test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
+  await signIn(page, 'editor')
+  const created = await page.evaluate(async () => {
+    const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Workflow', summary: 'This synthetic section supports the editorial browser workflow acceptance test.', slug: 'workflow-browser', allowedTemplates: ['standard'] }) })
+    const sectionBody = await section.json() as { doc: { id: string } }
+    const pageResponse = await fetch('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow original', summary: 'This synthetic draft is changed through the browser before review is requested.', slug: 'workflow-page', sectionId: sectionBody.doc.id, template: 'standard' }) })
+    const pageBody = await pageResponse.json() as { doc: { id: string } }
+    await fetch(`/api/pages/${pageBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow revised' }) })
+    return pageBody.doc.id
+  })
+  await page.goto('/editorial')
+  await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
+  await expect(page.getByText('title', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Submit for review' }).click()
+  await expect(page.getByRole('status')).toContainText('Submitted')
+  const directSpoof = await page.evaluate(async () => (await fetch('/api/change-sets/not-a-real-id', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: 'approved' }) })).status)
+  expect(directSpoof).toBeGreaterThanOrEqual(400)
+
+  const reviewer = await browser.newPage()
+  await signIn(reviewer, 'owner')
+  await reviewer.goto('/editorial')
+  await reviewer.getByRole('button', { name: 'Request changes' }).click()
+  await expect(reviewer.getByRole('status')).toContainText('updated')
+  await reviewer.close()
+
+  await page.evaluate(async (id) => {
+    await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow refreshed' }) })
+  }, created)
+  await page.reload()
+  await expect(page.getByText('changes-requested')).toBeVisible()
+  await page.getByRole('button', { name: 'Refresh' }).click()
+  await expect(page.getByRole('status')).toContainText('updated')
+})
+
 test('logout revokes the session, replays are denied, and cross-origin POST is blocked by Next proxy', async ({ page }) => {
   const callbackURL = await signIn(page, 'editor')
   const logoutStatus = await page.evaluate(async () => (await fetch('/api/auth/logout', { method: 'POST' })).status)
