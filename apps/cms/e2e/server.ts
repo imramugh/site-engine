@@ -30,6 +30,8 @@ const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const leadOwnerEmail = 'lead-owner.synthetic@example.test'
 const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
+const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
+const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const themeOwnerEmail = 'theme-owner.synthetic@example.test'
 const themeOwnerRecoveryCode = 'synthetic-theme-owner-code-08'
 const themeOwnerSessionToken = 'synthetic-theme-owner-session-token'
@@ -200,6 +202,7 @@ async function seed(): Promise<void> {
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
