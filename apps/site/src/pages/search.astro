@@ -5,18 +5,19 @@ import { crawlerMode } from '../lib/crawler-config.js';
 import { localURL, renderBase, siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 const preview = crawlerMode(renderBase) === 'preview';
+const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
 ---
-<Layout model={model} snapshot={siteSnapshot} title={`Search | ${siteSnapshot.settings.siteName}`} description="Search published site content." noindex={preview}>
+<Layout model={model} snapshot={siteSnapshot} title={`Search | ${siteSnapshot.settings.siteName}`} description="Search published site content." noindex={preview || !searchEnabled} searchEnabled={searchEnabled}>
   <section class="block"><div class="block__inner">
     <h1>Search</h1>
-    {preview ? <p role="status">Search is unavailable in previews.</p> : <>
+    {!searchEnabled ? <p role="status">Search is unavailable for this site.</p> : <>
       <form data-search-form role="search"><label for="search-query">Search published content</label><input id="search-query" name="q" type="search" autocomplete="off" required /><button>Search</button></form>
       <p data-search-status role="status" aria-live="polite"></p>
       <ol data-search-results></ol>
     </>}
   </div></section>
 </Layout>
-{!preview && <script define:vars={{ indexURL: localURL('/search-index.json') }}>
+{searchEnabled && <script define:vars={{ indexURL: localURL('/search-index.json') }}>
   const form = document.querySelector('[data-search-form]');
   const status = document.querySelector('[data-search-status]');
   const results = document.querySelector('[data-search-results]');

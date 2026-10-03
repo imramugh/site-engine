@@ -13,8 +13,10 @@ const model = deriveRoutes(siteSnapshot, siteHomepageId);
 const route = model.byPath.get('/');
 if (!route) throw new Error('The configured demo homepage is not published.');
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
+const preview = crawlerMode(renderBase) === 'preview';
+const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
 ---
-<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={crawlerMode(renderBase) === 'preview'} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
+<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={preview || route.page.noindex} searchEnabled={searchEnabled} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   {route.page.blocks.map((block) => <><BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />{!block.hidden && block.type === 'contact' && block.inquiryForm && <InquiryForm enabled={renderBase === '/'} />}</>)}
   <MotionRuntime enabled={motionEnabled} />
 </Layout>

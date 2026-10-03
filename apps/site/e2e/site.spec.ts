@@ -128,13 +128,19 @@ test('ENG-015 starts real starter effects still and pauses no-motion pages witho
 });
 
 test('ENG-024 searches published static content with accessible canonical results', async ({ page }) => {
-  await page.goto('/search');
+  await page.goto('/');
+  const search = page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Search' });
+  await expect(search).toHaveAttribute('href', '/search');
+  await search.click();
+  await expect(page).toHaveURL(/\/search\/?$/);
+  await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
   await page.getByLabel('Search published content').fill('guide neutral');
-  await page.getByRole('button', { name: 'Search' }).click();
+  await page.getByLabel('Search published content').press('Enter');
   await expect(page.getByRole('status')).toContainText('result');
   const guide = page.locator('#content').getByRole('link', { name: 'Guide' });
   await expect(guide).toHaveAttribute('href', '/general/guide');
-  await guide.click();
+  await guide.focus();
+  await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/general\/guide\/?$/);
   await page.goto('/search');
   await page.getByLabel('Search published content').fill('Hidden fixture');

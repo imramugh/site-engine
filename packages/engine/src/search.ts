@@ -25,7 +25,7 @@ function text(block: Block): { headings: string[]; body: string[] } {
 /** A theme-neutral, public-only document set. deriveRoutes omits drafts and unpublished ancestry. */
 export function buildSearchIndex(snapshot: SiteSnapshot): SearchIndex {
   const routes = deriveRoutes(snapshot, snapshot.settings.homepageId).routes
-  return { version: 1, documents: routes.map((route) => {
+  return { version: 1, documents: routes.filter((route) => !route.page.noindex).map((route) => {
     const values = route.page.blocks.filter((block) => !block.hidden).map(text)
     return { title: route.page.title, summary: route.page.summary, headings: values.flatMap((value) => value.headings), body: values.flatMap((value) => value.body).join('\n'), url: route.canonicalPath }
   }) }

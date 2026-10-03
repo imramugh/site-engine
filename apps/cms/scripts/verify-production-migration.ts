@@ -27,8 +27,9 @@ const pageData = (sectionId: string) => ({
   sectionId,
   template: 'standard' as const,
 })
-const firstPage = await payload.create({ collection: 'pages', data: pageData(first.id), user: created, overrideAccess: false })
+const firstPage = await payload.create({ collection: 'pages', data: { ...pageData(first.id), noindex: true }, user: created, overrideAccess: false })
 if (firstPage._status !== 'draft') throw new Error('Migrated Payload did not preserve normal draft page behavior.')
+if (firstPage.noindex !== true || (await payload.findByID({ collection: 'pages', id: firstPage.id, draft: true, overrideAccess: true })).noindex !== true) throw new Error('Migrated Payload did not preserve a noindex page write.')
 await payload.create({ collection: 'pages', data: pageData(second.id), user: created, overrideAccess: false })
 try {
   await payload.create({ collection: 'pages', data: pageData(first.id), user: created, overrideAccess: false })
@@ -38,6 +39,8 @@ try {
   const fieldErrors = (error as { data?: { errors?: Array<{ path?: string }> } }).data?.errors
   if (!fieldErrors?.some((field) => field.path === 'slug')) throw error
 }
+const settings = await payload.create({ collection: 'site-settings', data: { siteName: 'Production migration verifier', defaultLocale: 'en', searchEnabled: true }, draft: true, user: created, overrideAccess: false })
+if (settings.searchEnabled !== true || (await payload.findByID({ collection: 'site-settings', id: settings.id, draft: true, overrideAccess: true })).searchEnabled !== true) throw new Error('Migrated Payload did not preserve a searchEnabled singleton write.')
 console.info('Migrated Payload read/write verification passed.')
 
 await payload.destroy()
