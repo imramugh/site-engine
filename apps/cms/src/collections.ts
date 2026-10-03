@@ -352,6 +352,10 @@ export const Inquiries: CollectionConfig = {
     for (const field of ['notes', 'nextAction']) if (data[field] !== undefined && data[field] !== null && (typeof data[field] !== 'string' || data[field].length > 5_000)) throw new Error(`Invalid ${field}.`)
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
+  }], beforeDelete: [async ({ id, req }) => {
+    // A deleted lead must not retain queued copies of its personal data or
+    // leave required outbox relationships pointing at a removed record.
+    await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
   }] },
   fields: [
     { name: 'email', type: 'email', required: true },

@@ -74,4 +74,12 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     await expect(update({ stage: 'qualified', notes: '<script>plain text only</script>', assignee: sales.docs[0]!.id })).resolves.toMatchObject({ stage: 'qualified', notes: '<script>plain text only</script>' })
   })
 
+  it('deletes queued notification copies atomically when an owner deletes a lead', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'deleting-owner@example.test', name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const lead = (await payload.find({ collection: 'inquiries', where: { urgent: { equals: true } }, overrideAccess: true })).docs[0]!
+    expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(2)
+    await expect(payload.delete({ collection: 'inquiries', id: lead.id, user: owner, overrideAccess: false })).resolves.toMatchObject({ id: lead.id })
+    expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(0)
+  })
+
 })
