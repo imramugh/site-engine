@@ -35,18 +35,32 @@ function validRedirect(value: unknown): value is string {
 }
 
 async function requestJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.from(chunk));
-    if (Buffer.concat(chunks).byteLength > 16_384) throw new Error('registration request is too large');
-  }
-  const body = Buffer.concat(chunks).toString('utf8');
+  const body = await readBody(request);
   if (request.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
     return Object.fromEntries(new URLSearchParams(body));
   }
   const value: unknown = JSON.parse(body);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('registration body must be an object');
   return value as Record<string, unknown>;
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+    if (Buffer.concat(chunks).byteLength > 16_384) throw new Error('registration request is too large');
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function tokenForm(request: IncomingMessage, resource: string): Promise<Record<string, string>> {
+  if (!request.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) throw new Error('token requests must be urlencoded');
+  const params = new URLSearchParams(await readBody(request));
+  const values = new Map<string, string[]>();
+  for (const [key, value] of params) values.set(key, [...(values.get(key) ?? []), value]);
+  if ([...values.values()].some((entries) => entries.length !== 1)) throw new Error('duplicate token parameter');
+  if (values.get('resource')?.[0] !== resource) throw new Error('an exact resource indicator is required');
+  return Object.fromEntries([...values].map(([key, entries]) => [key, entries[0]!])) as Record<string, string>;
 }
 
 function registrationMetadata(body: Record<string, unknown>, resource: string): Record<string, unknown> {
@@ -149,6 +163,17 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     if (requestUrl.pathname === `${prefix}/reg` || requestUrl.pathname.startsWith(`${prefix}/reg/`)) return json(response, 405, { error: 'method_not_allowed' });
     if (requestUrl.pathname === `${prefix}/auth` && !exactResource(options.resource, requestUrl.searchParams.get('resource'))) {
       return invalidRequest(response, 'an exact resource indicator is required');
+    }
+    if (requestUrl.pathname === `${prefix}/token`) {
+      if (request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
+      try {
+        // oidc-provider's documented body-parser fallback consumes req.body when an
+        // upstream middleware has already parsed the stream. We validate that one
+        // bounded form first, then pass the same values through without replaying.
+        (request as IncomingMessage & { body?: Record<string, string> }).body = await tokenForm(request, options.resource);
+      } catch {
+        return invalidRequest(response, 'an exact, non-duplicated resource indicator is required');
+      }
     }
     if (requestUrl.pathname.startsWith(`${prefix}/interaction/`)) {
       if (request.method !== 'GET' && request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });

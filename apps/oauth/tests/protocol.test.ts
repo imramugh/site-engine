@@ -3,9 +3,11 @@ import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { test } from 'vitest';
 import { createOAuthService } from '../src/server.js';
 
-const port = 43991;
+test('enforces same-origin OAuth authorization-code boundaries', async () => {
+const port = 45_000 + (process.pid % 10_000);
 const origin = `http://127.0.0.1:${port}`;
 const issuer = `${origin}/oauth`;
 const resource = `${origin}/mcp`;
@@ -50,6 +52,23 @@ try {
 
   const authorization = new URL(`${issuer}/auth`);
   authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+  const authWithoutResource = new URL(authorization);
+  authWithoutResource.searchParams.delete('resource');
+  assert.equal((await fetch(authWithoutResource, { redirect: 'manual' })).status, 400);
+  const authWrongResource = new URL(authorization);
+  authWrongResource.searchParams.set('resource', `${origin}/other`);
+  assert.equal((await fetch(authWrongResource, { redirect: 'manual' })).status, 400);
+  const authWithoutPkce = new URL(authorization);
+  authWithoutPkce.searchParams.delete('code_challenge');
+  authWithoutPkce.searchParams.delete('code_challenge_method');
+  const noPkce = await fetch(authWithoutPkce, { redirect: 'manual' });
+  assert.equal(noPkce.status, 303);
+  assert.match(noPkce.headers.get('location') ?? '', /error=invalid_request/);
+  const authPlainPkce = new URL(authorization);
+  authPlainPkce.searchParams.set('code_challenge_method', 'plain');
+  const plainPkce = await fetch(authPlainPkce, { redirect: 'manual' });
+  assert.equal(plainPkce.status, 303);
+  assert.match(plainPkce.headers.get('location') ?? '', /error=invalid_request/);
   const authorizationResponse = await fetch(authorization, { redirect: 'manual' });
   assert.equal(authorizationResponse.status, 303);
   const interaction = authorizationResponse.headers.get('location');
@@ -93,6 +112,17 @@ try {
   assert.equal(callback.searchParams.get('state'), 'state-value');
   const code = callback.searchParams.get('code');
   assert.ok(code, callback.href);
+
+  const missingTokenResource = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier }) });
+  assert.equal(missingTokenResource.status, 400);
+  const wrongTokenResource = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier, resource: `${origin}/other` }) });
+  assert.equal(wrongTokenResource.status, 400);
+  const duplicateTokenResource = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent('http://127.0.0.1/callback')}&client_id=${client.client_id}&code_verifier=${verifier}&resource=${encodeURIComponent(resource)}&resource=${encodeURIComponent(resource)}` });
+  assert.equal(duplicateTokenResource.status, 400);
+  const wrongRedirect = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/other', client_id: client.client_id, code_verifier: verifier, resource }) });
+  assert.equal(wrongRedirect.status, 400);
+  const wrongClient = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: 'other-client', code_verifier: verifier, resource }) });
+  assert.equal(wrongClient.status, 401);
 
   const wrongVerifier = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: randomBytes(48).toString('base64url'), resource }) });
   assert.equal(wrongVerifier.status, 400);
@@ -148,3 +178,4 @@ try {
   rmSync(`${databasePath}-wal`, { force: true });
   rmSync(`${databasePath}-shm`, { force: true });
 }
+}, 30_000);
