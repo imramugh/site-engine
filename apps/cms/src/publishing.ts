@@ -214,6 +214,18 @@ async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: A
   return user
 }
 
+async function canonicalOwner(payload: Payload, req: PayloadRequest, actor: Actor | undefined): Promise<Actor> {
+  if (!actor?.id) throw new Error('Owner role required.')
+  const user = await payload.findByID({ collection: 'users', id: actor.id, overrideAccess: true, req }) as unknown as Actor
+  if (!hasRole(user, ['owner'])) throw new Error('Owner role required.')
+  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
+  if (!token) throw new Error('Fresh authentication is required.')
+  const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
+  const session = sessions.docs[0]
+  if (!session || idOf(session.user) !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) throw new Error('Fresh authentication is required.')
+  return user
+}
+
 export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot; scheduledFor?: string }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, previewContentHash, versions, initialBaseline } = input
   requireTransaction(req, 'Approval')
@@ -262,9 +274,69 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   return { snapshotID: snapshotDoc.id, outboxID: outbox?.id, scheduledPublicationID: scheduled?.id, idempotencyKey, scheduledFor }
 }
 
+type ScheduledPublication = { id: string; idempotencyKey: string; state?: string; scheduledFor?: string; snapshot?: unknown; outbox?: unknown; proof?: { includedChangeKeys?: unknown } }
+
+async function skipScheduledPublication(payload: Payload, req: PayloadRequest, schedule: ScheduledPublication, reason: string) {
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'stale', dispatchReason: reason }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) return false
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_skipped', detail: { scheduledPublication: schedule.id, reason } }, overrideAccess: true, req })
+  return true
+}
+
+/** Dispatches due schedules only when the frozen approval baseline remains the queue head. */
+export async function dispatchDueScheduledPublications(payload: Payload, req: PayloadRequest, now = new Date()) {
+  requireTransaction(req, 'Scheduled publication dispatch')
+  const due = await payload.find({ collection: 'scheduled-publications', where: { and: [{ state: { equals: 'scheduled' } }, { scheduledFor: { less_than_equal: now.toISOString() } }] }, sort: 'scheduledFor', limit: 100, depth: 2, overrideAccess: true, req })
+  let enqueued = 0; let skipped = 0
+  for (const schedule of due.docs as unknown as ScheduledPublication[]) {
+    const snapshot = schedule.snapshot as Record<string, unknown> | undefined
+    const approvedBy = snapshot && typeof snapshot === 'object' ? snapshot.approvedBy : undefined
+    const approver = approvedBy && typeof approvedBy === 'object' ? approvedBy as Actor : undefined
+    if (!snapshot || !hasRole(approver, ['owner', 'approver'])) {
+      if (await skipScheduledPublication(payload, req, schedule, 'APPROVAL_AUTHORITY_REVOKED')) skipped += 1
+      continue
+    }
+    const frozenSnapshotID = idOf(snapshot.baselineSnapshot)
+    const frozenSequence = Number(snapshot.baselineSequence ?? 0)
+    const baseline = await approvalBaseline(payload, req)
+    if (!baseline || baseline.snapshotID !== frozenSnapshotID || baseline.sequence !== frozenSequence) {
+      if (await skipScheduledPublication(payload, req, schedule, 'BASELINE_STALE')) skipped += 1
+      continue
+    }
+    const existing = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { equals: schedule.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req })
+    const includedChangeKeys = Array.isArray(schedule.proof?.includedChangeKeys) ? schedule.proof.includedChangeKeys : []
+    const outbox = existing.docs[0] ?? await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: schedule.idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshot.id as string, changeSet: idOf(snapshot.changeSet)!, reviewRevision: Number(snapshot.reviewRevision), changeHash: String(snapshot.changeHash), includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
+    const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'enqueued', outbox: outbox.id, enqueuedAt: now.toISOString(), dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+    if (!updated.docs[0]) throw new Error('The scheduled publication is no longer current.')
+    await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_enqueued', detail: { scheduledPublication: schedule.id, outbox: outbox.id, sequence: outbox.sequence } }, overrideAccess: true, req })
+    enqueued += 1
+  }
+  return { enqueued, skipped }
+}
+
+export async function cancelScheduledPublication(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string }) {
+  const { payload, req, actor, id } = input; requireTransaction(req, 'Scheduled publication cancellation')
+  const owner = await canonicalOwner(payload, req, actor)
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'cancelled', dispatchReason: 'CANCELLED_BY_OWNER' }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) throw new Error('Only a scheduled publication can be cancelled.')
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_cancelled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id } }, overrideAccess: true, req })
+  return updated.docs[0]
+}
+
+export async function reschedulePublication(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; scheduledFor: unknown }) {
+  const { payload, req, actor, id } = input; requireTransaction(req, 'Scheduled publication rescheduling')
+  const owner = await canonicalOwner(payload, req, actor); const scheduledFor = scheduledPublicationTime(input.scheduledFor)
+  if (!scheduledFor) throw new Error('scheduledFor is required.')
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: id } }, { state: { equals: 'scheduled' } }] }, data: { scheduledFor, dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) throw new Error('Only a scheduled publication can be rescheduled.')
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_rescheduled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id, scheduledFor } }, overrideAccess: true, req })
+  return updated.docs[0]
+}
+
 /** Claims only the oldest unfinished job. A backoff or live lease deliberately blocks later jobs. */
 export async function claimNextPublishJob(payload: Payload, req: PayloadRequest, now = new Date(), leaseMilliseconds = 60_000, maxAttempts = MAX_PUBLISH_ATTEMPTS) {
   requireTransaction(req, 'Publish claim')
+  await dispatchDueScheduledPublications(payload, req, now)
   const result = await payload.find({ collection: 'publish-outbox', where: { status: { in: ['pending', 'processing'] } }, sort: 'sequence', limit: 1, depth: 0, overrideAccess: true, req })
   const job = result.docs[0]
   if (!job) return null
