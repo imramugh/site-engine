@@ -15,7 +15,10 @@ controls and browser autoplay policy remain authoritative. Effects are paused
 when reduced motion is selected, while off-screen, and within `form` or
 `[data-urgent-contact]` contexts.
 
-Theme renderers should call `resolveMotionPreset(intent, preset, supported)`.
-An available selected preset wins. If it is unavailable after a theme change,
-the declared intent is used only if the new theme supports it; otherwise the
-renderer must leave a still frame.
+Theme renderers should call
+`resolveMotionPreset(intent, preset, supported, intentFallbacks)`. `none`
+always renders a still frame. Otherwise, an available selected preset wins. If
+it is unavailable after a theme change, the optional `intentFallbacks` map may
+translate the declared intent to a supported preset (for example, `subtle` to
+`fade`). Without a map, compatible intent and preset names work directly. A
+missing or unsupported fallback leaves a still frame.

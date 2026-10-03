@@ -56,8 +56,21 @@ test('ENG-015 motion fixture has no automated accessibility violations', async (
   expect(violations).toEqual([]);
 });
 
-test('ENG-015 delivers a motion runtime below 10 KiB gzip', async ({ page }) => {
+test('ENG-015 delivers a motion runtime below 10 KiB gzip', async ({ page, request }) => {
   await page.goto('/motion/one');
-  const runtime = await page.locator('script[type="module"]').textContent();
-  expect(gzipSync(runtime ?? '').byteLength).toBeLessThan(10 * 1024);
+  const modules = await page.locator('script[type="module"]').evaluateAll((scripts) => scripts.map((script) => ({
+    code: script.textContent ?? '',
+    src: script.getAttribute('src'),
+  })));
+  const externalModules = await Promise.all(modules.filter((module) => module.src).map(async (module) => {
+    const response = await request.get(new URL(module.src!, page.url()).toString());
+    expect(response.ok()).toBe(true);
+    return response.body();
+  }));
+  const deliveredCode = Buffer.concat([
+    ...modules.map((module) => Buffer.from(module.code)),
+    ...externalModules,
+  ]);
+  expect(deliveredCode.byteLength).toBeGreaterThan(0);
+  expect(gzipSync(deliveredCode).byteLength).toBeLessThan(10 * 1024);
 });

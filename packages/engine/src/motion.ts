@@ -29,9 +29,12 @@ export function resolveMotionPreset(
   intent: string,
   preset: string | undefined,
   supportedPresets: ReadonlySet<string>,
+  intentFallbacks?: ReadonlyMap<string, string>,
 ): ResolvedMotionPreset {
+  if (intent === 'none') return undefined;
   if (preset && supportedPresets.has(preset)) return preset;
-  return supportedPresets.has(intent) ? intent : undefined;
+  const fallback = intentFallbacks?.get(intent) ?? intent;
+  return supportedPresets.has(fallback) ? fallback : undefined;
 }
 
 type MotionMediaQuery = MediaQueryList & {
