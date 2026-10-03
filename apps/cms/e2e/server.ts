@@ -253,6 +253,21 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(() => { response.writeHead(500); response.end('Unable to create audit noise.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/schedule-page') {
+    void Promise.all([
+      payload.find({ collection: 'publish-snapshots', limit: 1, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'change-sets', limit: 1, depth: 0, overrideAccess: true }),
+    ]).then(async ([snapshots, sets]) => {
+      if (!snapshots.docs[0] || !sets.docs[0]) throw new Error('Schedule fixture dependencies are missing.')
+      const source = snapshots.docs[0] as { manifest: Record<string, unknown>; themeVersion: string; engineVersion: string; contractVersion: string; approvedBy: string; baselineSnapshot?: string; baselineSequence?: number }
+      for (let index = 0; index < 26; index += 1) {
+        const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: createHash('sha256').update(`e2e-page-${index}`).digest('hex'), changeSet: sets.docs[0].id, reviewRevision: 1, changeHash: `e2e-page-${index}`, manifest: source.manifest, themeVersion: source.themeVersion, engineVersion: source.engineVersion, contractVersion: source.contractVersion, approvedBy: source.approvedBy, baselineSnapshot: source.baselineSnapshot, baselineSequence: source.baselineSequence ?? 0 }, overrideAccess: true, context: { editorialInternal: true } })
+        await payload.create({ collection: 'scheduled-publications', data: { idempotencyKey: `e2e-page-${index}`, snapshot: snapshot.id, changeSet: sets.docs[0].id, scheduledFor: `2099-01-01T00:${String(index).padStart(2, '0')}:00.000Z`, state: 'scheduled', proof: {} }, overrideAccess: true, context: { editorialInternal: true } })
+      }
+      json(response, { seeded: 26 })
+    }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed schedules.') })
+    return
+  }
   // The public contact artifact is served under the same synthetic TLS origin
   // as CMS, just as the production edge routes public pages and /api together.
   // This makes the browser exercise the real Astro form, not a CMS preview.
