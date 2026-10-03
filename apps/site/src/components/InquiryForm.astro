@@ -1,0 +1,50 @@
+---
+interface Props { enabled: boolean }
+const { enabled } = Astro.props;
+---
+<form data-inquiry-form data-preview={!enabled} novalidate>
+  <p><label>Email <input name="email" type="email" required /></label></p>
+  <p><label>Topic <select name="topic"><option value="general">General inquiry</option><option value="active-incident">Active incident</option></select></label></p>
+  <p><label>Message <textarea name="message" required /></label></p>
+  <p><label><input name="consent" type="checkbox" required /> I consent to the handling of this inquiry.</label></p>
+  <button disabled={!enabled}>Send inquiry</button>
+  <p role="alert" data-inquiry-error></p>
+  <p role="status" data-inquiry-status></p>
+</form>
+<script>
+  document.querySelectorAll<HTMLFormElement>('[data-inquiry-form]').forEach((form) => {
+    if (form.dataset.inquiryBound === 'true') return;
+    form.dataset.inquiryBound = 'true';
+    let pending = false;
+    let accepted = false;
+    // Preserve the key across network retries; the server rejects changed data.
+    let key = crypto.randomUUID().replaceAll('-', '');
+    let previous = '';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (form.dataset.preview === 'true' || pending || accepted) return;
+      const data = new FormData(form);
+      const fields = { ...Object.fromEntries(data), consent: data.get('consent') === 'on', sourcePage: location.pathname };
+      const fingerprint = JSON.stringify(fields);
+      if (previous && previous !== fingerprint) key = crypto.randomUUID().replaceAll('-', '');
+      previous = fingerprint;
+      const error = form.querySelector<HTMLElement>('[data-inquiry-error]')!;
+      const status = form.querySelector<HTMLElement>('[data-inquiry-status]')!;
+      const button = form.querySelector<HTMLButtonElement>('button')!;
+      pending = true; button.disabled = true; form.setAttribute('aria-busy', 'true');
+      error.textContent = ''; status.textContent = 'Sending inquiry…';
+      try {
+        const response = await fetch('/api/inquiries', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...fields, idempotencyKey: key }) });
+        const result = await response.json();
+        accepted = response.ok && result.accepted === true;
+        error.textContent = accepted ? '' : Object.values(result.errors ?? { form: 'Unable to send inquiry. Please try again.' }).join(' ');
+        status.textContent = accepted ? 'Your inquiry has been received.' : '';
+      } catch {
+        error.textContent = 'Unable to send inquiry. Please check your connection and try again.';
+        status.textContent = '';
+      } finally {
+        pending = false; button.disabled = accepted; form.removeAttribute('aria-busy');
+      }
+    });
+  });
+</script>
