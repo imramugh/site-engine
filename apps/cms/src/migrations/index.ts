@@ -24,6 +24,7 @@ import * as migration_20261003_200100_site_settings from './20261003_200100_site
 import * as migration_20261003_210000_search_controls from './20261003_210000_search_controls';
 import * as migration_20261003_230100_scheduled_publications from './20261003_230100_scheduled_publications';
 import * as migration_20261003_230200_scheduled_publication_dispatch from './20261003_230200_scheduled_publication_dispatch';
+import * as migration_20261003_230300_business_case_metadata from './20261003_230300_business_case_metadata';
 
 export const migrations = [
   {
@@ -132,4 +133,5 @@ export const migrations = [
   { up: migration_20261003_230000_section_landing_page.up, down: migration_20261003_230000_section_landing_page.down, name: '20261003_230000_section_landing_page' },
   { up: migration_20261003_230100_scheduled_publications.up, down: migration_20261003_230100_scheduled_publications.down, name: '20261003_230100_scheduled_publications' },
   { up: migration_20261003_230200_scheduled_publication_dispatch.up, down: migration_20261003_230200_scheduled_publication_dispatch.down, name: '20261003_230200_scheduled_publication_dispatch' },
+  { up: migration_20261003_230300_business_case_metadata.up, down: migration_20261003_230300_business_case_metadata.down, name: '20261003_230300_business_case_metadata' },
 ];
