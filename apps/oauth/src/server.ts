@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Provider from 'oidc-provider';
 import { createHashedAdapter, findGrantBinding, openOAuthDatabase, revokeGrantFamily, storeGrantBinding } from './adapter.js';
 import { createHttpSessionBridge } from './session-bridge.js';
@@ -319,7 +320,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
   return { server, provider, close: () => db.close() };
 }
 
-if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const port = Number(process.env.PORT ?? '3001');
   const issuer = process.env.OAUTH_ISSUER;
   const resource = process.env.OAUTH_RESOURCE;
