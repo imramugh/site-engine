@@ -5,7 +5,7 @@ import { getPayload } from 'payload'
 import { z } from 'zod'
 import { BackgroundSchema, BlockSchemas, MotionIntentSchema, TemplateAllowedBlocks, TemplateSchema, WidthSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
-import { compatibilityReport, loadThemeRegistry } from '@site-engine/engine/theme-registry'
+import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
 import { createNamedChangeSet, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
@@ -155,7 +155,7 @@ export async function handleMcp(request: Request): Promise<Response> {
     if (!owner) return { error: 'owner_access_required' }
     const manifest = await publishedManifest()
     if (!manifest) return { status: 'not-configured', themes: [] }
-    return { themes: [...(await loadThemeRegistry()).values()].map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
+    return { themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
   }
   const frozenPageQuality = async (id: string) => {
     const manifest = await publishedManifest() as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
