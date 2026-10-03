@@ -12,8 +12,9 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 
-const cmsOrigin = 'https://127.0.0.1:4300'
-const issuerOrigin = 'https://127.0.0.1:4301'
+const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
 const clientSecret = 'synthetic-browser-secret'
 const inviteToken = 'synthetic-browser-owner-invite'
@@ -162,7 +163,7 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
-  if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)\/$/i.test(request.url ?? '')) {
+  if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
     html(response, '<!doctype html><title>Synthetic private comparison</title><main>Authenticated private comparison fixture</main>')
     return
   }
@@ -186,8 +187,8 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     return
   }
   const upstream = requestUpstream({
-    hostname: '127.0.0.1', port: 4302, method: request.method, path: request.url,
-    headers: { ...request.headers, host: '127.0.0.1:4300', 'x-forwarded-host': '127.0.0.1:4300', 'x-forwarded-proto': 'https' },
+    hostname: '127.0.0.1', port: e2ePort + 2, method: request.method, path: request.url,
+    headers: { ...request.headers, host: `127.0.0.1:${e2ePort}`, 'x-forwarded-host': `127.0.0.1:${e2ePort}`, 'x-forwarded-proto': 'https' },
   }, (upstreamResponse) => {
     response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers)
     upstreamResponse.pipe(response)
@@ -223,10 +224,10 @@ async function main(): Promise<void> {
   jwk = await exportJWK(pair.publicKey)
   createCertificates()
   issuer = createServer({ key: readFileSync(serverKey), cert: readFileSync(serverCertificate) }, (request, response) => { void provider(request, response).catch(() => html(response, 'Synthetic provider failed.', 500)) })
-  issuer.listen(4301, '127.0.0.1')
+  issuer.listen(e2ePort + 1, '127.0.0.1')
   await once(issuer, 'listening')
   cmsProxy = createServer({ key: readFileSync(serverKey), cert: readFileSync(serverCertificate) }, forwardCMS)
-  cmsProxy.listen(4300, '127.0.0.1')
+  cmsProxy.listen(e2ePort, '127.0.0.1')
   await once(cmsProxy, 'listening')
   await seed()
   await runNext(['build'])
@@ -239,7 +240,7 @@ async function main(): Promise<void> {
   if (existsSync(join(appDirectory, 'public'))) cpSync(join(appDirectory, 'public'), join(standaloneDirectory, 'public'), { recursive: true })
   next = spawn(process.execPath, [join(standaloneDirectory, 'server.js')], {
     cwd: process.cwd(),
-    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: '4302' },
+    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: String(e2ePort + 2) },
     stdio: 'inherit',
   })
   next.once('exit', (status) => { if (!stopping) void stop(status ?? 1) })
@@ -247,13 +248,13 @@ async function main(): Promise<void> {
     const retry = () => Date.now() > deadline ? reject(new Error('CMS standalone server did not become ready.')) : setTimeout(check, 100)
     const deadline = Date.now() + 30_000
     const check = () => {
-      const probe = requestUpstream({ hostname: '127.0.0.1', port: 4302, path: '/api/health' }, (response) => { response.resume(); response.statusCode === 200 ? resolve() : retry() })
+      const probe = requestUpstream({ hostname: '127.0.0.1', port: e2ePort + 2, path: '/api/health' }, (response) => { response.resume(); response.statusCode === 200 ? resolve() : retry() })
       probe.once('error', retry).end()
     }
     check()
   })
   readiness = createHTTPServer((_request, response) => { response.writeHead(200); response.end('ready') })
-  readiness.listen(4303, '127.0.0.1')
+  readiness.listen(e2ePort + 3, '127.0.0.1')
   await once(readiness, 'listening')
 }
 

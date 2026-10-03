@@ -3,10 +3,13 @@ import { expect, test, type Page } from '@playwright/test'
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 
 async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string): Promise<string> {
-  const start = page.waitForResponse((response) => response.url().startsWith('https://127.0.0.1:4300/api/auth/google') && response.status() === 307)
-  const callback = page.waitForRequest((request) => request.url().startsWith('https://127.0.0.1:4300/api/auth/callback/google?'))
+  const start = page.waitForResponse((response) => response.url().startsWith(`${cmsOrigin}/api/auth/google`) && response.status() === 307)
+  const callback = page.waitForRequest((request) => request.url().startsWith(`${cmsOrigin}/api/auth/callback/google?`))
   await page.goto(invite ? `/api/auth/google?invite=${invite}` : '/api/auth/google')
   expect((await start).headers()['critical-ch']).toBeUndefined()
   await page.getByRole('button', { name: identity === 'owner' ? 'Sign in as Synthetic Owner' : 'Sign in as Synthetic Editor' }).click()
@@ -18,7 +21,7 @@ async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string)
 async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-recovery-code-02', email = 'emergency-owner.synthetic@example.test'): Promise<void> {
   const providerRequests: string[] = []
   page.on('request', (request) => {
-    if (request.url().startsWith('https://127.0.0.1:4301/')) providerRequests.push(request.url())
+    if (request.url().startsWith(`${issuerOrigin}/`)) providerRequests.push(request.url())
   })
   await page.goto('/admin/login')
   await page.locator('#emergency-email').fill(email)
@@ -82,7 +85,7 @@ test('an invited Google identity creates an owner session and loads admin', asyn
 
 test('an editor can read only its own profile and anonymous REST stays denied', async ({ browser, page }) => {
   const anonymous = await browser.newContext()
-  const anonymousResponse = await anonymous.request.get('https://127.0.0.1:4300/api/users')
+  const anonymousResponse = await anonymous.request.get(`${cmsOrigin}/api/users`)
   expect(anonymousResponse.status()).toBeGreaterThanOrEqual(400)
   expect(await anonymousResponse.text()).not.toContain('owner.synthetic@example.test')
   await anonymous.close()
@@ -124,7 +127,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const directSpoof = await page.evaluate(async () => (await fetch('/api/change-sets/not-a-real-id', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: 'approved' }) })).status)
   expect(directSpoof).toBeGreaterThanOrEqual(400)
 
-  const reviewerContext = await browser.newContext({ baseURL: 'https://127.0.0.1:4300', ignoreHTTPSErrors: true })
+  const reviewerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
   const reviewer = await reviewerContext.newPage()
   // This test is intentionally runnable on its own. The invitation-backed
   // synthetic owner belongs to the enrollment test, so use an e2e-only local
@@ -132,6 +135,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await signInLocalOwner(reviewer, reviewOwnerRecoveryCode, reviewOwnerEmail)
   await reviewer.goto('/admin/editorial')
   await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
+  await expect(reviewer.getByLabel(/Include pages/)).toBeChecked()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
   await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
   const workerHeaders = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
@@ -147,6 +151,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   expect(completed.ok(), await completed.text()).toBeTruthy()
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
+  await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
   await reviewer.getByRole('button', { name: 'Live', exact: true }).click()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveCount(0)
   await reviewer.getByRole('button', { name: 'Proposed', exact: true }).click()
@@ -191,7 +196,7 @@ test('logout revokes the session, replays are denied, and cross-origin POST is b
   await page.goto(callbackURL)
   await expect(page.locator('body')).toContainText(/Sign-in browser binding is invalid|Sign-in request expired or was already used/)
 
-  await page.goto('https://127.0.0.1:4301/cross-origin-post')
+  await page.goto(`${issuerOrigin}/cross-origin-post`)
   await page.getByRole('button', { name: 'Submit cross-origin logout' }).click()
   await expect(page.locator('body')).toContainText('CSRF origin check failed.')
 })
