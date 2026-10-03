@@ -37,12 +37,13 @@ export async function POST(request: Request): Promise<Response> {
       const actor = typeof set.actor === 'string' ? set.actor : (set.actor as { id?: string } | undefined)?.id
       if (set.state !== 'open' || actor !== user.id) throw new Error('Choose an open change set that you own.')
       if (set.revision !== expectedRevision) throw new Error('The selected change set changed. Reload and try again.')
-      const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown }
+      const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown; blocks?: unknown }
       const blocks = recipeBlocks(String(page.template ?? ''), body.blockTypes)
       req.headers.set('x-site-engine-change-set', changeSetID)
-      return payload.update({ collection: 'pages', id: pageID, data: { blocks }, draft: true, user, overrideAccess: false, req }) as Promise<{ id: string; blocks?: unknown }>
+      return payload.update({ collection: 'pages', id: pageID, data: { blocks: [...(Array.isArray(page.blocks) ? page.blocks : []), ...blocks] }, draft: true, user, overrideAccess: false, req }) as Promise<{ id: string; blocks?: unknown }>
     })
-    return Response.json({ page: { id: updated.id, blocks: updated.blocks }, message: 'Recipe blocks were captured in the selected draft change set.' }, { status: 201, headers: { 'Cache-Control': 'no-store' } })
+    const current = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true }) as { revision?: unknown }
+    return Response.json({ page: { id: updated.id, blocks: updated.blocks }, changeSetRevision: Number(current.revision ?? 0), message: 'Recipe blocks were captured in the selected draft change set.' }, { status: 201, headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to insert recipe blocks.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } })
   }
