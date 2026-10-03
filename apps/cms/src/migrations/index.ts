@@ -1,5 +1,6 @@
 import * as migration_20261003_220000_style_guides from './20261003_220000_style_guides';
 import * as migration_20261003_230000_section_landing_page from './20261003_230000_section_landing_page';
+import * as migration_20261003_240000_integration_configurations from './20261003_240000_integration_configurations';
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
@@ -134,4 +135,5 @@ export const migrations = [
   { up: migration_20261003_230100_scheduled_publications.up, down: migration_20261003_230100_scheduled_publications.down, name: '20261003_230100_scheduled_publications' },
   { up: migration_20261003_230200_scheduled_publication_dispatch.up, down: migration_20261003_230200_scheduled_publication_dispatch.down, name: '20261003_230200_scheduled_publication_dispatch' },
   { up: migration_20261003_230300_business_case_metadata.up, down: migration_20261003_230300_business_case_metadata.down, name: '20261003_230300_business_case_metadata' },
+  { up: migration_20261003_240000_integration_configurations.up, down: migration_20261003_240000_integration_configurations.down, name: '20261003_240000_integration_configurations' },
 ];
