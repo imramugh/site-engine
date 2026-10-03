@@ -74,3 +74,39 @@ test('ENG-015 delivers a motion runtime below 10 KiB gzip', async ({ page, reque
   expect(deliveredCode.byteLength).toBeGreaterThan(0);
   expect(gzipSync(deliveredCode).byteLength).toBeLessThan(10 * 1024);
 });
+
+test('ENG-015 enhances real starter pages for OS preference and persisted choice', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('[data-motion-effect="subtle"]')).toHaveAttribute('data-motion-paused', 'true');
+
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await page.goto('/general/gallery');
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('#motion-offscreen')).toHaveAttribute('data-motion-paused', 'true');
+  await expect(page.locator('[data-block="incidentBar"]')).not.toHaveAttribute('data-motion-effect');
+  await expect(page.locator('[data-block="contact"]')).not.toHaveAttribute('data-motion-effect');
+});
+
+test('ENG-015 starts real starter effects still and pauses no-motion pages without a bundle', async ({ page, browser }) => {
+  await page.goto('/general/gallery');
+  const offscreen = page.locator('#motion-offscreen');
+  await expect(offscreen).toHaveCSS('animation-play-state', 'paused');
+  await page.evaluate(() => document.querySelector('#motion-offscreen')?.scrollIntoView());
+  await expect(offscreen).toHaveCSS('animation-play-state', 'running');
+
+  await page.goto('/general/guide');
+  await expect(page.locator('script[type="module"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reduce motion' })).toHaveCount(0);
+
+  const noJavaScript = await browser.newContext({ javaScriptEnabled: false });
+  const noJavaScriptPage = await noJavaScript.newPage();
+  await noJavaScriptPage.goto('/');
+  await expect(noJavaScriptPage.getByRole('heading', { level: 1 })).toHaveText('Publish clear information');
+  await expect(noJavaScriptPage.locator('[data-motion-effect="subtle"]')).toHaveCSS('animation-play-state', 'paused');
+  await noJavaScript.close();
+});

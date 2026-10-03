@@ -1,6 +1,6 @@
 ---
 import type { Block, RouteModel, SiteSnapshot } from '@site-engine/contract';
-const { block, snapshot, model } = Astro.props as { block: Block; snapshot: SiteSnapshot; model: RouteModel };
+const { block, snapshot, model, motionPreset } = Astro.props as { block: Block; snapshot: SiteSnapshot; model: RouteModel; motionPreset?: string };
 const media = new Map(snapshot.media.map((item) => [item.id, item]));
 const mediaSrc = (id: string) => `/media/${media.get(id)?.filename ?? 'missing.svg'}`;
 const resolved = (id: string) => media.get(id);
@@ -8,8 +8,9 @@ const classes = `block block--${block.appearance.background} block--${block.appe
 const related = block.type === 'relatedServices' ? block.pageIds.map((id) => model.routes.find((route) => route.page.id === id)).filter(Boolean) : [];
 const approvedTestimonials = block.type === 'testimonials' ? block.items.filter((item) => item.permissionConfirmed) : [];
 const paragraphs = block.type === 'richText' ? block.body.split(/\n\s*\n/).filter(Boolean) : [];
+const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : motionPreset;
 ---
-{!block.hidden && <section class={classes} id={block.anchorId} data-block={block.type}><div class="block__inner">
+{!block.hidden && <section class={classes} id={block.anchorId} data-block={block.type} data-motion-effect={effect}><div class="block__inner">
   {block.type === 'hero' && <><p>{block.eyebrow}</p><h1>{block.heading}</h1><p>{block.body}</p>{block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</>}
   {block.type === 'incidentBar' && <p role="status">{block.message} {block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</p>}
   {block.type === 'pillarGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3><a href={item.href}>{item.title}</a></h3><p>{item.body}</p></li>)}</ul></>}

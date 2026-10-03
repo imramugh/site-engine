@@ -1,0 +1,7 @@
+---
+const { enabled } = Astro.props as { enabled: boolean };
+---
+{enabled && <script>
+  import { mountMotionRuntime } from '@site-engine/engine/motion';
+  mountMotionRuntime(document, window);
+</script>}

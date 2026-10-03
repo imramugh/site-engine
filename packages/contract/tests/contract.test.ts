@@ -50,6 +50,12 @@ describe('ENG-002 versioned contract', () => {
     expect(ThemeManifestSchema.safeParse({ name: 'neutral', version: '1.0.0', contract: '1.0.0', entry: './dist/../../private.js' }).success).toBe(false);
   });
 
+  it('accepts declared theme motion presets and intent fallbacks', () => {
+    const manifest = { name: 'neutral', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js', motion: { presets: ['fade'], intentFallbacks: { subtle: 'fade' } } };
+    expect(ThemeManifestSchema.safeParse(manifest).success).toBe(true);
+    expect(ThemeManifestSchema.safeParse({ ...manifest, motion: { ...manifest.motion, intentFallbacks: { subtle: 'invalid preset' } } }).success).toBe(false);
+  });
+
   it('requires summaries, a visible landing hero, and compatible blocks', () => {
     const page = neutralFixture.pages[0];
     expect(PageSchema.safeParse({ ...page, summary: undefined }).success).toBe(false);
