@@ -171,6 +171,26 @@ try {
   assert.equal(persisted.includes(tokens.refresh_token), false);
   assert.equal(persisted.includes(code), false);
   db.close();
+
+  const gatedPort = port + 1;
+  const gatedOrigin = `http://127.0.0.1:${gatedPort}`;
+  const gatedIssuer = `${gatedOrigin}/oauth`;
+  const gated = createOAuthService({ issuer: gatedIssuer, resource: `${gatedOrigin}/mcp`, databasePath: `${databasePath}.gated`, cookieKeys: ['test-cookie-key-one', 'test-cookie-key-two'], jwks: { keys: [{ ...signingKey, kid: 'gated-key', use: 'sig', alg: 'RS256' }] } });
+  await new Promise<void>((resolve) => gated.server.listen(gatedPort, '127.0.0.1', resolve));
+  try {
+    const gatedRegistration = await fetch(`${gatedIssuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read' }) });
+    const gatedClient = await gatedRegistration.json() as { client_id: string };
+    const gatedAuthorization = await fetch(`${gatedIssuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: gatedClient.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read', resource: `${gatedOrigin}/mcp`, state: 'gated-state', code_challenge: challenge, code_challenge_method: 'S256' })}`, { redirect: 'manual' });
+    assert.equal(gatedAuthorization.status, 303);
+    const gatedInteraction = new URL(gatedAuthorization.headers.get('location')!, gatedIssuer);
+    assert.equal((await fetch(gatedInteraction)).status, 401);
+  } finally {
+    await new Promise<void>((resolve) => gated.server.close(() => resolve()));
+    gated.close();
+    rmSync(`${databasePath}.gated`, { force: true });
+    rmSync(`${databasePath}.gated-wal`, { force: true });
+    rmSync(`${databasePath}.gated-shm`, { force: true });
+  }
 } finally {
   await new Promise<void>((resolve) => service.server.close(() => resolve()));
   service.close();
