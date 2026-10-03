@@ -6,7 +6,7 @@ type Change = { collection: string; id: string; before: unknown; after: unknown 
 type ReadinessProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string }; report?: { publishable?: boolean; blockers?: { code: string; path: string; message: string }[]; warnings?: { code: string; path: string; message: string }[] } }
 type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[]; proof?: ReadinessProof }; staleAt?: string; preview?: { status?: string; jobID?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[] }
 type ScheduledPublication = { id: string; scheduledFor: string; state: string; dispatchReason?: string; snapshot?: { contentHash?: string }; changeSet?: string | { id: string } }
-type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] }; schedules?: ScheduledPublication[]; totalDocs?: number }
+type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] }; schedules?: ScheduledPublication[]; totalDocs?: number; schedulePage?: number; scheduleTotalPages?: number }
 function fields(change: Change): [string, unknown, unknown][] {
   const before = change.before && typeof change.before === 'object' ? change.before as Record<string, unknown> : {}
   const after = change.after && typeof change.after === 'object' ? change.after as Record<string, unknown> : {}
@@ -24,6 +24,7 @@ export function EditorialWorkflow() {
   const [comment, setComment] = useState('')
   const [includedChangeKeys, setIncludedChangeKeys] = useState<Set<string>>(new Set())
   const [scheduledFor, setScheduledFor] = useState('')
+  const [schedulePage, setSchedulePage] = useState(1)
   const [previewPath, setPreviewPath] = useState('/')
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true)
@@ -32,14 +33,14 @@ export function EditorialWorkflow() {
       if (!response.ok) { setMessage('Sign in to view editorial change sets.'); return }
       const next = await response.json() as Data
       if (next.actor.roles.some((role) => role === 'owner' || role === 'approver')) {
-        const schedules = await fetch('/api/editorial/schedules/list', { cache: 'no-store' })
-        if (schedules.ok) { const body = await schedules.json() as { schedules: ScheduledPublication[]; totalDocs: number }; next.schedules = body.schedules; next.totalDocs = body.totalDocs }
+        const schedules = await fetch(`/api/editorial/schedules/list?page=${schedulePage}`, { cache: 'no-store' })
+        if (schedules.ok) { const body = await schedules.json() as { schedules: ScheduledPublication[]; totalDocs: number; page: number; totalPages: number }; next.schedules = body.schedules; next.totalDocs = body.totalDocs; next.schedulePage = body.page; next.scheduleTotalPages = body.totalPages }
       }
       setData(next); setSelected((current) => current ?? next.sets[0]?.id ?? null)
     } catch {
       setMessage('Unable to load editorial change sets. Try again.')
     } finally { if (!background) setLoading(false) }
-  }, [])
+  }, [schedulePage])
   useEffect(() => { void load() }, [load])
   const set = data?.sets.find((item) => item.id === selected)
   useEffect(() => { setIncludedChangeKeys(new Set(set?.changes?.map((change) => `${change.collection}:${change.id}`) ?? [])) }, [set?.id, set?.revision])
@@ -120,6 +121,6 @@ export function EditorialWorkflow() {
         {reviewer && <section aria-label="Review comments"><h3>Review comments</h3>{set.reviewComments?.map((item) => <p key={item.id}>{item.body}</p>)}<textarea value={comment} onChange={(event) => setComment(event.target.value)} aria-label="Add review comment" /><button disabled={acting} onClick={() => void addComment()}>Add comment</button></section>}
       </section>}
     </div>
-    {reviewer && <section aria-label="Scheduled publications"><h2>Scheduled publications</h2>{data?.schedules?.length ? <><ul>{data.schedules.map((schedule) => <li key={schedule.id}><strong>{schedule.state}</strong> — <time dateTime={schedule.scheduledFor}>{new Date(schedule.scheduledFor).toLocaleString()} (UTC {schedule.scheduledFor})</time>{schedule.snapshot?.contentHash && <p>Frozen snapshot: {schedule.snapshot.contentHash}</p>}{schedule.dispatchReason && <p>Dispatch status: {schedule.dispatchReason}</p>}{data.actor.roles.includes('owner') && schedule.state === 'scheduled' && <p><button disabled={acting} onClick={() => void scheduleAction('reschedule', schedule)}>Reschedule</button><button disabled={acting} onClick={() => void scheduleAction('cancel', schedule)}>Cancel schedule</button></p>}</li>)}</ul>{data.totalDocs && data.totalDocs > data.schedules.length && <p>Showing the next {data.schedules.length} of {data.totalDocs} scheduled publications.</p>}</> : <p>No scheduled publications.</p>}</section>}
+    {reviewer && <section aria-label="Scheduled publications"><h2>Scheduled publications</h2>{data?.schedules?.length ? <><ul>{data.schedules.map((schedule) => <li key={schedule.id}><strong>{schedule.state}</strong> — <time dateTime={schedule.scheduledFor}>{new Date(schedule.scheduledFor).toLocaleString()} (UTC {schedule.scheduledFor})</time>{schedule.snapshot?.contentHash && <p>Frozen snapshot: {schedule.snapshot.contentHash}</p>}{schedule.dispatchReason && <p>Dispatch status: {schedule.dispatchReason}</p>}{data.actor.roles.includes('owner') && schedule.state === 'scheduled' && <p><button disabled={acting} onClick={() => void scheduleAction('reschedule', schedule)}>Reschedule</button><button disabled={acting} onClick={() => void scheduleAction('cancel', schedule)}>Cancel schedule</button></p>}</li>)}</ul>{data.scheduleTotalPages && data.scheduleTotalPages > 1 && <nav aria-label="Scheduled publication pages"><button disabled={acting || schedulePage <= 1} onClick={() => setSchedulePage((page) => page - 1)}>Previous schedules</button><span> Page {data.schedulePage} of {data.scheduleTotalPages} </span><button disabled={acting || schedulePage >= data.scheduleTotalPages} onClick={() => setSchedulePage((page) => page + 1)}>Next schedules</button></nav>}</> : <p>No scheduled publications.</p>}</section>}
   </main>
 }
