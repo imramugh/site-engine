@@ -30,6 +30,8 @@ Payload requires GraphQL 16; **16.14.2** is pinned as the latest compatible stab
 
 ## Current limits
 
-This is a foundation increment, not a complete publishing product. Staff sign-in, authenticated draft preview, review/publish workflows, MCP, private media handling, and provider integrations are not available yet. The static edge denies `/admin`, `/preview`, and `/mcp` until authenticated implementations are ready. CMS collection authorization and draft guards are enforced independently; edits cannot publish the public site.
+This is a foundation increment, not a complete publishing product. Invite-only identity, server-side sessions, role checks, local Owner authenticator/recovery sign-in, content-tree validation, and a session authorization endpoint for private static previews are implemented. Microsoft and Google sign-in require operator configuration. Deployment routing is owned by the operator; the public static demonstration does not expose the CMS itself.
+
+Editorial comparison and review/publication workflows, the MCP service, private media handling, and business integrations remain under development. CMS collection authorization and draft guards are enforced independently; draft edits cannot publish the public site.
 
 User stories remain open until their complete acceptance criteria and deployment evidence pass. See [the backlog](docs/backlog/README.md), [CONTRIBUTING.md](CONTRIBUTING.md), [release policy](docs/release-policy.md), and [dependency policy](docs/dependency-policy.md). Engine licensing does not grant rights to third-party theme assets; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
