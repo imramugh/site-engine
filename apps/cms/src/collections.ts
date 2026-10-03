@@ -1,9 +1,10 @@
-import type { CollectionConfig } from 'payload'
+import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
+import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -16,8 +17,41 @@ const editorialAccess = {
 
 const title = { name: 'title', type: 'text' as const, required: true, maxLength: 180 }
 
-function contractError(result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }): void {
-  if (!result.success) throw new Error(result.error?.issues.map(({ path, message }) => `${path.join('.')}: ${message}`).join('; '))
+function contractError(result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }, req?: PayloadRequest, collection?: string): void {
+  if (result.success) return
+  const errors = result.error?.issues.map(({ path, message }) => ({ path: path.join('.'), message })) ?? []
+  if (req && collection) throw new ValidationError({ collection, errors, req })
+  throw new Error(errors.map(({ path, message }) => `${path}: ${message}`).join('; '))
+}
+
+function fieldErrors(issues: FieldIssue[], req: PayloadRequest, collection: string): void {
+  if (issues.length) throw new ValidationError({ collection, errors: issues.map(({ field, message }) => ({ path: field, message })), req })
+}
+
+function relationId(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && 'id' in value && typeof value.id === 'string') return value.id
+  return undefined
+}
+
+function relationIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(relationId).filter((id): id is string => Boolean(id)) : []
+}
+
+function treePage(value: Record<string, unknown>): TreePage {
+  return {
+    id: String(value.id),
+    sectionId: relationId(value.sectionId) ?? '',
+    parentId: relationId(value.parentId),
+    slug: String(value.slug ?? ''),
+    template: value.template as TreePage['template'],
+    blocks: (value.blocks ?? []) as TreePage['blocks'],
+    title: typeof value.title === 'string' ? value.title : undefined,
+  }
+}
+
+function treeSection(value: Record<string, unknown>): TreeSection {
+  return { id: String(value.id), allowedTemplates: (value.allowedTemplates ?? []) as TreeSection['allowedTemplates'] }
 }
 
 export const Users: CollectionConfig = {
@@ -117,27 +151,44 @@ export const Pages: CollectionConfig = {
   admin: { useAsTitle: 'title', defaultColumns: ['title', 'slug', 'parent', 'updatedAt'] },
   versions: { drafts: { autosave: true }, maxPerDoc: 50 },
   access: editorialAccess,
-  hooks: { beforeChange: [({ data, originalDoc }) => {
+  hooks: {
+    beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
     if (data._status === 'published' || data.status === 'published') throw new Error('Publishing is unavailable until the review workflow is implemented.')
+    const id = data.id ?? originalDoc?.id ?? randomUUID()
     contractError(PageSchema.safeParse({
-      id: data.id ?? originalDoc?.id ?? randomUUID(),
-      sectionId: data.sectionId,
-      parentId: data.parentId,
+      id,
+      sectionId: relationId(data.sectionId),
+      parentId: relationId(data.parentId),
       title: data.title,
       summary: data.summary,
       slug: data.slug,
       template: data.template,
       status: 'draft',
       blocks: data.blocks ?? [],
-      seoDescription: data.seoDescription,
-    }))
-    return { ...data, id: data.id ?? originalDoc?.id ?? randomUUID(), status: 'draft', _status: 'draft' }
-  }] },
+      seoDescription: typeof data.seoDescription === 'string' ? data.seoDescription : undefined,
+    }), req, 'pages')
+    const sectionId = relationId(data.sectionId)
+    const [sections, pages] = await Promise.all([
+      req.payload.find({ collection: 'sections', where: { id: { equals: sectionId } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+      req.payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
+    ])
+    const candidate = treePage({ ...data, id, sectionId, parentId: relationId(data.parentId) })
+    fieldErrors([
+      ...incompatibleBlocks(candidate.template, candidate.blocks),
+      ...validatePageTree(candidate, pages.docs.map((page) => treePage(page as unknown as Record<string, unknown>)), sections.docs[0] ? treeSection(sections.docs[0] as unknown as Record<string, unknown>) : undefined),
+    ], req, 'pages')
+      return { ...data, id, status: 'draft', _status: 'draft' }
+    }],
+    beforeDelete: [async ({ id, req }) => {
+      const children = await req.payload.find({ collection: 'pages', where: { parentId: { equals: id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
+      fieldErrors(children.totalDocs ? [{ field: 'parentId', message: 'Move or delete child pages before deleting this page.' }] : [], req, 'pages')
+    }],
+  },
   fields: [
     title,
     {
-      name: 'slug', type: 'text', required: true, unique: true,
+      name: 'slug', type: 'text', required: true,
       validate: (value: unknown) => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
         ? true : 'Use a lowercase URL segment, such as about-us.',
     },
@@ -153,11 +204,20 @@ export const Pages: CollectionConfig = {
 
 export const Sections: CollectionConfig = {
   slug: 'sections', admin: { useAsTitle: 'name' }, versions: { drafts: true }, access: editorialAccess,
-  hooks: { beforeChange: [({ data, originalDoc }) => {
+  hooks: {
+    beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
-    contractError(SectionSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name, slug: data.slug, allowedTemplates: data.allowedTemplates, pageIds: data.pageIds ?? [] }))
-    return { ...data, id: data.id ?? originalDoc?.id ?? randomUUID(), _status: 'draft' }
-  }] },
+    const id = data.id ?? originalDoc?.id ?? randomUUID()
+    contractError(SectionSchema.safeParse({ id, name: data.name, slug: data.slug, allowedTemplates: data.allowedTemplates, pageIds: relationIds(data.pageIds) }), req, 'sections')
+    const pages = await req.payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req })
+    fieldErrors(validateSectionTemplatePolicy(treeSection({ ...data, id }), pages.docs.map((page) => treePage(page as unknown as Record<string, unknown>))), req, 'sections')
+      return { ...data, id, _status: 'draft' }
+    }],
+    beforeDelete: [async ({ id, req }) => {
+      const pages = await req.payload.find({ collection: 'pages', where: { sectionId: { equals: id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
+      fieldErrors(pages.totalDocs ? [{ field: 'sectionId', message: 'Move or delete pages before deleting this section.' }] : [], req, 'sections')
+    }],
+  },
   fields: [{ name: 'name', type: 'text', required: true }, { name: 'summary', type: 'textarea', required: true, minLength: 24, maxLength: 300 }, { name: 'slug', type: 'text', required: true, unique: true }, { name: 'allowedTemplates', type: 'select', hasMany: true, required: true, options: ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job'] }, { name: 'pageIds', type: 'relationship', relationTo: 'pages', hasMany: true }],
 }
 

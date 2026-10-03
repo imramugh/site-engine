@@ -5,6 +5,7 @@ import * as migration_20261003_033949_invitation_token_binding from './20261003_
 import * as migration_20261003_034216_oidc_issuer_binding from './20261003_034216_oidc_issuer_binding';
 import * as migration_20261003_034628_emergency_totp_and_csrf from './20261003_034628_emergency_totp_and_csrf';
 import * as migration_20261003_042858_invitation_required_subject from './20261003_042858_invitation_required_subject';
+import * as migration_20261003_133520_scoped_page_slugs from './20261003_133520_scoped_page_slugs';
 
 export const migrations = [
   {
@@ -41,5 +42,10 @@ export const migrations = [
     up: migration_20261003_042858_invitation_required_subject.up,
     down: migration_20261003_042858_invitation_required_subject.down,
     name: '20261003_042858_invitation_required_subject',
+  },
+  {
+    up: migration_20261003_133520_scoped_page_slugs.up,
+    down: migration_20261003_133520_scoped_page_slugs.down,
+    name: '20261003_133520_scoped_page_slugs'
   },
 ];

@@ -44,6 +44,35 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   expect(body).toContain('owner.synthetic@example.test')
   expect(body).not.toContain('synthetic-browser-secret')
   expect(body).not.toContain('synthetic-browser-payload-secret-not-for-production')
+  const section = await page.evaluate(async () => {
+    const response = await fetch('/api/sections', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      name: 'Browser services',
+      summary: 'This synthetic section proves browser callers receive field-specific content tree validation errors.',
+      slug: 'browser-services',
+      allowedTemplates: ['landing', 'pillar', 'service'],
+      }),
+    })
+    return { status: response.status, body: await response.json() as { doc: { id: string } } }
+  })
+  expect(section.status).toBe(201)
+  const invalidPage = await page.evaluate(async (sectionID) => {
+    const response = await fetch('/api/pages', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      title: 'Invalid browser article',
+      summary: 'This synthetic browser request chooses a template the selected section does not permit.',
+      slug: 'invalid-browser-article',
+      sectionId: sectionID,
+      template: 'article',
+      blocks: [],
+      }),
+    })
+    return { status: response.status, body: await response.json() as { errors: Array<{ data?: { errors?: Array<{ path: string; message: string }> } }> } }
+  }, section.body.doc.id)
+  expect(invalidPage.status).toBe(400)
+  expect(invalidPage.body.errors[0]?.data?.errors).toEqual(expect.arrayContaining([
+    expect.objectContaining({ path: 'template', message: expect.stringContaining('not allowed') }),
+  ]))
 })
 
 test('an editor can read only its own profile and anonymous REST stays denied', async ({ browser, page }) => {
