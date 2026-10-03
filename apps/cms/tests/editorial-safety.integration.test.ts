@@ -27,6 +27,16 @@ async function setFor(actorID: string) {
 }
 
 describe('ENG-008 discard, stale changes and rollback safety', () => {
+  it('keeps an unset section landing relation stable after persistence and refresh', async () => {
+    const { editor } = await fixture('section-empty-landing')
+    await payload.create({ collection: 'sections', data: { name: 'No landing selected', slug: 'no-landing-selected', allowedTemplates: ['standard'] }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    const change = (set.changes as Array<{ after: Record<string, unknown> }>)[0]!
+    expect(Object.hasOwn(change.after, 'landingPageId')).toBe(false)
+    await payload.update({ collection: 'change-sets', id: set.id, data: { createdAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'refresh' }))
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+  })
   it('restores the original draft and clears optional fields added by the editor', async () => {
     const { editor, page } = await fixture('discard-baseline')
     await payload.update({ collection: 'pages', id: page.id, data: { title: 'Edited', seoDescription: 'An optional description that must disappear on discard.', noindex: true }, draft: true, user: editor, overrideAccess: false })

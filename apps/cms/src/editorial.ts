@@ -56,7 +56,7 @@ function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (!document) return null
   if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0])
-  return Object.fromEntries(mutableFields[collection].flatMap((field) => {
+  return Object.fromEntries(mutableFields[collection].flatMap((field): [string, unknown][] => {
     const value = document[field]
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
     // Payload materializes an omitted optional section summary as null while
@@ -76,7 +76,10 @@ export function snapshot(collection: CapturedCollection, document: Record<string
       const parentID = idOf(value)
       return parentID ? [[field, parentID]] : []
     }
-    if (field === 'landingPageId') return [[field, idOf(value) ?? undefined]]
+    if (field === 'landingPageId') {
+      const landingID = idOf(value)
+      return landingID ? [[field, landingID]] : []
+    }
     if (field === 'pageIds') return [[field, Array.isArray(value) ? value.map((item) => idOf(item) ?? item) : []]]
     return [[field, value]]
   }))
