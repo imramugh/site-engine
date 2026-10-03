@@ -32,39 +32,6 @@ export const blockCatalog = blockTypes.map((type) => ({
 }))
 
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
-const mediaID = 'a0000000-0000-4000-8000-000000000001'
-const posterID = 'a0000000-0000-4000-8000-000000000002'
-const captionsID = 'a0000000-0000-4000-8000-000000000003'
-const relatedPageID = 'a0000000-0000-4000-8000-000000000004'
-const link = { label: 'Learn more', href: '/example' }
-
-/** Server-owned neutral examples. Editors select block kinds; they never submit
- * arbitrary JSON recipes through this convenience workflow. */
-export function fixtureBlock(type: Block['type']): Block {
-  const id = randomUUID()
-  const base = { id, type, hidden: false, appearance }
-  const value: Record<Block['type'], Record<string, unknown>> = {
-    hero: { ...base, eyebrow: 'Example', heading: 'Example heading', body: 'Neutral example body text.', cta: link },
-    incidentBar: { ...base, message: 'Example status message.', cta: link },
-    pillarGrid: { ...base, heading: 'Example pillars', items: [{ title: 'Example item', body: 'Neutral supporting text.', href: '/example' }] },
-    featureGrid: { ...base, heading: 'Example features', items: [{ title: 'Example item', body: 'Neutral supporting text.' }] },
-    splitList: { ...base, heading: 'Example list', items: [{ title: 'Example item', body: 'Neutral supporting text.' }] },
-    chipList: { ...base, heading: 'Example topics', chips: ['Example'] },
-    testimonials: { ...base, items: [{ quote: 'Example permission-confirmed quote.', attribution: 'Example person', permissionConfirmed: true }] },
-    faq: { ...base, heading: 'Example questions', items: [{ question: 'What is this?', answer: 'A neutral example answer.' }] },
-    callout: { ...base, heading: 'Example callout', body: 'Neutral supporting text.', cta: link },
-    relatedServices: { ...base, heading: 'Related examples', pageIds: [relatedPageID] },
-    cta: { ...base, heading: 'Example action', body: 'Neutral supporting text.', cta: link },
-    richText: { ...base, body: 'Neutral example rich text.' },
-    contact: { ...base, heading: 'Example contact', body: 'Neutral supporting text.', inquiryForm: false },
-    media: { ...base, mediaId: mediaID, caption: 'Example media caption.' },
-    imageText: { ...base, heading: 'Example image and text', body: 'Neutral supporting text.', mediaId: mediaID },
-    gallery: { ...base, mediaIds: [mediaID] },
-    logoStrip: { ...base, mediaIds: [mediaID] },
-    video: { ...base, mediaId: mediaID, posterMediaId: posterID, captionsMediaId: captionsID, transcript: 'Neutral example transcript.' },
-  }
-  return BlockSchema.parse(value[type])
-}
 
 export function recipeBlocks(template: string, selected: unknown): Block[] {
   const parsedTemplate = TemplateSchema.parse(template)
