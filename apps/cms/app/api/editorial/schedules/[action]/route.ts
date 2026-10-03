@@ -43,6 +43,18 @@ export async function GET(request: Request, context: { params: Promise<{ action:
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
   if (!hasRole(authenticated.user as never, ['owner', 'approver'])) return Response.json({ error: 'Reviewer role required.' }, { status: 403, headers: noStore })
-  const schedules = await payload.find({ collection: 'scheduled-publications', sort: 'scheduledFor', depth: 1, overrideAccess: true })
-  return Response.json({ schedules: schedules.docs }, { headers: noStore })
+  const schedules = await payload.find({ collection: 'scheduled-publications', sort: 'scheduledFor', depth: 1, limit: 25, overrideAccess: true })
+  return Response.json({
+    schedules: schedules.docs.map((schedule) => ({
+      id: schedule.id,
+      changeSet: schedule.changeSet,
+      scheduledFor: schedule.scheduledFor,
+      state: schedule.state,
+      dispatchReason: schedule.dispatchReason,
+      snapshot: schedule.snapshot && typeof schedule.snapshot === 'object' ? { contentHash: (schedule.snapshot as { contentHash?: unknown }).contentHash } : undefined,
+    })),
+    page: schedules.page,
+    totalPages: schedules.totalPages,
+    totalDocs: schedules.totalDocs,
+  }, { headers: noStore })
 }
