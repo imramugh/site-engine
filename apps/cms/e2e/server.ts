@@ -81,6 +81,7 @@ process.env.OIDC_GOOGLE_ISSUER_URL = issuerOrigin
 process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
 process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
 process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'

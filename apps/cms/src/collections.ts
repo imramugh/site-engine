@@ -102,7 +102,9 @@ export const Users: CollectionConfig = {
 
 export const Invitations: CollectionConfig = {
   slug: 'invitations', admin: { useAsTitle: 'email', group: 'Administration' },
-  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: freshStaff(['owner']) },
+  // The service route is the sole writer: direct collection operations cannot
+  // spoof health, credential fingerprints, or audit history.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'email', type: 'email', required: true, unique: true },
     { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
