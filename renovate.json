@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "dependencyDashboard": true,
+  "packageRules": [
+    {
+      "description": "Group routine non-major dependency updates",
+      "matchUpdateTypes": ["patch", "minor", "digest"],
+      "groupName": "routine dependency updates",
+      "groupSlug": "routine-dependencies"
+    },
+    {
+      "description": "Keep major updates reviewable by package",
+      "matchUpdateTypes": ["major"],
+      "groupName": null
+    }
+  ]
+}
+

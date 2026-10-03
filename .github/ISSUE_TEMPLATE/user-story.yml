@@ -1,0 +1,61 @@
+name: User story
+description: Propose a user-facing outcome with testable acceptance criteria.
+title: "story: "
+labels: ["type:story"]
+body:
+  - type: markdown
+    attributes:
+      value: "Describe the outcome before proposing an implementation."
+  - type: textarea
+    id: user
+    attributes:
+      label: User or actor
+      description: Who needs this outcome?
+      placeholder: "As a ..."
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should the user be able to accomplish and why?
+      placeholder: "I want ... so that ..."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: List observable, testable criteria.
+      placeholder: "- Given ... when ... then ..."
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and risks
+      description: Include accessibility, privacy, security, content, or operational constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: test_evidence
+    attributes:
+      label: Expected test evidence
+      description: Name relevant unit, integration, and browser evidence; include story IDs for browser coverage.
+    validations:
+      required: true
+
+  - type: textarea
+    id: e2e_scenarios
+    attributes:
+      label: End-to-end scenarios
+      description: Give explicit Given/When/Then journeys, including failure and permission cases. Identify the expected browser/API coverage and fixtures.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and release evidence
+      description: Link prerequisite issues or say none. For deployable work include the target environment and required post-deployment checks.
+    validations:
+      required: true

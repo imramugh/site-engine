@@ -1,0 +1,15 @@
+.git
+.github
+.codex
+node_modules
+dist
+.next
+.astro
+coverage
+playwright-report
+test-results
+.env
+.env.*
+*.log
+.DS_Store
+
