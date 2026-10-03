@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:http';
-import { copyFile, lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -68,6 +68,21 @@ async function writeSnapshot(root: string, snapshot: SiteSnapshot, filename = 's
   const input = join(root, filename);
   await writeFile(input, JSON.stringify(snapshot));
   return input;
+}
+
+async function customThemeComponents(root: string): Promise<string> {
+  const components = await mkdtemp(join(root, 'custom-theme-components-'));
+  await writeFile(join(components, 'theme.css'), 'body { outline: 1px solid #123456; }\n');
+  await writeFile(join(components, 'Layout.astro'), `---
+import './theme.css';
+const { title, description } = Astro.props;
+---
+<!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main></body></html>\n`);
+  await writeFile(join(components, 'BlockRenderer.astro'), `---
+const { block } = Astro.props;
+---
+<section data-custom-theme-block={block.type}><h2>{block.heading ?? block.type}</h2></section>\n`);
+  return components;
 }
 
 async function artifactContents(directory: string): Promise<string> {
@@ -158,6 +173,36 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"Article"');
     expect(article).toContain('"@type":"BreadcrumbList"');
     expect(article).toContain('"@type":"ProfessionalService"');
+  });
+
+  it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {
+    const customComponents = await customThemeComponents(root);
+    const custom = fixture('Custom theme host'); const defaultSnapshot = fixture('Default theme host');
+    const section = custom.settings.sections[0]!;
+    const jobID = '12121212-1212-4212-8212-121212121212';
+    section.allowedTemplates.push('job'); section.pageIds.push(jobID);
+    custom.pages.push({ id: jobID, sectionId: section.id, parentId: custom.pages.find((page) => page.slug === 'docs')!.id, title: 'Custom theme job', summary: 'A job rendered by the generic host.', slug: 'custom-theme-job', template: 'job', status: 'published', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' } } });
+    const [customBuild, defaultBuild] = await Promise.all([
+      renderer.buildSnapshot({ input: await writeSnapshot(root, custom, 'custom-theme.json'), publicOrigin: PUBLIC_ORIGIN, basePath: '/', outputRoot: root, themeComponentsRoot: customComponents }),
+      renderer.buildSnapshot({ input: await writeSnapshot(root, defaultSnapshot, 'default-theme.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
+    ]);
+    expect(await readFile(join(customBuild.output, 'index.html'), 'utf8')).toContain('data-custom-theme-layout="true"');
+    expect(await readFile(join(defaultBuild.output, 'index.html'), 'utf8')).not.toContain('data-custom-theme-layout="true"');
+    expect(await readFile(join(customBuild.output, 'search-index.json'), 'utf8')).toContain('Custom theme host home');
+    expect(await readFile(join(customBuild.output, 'machine-readable.json'), 'utf8')).toContain('Custom theme host home');
+    expect(await readFile(join(customBuild.output, 'sitemap.xml'), 'utf8')).toContain('custom-theme-job');
+    expect(await readFile(join(customBuild.output, 'docs/custom-theme-job/index.html'), 'utf8')).toContain('data-application-form');
+  }, 180_000);
+
+  it('rejects component roots that are non-absolute, symbolic, or missing the required renderer contract', async () => {
+    const input = await writeSnapshot(root, fixture('Unsafe components'), 'unsafe-components.json');
+    const components = await customThemeComponents(root);
+    const missing = join(root, 'missing-components'); await mkdir(missing); await writeFile(join(missing, 'Layout.astro'), '<slot />');
+    const linked = join(root, 'linked-components'); await symlink(components, linked, 'dir');
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: 'relative-components' })).rejects.toThrow('absolute normalized');
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: `${components}/../${components.split('/').at(-1)}` })).rejects.toThrow('absolute normalized');
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: linked })).rejects.toThrow('real directory');
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: missing })).rejects.toThrow('missing required BlockRenderer.astro');
   });
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {

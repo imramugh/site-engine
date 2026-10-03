@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { SiteSnapshotSchema } from '@site-engine/contract';
@@ -63,7 +63,41 @@ function terminate(child, signal) {
   if (child.exitCode !== null) return;
   try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { child.kill(signal); }
 }
-async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal }) {
+const requiredThemeComponents = ['Layout.astro', 'BlockRenderer.astro'];
+
+async function trustedThemeComponentsRoot(themeComponentsRoot) {
+  const starterRoot = dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro'));
+  if (themeComponentsRoot === undefined) return starterRoot;
+  if (typeof themeComponentsRoot !== 'string' || !isAbsolute(themeComponentsRoot) || themeComponentsRoot.split(/[\\/]/).includes('..') || resolve(themeComponentsRoot) !== themeComponentsRoot) throw new Error('themeComponentsRoot must be an absolute normalized directory.');
+  const info = await lstat(themeComponentsRoot).catch(() => undefined);
+  if (!info?.isDirectory() || info.isSymbolicLink()) throw new Error('themeComponentsRoot must be a real directory.');
+  return themeComponentsRoot;
+}
+
+async function copyThemeComponents(source, destination) {
+  const info = await lstat(source).catch(() => undefined);
+  if (!info?.isDirectory() || info.isSymbolicLink()) throw new Error('Theme component root must be a real directory.');
+  for (const component of requiredThemeComponents) {
+    const componentInfo = await lstat(join(source, component)).catch(() => undefined);
+    if (!componentInfo?.isFile() || componentInfo.isSymbolicLink()) throw new Error(`Theme component root is missing required ${component}.`);
+  }
+  await mkdir(destination, { recursive: false });
+  async function copyDirectory(from, to) {
+    const entries = await readdir(from, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === '.' || entry.name === '..' || entry.name.includes(sep)) throw new Error('Theme component path is unsafe.');
+      const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name);
+      const entryInfo = await lstat(sourcePath);
+      if (entryInfo.isSymbolicLink()) throw new Error('Theme component root must not contain symbolic links.');
+      if (entryInfo.isDirectory()) { await mkdir(destinationPath); await copyDirectory(sourcePath, destinationPath); }
+      else if (entryInfo.isFile()) await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
+      else throw new Error('Theme component root contains an unsupported entry.');
+    }
+  }
+  await copyDirectory(source, destination);
+}
+
+async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot }) {
   // Astro writes prerender intermediates to <root>/.astro independently of its
   // cacheDir. Separate source roots prevent simultaneous jobs deleting each
   // other's intermediates. Copy only reviewed renderer inputs, never .env/data.
@@ -74,7 +108,7 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     await cp(new URL(name, sourceRoot), join(renderRoot, name), { recursive: true });
   }
   const themeComponents = join(renderRoot, 'theme-components');
-  await cp(dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro')), themeComponents, { recursive: true });
+  await copyThemeComponents(await trustedThemeComponentsRoot(themeComponentsRoot), themeComponents);
   await symlink(fileURLToPath(new URL('node_modules', sourceRoot)), join(renderRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
@@ -90,8 +124,8 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal }} options */
-export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal }) {
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string }} options */
+export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
@@ -105,7 +139,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   // validated artifact is renamed into outputRoot under its public snapshot name.
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
-    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal });
+    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot });
     await copyReferencedMedia(snapshot, staged);
     await writeIndexNowVerificationFile({ output: staged });
     // This is consumed by the edge deployment adapter only after approval. It
