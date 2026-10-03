@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import { canonical, createPreviewAPI, hash, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
 import { buildSnapshot } from '../scripts/build-snapshot.mjs';
+import { parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const pins = { engineVersion: '1.0.0', themeVersion: '1.0.0', contractVersion: '1.0.0' };
 const secret = 'synthetic-preview-worker-token-32-characters';
+const themeManifest = { name: 'synthetic-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } };
 let root: string;
 let servers: Server[];
 beforeEach(async () => {
@@ -33,6 +35,13 @@ function claim() {
   return { job: { id, leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live, proposed, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins };
 }
 
+function themedClaim() {
+  const input = claim(); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }).get(themeManifest.name)!.manifestDigest };
+  input.live.settings.theme = selection;
+  input.proposed.settings.theme = selection;
+  return { input, selection, registry: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }) };
+}
+
 const options = () => ({ artifactRoot: root, publicOrigin: 'https://example.test', versionPins: pins, signal: undefined });
 
 describe('durable preview rendering worker', () => {
@@ -53,6 +62,7 @@ describe('durable preview rendering worker', () => {
     const html = await readFile(join(root, id, 'proposed', 'index.html'), 'utf8');
     expect(html).toContain('Proposed worker heading');
     expect(html).toContain(`/preview/changes/${id}/proposed/`);
+    expect(JSON.parse(await readFile(join(root, id, 'proposed', 'search-index.json'), 'utf8'))).toEqual({ version: 1, documents: [] });
     expect(await readFile(join(root, id, 'live', 'index.html'), 'utf8')).not.toContain('Proposed worker heading');
     const neverRender = vi.fn(async () => { throw new Error('A verified retry must not rebuild.'); });
     expect(await runPreviewOnce({ ...options(), api, render: neverRender })).toBe(true);
@@ -64,6 +74,27 @@ describe('durable preview rendering worker', () => {
     await expect(runPreviewOnce({ ...options(), api, render: neverRender })).rejects.toThrow('INVALID_ARTIFACT');
     expect(calls.filter(call => call.action === 'complete')).toHaveLength(2);
   }, 60_000);
+
+  it('passes the exact frozen input, preview base path, pins, and origin to a configured renderer', async () => {
+    const { input, selection, registry } = themedClaim(); const seen: Array<Record<string, unknown>> = [];
+    const render = async (rendererOptions: Record<string, unknown>) => { seen.push({ ...rendererOptions, frozen: await readFile(String(rendererOptions.input), 'utf8') }); return buildSnapshot(rendererOptions as Parameters<typeof buildSnapshot>[0]); };
+    const api = async (action: string) => action === 'claim' ? input : { ok: true };
+    await expect(runPreviewOnce({ ...options(), api, registry, render })).resolves.toBe(true);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ publicOrigin: 'https://example.test', basePath: `/preview/changes/${id}/live/`, versionPins: pins });
+    expect(seen[1]).toMatchObject({ publicOrigin: 'https://example.test', basePath: `/preview/changes/${id}/proposed/`, versionPins: pins });
+    expect(seen.map(item => item.themeSelection)).toEqual([selection, selection]);
+    expect(seen[0]!.frozen).toBe(canonical(input.live));
+    expect(seen[1]!.frozen).toBe(canonical(input.proposed));
+  }, 60_000);
+
+  it('rejects a frozen theme selection whose digest does not match the installed registry before rendering', async () => {
+    const { input, registry } = themedClaim();
+    input.proposed.settings.theme!.manifestDigest = '0'.repeat(64);
+    const render = vi.fn(async () => { throw new Error('renderer must not run'); });
+    await expect(runPreviewOnce({ ...options(), api: async (action: string) => action === 'claim' ? input : { ok: true }, registry, render })).rejects.toThrow(/exactly as reviewed/);
+    expect(render).not.toHaveBeenCalled();
+  });
 
   it('cancels a running render on lease loss, cleans scratch files, and never completes or fails an old lease', async () => {
     const calls: string[] = [];

@@ -1,13 +1,14 @@
 import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
+import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
 import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
+import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
@@ -392,14 +393,15 @@ export const NotificationOutbox: CollectionConfig = {
 
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
-  fields: [{ name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'closed'] }],
+  hooks: { beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data] },
+  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'closed'] }],
 }
 
 export const ChangeSets: CollectionConfig = {
   slug: 'change-sets', admin: { useAsTitle: 'name', group: 'Editorial' },
   access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
   hooks: {
-    beforeChange: [({ data, originalDoc, req }) => {
+    beforeChange: [async ({ data, originalDoc, req }) => {
       if (!req.context.editorialInternal) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'state', message: 'Change sets are changed through the editorial workflow.' }], req })
       contractError(ChangeSetSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name ?? originalDoc?.name, state: data.state ?? originalDoc?.state ?? 'open', revision: data.revision ?? originalDoc?.revision ?? 0 }), req, 'change-sets')
       return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID() }
@@ -510,4 +512,20 @@ export const PublishedReleases: CollectionConfig = {
     { name: 'healthEvidence', type: 'json', required: true, admin: { readOnly: true } },
     { name: 'artifact', type: 'json', required: true, admin: { readOnly: true } },
   ],
+}
+
+export const ThemeSettings: CollectionConfig = {
+  slug: 'theme-settings', admin: { useAsTitle: 'key', group: 'Editorial' },
+  access: { create: staff(['owner']), read: staff(editorialRoles), update: staff(['owner']), delete: () => false },
+  hooks: {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      if (operation === 'update' && originalDoc && data.key !== undefined && data.key !== originalDoc.key) throw new Error('Theme settings key is immutable.')
+      const selection = data.selection ?? originalDoc?.selection
+      contractError(ThemeSelectionSchema.safeParse(selection), req, 'theme-settings')
+      verifyInstalledThemeSelection(selection, await loadThemeRegistry())
+      return { ...originalDoc, ...data, key: originalDoc?.key ?? 'active' }
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'theme-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
+  },
+  fields: [{ name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' }, { name: 'selection', type: 'json', required: true }, { name: 'settings', type: 'json', defaultValue: {} }],
 }

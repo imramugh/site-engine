@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole } from './access'
-import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable } from './identity'
+import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable, SESSION_COOKIE } from './identity'
 import { markStaleIfNeeded, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
 import { validateRedirectSet } from './redirect-lifecycle'
 import { deriveRoutes } from '@site-engine/engine'
@@ -14,6 +14,7 @@ type Preview = { status?: string; revision?: number; changeHash?: string; includ
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[] }
 export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
 const MAX_PUBLISH_ATTEMPTS = 3
+const MAX_PUBLISH_WORKER_BODY_BYTES = 16 * 1024
 
 function stable(value: unknown): string { if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`; if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => String(a).localeCompare(String(b))).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}`; return JSON.stringify(value) }
 export const canonicalHash = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex')
@@ -22,6 +23,11 @@ const idOf = (value: unknown) => typeof value === 'string' ? value : value && ty
 const keysEqual = (left: readonly string[], right: readonly string[]) => stable([...left].sort()) === stable([...right].sort())
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 const cleanErrorCode = (value: string) => /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : 'PUBLISH_FAILED'
+function exactQualityProof(quality: unknown, expected: { revision: number; changeHash: string; contentHash: string; includedChangeKeys: readonly string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID?: string }): boolean {
+  const proof = quality && typeof quality === 'object' ? (quality as { proof?: Record<string, unknown> }).proof : undefined
+  const report = proof?.report as { publishable?: unknown } | undefined
+  return Boolean(proof && report?.publishable === true && proof.revision === expected.revision && proof.changeHash === expected.changeHash && proof.contentHash === expected.contentHash && proof.baselineSnapshotID === expected.baselineSnapshotID && proof.baselineSequence === expected.baselineSequence && (expected.previewJobID === undefined || proof.previewJobID === expected.previewJobID) && Array.isArray(proof.includedChangeKeys) && keysEqual(proof.includedChangeKeys.filter((value): value is string => typeof value === 'string'), expected.includedChangeKeys))
+}
 
 async function nextOutboxSequence(payload: Payload, req: PayloadRequest): Promise<number> {
   const newest = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true, req })
@@ -82,6 +88,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
   const redirects = new Map(base.redirects.map((redirect) => [redirect.from, structuredClone(redirect)]))
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
+  let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
@@ -102,14 +109,24 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
         redirects.set(String(merged.from), merged as SiteSnapshot['redirects'][number])
       }
     }
+    if (change.collection === 'theme-settings') {
+      // A site can already retain namespaced settings before the singleton
+      // theme-settings record is first created. That creation supplies the
+      // selection while preserving those baseline namespaces.
+      const merged = change.before === null
+        ? { selection: selectedTheme, settings: themeSettings, ...structuredClone(change.after) }
+        : mergeCapturedChange({ selection: selectedTheme, settings: themeSettings }, change)
+      if (!merged?.selection) throw new Error('Theme selection cannot be removed.')
+      selectedTheme = merged.selection as SiteSnapshot['settings']['theme']; Object.assign(themeSettings, merged.settings as Record<string, unknown>)
+    }
     if (change.collection === 'assets') {
       const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
       if (merged === null) media.delete(change.id)
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
   }
-  for (const section of sections.values()) section.pageIds = [...pages.values()].filter((page) => page.sectionId === section.id).map((page) => page.id).sort()
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  // Keep editor-maintained navigation distinct from derived section membership.
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))
@@ -143,7 +160,7 @@ async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: A
   if (!actor?.id) throw new Error('Reviewer role required.')
   const user = await payload.findByID({ collection: 'users', id: actor.id, overrideAccess: true, req }) as unknown as Actor
   if (!hasRole(user, ['owner', 'approver'])) throw new Error('Reviewer role required.')
-  const token = readCookie(req.headers, cookieName('__Host-site_engine_session'))
+  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
   if (!token) throw new Error('Fresh authentication is required.')
   const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
   const session = sessions.docs[0]
@@ -151,7 +168,7 @@ async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: A
   return user
 }
 
-export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; versions: Versions; initialBaseline?: SiteSnapshot }) {
+export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, previewContentHash, versions, initialBaseline } = input
   requireTransaction(req, 'Approval')
   const reviewer = await canonicalReviewer(payload, req, actor)
@@ -170,8 +187,6 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   const changes = Array.isArray(set.changes) ? set.changes as Change[] : []
   if (set.state !== 'submitted') throw new Error(`Cannot approve a ${String(set.state)} change set.`)
   if (Number(set.revision) !== expectedRevision || changeSetHash(changes) !== expectedChangeHash) throw new Error('The reviewed revision no longer matches the submitted change set.')
-  const checks = (set.quality as { checks?: { status?: string }[] } | undefined)?.checks
-  if (!checks?.length || checks.some((check) => check.status !== 'passed')) throw new Error('Change-set quality checks must pass before approval.')
   const known = new Set(changes.map((change) => `${change.collection}:${change.id}`))
   if (includedChangeKeys.some((key) => !known.has(key))) throw new Error('Approval must explicitly include unique captured changes only.')
   const baseline = await approvalBaseline(payload, req, initialBaseline)
@@ -180,6 +195,7 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   const contentHash = canonicalHash(candidate)
   const preview = set.preview as Preview | undefined
   if (preview?.status !== 'ready' || preview.revision !== expectedRevision || preview.changeHash !== expectedChangeHash || preview.contentHash !== contentHash || preview.contentHash !== previewContentHash || preview.baselineSnapshotID !== baseline.snapshotID || preview.baselineSequence !== baseline.sequence || !Array.isArray(preview.includedChangeKeys) || !keysEqual(preview.includedChangeKeys, includedChangeKeys)) throw new Error('A ready private preview for this exact candidate with its exact baseline is required before approval.')
+  if (!exactQualityProof(set.quality, { revision: expectedRevision, changeHash: expectedChangeHash, contentHash, includedChangeKeys, baselineSnapshotID: baseline.snapshotID, baselineSequence: baseline.sequence, previewJobID: input.previewJobID })) throw new Error('A passing deterministic quality proof for this exact candidate is required before approval.')
   const excluded = changes.filter((change) => !includedChangeKeys.includes(`${change.collection}:${change.id}`))
   if (excluded.length) await payload.create({ collection: 'change-sets', data: { name: `${String(set.name)} — remaining changes`, actor: idOf(set.actor), state: 'open', revision: 0, changes: excluded }, overrideAccess: true, req, context: { editorialInternal: true } })
   const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence }, overrideAccess: true, req, context: { editorialInternal: true } })
@@ -259,4 +275,22 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   if (!changeSetID) throw new Error('Publish job is missing its change set.')
   await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'published' }, overrideAccess: true, req, context: { editorialInternal: true } })
   return release
+}
+
+/** Shared-secret guard for private publish workers; browser sessions never authorize it. */
+export function publishWorkerAuthorized(request: Request): boolean {
+  const secret = process.env.PUBLISH_WORKER_TOKEN
+  const authorization = request.headers.get('authorization')
+  if (!secret || Buffer.byteLength(secret) < 32 || !authorization?.startsWith('Bearer ')) return false
+  const supplied = Buffer.from(authorization.slice('Bearer '.length)); const expected = Buffer.from(secret)
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected)
+}
+
+export async function boundedPublishWorkerJSON(request: Request): Promise<Record<string, unknown>> {
+  if (!request.body) return {}
+  const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0
+  try { while (true) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength; if (size > MAX_PUBLISH_WORKER_BODY_BYTES) { await reader.cancel(); throw new Error('Request body too large.') } chunks.push(part.value) } } finally { reader.releaseLock() }
+  const value = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)))
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Request body must be an object.')
+  return value as Record<string, unknown>
 }

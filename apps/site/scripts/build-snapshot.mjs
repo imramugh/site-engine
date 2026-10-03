@@ -1,9 +1,12 @@
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { SiteSnapshotSchema } from '@site-engine/contract';
+import { deriveRoutes } from '@site-engine/engine';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
 import { writeIndexNowVerificationFile } from './indexnow.mjs';
 import { nginxRedirectInclude } from './redirect-artifact.mjs';
@@ -23,7 +26,7 @@ function referencedMedia(snapshot) {
       else collect(item);
     }
   };
-  snapshot.pages.filter((page) => page.status === 'published').forEach((page) => collect(page.blocks.filter((block) => !block.hidden)));
+  deriveRoutes(snapshot, snapshot.settings.homepageId).routes.forEach(({ page }) => collect(page.blocks.filter((block) => !block.hidden)));
   if (snapshot.settings.logo) ids.add(snapshot.settings.logo.id);
   return ids;
 }
@@ -60,10 +63,23 @@ function terminate(child, signal) {
   if (child.exitCode !== null) return;
   try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { child.kill(signal); }
 }
-function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal }) {
+async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal }) {
+  // Astro writes prerender intermediates to <root>/.astro independently of its
+  // cacheDir. Separate source roots prevent simultaneous jobs deleting each
+  // other's intermediates. Copy only reviewed renderer inputs, never .env/data.
+  const sourceRoot = new URL('..', import.meta.url);
+  const renderRoot = join(staged, '..', 'renderer');
+  await mkdir(renderRoot);
+  for (const name of ['src', 'public', 'astro.config.mjs', 'site-config.mjs', 'tsconfig.json', 'package.json']) {
+    await cp(new URL(name, sourceRoot), join(renderRoot, name), { recursive: true });
+  }
+  const themeComponents = join(renderRoot, 'theme-components');
+  await cp(dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro')), themeComponents, { recursive: true });
+  await symlink(fileURLToPath(new URL('node_modules', sourceRoot)), join(renderRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
     let timedOut = false; let aborted = false; let forceTimer;
-    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: new URL('..', import.meta.url), detached: process.platform !== 'win32', env: { ...process.env, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
+    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...process.env, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
     const stop = () => { terminate(child, 'SIGTERM'); forceTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 5_000); };
     const abort = () => { aborted = true; stop(); };
     const cleanup = () => { clearTimeout(timeout); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort); };
@@ -95,6 +111,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
     // This is consumed by the edge deployment adapter only after approval. It
     // contains no draft CMS data and is deterministic for a snapshot hash.
     await writeFile(join(staged, 'redirects.nginx.conf'), nginxRedirectInclude(snapshot), { mode: 0o644 });
+    await writeFile(join(staged, 'redirects.json'), JSON.stringify(snapshot.redirects.map(({ from, to, status }) => ({ from, to, status }))));
     const manifest = { snapshotContentHash: sha(stable(snapshot)), sourceVersions: { contractVersion: snapshot.settings.contractVersion, themeVersion, engineVersion }, files: Object.fromEntries(await files(staged)) };
     await writeFile(join(staged, 'snapshot-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     await rename(staged, output);

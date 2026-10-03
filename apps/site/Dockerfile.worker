@@ -13,7 +13,7 @@ RUN pnpm install --frozen-lockfile --filter @site-engine/site... \
   && pnpm --filter @site-engine/theme-starter build \
   && mkdir -p /workspace/apps/site/.astro /artifacts \
   && chown -R 10001:10001 /workspace/apps/site/.astro /artifacts
-ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 PREVIEW_ARTIFACT_ROOT=/artifacts
+ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 PREVIEW_ARTIFACT_ROOT=/artifacts PUBLISH_ROLE=preview
 USER 10001:10001
 WORKDIR /workspace/apps/site
-CMD ["node", "scripts/run-preview-worker.mjs"]
+CMD ["sh", "-c", "if [ \"$PUBLISH_ROLE\" = publish ]; then exec node scripts/run-publish-worker.mjs; fi; exec node scripts/run-preview-worker.mjs"]

@@ -10,7 +10,9 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
+import { canonicalHash } from '../src/publishing.js'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
+import { mintResumeLink } from '../src/resume-links.js'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
@@ -26,6 +28,17 @@ const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const leadOwnerEmail = 'lead-owner.synthetic@example.test'
+const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
+const themeOwnerEmail = 'theme-owner.synthetic@example.test'
+const themeOwnerRecoveryCode = 'synthetic-theme-owner-code-08'
+const applicationJobID = '66666666-6666-4666-8666-666666666666'
+const applicationSectionID = '77777777-7777-4777-8777-777777777777'
+const applicationChangeSetID = '88888888-8888-4888-8888-888888888888'
+const draftApplicationJobID = '99999999-9999-4999-8999-999999999999'
+const expiredApplicationJobID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
+const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -36,15 +49,29 @@ const serverKey = join(temporaryDirectory, 'synthetic-issuer.key')
 const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
+const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
+const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
-writeFileSync(initialPreviewBaseline, JSON.stringify(neutralFixture))
+writeFileSync(themeRegistry, JSON.stringify({ themes: [{ manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }))
+const initialBaseline = structuredClone(neutralFixture)
+initialBaseline.settings.sections.push({ id: applicationSectionID, name: 'Careers', slug: 'careers', allowedTemplates: ['listing', 'job'], pageIds: [applicationJobID, draftApplicationJobID, expiredApplicationJobID] })
+initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSectionID, title: 'Synthetic Application Engineer', summary: 'A published synthetic role used only to exercise the private application HTTP flow.', slug: 'synthetic-application-engineer', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2030-01-01T00:00:00.000Z' } })
+initialBaseline.pages.push({ id: draftApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Draft Role', summary: 'A draft synthetic role which must not accept applications.', slug: 'synthetic-draft-role', template: 'job', status: 'draft', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' } } })
+initialBaseline.pages.push({ id: expiredApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Expired Role', summary: 'An expired synthetic role which must not accept applications.', slug: 'synthetic-expired-role', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2026-10-02T00:00:00.000Z' } })
+const inquiryPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc'
+initialBaseline.settings.sections[0]!.allowedTemplates.push('standard')
+initialBaseline.settings.sections[0]!.pageIds.push(inquiryPageID)
+initialBaseline.pages.push({ id: inquiryPageID, sectionId: initialBaseline.settings.sections[0]!.id, title: 'Inquiry form', summary: 'Synthetic intake browser fixture.', seoDescription: 'A synthetic consented inquiry form used for browser verification.', slug: 'gallery', template: 'standard', status: 'published', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd', type: 'contact', heading: 'Contact details', body: 'Send a synthetic inquiry.', inquiryForm: true, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
+writeFileSync(initialPreviewBaseline, JSON.stringify(initialBaseline))
 
 Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
 process.env.MEDIA_STORAGE_DIR = join(temporaryDirectory, 'media')
+process.env.APPLICATION_STORAGE_DIR = join(temporaryDirectory, 'applications')
 process.env.PAYLOAD_SECRET = 'synthetic-browser-payload-secret-not-for-production'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = cmsOrigin
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = bootstrapPath
+process.env.SITE_THEME_REGISTRY_JSON = themeRegistry
 process.env.OIDC_GOOGLE_ISSUER_URL = issuerOrigin
 process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
@@ -57,9 +84,11 @@ process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-f
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
-const identities: Record<'editor' | 'owner', Identity> = {
+const identities: Record<'editor' | 'owner' | 'hiring' | 'sales', Identity> = {
   owner: { email: 'owner.synthetic@example.test', name: 'Synthetic Owner', subject: 'synthetic-owner' },
   editor: { email: 'editor.synthetic@example.test', name: 'Synthetic Editor', subject: 'synthetic-editor' },
+  hiring: { email: 'hiring.synthetic@example.test', name: 'Synthetic Hiring', subject: 'synthetic-hiring' },
+  sales: { email: 'sales.synthetic@example.test', name: 'Synthetic Sales', subject: 'synthetic-sales' },
 }
 const authorizations = new Map<string, Authorization>()
 let privateKey: CryptoKey
@@ -71,6 +100,7 @@ let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
 let localOwnerID: string | undefined
+let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
 
 function createCertificates(): void {
@@ -121,7 +151,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
   if (url.pathname === '/authorize' && request.method === 'POST') {
     const form = await readBody(request)
     const choice = form.get('identity')
-    const identity = choice === 'owner' || choice === 'editor' ? identities[choice] : undefined
+    const identity = choice === 'owner' || choice === 'editor' || choice === 'hiring' || choice === 'sales' ? identities[choice] : undefined
     const redirectURI = form.get('redirect_uri')
     const state = form.get('state')
     const nonce = form.get('nonce')
@@ -155,13 +185,41 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
 async function seed(): Promise<void> {
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
-  await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
+  const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
+  applicationOwnerID = String(applicationOwner.id)
+  const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
+  const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
+  for (const [role, identity] of Object.entries({ hiring: identities.hiring, sales: identities.sales }) as Array<['hiring' | 'sales', Identity]>) {
+    applicationUsers[role] = await payload.create({ collection: 'users', data: { email: identity.email, name: identity.name, roles: [role], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identity.subject }, overrideAccess: true })
+  }
+  const sessionNow = new Date().toISOString(); const sessionExpiry = new Date(Date.now() + 10 * 60_000).toISOString()
+  for (const [role, user] of Object.entries({ owner: applicationOwner, hiring: applicationUsers.hiring, editor, sales: applicationUsers.sales }) as Array<[keyof typeof applicationSessionTokens, { id: string }]>) {
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(applicationSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  }
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(initialBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: initialBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+
+  const submitted = await payload.create({ collection: 'change-sets', data: { name: 'Synthetic pending operational review', state: 'submitted', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'inquiries', data: { email: 'new-lead.synthetic@example.test', message: 'A synthetic new lead.', topic: 'general', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-new', stage: 'new', urgent: false }, overrideAccess: true })
+  await payload.create({ collection: 'inquiries', data: { email: 'urgent-lead.synthetic@example.test', message: 'A synthetic urgent lead.', topic: 'active-incident', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-urgent', stage: 'qualified', urgent: true }, overrideAccess: true })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-pending', sequence: 2, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-pending', includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-processing', sequence: 3, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-processing', includedChangeKeys: [], status: 'processing', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-failed', sequence: 4, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-failed', includedChangeKeys: [], status: 'failed', attempts: 2, errorCode: 'synthetic_publish_failure', lastError: 'Synthetic failure detail.', correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  for (let sequence = 5; sequence <= 55; sequence += 1) await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `synthetic-operations-pending-${sequence}`, sequence, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: `synthetic-operations-pending-${sequence}`, includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  for (let index = 0; index < 26; index += 1) await payload.create({ collection: 'audit-events', data: { event: 'operations.fixture.page', actor: operationsOwner.id, detail: { index } }, overrideAccess: true })
+  await payload.create({ collection: 'audit-events', data: { event: 'inquiry.created', actor: operationsOwner.id, detail: { email: 'never-expose@example.test', message: 'Never expose this lead text.', resumeKey: 'private-resume-key' } }, overrideAccess: true })
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
@@ -176,12 +234,28 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(() => { response.writeHead(500); response.end('Unable to disable owner.') })
     return
   }
+  if (request.method === 'POST' && /^\/__e2e\/applications\/[^/]+\/expired-link$/.test(request.url ?? '')) {
+    const id = request.url!.split('/')[3]!
+    const userID = applicationOwnerID
+    if (!userID) { response.writeHead(500); response.end('Owner missing.'); return }
+    json(response, { url: `/api/applications/${id}/resume?token=${encodeURIComponent(mintResumeLink(id, userID, applicationSessionTokens.owner, Date.now() - 301_000))}` })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/audit-noise') {
+    void (async () => { for (let index = 0; index < 201; index += 1) await payload.create({ collection: 'audit-events', data: { event: 'e2e.unrelated', detail: { index } }, overrideAccess: true }) })()
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to create audit noise.') })
+    return
+  }
   // The public contact artifact is served under the same synthetic TLS origin
   // as CMS, just as the production edge routes public pages and /api together.
   // This makes the browser exercise the real Astro form, not a CMS preview.
   const pathname = new URL(request.url || '/', cmsOrigin).pathname
   const staticPath = pathname === '/general/gallery' || pathname === '/general/gallery/'
     ? join(process.cwd(), '..', 'site', 'dist', 'general', 'gallery', 'index.html')
+    : pathname === '/careers/synthetic-application-engineer' || pathname === '/careers/synthetic-application-engineer/'
+      ? join(process.cwd(), '..', 'site', 'dist', 'careers', 'synthetic-application-engineer', 'index.html')
+      : pathname === '/application-form.js' ? join(process.cwd(), '..', 'site', 'dist', 'application-form.js')
     : pathname.startsWith('/_astro/') ? join(process.cwd(), '..', 'site', 'dist', pathname) : undefined
   if (request.method === 'GET' && staticPath && existsSync(staticPath)) {
     response.writeHead(200, { 'content-type': staticPath.endsWith('.html') ? 'text/html; charset=utf-8' : staticPath.endsWith('.css') ? 'text/css' : 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
@@ -194,10 +268,24 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(() => { response.writeHead(500); response.end('Unable to disable local owner.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/application-owner/disable') {
+    void payload.update({ collection: 'users', id: applicationOwnerID!, data: { disabled: true }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable application owner.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/review-owner/disable') {
     void payload.update({ collection: 'users', id: reviewOwnerID!, data: { disabled: true }, overrideAccess: true })
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to disable review owner.') })
+    return
+  }
+  if (request.method === 'GET' && request.url === '/__e2e/publish-state') {
+    void Promise.all([
+      payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true }),
+      payload.count({ collection: 'published-releases', overrideAccess: true }),
+    ]).then(([outbox, releases]) => json(response, { outbox: outbox.docs[0] ? { id: outbox.docs[0].id, status: outbox.docs[0].status } : null, releaseCount: releases.totalDocs }))
+      .catch(() => { response.writeHead(500); response.end('Unable to read publish state.') })
     return
   }
   const upstream = requestUpstream({
@@ -275,7 +363,7 @@ async function main(): Promise<void> {
 
 function runAstroBuild(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('corepack', ['pnpm@12.8.1', '--filter', '@site-engine/site', 'build'], { cwd: process.cwd(), env: { ...process.env, SITE_PUBLIC_ORIGIN: cmsOrigin }, stdio: 'inherit' })
+    const child = spawn('corepack', ['pnpm@12.8.1', '--filter', '@site-engine/site', 'build'], { cwd: process.cwd(), env: { ...process.env, SITE_PUBLIC_ORIGIN: cmsOrigin, SITE_SNAPSHOT_PATH: initialPreviewBaseline, SITE_PUBLIC_DEMO: 'false' }, stdio: 'inherit' })
     child.once('error', reject)
     child.once('exit', (status) => status === 0 ? resolve() : reject(new Error(`Astro build exited with ${status ?? 'no'} status.`)))
   })

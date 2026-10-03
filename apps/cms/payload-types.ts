@@ -76,6 +76,7 @@ export interface Config {
     sections: Section;
     assets: Asset;
     redirects: Redirect;
+    'theme-settings': ThemeSetting;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     applications: Application;
@@ -100,6 +101,7 @@ export interface Config {
     sections: SectionsSelect<false> | SectionsSelect<true>;
     assets: AssetsSelect<false> | AssetsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
+    'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -402,6 +404,34 @@ export interface Redirect {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "theme-settings".
+ */
+export interface ThemeSetting {
+  id: string;
+  key: string;
+  selection:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  settings?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -453,8 +483,13 @@ export interface NotificationOutbox {
  */
 export interface Application {
   id: string;
+  name: string;
   email: string;
   coverLetter: string;
+  consent: boolean;
+  jobId: string;
+  resumeKey: string;
+  idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
@@ -739,6 +774,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'redirects';
         value: string | Redirect;
+      } | null)
+    | ({
+        relationTo: 'theme-settings';
+        value: string | ThemeSetting;
       } | null)
     | ({
         relationTo: 'inquiries';
@@ -1028,6 +1067,17 @@ export interface RedirectsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "theme-settings_select".
+ */
+export interface ThemeSettingsSelect<T extends boolean = true> {
+  key?: T;
+  selection?: T;
+  settings?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries_select".
  */
 export interface InquiriesSelect<T extends boolean = true> {
@@ -1068,8 +1118,13 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
  * via the `definition` "applications_select".
  */
 export interface ApplicationsSelect<T extends boolean = true> {
+  name?: T;
   email?: T;
   coverLetter?: T;
+  consent?: T;
+  jobId?: T;
+  resumeKey?: T;
+  idempotencyKey?: T;
   status?: T;
   updatedAt?: T;
   createdAt?: T;

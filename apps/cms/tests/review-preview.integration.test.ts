@@ -8,6 +8,7 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
+import { runReviewQuality } from '../src/review-quality'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-review-preview-'))
@@ -114,6 +115,7 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(set.preview).toMatchObject({ status: 'ready', jobID: job.id, contentHash: canonicalHash(job.proposedManifest), artifactDigest: digest })
     await expect(withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), 'old-token', { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }, new Date(started.getTime() + 1)))).resolves.toMatchObject({ id: completed.id })
     const candidate = buildCandidate(current.live, current.changes, [`pages:${current.changes[0]!.id}`], versions)
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
     const approved = await withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], previewContentHash: canonicalHash(candidate), versions, initialBaseline: current.live }) })
     expect(approved.outboxID).toBeTruthy()
   })
@@ -188,6 +190,7 @@ describe('ENG-030 immutable review preview jobs', () => {
     const reselected = await prepare(current)
     expect(reselected.id).toBe(job.id)
     expect((await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).preview).toMatchObject({ status: 'ready', jobID: job.id, contentHash: canonicalHash(job.proposedManifest), artifactDigest: digest })
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
     const approved = await withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], previewContentHash: canonicalHash(job.proposedManifest), versions, initialBaseline: current.live }) })
     expect(approved.outboxID).toBeTruthy()
   })

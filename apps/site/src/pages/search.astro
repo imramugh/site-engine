@@ -1,0 +1,38 @@
+---
+import Layout from '@site-engine/theme-starter/components/Layout.astro';
+import { deriveRoutes } from '@site-engine/engine';
+import { crawlerMode } from '../lib/crawler-config.js';
+import { localURL, renderBase, siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
+const model = deriveRoutes(siteSnapshot, siteHomepageId);
+const preview = crawlerMode(renderBase) === 'preview';
+---
+<Layout model={model} snapshot={siteSnapshot} title={`Search | ${siteSnapshot.settings.siteName}`} description="Search published site content." noindex={preview}>
+  <section class="block"><div class="block__inner">
+    <h1>Search</h1>
+    {preview ? <p role="status">Search is unavailable in previews.</p> : <>
+      <form data-search-form role="search"><label for="search-query">Search published content</label><input id="search-query" name="q" type="search" autocomplete="off" required /><button>Search</button></form>
+      <p data-search-status role="status" aria-live="polite"></p>
+      <ol data-search-results></ol>
+    </>}
+  </div></section>
+</Layout>
+{!preview && <script define:vars={{ indexURL: localURL('/search-index.json') }}>
+  const form = document.querySelector('[data-search-form]');
+  const status = document.querySelector('[data-search-status]');
+  const results = document.querySelector('[data-search-results]');
+  let index;
+  const words = (value) => value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const query = new FormData(form).get('q')?.toString() ?? '';
+    if (!words(query).length) return;
+    status.textContent = 'Searching…'; results.replaceChildren();
+    try {
+      index ??= await fetch(indexURL, { cache: 'force-cache' }).then(async (response) => { if (!response.ok) throw new Error('index unavailable'); return response.json(); });
+      const terms = words(query);
+      const matches = index.documents.filter((entry) => terms.every((term) => `${entry.title} ${entry.summary} ${entry.headings.join(' ')} ${entry.body}`.toLocaleLowerCase().includes(term))).slice(0, 20);
+      status.textContent = matches.length ? `${matches.length} result${matches.length === 1 ? '' : 's'} found.` : 'No published pages match your search.';
+      for (const entry of matches) { const item = document.createElement('li'); const link = document.createElement('a'); link.href = entry.url; link.textContent = entry.title; const summary = document.createElement('p'); summary.textContent = entry.summary; item.append(link, summary); results.append(item); }
+    } catch { status.textContent = 'Search is temporarily unavailable. Please try again.'; }
+  });
+</script>}

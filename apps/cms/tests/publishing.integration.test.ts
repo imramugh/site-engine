@@ -23,6 +23,7 @@ afterEach(async () => {
 
 const versions = { themeVersion: '1.2.3', engineVersion: '1.2.3', contractVersion: '1.0.0' }
 type Change = { collection: 'pages' | 'sections' | 'redirects'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
+function passingQuality(revision: number, changes: Change[], contentHash: string, includedChangeKeys: string[], baselineSnapshotID: string | undefined, baselineSequence: number) { return { checks: [{ name: 'deterministic-readiness', status: 'passed' }], proof: { revision, changeHash: changeSetHash(changes), contentHash, includedChangeKeys, baselineSnapshotID, baselineSequence, report: { publishable: true } } } }
 
 function baseline() {
   const value = structuredClone(neutralFixture)
@@ -51,7 +52,7 @@ async function fixture(label: string, options: { preview?: 'ready' | 'pending'; 
   const persistedChanges = set.changes as Change[]
   const candidate = buildCandidate(currentBase, persistedChanges, included, versions)
   const preview = options.preview === 'pending' ? { status: 'pending' } : { status: 'ready', revision: 4, changeHash: changeSetHash(persistedChanges), includedChangeKeys: included, contentHash: canonicalHash(candidate), baselineSequence: 0 }
-  const reviewed = await payload.update({ collection: 'change-sets', id: set.id, data: { preview }, overrideAccess: true, context: { editorialInternal: true } })
+  const reviewed = await payload.update({ collection: 'change-sets', id: set.id, data: { preview, quality: options.preview === 'pending' ? { checks: [{ name: 'contract-and-tree', status: 'passed' }] } : passingQuality(4, persistedChanges, canonicalHash(candidate), included, undefined, 0) }, overrideAccess: true, context: { editorialInternal: true } })
   const token = newOpaqueToken()
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: reviewer.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
   return { reviewer, editor, set: reviewed, changes: persistedChanges, included, candidate, baseline: currentBase, headers: new Headers({ cookie: `site_engine_session=${token}` }) }
@@ -71,7 +72,7 @@ function artifact(sourceContentHash: string) { return { digest: 'a'.repeat(64), 
 
 async function bindPreview(current: Awaited<ReturnType<typeof fixture>>, base: ReturnType<typeof baseline>, baselineSnapshotID?: string, baselineSequence = 0) {
   const candidate = buildCandidate(base, current.changes, current.included, versions)
-  await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(current.changes), includedChangeKeys: current.included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(current.changes), includedChangeKeys: current.included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence }, quality: passingQuality(4, current.changes, canonicalHash(candidate), current.included, baselineSnapshotID, baselineSequence) }, overrideAccess: true, context: { editorialInternal: true } })
   return candidate
 }
 
@@ -79,7 +80,7 @@ async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixtur
   const changes: Change[] = [{ collection: 'redirects', id: path, before: null, after: { from: path, to: '/welcome', status: 301 }, beforeHash: null, afterHash: null }]
   const included = [`redirects:${path}`]
   const candidate = buildCandidate(base, changes, included, versions)
-  await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes, preview: { status: 'ready', revision: 4, changeHash: changeSetHash(changes), includedChangeKeys: included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes, preview: { status: 'ready', revision: 4, changeHash: changeSetHash(changes), includedChangeKeys: included, contentHash: canonicalHash(candidate), baselineSnapshotID, baselineSequence }, quality: passingQuality(4, changes, canonicalHash(candidate), included, baselineSnapshotID, baselineSequence) }, overrideAccess: true, context: { editorialInternal: true } })
   return { changes, included, candidate }
 }
 
@@ -193,7 +194,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await payload.update({ collection: 'change-sets', id: second.set.id, data: { changes: secondChanges, preview: { status: 'ready', revision: 4, changeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], contentHash: canonicalHash(buildCandidate(second.baseline, secondChanges, ['redirects:/queue-proof'], versions)), baselineSequence: 0 } }, overrideAccess: true, context: { editorialInternal: true } })
     await expect(withPayloadTransaction(payload, req => { req.headers = second.headers; return approveChangeSet({ payload, req, actor: second.reviewer, id: second.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], previewContentHash: canonicalHash(buildCandidate(second.baseline, secondChanges, ['redirects:/queue-proof'], versions)), versions, initialBaseline: second.baseline }) })).rejects.toThrow('exact baseline')
     const queuedCandidate = buildCandidate(firstSnapshot.manifest as ReturnType<typeof baseline>, secondChanges, ['redirects:/queue-proof'], versions)
-    await payload.update({ collection: 'change-sets', id: second.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], contentHash: canonicalHash(queuedCandidate), baselineSnapshotID: firstSnapshot.id, baselineSequence: 1 } }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'change-sets', id: second.set.id, data: { preview: { status: 'ready', revision: 4, changeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], contentHash: canonicalHash(queuedCandidate), baselineSnapshotID: firstSnapshot.id, baselineSequence: 1 }, quality: passingQuality(4, secondChanges, canonicalHash(queuedCandidate), ['redirects:/queue-proof'], firstSnapshot.id, 1) }, overrideAccess: true, context: { editorialInternal: true } })
     const secondResult = await withPayloadTransaction(payload, req => { req.headers = second.headers; return approveChangeSet({ payload, req, actor: second.reviewer, id: second.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(secondChanges), includedChangeKeys: ['redirects:/queue-proof'], previewContentHash: canonicalHash(queuedCandidate), versions, initialBaseline: second.baseline }) })
     const secondSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: secondResult.snapshotID!, overrideAccess: true })
     expect((secondSnapshot.manifest as ReturnType<typeof baseline>).pages).toEqual((firstSnapshot.manifest as ReturnType<typeof baseline>).pages)

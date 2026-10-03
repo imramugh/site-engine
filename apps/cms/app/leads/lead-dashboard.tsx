@@ -1,26 +1,27 @@
 'use client'
-
-import { useEffect, useState } from 'react'
-
-type Lead = { id: string; email: string; topic: string; message: string; stage: string; urgent?: boolean; sourcePage: string }
-const stages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost']
-
+import { useEffect, useMemo, useState } from 'react'
+type Assignee = { id: string; name: string; email: string }
+type Lead = { id: string; email: string; name?: string; topic: string; message: string; stage: string; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; assignee?: string | Assignee | null; consentBasis?: string; consentedAt?: string }
+type Data = { leads: Lead[]; assignees: Assignee[]; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
+const stages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost']; const topics = ['general', 'project', 'partnership', 'active-incident']
+const blank = { email: '', name: '', topic: 'general', sourcePage: '/manual', message: '', consent: false }
+const assigneeID = (lead: Lead) => typeof lead.assignee === 'string' ? lead.assignee : lead.assignee?.id ?? ''
+function parameters(filters: { stage: string; urgent: boolean; assignee: string; page: number }) { const p = new URLSearchParams(); if (filters.stage) p.set('stage', filters.stage); if (filters.urgent) p.set('urgent', 'true'); if (filters.assignee) p.set('assignee', filters.assignee); p.set('page', String(filters.page)); return p.toString() }
 export function LeadDashboard() {
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [stage, setStage] = useState('')
-  const [error, setError] = useState('')
-  const load = async (filter = stage) => {
-    const response = await fetch(`/api/leads${filter ? `?stage=${encodeURIComponent(filter)}` : ''}`, { cache: 'no-store' })
-    if (!response.ok) { setError('You need a Sales or Owner session to view leads.'); return }
-    const data = await response.json() as { leads: Lead[] }
-    setLeads(data.leads); setError('')
-  }
-  useEffect(() => { void load('') }, [])
-  return <main>
-    <h1>Lead pipeline</h1>
-    <p><label htmlFor="stage-filter">Filter stage</label> <select id="stage-filter" value={stage} onChange={(event) => { setStage(event.target.value); void load(event.target.value) }}><option value="">All stages</option>{stages.map((item) => <option key={item} value={item}>{item}</option>)}</select> <a href={`/api/leads/export${stage ? `?stage=${encodeURIComponent(stage)}` : ''}`}>Export CSV</a></p>
-    {error && <p role="alert">{error}</p>}
-    <section aria-label="Urgent leads">{leads.filter((lead) => lead.urgent).map((lead) => <article key={lead.id}><h2>Urgent: {lead.email}</h2><p>{lead.topic} from {lead.sourcePage}</p><p>{lead.message}</p></article>)}</section>
-    {stages.map((item) => <section key={item} aria-label={`${item} leads`}><h2>{item}</h2><ul>{leads.filter((lead) => lead.stage === item).map((lead) => <li key={lead.id}><strong>{lead.email}</strong> — {lead.topic}<br />{lead.message}</li>)}</ul></section>)}
+  const [data, setData] = useState<Data>({ leads: [], assignees: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })
+  const [filters, setFilters] = useState({ stage: '', urgent: false, assignee: '', page: 1 }); const [selected, setSelected] = useState<string | null>(null)
+  const [manual, setManual] = useState(blank); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [saving, setSaving] = useState(false)
+  const active = useMemo(() => data.leads.find((lead) => lead.id === selected) ?? null, [data.leads, selected])
+  const load = async (next = filters) => { const response = await fetch(`/api/leads?${parameters(next)}`, { cache: 'no-store' }); if (!response.ok) { setError('You need a Sales or Owner session to view leads.'); return }; const body = await response.json() as Data; setData(body); setError(''); setSelected((current) => body.leads.some((lead) => lead.id === current) ? current : body.leads[0]?.id ?? null) }
+  useEffect(() => { void load({ stage: '', urgent: false, assignee: '', page: 1 }) }, [])
+  function changeFilters(change: Partial<typeof filters>) { const next = { ...filters, ...change, page: change.page ?? 1 }; setFilters(next); void load(next) }
+  async function createManual(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setMessage(''); setError(''); try { const response = await fetch('/api/leads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...manual, consentBasis: 'staff-recorded' }) }); const body = await response.json() as { errors?: Record<string, string>; error?: string }; if (!response.ok) { setError(body.error ?? (Object.values(body.errors ?? {}).join(' ') || 'The manual lead could not be created.')); return }; setManual(blank); setMessage('Manual lead recorded with staff-recorded consent.'); await load({ ...filters, page: 1 }) } finally { setSaving(false) } }
+  async function saveLead(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!active) return; const form = new FormData(event.currentTarget); setSaving(true); setMessage(''); setError(''); try { const response = await fetch(`/api/leads/${active.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stage: form.get('stage'), notes: form.get('notes'), nextAction: form.get('nextAction'), assignee: form.get('assignee') || null }) }); const body = await response.json() as { error?: string }; if (!response.ok) { setError(body.error ?? 'The lead could not be updated.'); return }; setMessage('Lead details saved.'); await load() } finally { setSaving(false) } }
+  return <main style={{ maxWidth: 1180, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }} aria-busy={saving}>
+    <h1>Lead pipeline</h1><p>Visitor messages are untrusted text. Manual entries require a staff-recorded consent basis.</p><p role="status" aria-live="polite">{message}</p>{error && <p role="alert">{error}</p>}
+    <section aria-label="Create manual lead"><h2>Record manual lead</h2><form onSubmit={createManual}><p><label>Email <input required type="email" value={manual.email} onChange={(e) => setManual({ ...manual, email: e.target.value })} /></label> <label>Name <input value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} /></label> <label>Topic <select value={manual.topic} onChange={(e) => setManual({ ...manual, topic: e.target.value })}>{topics.map((topic) => <option key={topic}>{topic}</option>)}</select></label></p><p><label>Source page <input required value={manual.sourcePage} onChange={(e) => setManual({ ...manual, sourcePage: e.target.value })} /></label></p><p><label>Message <textarea required value={manual.message} onChange={(e) => setManual({ ...manual, message: e.target.value })} /></label></p><p><label><input required type="checkbox" checked={manual.consent} onChange={(e) => setManual({ ...manual, consent: e.target.checked })} /> I recorded the contact&apos;s consent for staff follow-up.</label></p><button disabled={saving}>Create manual lead</button></form></section>
+    <section aria-label="Lead filters"><h2>Filter leads</h2><label>Stage <select value={filters.stage} onChange={(e) => changeFilters({ stage: e.target.value })}><option value="">All stages</option>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label> <label><input type="checkbox" checked={filters.urgent} onChange={(e) => changeFilters({ urgent: e.target.checked })} /> Urgent only</label> <label>Assignee <select value={filters.assignee} onChange={(e) => changeFilters({ assignee: e.target.value })}><option value="">Anyone</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label> <a href={`/api/leads/export?${parameters(filters)}`}>Export filtered CSV</a></section>
+    <p>{data.totalDocs} lead{data.totalDocs === 1 ? '' : 's'} · page {data.page} of {data.totalPages}</p><div style={{ display: 'grid', gridTemplateColumns: 'minmax(18rem, 1fr) minmax(20rem, 2fr)', gap: '2rem' }}><section aria-label="Lead list"><h2>Leads</h2><ul>{data.leads.map((lead) => <li key={lead.id}><button onClick={() => setSelected(lead.id)} aria-pressed={active?.id === lead.id}>{lead.urgent ? 'Urgent: ' : ''}{lead.email} — {lead.topic} ({lead.stage})</button></li>)}</ul>{!data.leads.length && <p>No leads match these filters.</p>}<p><button disabled={!data.hasPrevPage} onClick={() => changeFilters({ page: data.page - 1 })}>Previous page</button> <button disabled={!data.hasNextPage} onClick={() => changeFilters({ page: data.page + 1 })}>Next page</button></p></section>
+      {active && <section aria-label="Lead details"><h2>Lead details</h2><p><strong>{active.email}</strong>{active.name ? ` · ${active.name}` : ''}</p><p>{active.topic} from {active.sourcePage}{active.urgent ? ' · urgent' : ''}</p><p>{active.message}</p><p>Consent: {active.consentBasis ?? 'unknown'}</p><form onSubmit={saveLead}><p><label>Stage <select name="stage" defaultValue={active.stage}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label></p><p><label>Active assignee <select name="assignee" defaultValue={assigneeID(active)}><option value="">Unassigned</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></p><p><label>Notes <textarea name="notes" defaultValue={active.notes ?? ''} /></label></p><p><label>Next action <textarea name="nextAction" defaultValue={active.nextAction ?? ''} /></label></p><button disabled={saving}>Save lead details</button></form></section>}</div>
   </main>
 }

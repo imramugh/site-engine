@@ -62,3 +62,4 @@ export {
   type MotionPreference,
   type ResolvedMotionPreset,
 } from './motion.js';
+export { buildSearchIndex, type SearchDocument, type SearchIndex } from './search.js';

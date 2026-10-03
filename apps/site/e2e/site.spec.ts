@@ -126,3 +126,20 @@ test('ENG-015 starts real starter effects still and pauses no-motion pages witho
   await expect(noJavaScriptPage.locator('[data-motion-effect="subtle"]')).toHaveCSS('animation-play-state', 'paused');
   await noJavaScript.close();
 });
+
+test('ENG-024 searches published static content with accessible canonical results', async ({ page }) => {
+  await page.goto('/search');
+  await page.getByLabel('Search published content').fill('guide neutral');
+  await page.getByRole('button', { name: 'Search' }).click();
+  await expect(page.getByRole('status')).toContainText('result');
+  const guide = page.locator('#content').getByRole('link', { name: 'Guide' });
+  await expect(guide).toHaveAttribute('href', '/general/guide');
+  await guide.click();
+  await expect(page).toHaveURL(/\/general\/guide\/?$/);
+  await page.goto('/search');
+  await page.getByLabel('Search published content').fill('Hidden fixture');
+  await page.getByRole('button', { name: 'Search' }).click();
+  await expect(page.getByRole('status')).toHaveText('No published pages match your search.');
+  await page.addScriptTag({ path: axeSource });
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]);
+});

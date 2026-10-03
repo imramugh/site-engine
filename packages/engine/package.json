@@ -4,10 +4,31 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./motion": { "types": "./dist/motion.d.ts", "import": "./dist/motion.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./motion": {
+      "types": "./dist/motion.d.ts",
+      "import": "./dist/motion.js"
+    },
+    "./theme-registry": {
+      "types": "./dist/theme-registry.d.ts",
+      "import": "./dist/theme-registry.js"
+    }
   },
-  "files": ["dist"],
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
-  "dependencies": { "@site-engine/contract": "workspace:^" }
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@site-engine/contract": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1"
+  }
 }
