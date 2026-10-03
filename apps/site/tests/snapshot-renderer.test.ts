@@ -241,6 +241,15 @@ describe('static snapshot renderer', () => {
       const publicPage = await browser.newPage(); let publicSubmissions = 0;
       await publicPage.route('**/api/inquiries', async (request) => { publicSubmissions += 1; await request.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
       await publicPage.goto(`${publicServer.origin}/docs/custom-theme-inquiry/`, { waitUntil: 'networkidle' });
+      await publicPage.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      for (const width of [1280, 390]) {
+        await publicPage.setViewportSize({ width, height: 900 });
+        const violations = await publicPage.evaluate(async () => {
+          const axe = (window as typeof window & { axe: { run: (context: string, options: unknown) => Promise<{ violations: unknown[] }> } }).axe;
+          return (await axe.run('nav[aria-label="Breadcrumb"]', { runOnly: { type: 'rule', values: ['target-size'] } })).violations;
+        });
+        expect(violations).toEqual([]);
+      }
       expect(await publicPage.locator('[data-inquiry-form]').count()).toBe(1);
       await publicPage.getByRole('button', { name: 'Send inquiry' }).click();
       await publicPage.getByRole('status').filter({ hasText: 'received' }).waitFor();
