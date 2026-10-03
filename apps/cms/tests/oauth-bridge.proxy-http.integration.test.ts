@@ -28,10 +28,15 @@ Object.assign(process.env, {
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let next: ChildProcess | undefined
+let build: ChildProcess | undefined
 
 function runNext(args: string[]): Promise<void> {
   const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', ...args], { cwd: cmsRoot, env: process.env, stdio: 'ignore' })
-  return new Promise((resolve, reject) => child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Next ${args[0]} exited with ${code}`))))
+  build = child
+  return new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Next ${args[0]} exited with ${code}`)))
+  })
 }
 
 async function ready(): Promise<void> {
@@ -46,17 +51,20 @@ async function ready(): Promise<void> {
 beforeAll(async () => {
   payload = await getPayload({ config })
   const user = await payload.create({ collection: 'users', data: { email: 'proxy-bridge@example.test', name: 'Proxy bridge', roles: ['editor'] }, overrideAccess: true })
+  // Cold production compilation is slower on CI; it must not consume the
+  // lifetime of the authentication session this test is about to exercise.
+  await runNext(['build'])
   const token = newOpaqueToken(); const now = new Date().toISOString()
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
   // `next start` uses production cookie naming even though Vitest itself is
   // running with NODE_ENV=test.
   process.env.SYNTHETIC_PROXY_SESSION_COOKIE = `${SESSION_COOKIE}=${token}`
-  await runNext(['build'])
   next = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], { cwd: cmsRoot, env: process.env, stdio: 'ignore' })
   await ready()
-}, 45_000)
+}, 180_000)
 
 afterAll(async () => {
+  if (build?.exitCode === null) { build.kill('SIGTERM'); await new Promise<void>(resolve => build!.once('exit', () => resolve())) }
   if (next?.exitCode === null) {
     next.kill('SIGTERM')
     await new Promise<void>((resolve) => next!.once('exit', () => resolve()))

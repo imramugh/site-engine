@@ -27,7 +27,7 @@ export const demoSnapshot: SiteSnapshot = SiteSnapshotSchema.parse({
       block('40000000-0000-4000-8000-000000000012', 'relatedServices', { heading: 'Related services', pageIds: [ids.service] }),
       block('40000000-0000-4000-8000-000000000013', 'cta', { heading: 'Continue reading', body: 'A direct, valid action.', cta: { label: 'Guide', href: '/general/guide' } }, { ...appearance, background: 'brand', logoTone: 'inverse' }),
       block('40000000-0000-4000-8000-000000000014', 'richText', { anchorId: 'motion-offscreen', body: 'Rich text is escaped and rendered as readable paragraphs in this neutral starter.' }, { ...appearance, motionIntent: 'signature' }),
-      block('40000000-0000-4000-8000-000000000015', 'contact', { heading: 'Contact details', body: 'This static example deliberately does not submit information.' }, { ...appearance, motionIntent: 'ambient' }),
+      block('40000000-0000-4000-8000-000000000015', 'contact', { heading: 'Contact details', body: 'This synthetic contact block accepts a secure inquiry.', inquiryForm: true }, { ...appearance, motionIntent: 'ambient' }),
       block('40000000-0000-4000-8000-000000000016', 'media', { mediaId: ids.image, caption: 'A synthetic placeholder image.' }),
       block('40000000-0000-4000-8000-000000000017', 'imageText', { heading: 'Image and text', body: 'An image sits beside this neutral explanatory copy.', mediaId: ids.image }),
       block('40000000-0000-4000-8000-000000000018', 'gallery', { mediaIds: [ids.image, ids.poster] }),

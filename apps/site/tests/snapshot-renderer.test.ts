@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:http';
-import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -82,7 +83,7 @@ function staticServer(root: string, mount: string): Promise<{ server: Server; or
     const isPagePath = pathname.endsWith('/') || !pathname.split('/').at(-1)?.includes('.');
     const filePath = resolve(rootPath, `.${isPagePath ? `${pathname.replace(/\/$/, '')}/index.html` : pathname}`);
     if (filePath !== rootPath && !filePath.startsWith(`${rootPath}${sep}`)) { response.writeHead(400).end(); return; }
-    try { const body = await readFile(filePath); response.writeHead(200); response.end(body); } catch { response.writeHead(404).end('Not found'); }
+    try { const body = await readFile(filePath); response.writeHead(200, { 'content-type': filePath.endsWith('.js') ? 'text/javascript' : filePath.endsWith('.css') ? 'text/css' : filePath.endsWith('.avif') ? 'image/avif' : filePath.endsWith('.svg') ? 'image/svg+xml' : filePath.endsWith('.webm') ? 'video/webm' : filePath.endsWith('.vtt') ? 'text/vtt' : 'text/html' }); response.end(body); } catch { response.writeHead(404).end('Not found'); }
   });
   return new Promise((resolveServer) => server.listen(0, '127.0.0.1', () => {
     const address = server.address();
@@ -107,8 +108,11 @@ describe('static snapshot renderer', () => {
   it('builds two complete, content-distinct snapshots with CMS-compatible hashes', async () => {
     const alpha = fixture('Alpha'); const beta = fixture('Beta');
     const alphaInput = await writeSnapshot(root, alpha, 'alpha.json'); const betaInput = await writeSnapshot(root, beta, 'beta.json');
+    const priorMediaDirectory = process.env.SITE_MEDIA_DIR;
+    process.env.SITE_MEDIA_DIR = await mkdtemp(join(root, 'empty-upload-source-'));
     const alphaBuild = await renderer.buildSnapshot({ input: alphaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
     const betaBuild = await renderer.buildSnapshot({ input: betaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+    if (priorMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = priorMediaDirectory;
     expect(alphaBuild.manifest.snapshotContentHash).toBe(hash(alpha));
     expect(betaBuild.manifest.snapshotContentHash).toBe(hash(beta));
     expect(alphaBuild.manifest.snapshotContentHash).not.toBe(betaBuild.manifest.snapshotContentHash);
@@ -154,6 +158,17 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"ProfessionalService"');
   });
 
+  it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
+    const snapshot = fixture('Redirect rules')
+    snapshot.redirects = [{ from: '/legacy/', to: '/docs', status: 301 }]
+    // Snapshot contract data is normalized before build artifacts are produced.
+    snapshot.redirects[0]!.from = '/legacy'
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'redirects.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root })
+    const rules = await readFile(join(built.output, 'redirects.nginx.conf'), 'utf8')
+    expect(rules).toBe('# Generated from an approved immutable snapshot. Do not edit.\nlocation = /legacy { return 301 /docs; }\n')
+    expect(built.manifest.files).toHaveProperty('redirects.nginx.conf')
+  }, 60_000);
+
   it('escapes structured data and displays the same job metadata described by its schema', async () => {
     const snapshot = fixture('Safe metadata');
     const attack = '</script><img id="injected" src=x onerror=alert(1)>';
@@ -189,6 +204,44 @@ describe('static snapshot renderer', () => {
     await expect(renderer.buildSnapshot({ input: invalidSchema, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow();
     expect((await readdir(root)).filter((name) => name.startsWith('snapshot-'))).toEqual(promoted);
   });
+
+  it('copies only referenced, checksummed media into an immutable artifact and rejects missing or corrupt sources before promotion', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'site-media-source-'));
+    const previousMediaDirectory = process.env.SITE_MEDIA_DIR;
+    try {
+      for (const filename of ['sample-image.svg', 'sample-poster.svg', 'sample-video.webm', 'sample-captions.vtt']) await copyFile(join(process.cwd(), 'apps/site/public/media', filename), join(source, filename));
+      const sharp = createRequire(new URL('../../cms/package.json', import.meta.url))('sharp');
+      await writeFile(join(source, 'sample-image-hero.avif'), await sharp({ create: { width: 640, height: 360, channels: 3, background: '#155e75' } }).avif().toBuffer());
+      await writeFile(join(source, 'unreferenced-private.txt'), 'must never enter artifact');
+      process.env.SITE_MEDIA_DIR = source;
+      const snapshot = fixture('Immutable media');
+      snapshot.media = await Promise.all(snapshot.media.map(async (media) => ({ ...media, sha256: createHash('sha256').update(await readFile(join(source, media.filename))).digest('hex') })));
+      const variant = await readFile(join(source, 'sample-image-hero.avif'));
+      snapshot.media[0]!.variants = { heroAvif: { filename: 'sample-image-hero.avif', width: 640, height: 360, mimeType: 'image/avif', sha256: createHash('sha256').update(variant).digest('hex') } };
+      const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'immutable-media.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+      expect((await readdir(join(built.output, 'media'))).sort()).toEqual([...snapshot.media.map((media) => media.filename), 'sample-image-hero.avif'].sort());
+      expect(await readFile(join(built.output, 'media/sample-image.svg'), 'utf8')).toContain('<svg');
+      expect(await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
+      expect(await readFile(join(built.output, 'docs/release-notes/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image-hero.avif`);
+
+      const served = await staticServer(built.output, BASE_PATH);
+      const browser = await chromium.launch();
+      try {
+        const page = await browser.newPage();
+        await page.goto(`${served.origin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'networkidle' });
+        expect(await page.locator('picture img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 640 && image.currentSrc.endsWith('sample-image-hero.avif'))).toBe(true);
+      } finally { await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+      const promoted = (await readdir(root)).filter((name) => name.startsWith('snapshot-'));
+      snapshot.media[0]!.sha256 = '0'.repeat(64);
+      await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'corrupt-media.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow('checksum mismatch');
+      await rm(join(source, 'sample-image.svg'));
+      await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'missing-media.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow('unavailable');
+      expect((await readdir(root)).filter((name) => name.startsWith('snapshot-'))).toEqual(promoted);
+    } finally {
+      if (previousMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = previousMediaDirectory;
+      await rm(source, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it('rejects unsafe preview bases and public origins before promoting an artifact', async () => {
     const input = await writeSnapshot(root, fixture('Unsafe config'), 'unsafe-config.json');
@@ -261,10 +314,56 @@ describe('static snapshot renderer', () => {
     await page.goto(`${serverOrigin}${BASE_PATH}docs/guide/install/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
     expect(await page.getByRole('link', { name: 'Return to docs' }).getAttribute('href')).toBe(`${BASE_PATH}docs`);
     expect(await page.locator('img').getAttribute('src')).toBe(`${BASE_PATH}media/sample-image.svg`);
+    expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+    expect(await page.locator('picture source').count()).toBe(0);
     await page.getByRole('link', { name: 'Return to docs' }).click({ noWaitAfter: true }); await page.waitForURL(`${serverOrigin}${BASE_PATH}docs`, { timeout: 5_000 }); expect(page.url()).toBe(`${serverOrigin}${BASE_PATH}docs`);
     const noJs = await browser.newContext({ javaScriptEnabled: false }); const noJsPage = await noJs.newPage();
     await noJsPage.goto(`${serverOrigin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
     expect(await noJsPage.getByRole('heading').first().isVisible({ timeout: 5_000 })).toBe(true); expect(await noJsPage.locator('body').textContent()).toContain('Synthetic transcript.');
     await noJs.close(); await context.close(); await browser.close();
   }, 120_000);
+  it('enables root inquiry forms, preserves retry keys, and prevents private preview submission', async () => {
+    const snapshot = fixture('Inquiry');
+    snapshot.settings.sections[0]!.allowedTemplates.push('standard');
+    const inquiryPage = { ...snapshot.pages[0]!, id: '12345678-1234-4234-8234-123456789abf', template: 'standard' as const, slug: 'inquiry', blocks: [] as typeof snapshot.pages[0]['blocks'] };
+    snapshot.pages.push(inquiryPage);
+    snapshot.settings.sections[0]!.pageIds.push(inquiryPage.id);
+    inquiryPage.blocks.push({ id: '12345678-1234-4234-8234-123456789abe', type: 'contact', heading: 'Send a message', body: 'Synthetic inquiry form.', inquiryForm: true, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } });
+    const input = await writeSnapshot(root, snapshot, 'inquiry.json');
+    const browser = await chromium.launch();
+    try {
+      for (const basePath of ['/', BASE_PATH]) {
+        const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
+        const served = await staticServer(built.output, basePath);
+        const context = await browser.newContext(); const page = await context.newPage();
+        const submitted: { idempotencyKey: string }[] = [];
+        await page.route('**/api/inquiries', async route => {
+          submitted.push(route.request().postDataJSON());
+          if (submitted.length === 1) await route.abort('failed');
+          else await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
+        });
+        try {
+          await page.goto(`${served.origin}${basePath}docs/inquiry/`, { waitUntil: 'networkidle' });
+          const button = page.getByRole('button', { name: 'Send inquiry' });
+          if (basePath === '/') {
+            expect(await button.isEnabled()).toBe(true);
+            await button.click();
+            await page.getByRole('alert').filter({ hasText: 'check your connection' }).waitFor();
+            expect(await button.isEnabled()).toBe(true);
+            await button.click();
+            await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
+            expect(submitted).toHaveLength(2);
+            expect(submitted[0]!.idempotencyKey).toBe(submitted[1]!.idempotencyKey);
+            expect(await button.isDisabled()).toBe(true);
+          } else {
+            expect(await button.isDisabled()).toBe(true);
+            await page.locator('[data-inquiry-form]').evaluate((form: HTMLFormElement) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            expect(submitted).toHaveLength(0);
+          }
+        } finally { await context.close(); served.server.closeAllConnections(); served.server.close(); }
+      }
+    } finally { await browser.close(); }
+  }, 120_000);
+
 });

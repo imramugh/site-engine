@@ -21,3 +21,6 @@ __pycache__/
 *.py[cod]
 
 *.tsbuildinfo
+
+# Local private upload storage; release artifacts are built from explicit snapshots.
+data/

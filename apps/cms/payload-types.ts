@@ -77,6 +77,7 @@ export interface Config {
     assets: Asset;
     redirects: Redirect;
     inquiries: Inquiry;
+    'notification-outbox': NotificationOutbox;
     applications: Application;
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
@@ -100,6 +101,7 @@ export interface Config {
     assets: AssetsSelect<false> | AssetsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
+    'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
@@ -312,11 +314,74 @@ export interface Section {
  */
 export interface Asset {
   id: string;
-  alt: string;
+  alt?: string | null;
+  decorative?: boolean | null;
   caption?: string | null;
-  private?: boolean | null;
+  credit?: string | null;
+  tags?: string[] | null;
+  deletedAt?: string | null;
+  deleteAfter?: string | null;
   updatedAt: string;
   createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  focalX?: number | null;
+  focalY?: number | null;
+  sizes?: {
+    heroAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    heroWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    cardAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    cardWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    thumbnailAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    thumbnailWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+  };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -327,6 +392,11 @@ export interface Redirect {
   from: string;
   to: string;
   status?: number | null;
+  /**
+   * Updated by the edge log ingestion adapter.
+   */
+  hitCount?: number | null;
+  lastHitAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -337,8 +407,43 @@ export interface Redirect {
 export interface Inquiry {
   id: string;
   email: string;
+  name?: string | null;
+  telephone?: string | null;
+  company?: string | null;
   message: string;
-  status?: ('new' | 'contacted' | 'closed') | null;
+  topic: 'general' | 'project' | 'partnership' | 'active-incident';
+  sourcePage: string;
+  consentedAt: string;
+  consentBasis: 'visitor-confirmed' | 'staff-recorded' | 'unknown';
+  idempotencyKey: string;
+  stage: 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost';
+  urgent?: boolean | null;
+  notes?: string | null;
+  assignee?: (string | null) | User;
+  nextAction?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-outbox".
+ */
+export interface NotificationOutbox {
+  id: string;
+  inquiry: string | Inquiry;
+  kind: 'lead-received' | 'urgent-lead-alert';
+  idempotencyKey: string;
+  state: 'queued' | 'delivered' | 'failed';
+  payload:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  availableAt: string;
   updatedAt: string;
   createdAt: string;
 }
@@ -640,6 +745,10 @@ export interface PayloadLockedDocument {
         value: string | Inquiry;
       } | null)
     | ({
+        relationTo: 'notification-outbox';
+        value: string | NotificationOutbox;
+      } | null)
+    | ({
         relationTo: 'applications';
         value: string | Application;
       } | null)
@@ -822,10 +931,87 @@ export interface SectionsSelect<T extends boolean = true> {
  */
 export interface AssetsSelect<T extends boolean = true> {
   alt?: T;
+  decorative?: T;
   caption?: T;
-  private?: T;
+  credit?: T;
+  tags?: T;
+  deletedAt?: T;
+  deleteAfter?: T;
   updatedAt?: T;
   createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+  focalX?: T;
+  focalY?: T;
+  sizes?:
+    | T
+    | {
+        heroAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        heroWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        cardAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        cardWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        thumbnailAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        thumbnailWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+      };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -835,6 +1021,8 @@ export interface RedirectsSelect<T extends boolean = true> {
   from?: T;
   to?: T;
   status?: T;
+  hitCount?: T;
+  lastHitAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -844,8 +1032,34 @@ export interface RedirectsSelect<T extends boolean = true> {
  */
 export interface InquiriesSelect<T extends boolean = true> {
   email?: T;
+  name?: T;
+  telephone?: T;
+  company?: T;
   message?: T;
-  status?: T;
+  topic?: T;
+  sourcePage?: T;
+  consentedAt?: T;
+  consentBasis?: T;
+  idempotencyKey?: T;
+  stage?: T;
+  urgent?: T;
+  notes?: T;
+  assignee?: T;
+  nextAction?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-outbox_select".
+ */
+export interface NotificationOutboxSelect<T extends boolean = true> {
+  inquiry?: T;
+  kind?: T;
+  idempotencyKey?: T;
+  state?: T;
+  payload?: T;
+  availableAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

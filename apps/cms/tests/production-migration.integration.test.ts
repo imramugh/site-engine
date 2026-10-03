@@ -9,6 +9,9 @@ import { createClient } from '@libsql/client'
 
 const scopedSlugMigration = '20261003_133520_scoped_page_slugs'
 const publishQueueMigration = '20261003_160000_publish_queue_correctness'
+const inquiryPipelineMigration = '20261003_163801_inquiry_lead_pipeline'
+const redirectLifecycleMigration = '20261003_165038_redirect_lifecycle'
+const mediaMigration = '20261003_171753_media_library'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -63,11 +66,60 @@ describe('production migrations (ENG-036)', () => {
     expect(queueIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
     const queueApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${publishQueueMigration}'`)
     expect(queueApplied.rows.map((row) => row.name)).toEqual([publishQueueMigration])
+    // Recreate the persisted schema and data immediately before the inquiry
+    // migration, then run the real production migrator rather than a schema push.
+    for (const statement of [
+      'DROP TABLE notification_outbox',
+      'DROP INDEX payload_locked_documents_rels_notification_outbox_id_idx',
+      'ALTER TABLE payload_locked_documents_rels DROP COLUMN notification_outbox_id',
+      'PRAGMA foreign_keys=OFF',
+      'DROP TABLE inquiries',
+      "CREATE TABLE inquiries (id text(36) PRIMARY KEY NOT NULL, email text NOT NULL, message text NOT NULL, status text DEFAULT 'new', updated_at text NOT NULL, created_at text NOT NULL)",
+      "INSERT INTO inquiries (id, email, message, status, updated_at, created_at) VALUES ('30000000-0000-4000-8000-000000000001', 'legacy@example.test', 'Synthetic legacy inquiry retained through an upgrade.', 'contacted', '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z')",
+      'PRAGMA foreign_keys=ON',
+      `DELETE FROM payload_migrations WHERE name = '${inquiryPipelineMigration}'`,
+    ]) await sqlite.execute(statement)
+    const inquiryForward = migrate()
+    expect(inquiryForward.status, inquiryForward.stderr || inquiryForward.stdout).toBe(0)
+    const upgradedInquiry = await sqlite.execute("SELECT email, message, stage, consent_basis, consented_at, idempotency_key FROM inquiries WHERE id = '30000000-0000-4000-8000-000000000001'")
+    expect(upgradedInquiry.rows[0]).toMatchObject({ email: 'legacy@example.test', message: 'Synthetic legacy inquiry retained through an upgrade.', stage: 'contacted', consent_basis: 'unknown', consented_at: '2026-01-02T00:00:00.000Z', idempotency_key: 'legacy:30000000-0000-4000-8000-000000000001' })
+    const outbox = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_outbox'")
+    expect(outbox.rows).toHaveLength(1)
+    const inquiryApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${inquiryPipelineMigration}'`)
+    expect(inquiryApplied.rows.map((row) => row.name)).toEqual([inquiryPipelineMigration])
+
+    // Reconstruct the schema immediately before redirect lifecycle support and
+    // run the real production migrator against that persisted database.
+    for (const statement of [
+      'ALTER TABLE redirects DROP COLUMN hit_count',
+      'ALTER TABLE redirects DROP COLUMN last_hit_at',
+      `DELETE FROM payload_migrations WHERE name = '${redirectLifecycleMigration}'`,
+    ]) await sqlite.execute(statement)
+    const redirectForward = migrate()
+    expect(redirectForward.status, redirectForward.stderr || redirectForward.stdout).toBe(0)
+    const redirectColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('redirects') WHERE name IN ('hit_count', 'last_hit_at')")
+    expect(redirectColumns.rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'hit_count', dflt_value: '0' }), expect.objectContaining({ name: 'last_hit_at' })]))
+    const redirectApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${redirectLifecycleMigration}'`)
+    expect(redirectApplied.rows.map((row) => row.name)).toEqual([redirectLifecycleMigration])
+
+    // Reconstruct the exact pre-ENG-014 asset table, including the legacy
+    // private bit, then prove the generated rebuild migration retains it.
+    for (const statement of [
+      'DROP TABLE assets_texts',
+      'DROP TABLE assets',
+      "CREATE TABLE assets (id text(36) PRIMARY KEY NOT NULL, alt text NOT NULL, caption text, private integer DEFAULT true, updated_at text NOT NULL, created_at text NOT NULL)",
+      "INSERT INTO assets (id, alt, caption, private, updated_at, created_at) VALUES ('30000000-0000-4000-8000-000000000001', 'Synthetic legacy asset', 'Legacy metadata', 1, '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')",
+      `DELETE FROM payload_migrations WHERE name = '${mediaMigration}'`,
+    ]) await sqlite.execute(statement)
+    const mediaForward = migrate()
+    expect(mediaForward.status, mediaForward.stderr || mediaForward.stdout).toBe(0)
+    const legacyAsset = await sqlite.execute("SELECT alt, caption, private, filename FROM assets WHERE id = '30000000-0000-4000-8000-000000000001'")
+    expect(legacyAsset.rows[0]).toMatchObject({ alt: 'Synthetic legacy asset', caption: 'Legacy metadata', private: 1, filename: null })
     await sqlite.close()
 
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')
     const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
     expect(verify.status, verify.stderr || verify.stdout).toBe(0)
     } finally { rmSync(directory, { recursive: true, force: true }) }
-  }, 30_000)
+  }, 90_000)
 })

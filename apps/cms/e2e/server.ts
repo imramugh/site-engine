@@ -41,6 +41,7 @@ writeFileSync(initialPreviewBaseline, JSON.stringify(neutralFixture))
 
 Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
+process.env.MEDIA_STORAGE_DIR = join(temporaryDirectory, 'media')
 process.env.PAYLOAD_SECRET = 'synthetic-browser-payload-secret-not-for-production'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = cmsOrigin
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = bootstrapPath
@@ -159,6 +160,7 @@ async function seed(): Promise<void> {
   localOwnerID = String(localOwner.id)
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
+  await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
 }
 
@@ -172,6 +174,18 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to disable owner.') })
+    return
+  }
+  // The public contact artifact is served under the same synthetic TLS origin
+  // as CMS, just as the production edge routes public pages and /api together.
+  // This makes the browser exercise the real Astro form, not a CMS preview.
+  const pathname = new URL(request.url || '/', cmsOrigin).pathname
+  const staticPath = pathname === '/general/gallery' || pathname === '/general/gallery/'
+    ? join(process.cwd(), '..', 'site', 'dist', 'general', 'gallery', 'index.html')
+    : pathname.startsWith('/_astro/') ? join(process.cwd(), '..', 'site', 'dist', pathname) : undefined
+  if (request.method === 'GET' && staticPath && existsSync(staticPath)) {
+    response.writeHead(200, { 'content-type': staticPath.endsWith('.html') ? 'text/html; charset=utf-8' : staticPath.endsWith('.css') ? 'text/css' : 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
+    response.end(readFileSync(staticPath))
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/local-owner/disable') {
@@ -230,6 +244,7 @@ async function main(): Promise<void> {
   cmsProxy.listen(e2ePort, '127.0.0.1')
   await once(cmsProxy, 'listening')
   await seed()
+  await runAstroBuild()
   await runNext(['build'])
   const appDirectory = process.cwd()
   const standaloneDirectory = join(appDirectory, '.next', 'standalone', 'apps', 'cms')
@@ -256,6 +271,14 @@ async function main(): Promise<void> {
   readiness = createHTTPServer((_request, response) => { response.writeHead(200); response.end('ready') })
   readiness.listen(e2ePort + 3, '127.0.0.1')
   await once(readiness, 'listening')
+}
+
+function runAstroBuild(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('corepack', ['pnpm@12.8.1', '--filter', '@site-engine/site', 'build'], { cwd: process.cwd(), env: { ...process.env, SITE_PUBLIC_ORIGIN: cmsOrigin }, stdio: 'inherit' })
+    child.once('error', reject)
+    child.once('exit', (status) => status === 0 ? resolve() : reject(new Error(`Astro build exited with ${status ?? 'no'} status.`)))
+  })
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void stop() })
