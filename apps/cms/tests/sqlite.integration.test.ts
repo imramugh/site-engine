@@ -5,10 +5,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { cookieName, hashOpaqueToken, newOpaqueToken, serverSessionStrategy, SESSION_COOKIE } from '../src/identity'
 import { handleOAuthSessionBridge } from '../src/oauth-session-bridge'
+import sharp from 'sharp'
+import { existsSync } from 'node:fs'
+import { mediaStorageDirectory, snapshotMediaReference } from '../src/media'
+import { moveAssetToBin, restoreAssetFromBin } from '../src/media-lifecycle'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
 const db = join(directory, 'cms.sqlite')
 process.env.DATABASE_URI = `file:${db}`
+process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-payload'
 const tokenFile = join(directory, 'bootstrap-token')
 writeFileSync(tokenFile, 'test-only-bootstrap-token')
@@ -24,6 +29,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await payload?.destroy()
   rmSync(directory, { recursive: true, force: true })
+  delete process.env.MEDIA_STORAGE_DIR
 })
 
 describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036)', () => {
@@ -224,5 +230,51 @@ describe('ENG-003 content-tree and template invariants through the Payload API',
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
     const stored = await payload.find({ collection: 'pages', where: { sectionId: { equals: section.id }, slug: { equals: 'racing-root' } }, depth: 0, overrideAccess: true })
     expect(stored.totalDocs).toBe(1)
+  })
+})
+
+describe('ENG-014 media library, variants, and lifecycle', () => {
+  const raster = async () => sharp({ create: { width: 1200, height: 800, channels: 3, background: '#155e75' } }).png().toBuffer()
+  const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
+
+  it('rejects missing alt text, transforms a real upload, and blocks binning an in-use asset with locations', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'media-owner@example.test', name: 'Media Owner', roles: ['owner'] }, overrideAccess: true })
+    const file = { data: await raster(), mimetype: 'image/png', name: 'synthetic-media.png', size: 0 }
+    file.size = file.data.length
+    await expect(payload.create({ collection: 'assets', data: { decorative: false }, file, user: owner, overrideAccess: false })).rejects.toThrow('invalid: alt')
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Synthetic teal test image', caption: 'Synthetic test caption', credit: 'Test fixture', tags: ['synthetic'], focalX: 25, focalY: 75 }, file, user: owner, overrideAccess: false })
+    expect(asset.width).toBe(1200)
+    expect(asset.height).toBe(800)
+    expect(asset.sizes?.heroAvif?.filename).toBeTruthy()
+    expect(asset.sizes?.cardWebp?.filename).toBeTruthy()
+    expect(existsSync(`${mediaStorageDirectory()}/${asset.sizes?.heroAvif?.filename}`)).toBe(true)
+    const captured = snapshotMediaReference(asset)
+    expect(captured.filename).toBe(asset.filename)
+    expect(captured.sha256).toMatch(/^[a-f0-9]{64}$/)
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 80 }, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Replacement' }, file, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
+    expect(snapshotMediaReference(asset).sha256).toBe(captured.sha256)
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Updated description', focalX: asset.focalX, focalY: asset.focalY }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Updated description' })
+    expect(captured.variants?.heroAvif).toMatchObject({ filename: asset.sizes?.heroAvif?.filename, width: asset.sizes?.heroAvif?.width, height: asset.sizes?.heroAvif?.height, mimeType: 'image/avif', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+
+    const section = await payload.create({ collection: 'sections', data: { name: 'Media', summary: 'Synthetic media section used to verify asset usage and lifecycle validation.', slug: 'media-lifecycle', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
+    await expect(payload.create({ collection: 'pages', data: { title: 'Missing asset alt', summary: 'This page proves server validation refuses assets that have no accessible description.', slug: 'missing-asset-alt', sectionId: section.id, template: 'standard', blocks: [{ id: 'c1000000-0000-4000-8000-000000000001', type: 'media', mediaId: asset.id, hidden: false, appearance }] }, user: owner, overrideAccess: false })).resolves.toMatchObject({ id: expect.any(String) })
+    const lifecycle = await moveAssetToBin(payload, { payload } as never, owner, asset.id, new Date('2026-10-03T00:00:00.000Z'))
+    expect(lifecycle).toMatchObject({ status: 'blocked', usages: [{ pageTitle: 'Missing asset alt', locations: ['blocks[0].mediaId'] }] })
+  })
+
+  it('allows a decorative image and bins an unused asset for exactly thirty days', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'media-bin-owner@example.test', name: 'Media Bin Owner', roles: ['owner'] }, overrideAccess: true })
+    const data = await raster()
+    const asset = await payload.create({ collection: 'assets', data: { decorative: true }, file: { data, mimetype: 'image/png', name: 'decorative.png', size: data.length }, user: owner, overrideAccess: false })
+    const result = await moveAssetToBin(payload, { payload } as never, owner, asset.id, new Date('2026-10-03T00:00:00.000Z'))
+    expect(result).toEqual({ status: 'binned', deleteAfter: '2026-11-02T00:00:00.000Z' })
+    const stored = await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })
+    expect(stored.deletedAt).toBe('2026-10-03T00:00:00.000Z')
+    await expect(payload.delete({ collection: 'assets', id: asset.id, user: owner, overrideAccess: false })).rejects.toThrow()
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: null }, user: owner, overrideAccess: false })).rejects.toThrow()
+    await expect(restoreAssetFromBin(payload, { payload } as never, owner, asset.id)).resolves.toEqual({ status: 'restored' })
+    const restored = await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })
+    expect(restored.deletedAt).toBeNull()
   })
 })

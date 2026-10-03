@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
+import { snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 
-export type CapturedCollection = 'pages' | 'sections' | 'redirects'
+export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
@@ -18,9 +19,10 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'blocks', 'seoDescription'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription'],
   sections: ['name', 'summary', 'slug', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
+  assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
 }
 
 function idOf(value: unknown): string | undefined {
@@ -43,10 +45,15 @@ function hash(value: Record<string, unknown> | null): string | null {
 
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (!document) return null
+  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0])
   return Object.fromEntries(mutableFields[collection].flatMap((field) => {
     const value = document[field]
     if (field === 'seoDescription' && (value === null || value === '')) return []
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
+    // Draft records are the editor's working copy of published content. They
+    // must compare to the published snapshot as published, while an explicit
+    // archival operation remains visible to the approval candidate.
+    if (field === 'status') return [[field, value === 'archived' ? 'archived' : 'published']]
     if (value === undefined) return []
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
     if (field === 'parentId') {
@@ -61,7 +68,12 @@ export function snapshot(collection: CapturedCollection, document: Record<string
 function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
   // Payload applies partial updates. Explicit nulls clear fields that were absent
   // from the baseline rather than leaving a later editor's addition behind.
-  return Object.fromEntries(mutableFields[collection].map((field) => [field, field in value ? value[field] : null]))
+  return Object.fromEntries(mutableFields[collection].map((field) => {
+    // Draft persistence cannot accept the snapshot-only published status.
+    // Restoring an archived draft returns it to the ordinary draft workflow.
+    if (collection === 'pages' && field === 'status') return [field, 'draft']
+    return [field, field in value ? value[field] : null]
+  }))
 }
 
 function equivalent(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {

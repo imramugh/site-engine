@@ -13,6 +13,9 @@ import * as migration_20261003_150050 from './20261003_150050';
 import * as migration_20261003_155740_review_preview_jobs from './20261003_155740_review_preview_jobs';
 import * as migration_20261003_160000_publish_queue_correctness from './20261003_160000_publish_queue_correctness';
 import * as migration_20261003_160100_review_comments from './20261003_160100_review_comments';
+import * as migration_20261003_163801_inquiry_lead_pipeline from './20261003_163801_inquiry_lead_pipeline';
+import * as migration_20261003_165038_redirect_lifecycle from './20261003_165038_redirect_lifecycle';
+import * as migration_20261003_171753_media_library from './20261003_171753_media_library';
 
 export const migrations = [
   {
@@ -88,6 +91,21 @@ export const migrations = [
   {
     up: migration_20261003_160100_review_comments.up,
     down: migration_20261003_160100_review_comments.down,
-    name: '20261003_160100_review_comments'
+    name: '20261003_160100_review_comments',
+  },
+  {
+    up: migration_20261003_171753_media_library.up,
+    down: migration_20261003_171753_media_library.down,
+    name: '20261003_171753_media_library'
+  },
+  {
+    up: migration_20261003_163801_inquiry_lead_pipeline.up,
+    down: migration_20261003_163801_inquiry_lead_pipeline.down,
+    name: '20261003_163801_inquiry_lead_pipeline'
+  },
+  {
+    up: migration_20261003_165038_redirect_lifecycle.up,
+    down: migration_20261003_165038_redirect_lifecycle.down,
+    name: '20261003_165038_redirect_lifecycle'
   },
 ];

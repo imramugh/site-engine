@@ -4,6 +4,8 @@ import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole } from './access'
 import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable } from './identity'
 import { markStaleIfNeeded, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
+import { validateRedirectSet } from './redirect-lifecycle'
+import { deriveRoutes } from '@site-engine/engine'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
@@ -79,12 +81,13 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const pages = new Map(base.pages.map((page) => [page.id, structuredClone(page)]))
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
   const redirects = new Map(base.redirects.map((redirect) => [redirect.from, structuredClone(redirect)]))
+  const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
     if (change.collection === 'pages') {
       const merged = mergeCapturedChange(pages.get(change.id) as Record<string, unknown> | undefined, change)
-      merged === null ? pages.delete(change.id) : pages.set(change.id, { id: change.id, ...merged, status: 'published' } as SiteSnapshot['pages'][number])
+      merged === null ? pages.delete(change.id) : pages.set(change.id, { id: change.id, ...merged, status: merged.status === 'archived' ? 'archived' : 'published' } as SiteSnapshot['pages'][number])
     }
     if (change.collection === 'sections') {
       const merged = mergeCapturedChange(sections.get(change.id) as Record<string, unknown> | undefined, change)
@@ -99,9 +102,41 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
         redirects.set(String(merged.from), merged as SiteSnapshot['redirects'][number])
       }
     }
+    if (change.collection === 'assets') {
+      const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
+      if (merged === null) media.delete(change.id)
+      else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
+    }
   }
   for (const section of sections.values()) section.pageIds = [...pages.values()].filter((page) => page.sectionId === section.id).map((page) => page.id).sort()
-  return SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: structuredClone(base.media), changeSets: [] })
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  const oldRoutes = deriveRoutes(base).routes
+  const newRoutes = deriveRoutes(candidate).routes
+  const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))
+  const transitions = new Map(oldRoutes.flatMap((route) => {
+    const next = nextByID.get(route.page.id)
+    return next && next.path !== route.path ? [[route.path, next.path] as const] : []
+  }))
+  const redirectsWithMovedTargets = candidate.redirects.map((redirect) => ({ ...redirect, to: transitions.get(redirect.to) ?? redirect.to }))
+  const addRedirect = (redirect: { from: string; to: string; status: 301 }) => {
+    const existing = redirectsWithMovedTargets.find((candidateRedirect) => candidateRedirect.from === redirect.from)
+    if (!existing) { redirectsWithMovedTargets.push(redirect); return }
+    if (existing.to !== redirect.to) throw new Error(`Redirect ${redirect.from} already has a different target.`)
+  }
+  for (const oldRoute of oldRoutes) {
+    const next = nextByID.get(oldRoute.page.id)
+    if (next && next.path !== oldRoute.path) addRedirect({ from: oldRoute.path, to: next.path, status: 301 })
+    if (!next && candidate.pages.find((page) => page.id === oldRoute.page.id)?.status === 'archived') {
+      // An editor-selected redirect is authoritative. Only derive the parent
+      // destination when the old route has no selected redirect at all.
+      if (redirectsWithMovedTargets.some((redirect) => redirect.from === oldRoute.path)) continue
+      const parentID = oldRoute.page.parentId
+      const target = parentID ? nextByID.get(parentID)?.path : undefined
+      if (!target) throw new Error(`Archiving ${oldRoute.path} requires an explicit redirect target.`)
+      addRedirect({ from: oldRoute.path, to: target, status: 301 })
+    }
+  }
+  return SiteSnapshotSchema.parse({ ...candidate, redirects: validateRedirectSet(redirectsWithMovedTargets) })
 }
 
 async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: Actor | undefined): Promise<Actor> {

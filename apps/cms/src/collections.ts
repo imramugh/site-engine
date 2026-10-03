@@ -6,6 +6,9 @@ import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from 
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
+import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
+import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
+import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -158,7 +161,8 @@ export const Pages: CollectionConfig = {
   hooks: {
     beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
-    if (data._status === 'published' || data.status === 'published') throw new Error('Publishing is unavailable until the review workflow is implemented.')
+    const archived = data.status === 'archived' && req.context.archiveInternal
+    if (data._status === 'published' || data.status === 'published' || (data.status === 'archived' && !archived)) throw new Error('Publishing is unavailable; archive status changes are only available through the editorial workflow.')
     const id = data.id ?? originalDoc?.id ?? randomUUID()
     contractError(PageSchema.safeParse({
       id,
@@ -168,7 +172,7 @@ export const Pages: CollectionConfig = {
       summary: data.summary,
       slug: data.slug,
       template: data.template,
-      status: 'draft',
+      status: archived ? 'archived' : 'draft',
       blocks: data.blocks ?? [],
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
     }), req, 'pages')
@@ -178,11 +182,12 @@ export const Pages: CollectionConfig = {
       req.payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
     ])
     const candidate = treePage({ ...data, id, sectionId, parentId: relationId(data.parentId) })
+    await assertReferencedAssetsAreAccessible(req.payload, req, data.blocks ?? [])
     fieldErrors([
       ...incompatibleBlocks(candidate.template, candidate.blocks),
       ...validatePageTree(candidate, pages.docs.map((page) => treePage(page as unknown as Record<string, unknown>)), sections.docs[0] ? treeSection(sections.docs[0] as unknown as Record<string, unknown>) : undefined),
     ], req, 'pages')
-      return { ...data, id, status: 'draft', _status: 'draft' }
+      return { ...data, id, status: archived ? 'archived' : 'draft', _status: 'draft' }
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       await captureChange({ collection: 'pages', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
@@ -234,25 +239,151 @@ export const Sections: CollectionConfig = {
 }
 
 export const Assets: CollectionConfig = {
-  slug: 'assets', admin: { useAsTitle: 'alt', group: 'Content' }, access: editorialAccess,
-  fields: [{ name: 'alt', type: 'text', required: true }, { name: 'caption', type: 'textarea' }, { name: 'private', type: 'checkbox', defaultValue: true }],
+  slug: 'assets', admin: { useAsTitle: 'alt', group: 'Content', defaultColumns: ['alt', 'filename', 'updatedAt'] }, access: editorialAccess,
+  upload: {
+    staticDir: (() => { ensureMediaStorageDirectory(); return mediaStorageDirectory() })(),
+    mimeTypes: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'],
+    pasteURL: false,
+    focalPoint: true,
+    crop: true,
+    imageSizes: Object.entries(MEDIA_VARIANTS).map(([name, size]) => ({
+      name,
+      width: size.width,
+      height: size.height,
+      fit: 'cover' as const,
+      position: 'attention' as const,
+      withoutEnlargement: true,
+      formatOptions: { format: size.format },
+    })),
+  },
+  hooks: {
+    // Payload can remove existing files while generating upload data, before validation.
+    // Reject byte-changing operations before that stage to preserve pinned snapshots.
+    beforeOperation: [async ({ args, operation, req }) => {
+      if (operation !== 'update') return args
+      const immutableMessage = 'Upload a new asset to replace image bytes or change the crop; existing snapshots retain their original files.'
+      if (req.file) throw new Error(immutableMessage)
+      const data = 'data' in args ? args.data : undefined
+      const focalFields = ['focalX', 'focalY'] as const
+      if (data && focalFields.some(field => data[field] !== undefined)) {
+        if (!('id' in args) || (typeof args.id !== 'string' && typeof args.id !== 'number')) throw new Error(immutableMessage)
+        const original = await req.payload.findByID({ collection: 'assets', id: args.id, depth: 0, overrideAccess: true, req })
+        if (focalFields.some(field => data[field] !== undefined && data[field] !== original[field])) throw new Error(immutableMessage)
+      }
+      return args
+    }],
+    beforeValidate: [async ({ data, req }) => {
+      const issues = mediaMetadataIssues(data ?? {})
+      if (issues.length) fieldErrors(issues, req, 'assets')
+      if (req.file) await validateRasterUpload(req.file)
+      return data
+    }],
+    beforeChange: [async ({ data, originalDoc, req }) => {
+      const lifecycle = req.context.mediaLifecycle
+      const serverTransition = lifecycle === 'bin' || lifecycle === 'restore'
+      const directLifecycleWrite = data.restoreFromBin === true || Boolean(originalDoc
+        ? (data.deletedAt !== undefined && data.deletedAt !== originalDoc.deletedAt) || (data.deleteAfter !== undefined && data.deleteAfter !== originalDoc.deleteAfter)
+        : data.deletedAt || data.deleteAfter)
+      if (!serverTransition && directLifecycleWrite) throw new Error('Asset deletion lifecycle fields are server-owned.')
+      if (originalDoc?.deletedAt && !serverTransition) throw new Error('Assets in the deletion bin must be restored through the media lifecycle.')
+      const next = { ...data }
+      delete next.restoreFromBin
+      if (serverTransition && lifecycle === 'bin') { if (!next.deletedAt || !next.deleteAfter) throw new Error('Deletion bin timestamps are required.'); }
+      if (serverTransition && lifecycle === 'restore') { next.deletedAt = null; next.deleteAfter = null }
+      return next
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      await captureChange({ collection: 'assets', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
+      return doc
+    }],
+  },
+  fields: [
+    { name: 'alt', type: 'text', required: false, maxLength: 240 },
+    { name: 'decorative', type: 'checkbox', defaultValue: false },
+    { name: 'caption', type: 'textarea', maxLength: 300 },
+    { name: 'credit', type: 'text', maxLength: 240 },
+    { name: 'tags', type: 'text', hasMany: true, maxRows: 12 },
+    { name: 'focalX', type: 'number', min: 0, max: 100, defaultValue: 50 },
+    { name: 'focalY', type: 'number', min: 0, max: 100, defaultValue: 50 },
+    { name: 'deletedAt', type: 'date', admin: { readOnly: true }, access: { create: () => false, update: () => false } },
+    { name: 'deleteAfter', type: 'date', admin: { readOnly: true }, access: { create: () => false, update: () => false } },
+  ],
 }
 
 export const Redirects: CollectionConfig = {
   slug: 'redirects', admin: { useAsTitle: 'from', group: 'Content' }, access: editorialAccess,
   hooks: {
-    beforeChange: [({ data }) => { contractError(RedirectSchema.safeParse({ from: data.from, to: data.to, status: 301 })); return { ...data, status: 301 } }],
+    beforeChange: [async ({ data, originalDoc, req }) => {
+      const redirect = normalizedRedirect({ from: data.from ?? originalDoc?.from, to: data.to ?? originalDoc?.to })
+      const existing = await req.payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
+      validateRedirectSet([
+        ...existing.docs.filter((item) => item.id !== originalDoc?.id).map((item) => ({ from: String(item.from), to: String(item.to), status: 301 })),
+        redirect,
+      ])
+      contractError(RedirectSchema.safeParse(redirect), req, 'redirects')
+      return { ...originalDoc, ...data, ...redirect, status: 301 }
+    }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       await captureChange({ collection: 'redirects', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
       return doc
     }],
   },
-  fields: [{ name: 'from', type: 'text', required: true, unique: true }, { name: 'to', type: 'text', required: true }, { name: 'status', type: 'number', defaultValue: 301, admin: { readOnly: true } }],
+  fields: [
+    { name: 'from', type: 'text', required: true, unique: true },
+    { name: 'to', type: 'text', required: true },
+    { name: 'status', type: 'number', defaultValue: 301, admin: { readOnly: true } },
+    { name: 'hitCount', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true, description: 'Updated by the edge log ingestion adapter.' } },
+    { name: 'lastHitAt', type: 'date', admin: { readOnly: true } },
+  ],
 }
 
 export const Inquiries: CollectionConfig = {
-  slug: 'inquiries', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
-  fields: [{ name: 'email', type: 'email', required: true }, { name: 'message', type: 'textarea', required: true }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'contacted', 'closed'] }],
+  slug: 'inquiries',
+  admin: { useAsTitle: 'email', group: 'Private', defaultColumns: ['email', 'topic', 'stage', 'urgent', 'assignee', 'nextAction', 'updatedAt'] },
+  // Public submissions enter only through the server-owned intake route. This
+  // keeps the form entirely outside editorial and ordinary Payload REST create.
+  access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  hooks: { beforeChange: [async ({ data, originalDoc, operation, req }) => {
+    if (operation !== 'update') return data
+    for (const field of ['email', 'message', 'topic', 'sourcePage', 'consentedAt', 'consentBasis', 'idempotencyKey', 'urgent']) {
+      if (data[field] !== undefined && data[field] !== originalDoc[field]) throw new Error('Original inquiry and consent evidence cannot be changed.')
+    }
+    if (data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
+    for (const field of ['notes', 'nextAction']) if (data[field] !== undefined && data[field] !== null && (typeof data[field] !== 'string' || data[field].length > 5_000)) throw new Error(`Invalid ${field}.`)
+    if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
+    return data
+  }] },
+  fields: [
+    { name: 'email', type: 'email', required: true },
+    { name: 'name', type: 'text' },
+    { name: 'telephone', type: 'text' },
+    { name: 'company', type: 'text' },
+    { name: 'message', type: 'textarea', required: true },
+    { name: 'topic', type: 'select', required: true, options: ['general', 'project', 'partnership', 'active-incident'] },
+    { name: 'sourcePage', type: 'text', required: true },
+    { name: 'consentedAt', type: 'date', required: true, admin: { readOnly: true } },
+    { name: 'consentBasis', type: 'select', required: true, options: ['visitor-confirmed', 'staff-recorded', 'unknown'], admin: { readOnly: true } },
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'stage', type: 'select', defaultValue: 'new', required: true, options: ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] },
+    { name: 'urgent', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
+    { name: 'notes', type: 'textarea' },
+    { name: 'assignee', type: 'relationship', relationTo: 'users' },
+    { name: 'nextAction', type: 'textarea' },
+  ],
+}
+
+/** Durable intent only: notification providers are deliberately not invoked here. */
+export const NotificationOutbox: CollectionConfig = {
+  slug: 'notification-outbox', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'inquiry', type: 'relationship', relationTo: 'inquiries', required: true },
+    { name: 'kind', type: 'select', required: true, options: ['lead-received', 'urgent-lead-alert'] },
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true },
+    { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'delivered', 'failed'] },
+    { name: 'payload', type: 'json', required: true },
+    { name: 'availableAt', type: 'date', required: true },
+  ],
 }
 
 export const Applications: CollectionConfig = {

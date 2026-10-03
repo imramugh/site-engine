@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { createNamedChangeSet, transitionChangeSet } from '../../../../src/editorial'
+import { archivePage } from '../../../../src/redirect-lifecycle'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { changeSetHash } from '../../../../src/publishing'
 import { SiteSnapshotSchema } from '@site-engine/contract'
@@ -41,7 +42,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-    const body = await request.json() as { id?: string; name?: string }
+    const body = await request.json() as { id?: string; name?: string; target?: string }
     const { action } = await context.params
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
@@ -57,6 +58,11 @@ export async function POST(request: Request, context: { params: Promise<{ action
         const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req })
         const comments = Array.isArray(set.reviewComments) ? set.reviewComments : []
         return payload.update({ collection: 'change-sets', id: body.id, data: { reviewComments: [...comments, { id: crypto.randomUUID(), author: actor.id, body: comment, createdAt: new Date().toISOString() }] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      }
+      if (action === 'archive') {
+        if (typeof body.id !== 'string') throw new Error('A page ID is required.')
+        if (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'editor')) throw new Error('Editor role required.')
+        return archivePage({ payload, req, pageID: body.id, target: body.target })
       }
       if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
       return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })
