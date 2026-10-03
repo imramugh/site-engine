@@ -187,6 +187,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(await rescheduled.json()).toMatchObject({ state: 'scheduled', scheduledFor: '2030-01-02T04:04:05.000Z' })
     expect((await request('cancel', { id: first.scheduledPublicationID })).status).toBe(200)
     expect(await payload.findByID({ collection: 'scheduled-publications', id: first.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'cancelled', dispatchReason: 'CANCELLED_BY_OWNER' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
     expect((await scheduledPublicationRoute.POST(new Request('http://cms.test/api/editorial/schedules/cancel', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify({ id: first.scheduledPublicationID }) }), { params: Promise.resolve({ action: 'cancel' }) })).status).toBe(401)
   })
 

@@ -317,9 +317,15 @@ export async function dispatchDueScheduledPublications(payload: Payload, req: Pa
 export async function cancelScheduledPublication(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string }) {
   const { payload, req, actor, id } = input; requireTransaction(req, 'Scheduled publication cancellation')
   const owner = await canonicalOwner(payload, req, actor)
+  const schedule = await payload.findByID({ collection: 'scheduled-publications', id, depth: 0, overrideAccess: true, req }) as unknown as { changeSet?: unknown }
   const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'cancelled', dispatchReason: 'CANCELLED_BY_OWNER' }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('Only a scheduled publication can be cancelled.')
-  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_cancelled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id } }, overrideAccess: true, req })
+  const changeSetID = idOf(schedule.changeSet)
+  if (changeSetID) {
+    const set = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    if (set.state === 'approved') await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'changes-requested', revision: Number(set.revision ?? 0) + 1, quality: undefined, preview: undefined, reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  }
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_cancelled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id, changeSet: changeSetID, reopenedForReview: Boolean(changeSetID) } }, overrideAccess: true, req })
   return updated.docs[0]
 }
 

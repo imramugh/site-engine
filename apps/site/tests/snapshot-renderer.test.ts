@@ -456,6 +456,12 @@ describe('static snapshot renderer', () => {
     expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
     expect(await page.locator('picture source').count()).toBe(0);
     await page.getByRole('link', { name: 'Return to docs' }).click({ noWaitAfter: true }); await page.waitForURL(`${serverOrigin}${BASE_PATH}docs`, { timeout: 5_000 }); expect(page.url()).toBe(`${serverOrigin}${BASE_PATH}docs`);
+    await page.goto(`${serverOrigin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+    expect(await page.getByRole('heading', { name: 'Case study' }).isVisible()).toBe(true);
+    expect(await page.getByText('Synthetic client').isVisible()).toBe(true);
+    const graph = JSON.parse((await page.locator('script[type="application/ld+json"]').textContent()) ?? '{}') as { '@graph'?: Array<{ '@type'?: string; keywords?: string; contributor?: { name?: string } }> };
+    const articleSchema = graph['@graph']?.find((entry) => entry['@type'] === 'Article');
+    expect(articleSchema).toMatchObject({ keywords: 'Synthetic strategy', contributor: { name: 'Synthetic client' } });
     const noJs = await browser.newContext({ javaScriptEnabled: false }); const noJsPage = await noJs.newPage();
     await noJsPage.goto(`${serverOrigin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
     expect(await noJsPage.getByRole('heading').first().isVisible({ timeout: 5_000 })).toBe(true); expect(await noJsPage.locator('body').textContent()).toContain('Synthetic transcript.');

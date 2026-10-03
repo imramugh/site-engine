@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+import { createRequire } from 'node:module'
+
+const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
@@ -136,6 +139,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   // owner whose revocation cannot affect the other identity journeys.
   await signInLocalOwner(reviewer, reviewOwnerRecoveryCode, reviewOwnerEmail)
   await reviewer.goto('/admin/editorial')
+  await reviewer.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
+  await reviewer.addScriptTag({ path: axeSource })
+  expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
   await expect(reviewer.getByLabel(/Include pages/)).toBeChecked()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
@@ -167,6 +173,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.getByRole('button', { name: 'Run readiness checks' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Deterministic readiness checks completed' })).toContainText('completed')
   await expect(reviewer.getByText(/SEO_DESCRIPTION_MISSING/).first()).toBeVisible()
+  await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
   const displayed = await reviewer.evaluate(async () => {
     const response = await fetch('/api/editorial/list', { cache: 'no-store' })
     const body = await response.json() as { sets: Array<{ id: string; name: string; quality?: { proof?: Record<string, unknown> } }> }
