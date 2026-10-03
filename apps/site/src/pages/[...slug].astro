@@ -10,6 +10,7 @@ import { publicOrigin, renderBase } from '../lib/snapshot.js';
 import { schemaForRoute } from '../lib/seo.js';
 import ApplicationForm from '../components/ApplicationForm.astro';
 import InquiryForm from '../components/InquiryForm.astro';
+import AnalyticsHooks from '../components/AnalyticsHooks.astro';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 export function getStaticPaths() { const staticModel = deriveRoutes(siteSnapshot, siteHomepageId); return staticModel.routes.filter((route) => route.path !== '/').map((route) => ({ params: { slug: route.path.slice(1) }, props: { route } })); }
 const { route } = Astro.props;
@@ -27,6 +28,7 @@ const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
   {route.page.template === 'article' && <aside class="block"><div class="block__inner"><h2>Article information</h2><p>{route.page.summary}</p>{route.page.businessCase && <section aria-label="Case study details"><h2>Case study</h2><dl><dt>Client</dt><dd>{route.page.businessCase.client ?? route.page.businessCase.anonymizedClient}</dd><dt>Industry</dt><dd>{route.page.businessCase.industry}</dd><dt>Published</dt><dd><time datetime={route.page.businessCase.publicationDate}>{route.page.businessCase.publicationDate.slice(0, 10)}</time></dd><dt>Challenge</dt><dd>{route.page.businessCase.challenge}</dd><dt>Approach</dt><dd>{route.page.businessCase.approach}</dd><dt>Outcome</dt><dd>{route.page.businessCase.outcome}</dd><dt>Services</dt><dd>{route.page.businessCase.services.join(', ')}</dd></dl></section>}</div></aside>}
   {route.page.template === 'job' && route.page.jobPosting && <section class="block"><div class="block__inner"><h2>Application information</h2><dl><dt>Employment type</dt><dd>{route.page.jobPosting.employmentType.replaceAll('_', ' ').toLowerCase()}</dd><dt>Location</dt><dd>{[route.page.jobPosting.location.addressLocality, route.page.jobPosting.location.addressRegion, route.page.jobPosting.location.addressCountry].filter(Boolean).join(', ')}</dd><dt>Posted</dt><dd><time datetime={route.page.jobPosting.datePosted}>{route.page.jobPosting.datePosted.slice(0, 10)}</time></dd>{route.page.jobPosting.validThrough && <><dt>Closing date</dt><dd><time datetime={route.page.jobPosting.validThrough}>{route.page.jobPosting.validThrough.slice(0, 10)}</time></dd></>}</dl><h2>Apply for this role</h2><ApplicationForm jobId={route.page.id} enabled={applicationsEnabled} /></div></section>}
   <MotionRuntime enabled={motionEnabled} />
+  <AnalyticsHooks path={route.path} />
 </Layout>
 
 <style>
