@@ -2,7 +2,7 @@
 import Layout from '@site-engine/theme-starter/components/Layout.astro';
 import BlockRenderer from '@site-engine/theme-starter/components/BlockRenderer.astro';
 import { childrenOf, deriveRoutes } from '@site-engine/engine';
-import { siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
+import { localURL, siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
 import MotionRuntime from '../components/MotionRuntime.astro';
 import { pageHasEnabledMotion, resolveStarterMotion } from '../lib/motion.js';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
@@ -12,10 +12,10 @@ const children = childrenOf(route, model);
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 ---
 <Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.summary} motionEnabled={motionEnabled}>
-  <nav aria-label="Breadcrumb"><ol>{route.breadcrumbs.map((crumb, index) => <li>{index === route.breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span> : <a href={crumb.href}>{crumb.label}</a>}</li>)}</ol></nav>
+  <nav aria-label="Breadcrumb"><ol>{route.breadcrumbs.map((crumb, index) => <li>{index === route.breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span> : <a href={localURL(crumb.href)}>{crumb.label}</a>}</li>)}</ol></nav>
   {!route.page.blocks.some((block) => !block.hidden && block.type === 'hero') && <header class="block"><div class="block__inner"><h1>{route.page.title}</h1><p>{route.page.summary}</p></div></header>}
   {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />)}
-  {['listing', 'pillar', 'service'].includes(route.page.template) && <section class="block"><div class="block__inner"><h2>{route.page.template === 'listing' ? 'Pages' : 'Child pages'}</h2>{children.length ? <ul>{children.map((child) => <li><a href={child.path}>{child.page.title}</a><p>{child.page.summary}</p></li>)}</ul> : <p>No child pages are published.</p>}</div></section>}
+  {['listing', 'pillar', 'service'].includes(route.page.template) && <section class="block"><div class="block__inner"><h2>{route.page.template === 'listing' ? 'Pages' : 'Child pages'}</h2>{children.length ? <ul>{children.map((child) => <li><a href={localURL(child.path)}>{child.page.title}</a><p>{child.page.summary}</p></li>)}</ul> : <p>No child pages are published.</p>}</div></section>}
   {route.page.template === 'article' && <aside class="block"><div class="block__inner"><h2>Article information</h2><p>{route.page.summary}</p></div></aside>}
   {route.page.template === 'job' && <section class="block"><div class="block__inner"><h2>Application information</h2><p>This static preview does not collect applications.</p></div></section>}
   <MotionRuntime enabled={motionEnabled} />

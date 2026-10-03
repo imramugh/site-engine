@@ -13,3 +13,4 @@ function load(): SiteSnapshot {
 }
 export const siteSnapshot = load()
 export const siteHomepageId = input ? siteSnapshot.settings.homepageId : demoHomepageId
+export const localURL = (href: string) => /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(href) ? href : `${renderBase}${href.replace(/^\//, '')}`

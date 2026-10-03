@@ -14,16 +14,16 @@ const effect = ['contact', 'incidentBar'].includes(block.type) ? undefined : mot
 ---
 {!block.hidden && <section class={classes} id={block.anchorId} data-block={block.type} data-motion-effect={effect}><div class="block__inner">
   {block.type === 'hero' && <><p>{block.eyebrow}</p><h1>{block.heading}</h1><p>{block.body}</p>{block.cta && <a href={href(block.cta.href)}>{block.cta.label}</a>}</>}
-  {block.type === 'incidentBar' && <p role="status">{block.message} {block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</p>}
-  {block.type === 'pillarGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3><a href={item.href}>{item.title}</a></h3><p>{item.body}</p></li>)}</ul></>}
+  {block.type === 'incidentBar' && <p role="status">{block.message} {block.cta && <a href={href(block.cta.href)}>{block.cta.label}</a>}</p>}
+  {block.type === 'pillarGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3><a href={href(item.href)}>{item.title}</a></h3><p>{item.body}</p></li>)}</ul></>}
   {block.type === 'featureGrid' && <><h2>{block.heading}</h2><ul class="cards">{block.items.map((item) => <li class="card"><h3>{item.title}</h3><p>{item.body}</p></li>)}</ul></>}
   {block.type === 'splitList' && <><h2>{block.heading}</h2><ol class="split">{block.items.map((item) => <li><h3>{item.title}</h3><p>{item.body}</p></li>)}</ol></>}
   {block.type === 'chipList' && <>{block.heading && <h2>{block.heading}</h2>}<ul class="chips">{block.chips.map((chip) => <li>{chip}</li>)}</ul></>}
   {block.type === 'testimonials' && approvedTestimonials.length > 0 && <><h2>Testimonials</h2>{approvedTestimonials.map((item) => <figure class="quote"><blockquote>{item.quote}</blockquote><figcaption>{item.attribution}{item.role && `, ${item.role}`}</figcaption></figure>)}</>}
   {block.type === 'faq' && <><h2>{block.heading}</h2>{block.items.map((item) => <details><summary>{item.question}</summary><p>{item.answer}</p></details>)}</>}
-  {block.type === 'callout' && <><h2>{block.heading}</h2><p>{block.body}</p>{block.cta && <a href={block.cta.href}>{block.cta.label}</a>}</>}
+  {block.type === 'callout' && <><h2>{block.heading}</h2><p>{block.body}</p>{block.cta && <a href={href(block.cta.href)}>{block.cta.label}</a>}</>}
   {block.type === 'relatedServices' && <><h2>{block.heading}</h2><ul>{related.map((route) => route && <li><a href={href(route.path)}>{route.page.title}</a><p>{route.page.summary}</p></li>)}</ul></>}
-  {block.type === 'cta' && <><h2>{block.heading}</h2><p>{block.body}</p><a href={block.cta.href}>{block.cta.label}</a></>}
+  {block.type === 'cta' && <><h2>{block.heading}</h2><p>{block.body}</p><a href={href(block.cta.href)}>{block.cta.label}</a></>}
   {block.type === 'richText' && <>{paragraphs.map((paragraph) => <p>{paragraph}</p>)}</>}
   {block.type === 'contact' && <><h2>{block.heading}</h2><p>{block.body}</p></>}
   {block.type === 'media' && resolved(block.mediaId) && <figure><img class="media" src={mediaSrc(block.mediaId)} width={resolved(block.mediaId)!.width} height={resolved(block.mediaId)!.height} alt={resolved(block.mediaId)!.decorative ? '' : resolved(block.mediaId)!.alt} /><figcaption>{block.caption}</figcaption></figure>}
