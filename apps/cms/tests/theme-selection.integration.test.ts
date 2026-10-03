@@ -13,11 +13,12 @@ import { prepareReviewPreview } from '../src/review-preview'
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-theme-selection-'))
 const registryFile = join(directory, 'theme-registry.json')
 const db = join(directory, 'cms.sqlite')
-const manifest = {
+const oldManifest = {
   name: 'synthetic-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js',
   standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} },
 }
-const registry = { themes: [{ manifest, installedAt: '2026-10-03T00:00:00.000Z' }] }
+const manifest = { ...oldManifest, version: '2.4.7' }
+const registry = { themes: [{ manifest: oldManifest, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest, installedAt: '2026-10-04T00:00:00.000Z' }] }
 
 process.env.DATABASE_URI = `file:${db}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-theme-selection'
@@ -25,7 +26,7 @@ process.env.SITE_THEME_REGISTRY_JSON = registryFile
 writeFileSync(registryFile, JSON.stringify(registry))
 
 const { default: config } = await import('../payload.config.js')
-const { parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
+const { getInstalledTheme, parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })
@@ -43,10 +44,12 @@ function baseline() {
 
 async function installPublishedBaseline(ownerID: string) {
   const manifest = baseline()
+  const oldTheme = getInstalledTheme(parseThemeRegistry(registry), oldManifest.name, oldManifest.version)!
+  manifest.settings.theme = { id: oldManifest.name, version: oldManifest.version, contract: oldManifest.contract, manifestDigest: oldTheme.manifestDigest }
   const set = await payload.create({ collection: 'change-sets', data: { name: 'Synthetic baseline', actor: ownerID, state: 'published', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
-  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: '1.0.0', engineVersion: 'test-engine', contractVersion: '1.0.0', approvedBy: ownerID, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0', approvedBy: ownerID, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: '1.0.0', engineVersion: 'test-engine', contractVersion: '1.0.0', checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0', checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   return { manifest, snapshot }
 }
 
@@ -55,13 +58,13 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     const owner = await payload.create({ collection: 'users', data: { email: `theme-owner-${randomUUID()}@example.test`, name: 'Theme owner', roles: ['owner'] }, overrideAccess: true })
     const editor = await payload.create({ collection: 'users', data: { email: `theme-editor-${randomUUID()}@example.test`, name: 'Theme editor', roles: ['editor'] }, overrideAccess: true })
     const { manifest: published, snapshot } = await installPublishedBaseline(owner.id)
-    const installed = parseThemeRegistry(registry).get(manifest.name)!
+    const installed = getInstalledTheme(parseThemeRegistry(registry), manifest.name, manifest.version)!
     const selection = { id: manifest.name, version: manifest.version, contract: manifest.contract, manifestDigest: installed.manifestDigest }
 
     const settings = await payload.create({ collection: 'theme-settings', data: { selection, settings: { [manifest.name]: { tone: 'warm' } } }, draft: true, user: owner, overrideAccess: false })
     await expect(payload.update({ collection: 'theme-settings', id: settings.id, data: { settings: { [manifest.name]: { tone: 'cool' } } }, user: editor, overrideAccess: false })).rejects.toThrow()
     await expect(payload.update({ collection: 'theme-settings', id: settings.id, data: { selection: { ...selection, manifestDigest: 'bad' } }, user: owner, overrideAccess: false })).rejects.toThrow()
-    writeFileSync(registryFile, JSON.stringify({ themes: [{ ...registry.themes[0], manifest: { ...manifest, version: '2.4.7' } }] }))
+    writeFileSync(registryFile, JSON.stringify({ themes: registry.themes.map((entry) => entry.manifest.version === manifest.version ? { ...entry, manifest: { ...manifest, version: '2.4.8' } } : entry) }))
     await expect(payload.update({ collection: 'theme-settings', id: settings.id, data: { selection }, user: owner, overrideAccess: false })).rejects.toThrow(/installed exactly as reviewed/)
     writeFileSync(registryFile, JSON.stringify(registry))
 
@@ -74,6 +77,7 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
 
     expect(settings.selection).toEqual(selection)
     expect(proposed.settings.theme).toEqual(selection)
+    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0' })
     expect(proposed.settings.themeSettings).toEqual({ 'retained-theme': { tone: 'preserved' }, [manifest.name]: { tone: 'warm' } })
     expect((await payload.findByID({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })).manifest).toEqual(published)
     expect((await payload.find({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(1)

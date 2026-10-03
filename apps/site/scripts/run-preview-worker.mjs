@@ -29,11 +29,20 @@ function claimInput(value, expectedVersions) {
   if (!uuid.test(job?.id ?? '') || !/^[A-Za-z0-9_-]{16,256}$/.test(job?.leaseToken ?? '')
     || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now()
     || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed'
-    || versions.some(key => typeof versionPins?.[key] !== 'string' || versionPins[key] !== expectedVersions[key])) {
+    || versions.some(key => typeof versionPins?.[key] !== 'string')
+    || ['engineVersion', 'contractVersion'].some(key => versionPins[key] !== expectedVersions[key])) {
     throw new WorkerError('INVALID_CLAIM');
   }
   const input = { job, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
   if ([input.live, input.proposed].some(snapshot => snapshot.settings.contractVersion !== versionPins.contractVersion)) throw new WorkerError('INVALID_CLAIM');
+  const selectedVersion = snapshot => snapshot.settings.theme?.version;
+  const proposedThemeVersion = selectedVersion(input.proposed) ?? versionPins.themeVersion;
+  const liveThemeVersion = selectedVersion(input.live) ?? versionPins.liveThemeVersion ?? versionPins.themeVersion;
+  if (versionPins.themeVersion !== proposedThemeVersion || ('liveThemeVersion' in versionPins && versionPins.liveThemeVersion !== liveThemeVersion)) throw new WorkerError('INVALID_CLAIM');
+  input.variantPins = {
+    live: { engineVersion: versionPins.engineVersion, contractVersion: versionPins.contractVersion, themeVersion: liveThemeVersion },
+    proposed: { engineVersion: versionPins.engineVersion, contractVersion: versionPins.contractVersion, themeVersion: proposedThemeVersion },
+  };
   return input;
 }
 
@@ -95,8 +104,8 @@ async function verifyPair(root, input) {
   if (!info.isDirectory() || info.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
   const names = (await readdir(root)).sort();
   if (canonical(names) !== canonical(['live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
-  const live = await verifyVariant(join(root, 'live'), input.live, input.versionPins);
-  const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.versionPins);
+  const live = await verifyVariant(join(root, 'live'), input.live, input.variantPins.live);
+  const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.variantPins.proposed);
   return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, artifactDigest: hash({ live, proposed }) };
 }
 
@@ -138,11 +147,11 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
         const inputPath = join(scratch, `${variant}.json`);
         await writeFile(inputPath, canonical(input[variant]), { mode: 0o600 });
         if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
-        const result = await render({ input: inputPath, outputRoot: scratch, publicOrigin: origin, basePath: `/preview/changes/${input.job.id}/${variant}/`, themeSelection: input[variant].settings.theme, versionPins: input.versionPins, signal: controller.signal });
+        const result = await render({ input: inputPath, outputRoot: scratch, publicOrigin: origin, basePath: `/preview/changes/${input.job.id}/${variant}/`, themeSelection: input[variant].settings.theme, versionPins: input.variantPins[variant], signal: controller.signal });
         if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
         const output = resolve(result.output);
         if (!output.startsWith(`${scratch}/snapshot-`) || output.slice(scratch.length + 1).includes('/')) throw new WorkerError('INVALID_ARTIFACT');
-        await verifyVariant(output, input[variant], input.versionPins);
+        await verifyVariant(output, input[variant], input.variantPins[variant]);
         await rename(output, join(pair, variant));
       }
       evidence = await verifyPair(pair, input);
@@ -171,8 +180,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const artifactRoot = process.env.PREVIEW_ARTIFACT_ROOT;
   if (!process.env.SITE_PUBLIC_ORIGIN) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
   const publicOrigin = normalizePublicOrigin(process.env.SITE_PUBLIC_ORIGIN);
-  const versionPins = { engineVersion: process.env.SITE_ENGINE_VERSION, themeVersion: process.env.SITE_THEME_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
-  if (!artifactRoot || versions.some(key => !versionPins[key])) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  const versionPins = { engineVersion: process.env.SITE_ENGINE_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
+  if (!artifactRoot || Object.values(versionPins).some(value => !value)) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
   const registry = await loadThemeRegistry();
   const render = await loadRenderer({ genericRenderer: buildSnapshot });
   const controller = new AbortController();

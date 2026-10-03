@@ -6,7 +6,16 @@ const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(
 const digest = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
 
 export type InstalledTheme = { manifest: ReturnType<typeof ThemeManifestSchema.parse>; manifestDigest: string };
-export type ThemeRegistry = Map<string, InstalledTheme>;
+/** Themes are retained by immutable name/version identity. */
+export type ThemeRegistry = Map<string, Map<string, InstalledTheme>>;
+
+export function installedThemes(registry: ThemeRegistry): InstalledTheme[] {
+  return [...registry.values()].flatMap((versions) => [...versions.values()]);
+}
+
+export function getInstalledTheme(registry: ThemeRegistry, name: string, version: string): InstalledTheme | undefined {
+  return registry.get(name)?.get(version);
+}
 
 /** Parses operator data only; it never imports or executes a theme module. */
 export function parseThemeRegistry(value: unknown): ThemeRegistry {
@@ -16,8 +25,10 @@ export function parseThemeRegistry(value: unknown): ThemeRegistry {
   for (const entry of entries) {
     const installed = ThemeInstallSchema.parse(entry);
     const manifestDigest = digest(installed.manifest);
-    if (registry.has(installed.manifest.name)) throw new Error('Theme registry contains duplicate install names.');
-    registry.set(installed.manifest.name, { manifest: installed.manifest, manifestDigest });
+    const versions = registry.get(installed.manifest.name) ?? new Map<string, InstalledTheme>();
+    if (versions.has(installed.manifest.version)) throw new Error('Theme registry contains duplicate install name/version pairs.');
+    versions.set(installed.manifest.version, { manifest: installed.manifest, manifestDigest });
+    registry.set(installed.manifest.name, versions);
   }
   return registry;
 }
@@ -27,7 +38,7 @@ export async function loadThemeRegistry(value = process.env.SITE_THEME_REGISTRY_
   try { return parseThemeRegistry(JSON.parse(source)); } catch (error) { throw new Error(`Invalid theme registry: ${error instanceof Error ? error.message : 'unknown error'}`); }
 }
 export function verifyInstalledThemeSelection(input: unknown, registry: ThemeRegistry) {
-  const selection = ThemeSelectionSchema.parse(input); const installed = registry.get(selection.id);
+  const selection = ThemeSelectionSchema.parse(input); const installed = getInstalledTheme(registry, selection.id, selection.version);
   if (!installed || installed.manifest.version !== selection.version || installed.manifest.contract !== selection.contract || installed.manifestDigest !== selection.manifestDigest) throw new Error('Frozen theme selection is not installed exactly as reviewed.');
   return installed;
 }

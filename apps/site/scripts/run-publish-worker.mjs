@@ -24,9 +24,10 @@ export function createPublishAPI({ cmsOrigin, token, fetchImpl = fetch, timeoutM
 }
 function claim(value, pins) {
   if (value?.job === null) return null; const job = value?.job;
-  if (!uuid.test(job?.id ?? '') || typeof job?.leaseToken !== 'string' || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now() || !value?.contentHash || Object.keys(pins).some(key => value?.versionPins?.[key] !== pins[key])) throw new WorkerError('INVALID_CLAIM');
+  if (!uuid.test(job?.id ?? '') || typeof job?.leaseToken !== 'string' || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now() || !value?.contentHash || typeof value?.versionPins?.themeVersion !== 'string' || ['engineVersion', 'contractVersion'].some(key => value?.versionPins?.[key] !== pins[key])) throw new WorkerError('INVALID_CLAIM');
   const snapshot = SiteSnapshotSchema.parse(value.snapshot); if (hash(snapshot) !== value.contentHash || snapshot.settings.contractVersion !== pins.contractVersion) throw new WorkerError('INVALID_CLAIM');
-  return { job, snapshot, pins: { contentHash: value.contentHash, ...pins } };
+  if (snapshot.settings.theme?.version && snapshot.settings.theme.version !== value.versionPins.themeVersion) throw new WorkerError('INVALID_CLAIM');
+  return { job, snapshot, versionPins: value.versionPins, pins: { contentHash: value.contentHash, ...value.versionPins } };
 }
 function sameProof(proof, expected) { return proof?.jobID === expected.jobID && proof?.sequence === expected.sequence && proof?.contentHash === expected.contentHash && Object.keys(expected.versionPins).every(key => proof?.versionPins?.[key] === expected.versionPins[key]); }
 async function externalHealthProbe(origin, expected, signal) {
@@ -46,15 +47,15 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
       if (error?.code !== 'ENOENT') throw error;
       await mkdir(buildRoot, { recursive: true }); scratch = await mkdtemp(join(resolve(buildRoot), '.publish-build-'));
       const source = join(scratch, 'snapshot.json'); await writeFile(source, stable(input.snapshot));
-      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', themeSelection: input.snapshot.settings.theme, versionPins, signal });
+      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', themeSelection: input.snapshot.settings.theme, versionPins: input.versionPins, signal });
       manifest = await verifyPublicArtifact(built.output, input.pins); artifact = built.output;
     }
-    const expectedProof = { jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, versionPins };
+    const expectedProof = { jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, versionPins: input.versionPins };
     const probe = healthProbe ?? ((expected) => externalHealthProbe(normalizePublicOrigin(healthOrigin), expected, signal));
     await activatePublicRelease({ releasesRoot, artifact, jobID: identity.id, sequence: input.job.sequence, pins: input.pins, health: () => probe(expectedProof), assertLease: async () => {
       const renewed = await api('renew', identity, signal); if (!validLease(renewed?.job, identity, signal)) throw new WorkerError('LEASE_LOST'); return true;
     } });
-    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] };
+    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] };
     await api('complete', { ...identity, artifact: evidence }, signal); return true;
   } catch (error) {
     if (error?.code !== 'LEASE_LOST') { try { await api('fail', { ...identity, errorCode: error?.code ?? 'BUILD_FAILED' }, signal); } catch {} }
@@ -64,7 +65,8 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const controller = new AbortController(); for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => controller.abort());
-  const versionPins = { themeVersion: process.env.SITE_THEME_VERSION, engineVersion: process.env.SITE_ENGINE_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
+  const versionPins = { engineVersion: process.env.SITE_ENGINE_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
+  if (Object.values(versionPins).some(value => !value)) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
   const registry = await loadThemeRegistry();
   const render = await loadRenderer({ genericRenderer: buildSnapshot });
   const api = createPublishAPI({ cmsOrigin: process.env.PUBLISH_CMS_ORIGIN, token: process.env.PUBLISH_WORKER_TOKEN });

@@ -3,7 +3,7 @@ import config from '../../../payload.config'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
 import { createNamedChangeSet } from '../../../src/editorial'
 import { serverSessionStrategy } from '../../../src/identity'
-import { compatibilityReport, loadThemeRegistry } from '@site-engine/engine/theme-registry'
+import { compatibilityReport, getInstalledTheme, installedThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,7 +51,7 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>) {
   const [registry, state] = await Promise.all([loadThemeRegistry(), currentState(payload)])
   const published = selectionOf((state.manifest as { settings?: { theme?: unknown } }).settings?.theme)
   return {
-    themes: [...registry.values()].map((installed) => ({
+    themes: installedThemes(registry).map((installed) => ({
       id: installed.manifest.name,
       version: installed.manifest.version,
       contract: installed.manifest.contract,
@@ -86,8 +86,8 @@ export async function POST(request: Request): Promise<Response> {
     const name = body.changeSetName.trim()
     if (!name || name.length > 120) throw new Error('A change set name must contain 1 to 120 characters.')
     const registry = await loadThemeRegistry()
-    const installed = registry.get(body.id)
-    if (!installed || installed.manifest.version !== body.version) throw new Error('Choose a currently installed theme version.')
+    const installed = getInstalledTheme(registry, body.id, body.version)
+    if (!installed) throw new Error('Choose a currently installed theme version.')
     const state = await currentState(payload)
     const compatibility = compatibilityReport(state.manifest, installed.manifest)
     if (!compatibility.compatible) throw new Error('This theme cannot render the current published content.')
