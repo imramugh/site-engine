@@ -51,7 +51,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
       const parentID = idOf(value)
       return parentID ? [[field, parentID]] : []
     }
-    if (field === 'pageIds' && Array.isArray(value)) return [[field, value.map((item) => idOf(item) ?? item)]]
+    if (field === 'pageIds') return [[field, Array.isArray(value) ? value.map((item) => idOf(item) ?? item) : []]]
     return [[field, value]]
   }))
 }
