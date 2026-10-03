@@ -13,6 +13,7 @@ const MAX_BODY_BYTES = 16 * 1024
 
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+const versionsEqual = (left: unknown, right: Versions) => Boolean(left && typeof left === 'object' && (left as Versions).themeVersion === right.themeVersion && (left as Versions).engineVersion === right.engineVersion && (left as Versions).contractVersion === right.contractVersion)
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 
 export async function loadInitialPreviewBaseline(): Promise<Baseline | undefined> {
@@ -59,7 +60,8 @@ export async function prepareReviewPreview(input: { payload: Payload; req: Paylo
   const proposed = buildCandidate(base.manifest, changes, includedChangeKeys, base.versions)
   const liveManifestHash = canonicalHash(live.manifest); const proposedManifestHash = canonicalHash(proposed)
   const existing = await payload.find({ collection: 'preview-render-jobs', where: { and: [{ changeSet: { equals: id } }, { reviewRevision: { equals: expectedRevision } }, { changeHash: { equals: expectedChangeHash } }, { proposedManifestHash: { equals: proposedManifestHash } }, { liveManifestHash: { equals: liveManifestHash } }, { baselineSequence: { equals: base.sequence } }, { liveSequence: { equals: live.sequence } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true, req })
-  if (existing.docs[0] && Array.isArray(existing.docs[0].includedChangeKeys) && keysEqual(existing.docs[0].includedChangeKeys as string[], includedChangeKeys)) return existing.docs[0]
+  const duplicate = existing.docs[0]
+  if (duplicate && Array.isArray(duplicate.includedChangeKeys) && keysEqual(duplicate.includedChangeKeys as string[], includedChangeKeys) && idOf(duplicate.baselineSnapshot) === base.snapshotID && idOf(duplicate.liveSnapshot) === live.snapshotID && versionsEqual(duplicate.versionPins, base.versions)) return duplicate
   const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, baselineSnapshot: base.snapshotID, baselineSequence: base.sequence, liveSnapshot: live.snapshotID, liveSequence: live.sequence, liveManifest: live.manifest, proposedManifest: proposed, liveManifestHash, proposedManifestHash, versionPins: base.versions, status: 'pending', attempts: 0 }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.update({ collection: 'change-sets', id, data: { preview: { status: 'queued', jobID: job.id, revision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, baselineSnapshotID: base.snapshotID, baselineSequence: base.sequence, liveSnapshotID: live.snapshotID, liveSequence: live.sequence, liveManifestHash, proposedManifestHash } }, overrideAccess: true, req, context: { editorialInternal: true } })
   return job
@@ -91,7 +93,9 @@ export async function completePreviewRenderJob(payload: Payload, req: PayloadReq
   const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true, req })
   const preview = set.preview as { jobID?: string; revision?: number; changeHash?: string; baselineSequence?: number; includedChangeKeys?: string[] } | undefined
   if (preview?.jobID === id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.baselineSequence === job.baselineSequence && Array.isArray(preview.includedChangeKeys) && keysEqual(preview.includedChangeKeys, job.includedChangeKeys as string[])) {
-    await payload.update({ collection: 'change-sets', id: String(job.changeSet), data: { preview: { ...preview, status: 'ready', baselineSnapshotID: idOf(job.baselineSnapshot), liveSnapshotID: idOf(job.liveSnapshot), liveSequence: job.liveSequence, liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash } }, overrideAccess: true, req, context: { editorialInternal: true } })
+    // Approval verifies the exact candidate content hash.  It must be derived
+    // from this immutable worker input, never supplied by the browser.
+    await payload.update({ collection: 'change-sets', id: String(job.changeSet), data: { preview: { ...preview, status: 'ready', contentHash: canonicalHash(job.proposedManifest), artifactDigest: proof.artifactDigest, baselineSnapshotID: idOf(job.baselineSnapshot), liveSnapshotID: idOf(job.liveSnapshot), liveSequence: job.liveSequence, liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash, versionPins: job.versionPins } }, overrideAccess: true, req, context: { editorialInternal: true } })
   }
   return completed
 }
