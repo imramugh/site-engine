@@ -547,7 +547,7 @@ it('ENG-035 loads trusted components from a packed external theme package', asyn
     await mkdir(installed, { recursive: true }); execFileSync('tar', ['-xzf', join(source, file), '--strip-components=1', '-C', installed]);
     const manifest = JSON.parse(await readFile(join(installed, 'theme.json'), 'utf8'));
     expect(manifest.contract).toBe('1.0.0'); expect(() => { if (manifest.contract !== '1.0.0') throw new Error('incompatible contract'); }).not.toThrow();
-    const snapshot = fixture('Packed external theme'); const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: join(installed, 'components'), versionPins: { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0' } });
+    const snapshot = fixture('Packed external theme'); const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: join(installed, 'components'), versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' } });
     expect(await readFile(join(built.output, 'index.html'), 'utf8')).toContain('data-packed-external-theme="true"');
     manifest.contract = '9.0.0'; expect(() => { if (manifest.contract !== '1.0.0') throw new Error('incompatible contract'); }).toThrow('incompatible contract');
   } finally { await rm(root, { recursive: true, force: true }); }
