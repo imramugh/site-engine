@@ -6,6 +6,8 @@ const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const leadOwnerEmail = 'lead-owner.synthetic@example.test'
+const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
@@ -207,6 +209,36 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await page.reload()
   await expect(page.getByText('open', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Unsubmitted edits — approved' })).toBeVisible()
+})
+
+test('an owner schedules, reschedules, and cancels a reviewed future publication without queuing it immediately', async ({ browser, page }) => {
+  test.setTimeout(60_000)
+  await signIn(page, 'editor')
+  await page.evaluate(async () => {
+    const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Scheduled workflow', summary: 'This synthetic section exercises reviewed future publication scheduling in a real browser.', slug: 'scheduled-workflow', allowedTemplates: ['standard'] }) })
+    const sectionBody = await section.json() as { doc: { id: string } }
+    const created = await fetch('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow page', summary: 'This synthetic page provides a real reviewed candidate for a future publication.', slug: 'scheduled-workflow-page', sectionId: sectionBody.doc.id, template: 'standard' }) })
+    const createdBody = await created.json() as { doc: { id: string } }
+    await fetch(`/api/pages/${createdBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow revised' }) })
+  })
+  await page.goto('/admin/editorial'); await page.getByRole('button', { name: 'Submit for review' }).click()
+  const editorList = await page.evaluate(async () => (await fetch('/api/editorial/schedules/list')).status)
+  expect(editorList).toBe(403)
+  const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
+  await signInLocalOwner(owner, leadOwnerRecoveryCode, leadOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
+  await owner.getByRole('button', { name: 'Unsubmitted edits — submitted' }).last().click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
+  const headers = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
+  const claimed = await owner.request.post('/api/internal/preview-jobs/claim', { headers, data: {} }); const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
+  const hash = async (value: unknown) => owner.evaluate(async (input) => { const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input))); return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') }, value)
+  expect((await owner.request.post('/api/internal/preview-jobs/complete', { headers, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'c'.repeat(64) } })).ok()).toBeTruthy()
+  await expect(owner.getByRole('button', { name: 'Run readiness checks' })).toBeVisible({ timeout: 10_000 }); await owner.getByRole('button', { name: 'Run readiness checks' }).click()
+  const beforeSchedule = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }
+  const future = '2031-01-02T03:04'; await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()
+  await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); await expect(owner.getByText('UTC 2031-01-02T03:04:00.000Z')).toBeVisible()
+  const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
+  owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.getByText('UTC 2031-01-02T04:04:00.000Z')).toBeVisible()
+  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('cancelled')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Unsubmitted edits — changes-requested' })).toBeVisible()
+  await ownerContext.close()
 })
 
 test('logout revokes the session, replays are denied, and cross-origin POST is blocked by Next proxy', async ({ page }) => {
