@@ -453,8 +453,13 @@ export interface NotificationOutbox {
  */
 export interface Application {
   id: string;
+  name: string;
   email: string;
   coverLetter: string;
+  consent: boolean;
+  jobId: string;
+  resumeKey: string;
+  idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
@@ -1068,8 +1073,13 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
  * via the `definition` "applications_select".
  */
 export interface ApplicationsSelect<T extends boolean = true> {
+  name?: T;
   email?: T;
   coverLetter?: T;
+  consent?: T;
+  jobId?: T;
+  resumeKey?: T;
+  idempotencyKey?: T;
   status?: T;
   updatedAt?: T;
   createdAt?: T;

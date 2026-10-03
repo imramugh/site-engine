@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 type Change = { collection: string; id: string; before: unknown; after: unknown }
-type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[] }; staleAt?: string; preview?: { status?: string; jobID?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[] }
+type ReadinessProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string }; report?: { publishable?: boolean; blockers?: { code: string; path: string; message: string }[]; warnings?: { code: string; path: string; message: string }[] } }
+type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[]; proof?: ReadinessProof }; staleAt?: string; preview?: { status?: string; jobID?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[] }
 type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] } }
 function fields(change: Change): [string, unknown, unknown][] {
   const before = change.before && typeof change.before === 'object' ? change.before as Record<string, unknown> : {}
@@ -59,10 +60,12 @@ export function EditorialWorkflow() {
     try {
       const preview = action === 'prepare-preview'
       if (preview && !includedChangeKeys.size) { setMessage('Select at least one captured change for the comparison.'); return }
-      const response = await fetch(preview ? '/api/editorial/prepare-preview' : `/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(preview ? { id: set.id, includedChangeKeys: [...includedChangeKeys] } : { id: set.id }) })
+      const approval = action === 'approve'
+      if (approval && !set.quality?.proof) { setMessage('The displayed readiness proof is missing. Reload the comparison and run readiness checks again.'); return }
+      const response = await fetch(preview ? '/api/editorial/prepare-preview' : `/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(preview ? { id: set.id, includedChangeKeys: [...includedChangeKeys] } : approval ? { id: set.id, proof: set.quality?.proof } : { id: set.id }) })
       const body = await response.json() as { error?: string }
       if (!response.ok) { setMessage(body.error ?? 'The workflow action was not accepted.'); return }
-      setMessage(preview ? 'Private comparison queued. It will remain unavailable until the renderer completes.' : action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
+      setMessage(preview ? 'Private comparison queued. It will remain unavailable until the renderer completes.' : action === 'run-quality' ? 'Deterministic readiness checks completed.' : action === 'approve' ? 'Approved snapshot queued for the publish worker.' : action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
       await load()
     } catch {
       setMessage('Unable to update the change set. Try again.')
@@ -73,7 +76,7 @@ export function EditorialWorkflow() {
   async function addComment() { if (!set || !comment.trim()) return; setActing(true); try { const response = await fetch('/api/editorial/comment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id, comment }) }); if (!response.ok) throw new Error(); setComment(''); await load() } finally { setActing(false) } }
   return <main style={{ maxWidth: 1100, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }} aria-busy={loading || acting}>
     <h1>Pending changes</h1>
-    <p>Draft edits remain private. Approval and publication are unavailable in this phase.</p>
+    <p>Draft edits remain private. Approval queues an immutable snapshot; only the publish worker can activate a release.</p>
     <p role="status" aria-live="polite">{message || (loading ? 'Loading change sets…' : '')}</p>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 18rem), 1fr))', gap: '2rem' }}>
       <nav aria-label="Change sets"><h2>Change sets</h2>{data?.sets.map((item) => <button key={item.id} onClick={() => setSelected(item.id)} aria-pressed={selected === item.id} style={{ display: 'block', width: '100%', textAlign: 'left', margin: '0.5rem 0', overflowWrap: 'anywhere' }}>{item.name} — {item.state}</button>)}{!loading && data?.sets.length === 0 && <p>No pending change sets.</p>}</nav>
@@ -81,7 +84,7 @@ export function EditorialWorkflow() {
         {set.state === 'stale' && <p role="alert">This change set is stale. Refresh it before review.</p>}
         <div aria-label="Workflow actions">
           {owns && (set.state === 'open' || set.state === 'changes-requested') && <button disabled={acting} onClick={() => action('submit')}>Submit for review</button>}
-          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button><button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
+          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button>{set.preview?.status === 'ready' && <button disabled={acting} onClick={() => action('run-quality')}>Run readiness checks</button>}{set.quality?.proof?.report?.publishable === true && <button disabled={acting} onClick={() => action('approve')}>Approve and queue publish</button>}{set.preview?.status === 'ready' && set.quality?.proof?.report?.publishable !== true && <p role="status">Approval is disabled until the exact comparison has a passing readiness proof.</p>}<button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'stale') && <button disabled={acting} onClick={() => action('refresh')}>Refresh</button>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'rejected') && <button disabled={acting} onClick={() => action('discard')}>Discard</button>}
         </div>
@@ -91,6 +94,8 @@ export function EditorialWorkflow() {
         {set.changes?.map((change) => <article key={`${change.collection}-${change.id}`}><h4>{change.collection} {change.id}</h4><table><thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead><tbody>{fields(change).map(([field, before, after]) => <tr key={field}><th scope="row">{field}</th><td><pre>{JSON.stringify(before, null, 2)}</pre></td><td><pre>{JSON.stringify(after, null, 2)}</pre></td></tr>)}</tbody></table></article>)}
         {set.quality?.checks?.map((check) => <section key={check.name}><h3>{check.name}: {check.status}</h3>{check.errors?.map((error, index) => <p key={index} role="alert">{error.message}</p>)}</section>)}
         {set.quality?.warnings?.map((warning) => <p key={warning}>{warning}</p>)}
+        {set.quality?.proof?.report?.blockers?.map((blocker) => <p key={`${blocker.code}-${blocker.path}`} role="alert">Blocker {blocker.code} at {blocker.path}: {blocker.message}</p>)}
+        {set.quality?.proof?.report?.warnings?.map((warning) => <p key={`${warning.code}-${warning.path}`}>Warning {warning.code} at {warning.path}: {warning.message}</p>)}
         {reviewer && <section aria-label="Review comments"><h3>Review comments</h3>{set.reviewComments?.map((item) => <p key={item.id}>{item.body}</p>)}<textarea value={comment} onChange={(event) => setComment(event.target.value)} aria-label="Add review comment" /><button disabled={acting} onClick={() => void addComment()}>Add comment</button></section>}
       </section>}
     </div>

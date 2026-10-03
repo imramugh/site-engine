@@ -5,6 +5,9 @@ import { createNamedChangeSet, transitionChangeSet } from '../../../../src/edito
 import { archivePage } from '../../../../src/redirect-lifecycle'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { changeSetHash } from '../../../../src/publishing'
+import { approveChangeSet } from '../../../../src/publishing'
+import { runReviewQuality } from '../../../../src/review-quality'
+import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
 import { SiteSnapshotSchema } from '@site-engine/contract'
 
 export const dynamic = 'force-dynamic'
@@ -34,6 +37,20 @@ function routeForPreview(manifest: unknown, includedChangeKeys: unknown): string
   return `/${[section.slug, ...ancestors, page.slug].filter(Boolean).join('/')}`
 }
 
+type ApprovalProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string } }
+
+function approvalProof(value: unknown): ApprovalProof | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const proof = value as Record<string, unknown>
+  const pins = proof.versionPins
+  if (!Number.isInteger(proof.revision) || typeof proof.changeHash !== 'string' || typeof proof.contentHash !== 'string' || !Array.isArray(proof.includedChangeKeys) || !proof.includedChangeKeys.every((key): key is string => typeof key === 'string') || (proof.baselineSnapshotID !== undefined && typeof proof.baselineSnapshotID !== 'string') || !Number.isInteger(proof.baselineSequence) || typeof proof.previewJobID !== 'string' || !pins || typeof pins !== 'object') return undefined
+  const versions = pins as Record<string, unknown>
+  if (typeof versions.themeVersion !== 'string' || typeof versions.engineVersion !== 'string' || typeof versions.contractVersion !== 'string') return undefined
+  return { revision: proof.revision as number, changeHash: proof.changeHash, contentHash: proof.contentHash, includedChangeKeys: proof.includedChangeKeys, baselineSnapshotID: proof.baselineSnapshotID as string | undefined, baselineSequence: proof.baselineSequence as number, previewJobID: proof.previewJobID, versionPins: { themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion } }
+}
+
+const sameKeys = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+
 /** Server-owned lifecycle API. Collection REST updates are denied so clients
  * cannot forge state, actor, baseline, or review timestamps. */
 export async function POST(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
@@ -42,10 +59,13 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-    const body = await request.json() as { id?: string; name?: string; target?: string }
+    const body = await request.json() as { id?: string; name?: string; target?: string; proof?: unknown }
     const { action } = await context.params
+    if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
+    const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
+      req.headers = request.headers
       if (action === 'create') {
         if (typeof body.name !== 'string') throw new Error('A change-set name is required.')
         return createNamedChangeSet(payload, req, authenticated.user as never, body.name)
@@ -63,6 +83,25 @@ export async function POST(request: Request, context: { params: Promise<{ action
         if (typeof body.id !== 'string') throw new Error('A page ID is required.')
         if (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'editor')) throw new Error('Editor role required.')
         return archivePage({ payload, req, pageID: body.id, target: body.target })
+      }
+      if (action === 'run-quality' && typeof body.id === 'string') {
+        const actor = authenticated.user as { roles?: string[] }
+        if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
+        return runReviewQuality({ payload, req, id: body.id })
+      }
+      if (action === 'approve' && typeof body.id === 'string') {
+        const proof = approvalProof(body.proof)
+        if (!proof) throw new Error('The exact readiness proof displayed to the reviewer is required before approval.')
+        const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }
+        const preview = set.preview
+        if (!preview || typeof preview.contentHash !== 'string' || !Array.isArray(preview.includedChangeKeys) || !preview.includedChangeKeys.every((key): key is string => typeof key === 'string') || typeof preview.jobID !== 'string') throw new Error('A ready private preview is required before approval.')
+        const currentHash = changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])
+        if (proof.revision !== Number(set.revision) || proof.changeHash !== currentHash || proof.contentHash !== preview.contentHash || !sameKeys(proof.includedChangeKeys, preview.includedChangeKeys) || proof.previewJobID !== preview.jobID) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
+        const job = await payload.findByID({ collection: 'preview-render-jobs', id: preview.jobID, depth: 0, overrideAccess: true, req }) as unknown as { versionPins?: unknown }
+        const pins = job.versionPins as { themeVersion?: unknown; engineVersion?: unknown; contractVersion?: unknown } | undefined
+        if (!pins || typeof pins.themeVersion !== 'string' || typeof pins.engineVersion !== 'string' || typeof pins.contractVersion !== 'string') throw new Error('The preview version pins are invalid.')
+        if (proof.baselineSnapshotID !== (preview as { baselineSnapshotID?: unknown }).baselineSnapshotID || proof.baselineSequence !== (preview as { baselineSequence?: unknown }).baselineSequence || proof.versionPins.themeVersion !== pins.themeVersion || proof.versionPins.engineVersion !== pins.engineVersion || proof.versionPins.contractVersion !== pins.contractVersion) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
+        return approveChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest })
       }
       if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
       return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })

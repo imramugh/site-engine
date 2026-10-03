@@ -105,13 +105,15 @@ describe('static snapshot renderer', () => {
   });
   afterAll(async () => { server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true }); });
 
-  it('builds two complete, content-distinct snapshots with CMS-compatible hashes', async () => {
+  it('builds two concurrent, content-distinct snapshots without sharing Astro intermediates', async () => {
     const alpha = fixture('Alpha'); const beta = fixture('Beta');
     const alphaInput = await writeSnapshot(root, alpha, 'alpha.json'); const betaInput = await writeSnapshot(root, beta, 'beta.json');
     const priorMediaDirectory = process.env.SITE_MEDIA_DIR;
     process.env.SITE_MEDIA_DIR = await mkdtemp(join(root, 'empty-upload-source-'));
-    const alphaBuild = await renderer.buildSnapshot({ input: alphaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
-    const betaBuild = await renderer.buildSnapshot({ input: betaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+    const [alphaBuild, betaBuild] = await Promise.all([
+      renderer.buildSnapshot({ input: alphaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
+      renderer.buildSnapshot({ input: betaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
+    ]);
     if (priorMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = priorMediaDirectory;
     expect(alphaBuild.manifest.snapshotContentHash).toBe(hash(alpha));
     expect(betaBuild.manifest.snapshotContentHash).toBe(hash(beta));
@@ -218,8 +220,19 @@ describe('static snapshot renderer', () => {
       snapshot.media = await Promise.all(snapshot.media.map(async (media) => ({ ...media, sha256: createHash('sha256').update(await readFile(join(source, media.filename))).digest('hex') })));
       const variant = await readFile(join(source, 'sample-image-hero.avif'));
       snapshot.media[0]!.variants = { heroAvif: { filename: 'sample-image-hero.avif', width: 640, height: 360, mimeType: 'image/avif', sha256: createHash('sha256').update(variant).digest('hex') } };
+      const visibleMediaNames = snapshot.media.map((media) => media.filename);
+      const privateMediaID = '99999999-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      snapshot.media.push({ id: privateMediaID, filename: 'unreachable.svg', alt: 'Not publicly reachable', decorative: false, width: 640, height: 360, mimeType: 'image/svg+xml', sha256: 'f'.repeat(64) });
+      const hiddenChild = structuredClone(snapshot.pages.find((page) => page.slug === 'install')!);
+      hiddenChild.id = '99999999-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      hiddenChild.parentId = snapshot.pages.find((page) => page.status === 'draft')!.id;
+      hiddenChild.slug = 'unreachable-child';
+      hiddenChild.template = 'article';
+      hiddenChild.blocks = [{ id: '99999999-cccc-4ccc-8ccc-cccccccccccc', type: 'media', mediaId: privateMediaID, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }];
+      snapshot.pages.push(hiddenChild);
+      snapshot.settings.sections[0]!.pageIds.push(hiddenChild.id);
       const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'immutable-media.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
-      expect((await readdir(join(built.output, 'media'))).sort()).toEqual([...snapshot.media.map((media) => media.filename), 'sample-image-hero.avif'].sort());
+      expect((await readdir(join(built.output, 'media'))).sort()).toEqual([...visibleMediaNames, 'sample-image-hero.avif'].sort());
       expect(await readFile(join(built.output, 'media/sample-image.svg'), 'utf8')).toContain('<svg');
       expect(await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
       expect(await readFile(join(built.output, 'docs/release-notes/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image-hero.avif`);
@@ -360,6 +373,40 @@ describe('static snapshot renderer', () => {
             await page.locator('[data-inquiry-form]').evaluate((form: HTMLFormElement) => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
             await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
             expect(submitted).toHaveLength(0);
+          }
+        } finally { await context.close(); served.server.closeAllConnections(); served.server.close(); }
+      }
+    } finally { await browser.close(); }
+  }, 120_000);
+
+  it('renders application forms only as a disabled, non-enhanced control in private previews', async () => {
+    const snapshot = fixture('Application preview');
+    const section = snapshot.settings.sections[0]!;
+    section.allowedTemplates.push('job');
+    const job = { ...snapshot.pages[0]!, id: 'abababab-abab-4bab-8bab-abababababab', slug: 'application-role', title: 'Application preview role', template: 'job' as const, blocks: [] as typeof snapshot.pages[0]['blocks'], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' } };
+    snapshot.pages.push(job); section.pageIds.push(job.id);
+    const input = await writeSnapshot(root, snapshot, 'application-preview.json');
+    const browser = await chromium.launch();
+    try {
+      for (const basePath of ['/', BASE_PATH]) {
+        const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
+        const served = await staticServer(built.output, basePath);
+        const context = await browser.newContext(); const page = await context.newPage(); let applications = 0; const retryKeys: string[] = [];
+        await page.route('**/api/applications', async route => { applications += 1; const key = route.request().postDataBuffer()?.toString().match(/name="idempotencyKey"\r\n\r\n([^\r]+)/)?.[1]; if (key) retryKeys.push(key); if (applications < 3) await route.abort('failed'); else await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }) }); });
+        try {
+          await page.goto(`${served.origin}${basePath}docs/application-role/`, { waitUntil: 'networkidle' });
+          const form = page.locator('[data-application-form]'); const button = page.getByRole('button', { name: 'Submit application' });
+          if (basePath === '/') {
+            expect(await button.isEnabled()).toBe(true);
+            await page.getByLabel('Name').fill('Preview applicant'); await page.getByLabel('Email').fill('preview.applicant@example.test'); await page.getByLabel('Cover letter').fill('A valid public application form submission.');
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); await page.getByLabel(/I consent/).check(); await button.click();
+            await page.getByRole('alert').waitFor({ state: 'visible' }); await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.getByLabel('Cover letter').fill('A changed public application submission.'); await button.click();
+            await page.getByRole('status').waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
+          } else {
+            expect(await button.isDisabled()).toBe(true);
+            await form.evaluate((element: HTMLFormElement) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+            expect(applications).toBe(0);
           }
         } finally { await context.close(); served.server.closeAllConnections(); served.server.close(); }
       }

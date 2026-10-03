@@ -21,10 +21,7 @@ function view(inquiry: Record<string, unknown>) {
   return inquiry
 }
 
-export async function GET(request: Request): Promise<Response> {
-  const { payload, user } = await staff(request)
-  if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-  const url = new URL(request.url)
+function filters(url: URL) {
   const stage = url.searchParams.get('stage')
   const urgent = url.searchParams.get('urgent')
   const assignee = url.searchParams.get('assignee')
@@ -32,10 +29,22 @@ export async function GET(request: Request): Promise<Response> {
   if (stage) clauses.push({ stage: { equals: stage } })
   if (urgent === 'true') clauses.push({ urgent: { equals: true } })
   if (assignee) clauses.push({ assignee: { equals: assignee } })
-  const result = await payload.find({ collection: 'inquiries', where: clauses.length ? { and: clauses } as never : undefined, sort: '-urgent,-updatedAt', limit: 200, depth: 0, overrideAccess: true })
+  return clauses.length ? { and: clauses } as never : undefined
+}
+
+function pageOf(value: string | null) { const parsed = Number(value ?? '1'); return Number.isInteger(parsed) && parsed > 0 ? parsed : 1 }
+
+export async function GET(request: Request): Promise<Response> {
+  const { payload, user } = await staff(request)
+  if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
+  const url = new URL(request.url)
+  const page = pageOf(url.searchParams.get('page'))
+  const result = await payload.find({ collection: 'inquiries', where: filters(url), sort: '-urgent,-updatedAt', limit: 50, page, depth: 0, overrideAccess: true })
+  const users = await payload.find({ collection: 'users', where: { disabled: { not_equals: true } }, limit: 200, depth: 0, overrideAccess: true })
+  const assignees = users.docs.filter((candidate) => hasRole(candidate as never, ['owner', 'sales'])).map((candidate) => ({ id: candidate.id, name: candidate.name || candidate.email, email: candidate.email }))
   const leads = result.docs.map((inquiry) => view(inquiry as unknown as Record<string, unknown>))
   const pipeline = Object.fromEntries(['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'].map((stageName) => [stageName, leads.filter((lead) => lead.stage === stageName)]))
-  return Response.json({ leads, pipeline }, { headers: { 'Cache-Control': 'no-store' } })
+  return Response.json({ leads, pipeline, assignees, page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(request: Request): Promise<Response> {

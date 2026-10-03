@@ -65,6 +65,18 @@ describe('durable preview rendering worker', () => {
     expect(calls.filter(call => call.action === 'complete')).toHaveLength(2);
   }, 60_000);
 
+  it('passes the exact frozen input, preview base path, pins, and origin to a configured renderer', async () => {
+    const input = claim(); const seen: Array<Record<string, unknown>> = [];
+    const render = async (rendererOptions: Record<string, unknown>) => { seen.push({ ...rendererOptions, frozen: await readFile(String(rendererOptions.input), 'utf8') }); return buildSnapshot(rendererOptions as Parameters<typeof buildSnapshot>[0]); };
+    const api = async (action: string) => action === 'claim' ? input : { ok: true };
+    await expect(runPreviewOnce({ ...options(), api, render })).resolves.toBe(true);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ publicOrigin: 'https://example.test', basePath: `/preview/changes/${id}/live/`, versionPins: pins });
+    expect(seen[1]).toMatchObject({ publicOrigin: 'https://example.test', basePath: `/preview/changes/${id}/proposed/`, versionPins: pins });
+    expect(seen[0]!.frozen).toBe(canonical(input.live));
+    expect(seen[1]!.frozen).toBe(canonical(input.proposed));
+  }, 60_000);
+
   it('cancels a running render on lease loss, cleans scratch files, and never completes or fails an old lease', async () => {
     const calls: string[] = [];
     const api = async (action: string) => {

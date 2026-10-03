@@ -16,7 +16,7 @@ if (process.env.NODE_ENV === 'production' && !isProductionBuild && !secret) {
 export default buildConfig({
   admin: {
     user: Users.slug,
-    components: { afterNavLinks: ['./app/(payload)/admin/editorial-nav-link#EditorialNavLink'] },
+    components: { afterNavLinks: ['./app/(payload)/admin/editorial-nav-link#EditorialNavLink', './app/(payload)/admin/leads-nav-link#LeadsNavLink'] },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
   collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, Redirects, Inquiries, NotificationOutbox, Applications, ChangeSets, PublishSnapshots, PublishOutbox, PreviewRenderJobs, PublishedReleases],

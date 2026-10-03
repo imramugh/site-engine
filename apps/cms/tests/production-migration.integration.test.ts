@@ -12,6 +12,7 @@ const publishQueueMigration = '20261003_160000_publish_queue_correctness'
 const inquiryPipelineMigration = '20261003_163801_inquiry_lead_pipeline'
 const redirectLifecycleMigration = '20261003_165038_redirect_lifecycle'
 const mediaMigration = '20261003_171753_media_library'
+const applicationsMigration = '20261003_181059'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -115,6 +116,24 @@ describe('production migrations (ENG-036)', () => {
     expect(mediaForward.status, mediaForward.stderr || mediaForward.stdout).toBe(0)
     const legacyAsset = await sqlite.execute("SELECT alt, caption, private, filename FROM assets WHERE id = '30000000-0000-4000-8000-000000000001'")
     expect(legacyAsset.rows[0]).toMatchObject({ alt: 'Synthetic legacy asset', caption: 'Legacy metadata', private: 1, filename: null })
+    // Reconstruct the legacy private-application table and prove the generated
+    // expansion preserves a row while assigning collision-free defaults.
+    for (const statement of [
+      'DROP INDEX applications_idempotency_key_idx',
+      'ALTER TABLE applications DROP COLUMN name',
+      'ALTER TABLE applications DROP COLUMN consent',
+      'ALTER TABLE applications DROP COLUMN job_id',
+      'ALTER TABLE applications DROP COLUMN resume_key',
+      'ALTER TABLE applications DROP COLUMN idempotency_key',
+      "INSERT INTO applications (id, email, cover_letter, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000001', 'legacy-applicant@example.test', 'Synthetic legacy application retained through upgrade.', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')",
+      `DELETE FROM payload_migrations WHERE name = '${applicationsMigration}'`,
+    ]) await sqlite.execute(statement)
+    const applicationsForward = migrate()
+    expect(applicationsForward.status, applicationsForward.stderr || applicationsForward.stdout).toBe(0)
+    const legacyApplication = await sqlite.execute("SELECT name, email, job_id, resume_key, idempotency_key FROM applications WHERE id = '40000000-0000-4000-8000-000000000001'")
+    expect(legacyApplication.rows[0]).toMatchObject({ name: 'Legacy applicant', email: 'legacy-applicant@example.test', job_id: 'legacy', resume_key: 'legacy', idempotency_key: 'legacy:40000000-0000-4000-8000-000000000001' })
+    await expect(sqlite.execute("INSERT INTO applications (id, name, email, cover_letter, consent, job_id, resume_key, idempotency_key, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000002', 'New applicant', 'new-applicant@example.test', 'Synthetic new application write after upgrade.', 1, 'job-1', 'key-1', 'new-key', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')")).resolves.toBeDefined()
+    await expect(sqlite.execute("INSERT INTO applications (id, name, email, cover_letter, consent, job_id, resume_key, idempotency_key, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000003', 'Duplicate applicant', 'duplicate@example.test', 'Synthetic duplicate application write.', 1, 'job-1', 'key-2', 'new-key', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')")).rejects.toThrow()
     await sqlite.close()
 
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')

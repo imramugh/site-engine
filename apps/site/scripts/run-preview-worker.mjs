@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SiteSnapshotSchema } from '@site-engine/contract';
 import { buildSnapshot } from './build-snapshot.mjs';
+import { loadRenderer } from './renderer-adapter.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -135,7 +136,7 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
         const inputPath = join(scratch, `${variant}.json`);
         await writeFile(inputPath, canonical(input[variant]), { mode: 0o600 });
         if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
-        const result = await render({ input: inputPath, outputRoot: scratch, publicOrigin: origin, basePath: `/preview/changes/${input.job.id}/${variant}/`, signal: controller.signal });
+        const result = await render({ input: inputPath, outputRoot: scratch, publicOrigin: origin, basePath: `/preview/changes/${input.job.id}/${variant}/`, versionPins: input.versionPins, signal: controller.signal });
         if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
         const output = resolve(result.output);
         if (!output.startsWith(`${scratch}/snapshot-`) || output.slice(scratch.length + 1).includes('/')) throw new WorkerError('INVALID_ARTIFACT');
@@ -170,10 +171,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const publicOrigin = normalizePublicOrigin(process.env.SITE_PUBLIC_ORIGIN);
   const versionPins = { engineVersion: process.env.SITE_ENGINE_VERSION, themeVersion: process.env.SITE_THEME_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
   if (!artifactRoot || versions.some(key => !versionPins[key])) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  const render = await loadRenderer({ genericRenderer: buildSnapshot });
   const controller = new AbortController();
   for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => controller.abort());
   while (!controller.signal.aborted) {
-    try { await runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, signal: controller.signal }); }
+    try { await runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, render, signal: controller.signal }); }
     catch (error) { console.error(`Preview worker: ${error instanceof WorkerError ? error.code : 'WORKER_FAILED'}`); }
     if (!controller.signal.aborted) await new Promise(resolveDelay => { const timer = setTimeout(done, 2_000); function done() { clearTimeout(timer); controller.signal.removeEventListener('abort', done); resolveDelay(); } controller.signal.addEventListener('abort', done, { once: true }); });
   }
