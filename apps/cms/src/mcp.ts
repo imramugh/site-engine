@@ -13,7 +13,7 @@ const rateLimit = (key: string) => {
   state.count += 1; return true
 }
 const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
-const page = (value: Record<string, unknown>) => ({ id: value.id, title: value.title, slug: value.slug, summary: value.summary, template: value.template, sectionId: typeof value.sectionId === 'string' ? value.sectionId : value.sectionId && typeof value.sectionId === 'object' && 'id' in value.sectionId ? (value.sectionId as { id: unknown }).id : undefined })
+const page = (value: Record<string, unknown>) => ({ id: value.id, title: value.title, slug: value.slug, summary: value.summary, template: value.template, blocks: Array.isArray(value.blocks) ? value.blocks : [], sectionId: typeof value.sectionId === 'string' ? value.sectionId : value.sectionId && typeof value.sectionId === 'object' && 'id' in value.sectionId ? (value.sectionId as { id: unknown }).id : undefined })
 const section = (value: Record<string, unknown>) => ({ id: value.id, name: value.name, slug: value.slug, summary: value.summary, allowedTemplates: value.allowedTemplates })
 const redirect = (value: Record<string, unknown>) => ({ id: value.id, from: value.from, to: value.to, status: value.status })
 
@@ -56,13 +56,19 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (!identity.active) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
   if (!rateLimit(`client:${identity.clientId}`) || !rateLimit(`user:${identity.userId}`)) return new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '60' } })
   const length = Number(request.headers.get('content-length') ?? '0'); if (!Number.isFinite(length) || length > 32_768) return new Response(null, { status: 413, headers: { 'cache-control': 'no-store' } })
-  let method: string | undefined
-  try { const body = await request.clone().json() as { method?: unknown }; method = typeof body.method === 'string' ? body.method : undefined } catch { return new Response(null, { status: 400, headers: { 'cache-control': 'no-store' } }) }
-  const required = method === 'tools/call' ? (request.headers.get('x-mcp-required-scope') ?? 'mcp:content:read') : undefined
+  let method: string | undefined; let tool: string | undefined
+  try {
+    const body = await request.clone().json() as { method?: unknown; params?: { name?: unknown } }
+    method = typeof body.method === 'string' ? body.method : undefined
+    tool = typeof body.params?.name === 'string' ? body.params.name : undefined
+  } catch { return new Response(null, { status: 400, headers: { 'cache-control': 'no-store' } }) }
+  const required = method === 'tools/call' && tool === 'list_redirects' ? 'mcp:redirects:read' : method === 'tools/call' ? 'mcp:content:read' : undefined
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
-  const current = await payload.findByID({ collection: 'users', id: identity.userId, overrideAccess: true })
-  if (current.disabled) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
+  let current: Awaited<ReturnType<typeof payload.findByID>>
+  try { current = await payload.findByID({ collection: 'users', id: identity.userId, overrideAccess: true }) } catch { return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } }) }
+  if ((current as { disabled?: boolean }).disabled) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
+  await payload.create({ collection: 'audit-events', data: { event: 'mcp.request', user: identity.userId, actor: identity.userId, detail: { clientId: identity.clientId, method, tool } }, overrideAccess: true })
   const read = identity.scopes.includes('mcp:content:read'); const redirects = identity.scopes.includes('mcp:redirects:read')
   const denied = (scope: string) => text({ error: 'insufficient_scope', required: scope })
   const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
