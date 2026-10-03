@@ -1,6 +1,6 @@
 ---
 import type { PublicRoute, RouteModel, SiteSnapshot } from '@site-engine/contract';
-const { route, model, snapshot, title, description, motionEnabled = false } = Astro.props as { route?: PublicRoute; model: RouteModel; snapshot: SiteSnapshot; title: string; description: string; motionEnabled?: boolean };
+const { route, model, snapshot, title, description, motionEnabled = false, noindex = false, schema } = Astro.props as { route?: PublicRoute; model: RouteModel; snapshot: SiteSnapshot; title: string; description: string; motionEnabled?: boolean; noindex?: boolean; schema?: unknown };
 const base = import.meta.env.SITE_BASE_PATH && import.meta.env.SITE_BASE_PATH !== '/' ? `/${import.meta.env.SITE_BASE_PATH.replace(/^\/+|\/+$/g, '')}` : '';
 const link = (href: string) => /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(href) ? href : `${base}${href}`;
 const canonical = new URL(route?.canonicalPath ?? Astro.url.pathname, import.meta.env.SITE_PUBLIC_ORIGIN ?? 'https://example.invalid').href;
@@ -8,7 +8,7 @@ const services = model.routes.filter((item) => item.page.template === 'service')
 const primary = model.routes.filter((item) => item.path !== '/').filter((item) => item.page.template === 'listing' || item.page.template === 'pillar' || item.page.template === 'standard').slice(0, 6);
 const showSyntheticFooter = !import.meta.env.SITE_SNAPSHOT_PATH;
 ---
-<!doctype html><html lang="en" data-motion="allow"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width" /><title>{title}</title><meta name="description" content={description} /><link rel="canonical" href={canonical} /></head>
+<!doctype html><html lang="en" data-motion="allow"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width" /><title>{title}</title><meta name="description" content={description} /><link rel="canonical" href={canonical} />{noindex && <meta name="robots" content="noindex, nofollow, noarchive" />}{schema && <script type="application/ld+json" set:html={JSON.stringify(schema).replaceAll('<', '\\u003c')} />}</head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
   <header class="site-header starter-header"><a class="wordmark" href={link('/')}>{snapshot.settings.siteName}</a><nav aria-label="Primary"><a href={link('/')}>Home</a>{primary.map((item) => <a href={link(item.path)}>{item.page.title}</a>)}{services.slice(0, 6).map((service) => <a href={link(service.path)}>{service.page.title}</a>)}</nav></header>

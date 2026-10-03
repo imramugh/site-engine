@@ -19,6 +19,13 @@ describe('ENG-002 versioned contract', () => {
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
   });
 
+  it('accepts legacy published snapshots without SEO timestamps', () => {
+    const legacy = fixture();
+    delete legacy.pages[0].publishedAt;
+    delete legacy.pages[0].updatedAt;
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true);
+  });
+
   it('rejects unknown appearance fields without confusing escaped prose with styling', () => {
     expect(BlockSchema.safeParse({ ...cta, colour: '#fff' }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...cta, appearance: { ...appearance, background: '#fff' } }).success).toBe(false);

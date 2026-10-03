@@ -5,12 +5,15 @@ import { deriveRoutes } from '@site-engine/engine';
 import { siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
 import MotionRuntime from '../components/MotionRuntime.astro';
 import { pageHasEnabledMotion, resolveStarterMotion } from '../lib/motion.js';
+import { crawlerMode } from '../lib/crawler-config.js';
+import { publicOrigin, renderBase } from '../lib/snapshot.js';
+import { schemaForRoute } from '../lib/seo.js';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 const route = model.byPath.get('/');
 if (!route) throw new Error('The configured demo homepage is not published.');
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 ---
-<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.summary} motionEnabled={motionEnabled}>
+<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={crawlerMode(renderBase) === 'preview'} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />)}
   <MotionRuntime enabled={motionEnabled} />
 </Layout>

@@ -5,18 +5,21 @@ import { childrenOf, deriveRoutes } from '@site-engine/engine';
 import { localURL, siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
 import MotionRuntime from '../components/MotionRuntime.astro';
 import { pageHasEnabledMotion, resolveStarterMotion } from '../lib/motion.js';
+import { crawlerMode } from '../lib/crawler-config.js';
+import { publicOrigin, renderBase } from '../lib/snapshot.js';
+import { schemaForRoute } from '../lib/seo.js';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 export function getStaticPaths() { const staticModel = deriveRoutes(siteSnapshot, siteHomepageId); return staticModel.routes.filter((route) => route.path !== '/').map((route) => ({ params: { slug: route.path.slice(1) }, props: { route } })); }
 const { route } = Astro.props;
 const children = childrenOf(route, model);
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 ---
-<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.summary} motionEnabled={motionEnabled}>
+<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={crawlerMode(renderBase) === 'preview'} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   <nav aria-label="Breadcrumb"><ol>{route.breadcrumbs.map((crumb, index) => <li>{index === route.breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span> : <a href={localURL(crumb.href)}>{crumb.label}</a>}</li>)}</ol></nav>
   {!route.page.blocks.some((block) => !block.hidden && block.type === 'hero') && <header class="block"><div class="block__inner"><h1>{route.page.title}</h1><p>{route.page.summary}</p></div></header>}
   {route.page.blocks.map((block) => <BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />)}
   {['listing', 'pillar', 'service'].includes(route.page.template) && <section class="block"><div class="block__inner"><h2>{route.page.template === 'listing' ? 'Pages' : 'Child pages'}</h2>{children.length ? <ul>{children.map((child) => <li><a href={localURL(child.path)}>{child.page.title}</a><p>{child.page.summary}</p></li>)}</ul> : <p>No child pages are published.</p>}</div></section>}
   {route.page.template === 'article' && <aside class="block"><div class="block__inner"><h2>Article information</h2><p>{route.page.summary}</p></div></aside>}
-  {route.page.template === 'job' && <section class="block"><div class="block__inner"><h2>Application information</h2><p>This static preview does not collect applications.</p></div></section>}
+  {route.page.template === 'job' && <section class="block"><div class="block__inner"><h2>Application information</h2>{route.page.jobPosting && <dl><dt>Employment type</dt><dd>{route.page.jobPosting.employmentType.replaceAll('_', ' ').toLowerCase()}</dd><dt>Location</dt><dd>{[route.page.jobPosting.location.addressLocality, route.page.jobPosting.location.addressRegion, route.page.jobPosting.location.addressCountry].filter(Boolean).join(', ')}</dd><dt>Posted</dt><dd><time datetime={route.page.jobPosting.datePosted}>{route.page.jobPosting.datePosted.slice(0, 10)}</time></dd>{route.page.jobPosting.validThrough && <><dt>Closing date</dt><dd><time datetime={route.page.jobPosting.validThrough}>{route.page.jobPosting.validThrough.slice(0, 10)}</time></dd></>}</dl>}<p>This static preview does not collect applications.</p></div></section>}
   <MotionRuntime enabled={motionEnabled} />
 </Layout>

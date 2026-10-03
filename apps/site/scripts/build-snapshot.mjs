@@ -4,6 +4,7 @@ import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { SiteSnapshotSchema } from '@site-engine/contract';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
+import { writeIndexNowVerificationFile } from './indexnow.mjs';
 
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
@@ -36,8 +37,10 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs });
+    await writeIndexNowVerificationFile({ output: staged });
     const manifest = { snapshotContentHash: sha(stable(snapshot)), sourceVersions: { contractVersion: snapshot.settings.contractVersion, themeVersion, engineVersion }, files: Object.fromEntries(await files(staged)) };
     await writeFile(join(staged, 'snapshot-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    await rename(staged, output); return { output, manifest };
+    await rename(staged, output);
+    return { output, manifest };
   } catch (error) { await rm(output, { recursive: true, force: true }); throw error } finally { await rm(job, { recursive: true, force: true }); }
 }

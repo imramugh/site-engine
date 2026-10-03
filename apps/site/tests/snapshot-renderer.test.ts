@@ -21,6 +21,7 @@ const hash = (value: unknown) => createHash('sha256').update(stable(value)).dige
 function fixture(name: string): SiteSnapshot {
   const snapshot = structuredClone(neutralFixture);
   const section = snapshot.settings.sections[0];
+  snapshot.settings.organizationType = 'professional-service';
   section.name = `${name} section`;
   section.slug = 'docs';
   section.allowedTemplates = ['landing', 'listing', 'pillar', 'service', 'article'];
@@ -53,6 +54,12 @@ function fixture(name: string): SiteSnapshot {
   );
   section.landingPageId = listingId;
   section.pageIds = snapshot.pages.map((page) => page.id);
+  snapshot.pages.forEach((page, index) => {
+    if (page.status === 'published') {
+      page.publishedAt = `2026-10-${String(index + 1).padStart(2, '0')}T12:00:00.000Z`;
+      page.updatedAt = `2026-10-${String(index + 2).padStart(2, '0')}T12:00:00.000Z`;
+    }
+  });
   return snapshot;
 }
 
@@ -117,6 +124,57 @@ describe('static snapshot renderer', () => {
     expect(await readdir(alphaBuild.output)).not.toContain('input.json');
     browserOutput = alphaBuild.output;
   }, 180_000);
+
+  it('emits public-only SEO, crawler, schema, and machine-readable outputs', async () => {
+    const sitemap = await readFile(join(browserOutput, 'sitemap.xml'), 'utf8');
+    const robots = await readFile(join(browserOutput, 'robots.txt'), 'utf8');
+    const llms = await readFile(join(browserOutput, 'llms.txt'), 'utf8');
+    const machine = JSON.parse(await readFile(join(browserOutput, 'machine-readable.json'), 'utf8'));
+    const article = await readFile(join(browserOutput, 'docs/release-notes/index.html'), 'utf8');
+    expect(sitemap).toContain('<lastmod>2026-10-05T12:00:00.000Z</lastmod>');
+    expect(sitemap).toContain('<loc>https://public.example.test/docs/release-notes</loc>');
+    expect(sitemap).not.toContain('draft-marker');
+    expect(robots).toContain('Disallow: /');
+    expect(robots).toContain('crawler policy 2026-10-03');
+    expect(llms).toContain('[Alpha release notes](https://public.example.test/docs/release-notes)');
+    expect(llms).not.toContain('DRAFT_MARKER_MUST_NOT_RENDER');
+    expect(machine.pages.map((page: { url: string }) => page.url)).not.toContain('https://public.example.test/docs/draft-marker');
+    expect(JSON.stringify(machine)).not.toContain('DRAFT_MARKER_MUST_NOT_RENDER');
+    expect(JSON.stringify(machine)).not.toContain('"id"');
+    expect(JSON.stringify(machine)).not.toContain('"sectionId"');
+    expect(JSON.stringify(machine)).not.toContain('"parentId"');
+    expect(article).toContain('application/ld+json');
+    expect(article).toContain('"@type":"Article"');
+    expect(article).toContain('"@type":"BreadcrumbList"');
+    expect(article).toContain('"@type":"ProfessionalService"');
+  });
+
+  it('escapes structured data and displays the same job metadata described by its schema', async () => {
+    const snapshot = fixture('Safe metadata');
+    const attack = '</script><img id="injected" src=x onerror=alert(1)>';
+    snapshot.pages[0]!.title = attack;
+    const section = snapshot.settings.sections[0]!;
+    section.allowedTemplates.push('job');
+    const jobId = '12345678-1234-4234-8234-123456789abc';
+    section.pageIds.push(jobId);
+    snapshot.pages.push({ id: jobId, sectionId: section.id, parentId: section.landingPageId,
+      title: 'Example role', summary: 'Synthetic role details.', slug: 'safe-role', template: 'job', status: 'published',
+      blocks: [{ id: '12345678-1234-4234-8234-123456789abd', type: 'richText', body: 'A complete visible synthetic role description.', hidden: false,
+        appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }],
+      jobPosting: { datePosted: '2026-01-01T00:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' },
+    });
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'safe-metadata.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    const scripts = [...html.matchAll(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)];
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]![1]).not.toContain('<');
+    expect(JSON.parse(scripts[0]![1]!)['@graph'].some((entry: { name?: string }) => entry.name === attack)).toBe(true);
+    expect(html).not.toContain('<img id="injected"');
+    const job = await readFile(join(built.output, 'docs/safe-role/index.html'), 'utf8');
+    expect(job).toContain('<dt>Location</dt><dd>Example City, CA</dd>');
+    expect(job).toContain('full time');
+    expect(job).toContain('"@type":"JobPosting"');
+  }, 60_000);
 
   it('rejects malformed input and never promotes a partial artifact', async () => {
     const invalidJson = join(root, 'invalid.json'); const invalidSchema = join(root, 'invalid-schema.json');
@@ -191,6 +249,7 @@ describe('static snapshot renderer', () => {
       await page.goto(`${serverOrigin}${BASE_PATH}${path}`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
       expect(await page.getByRole('heading').first().isVisible({ timeout: 5_000 })).toBe(true);
       expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(path ? `${PUBLIC_ORIGIN}/${path.replace(/\/$/, '')}` : `${PUBLIC_ORIGIN}/`);
+      expect(await page.locator('meta[name="robots"]').getAttribute('content')).toBe('noindex, nofollow, noarchive');
       const links = await page.locator('a[href]').evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('href')));
       for (const href of links.filter((href): href is string => Boolean(href))) expect(/^(?:https?:|mailto:|tel:|#)/.test(href) || href.startsWith('/preview/changes/test/proposed/')).toBe(true);
     }
