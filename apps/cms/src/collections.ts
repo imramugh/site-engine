@@ -475,6 +475,19 @@ export const PublishOutbox: CollectionConfig = {
   ],
 }
 
+export const ScheduledPublications: CollectionConfig = {
+  slug: 'scheduled-publications', admin: { useAsTitle: 'scheduledFor', group: 'Editorial' },
+  access: { create: () => false, read: staff(['owner', 'approver']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'scheduledFor', type: 'date', required: true, admin: { readOnly: true } },
+    { name: 'state', type: 'select', required: true, defaultValue: 'scheduled', options: ['scheduled', 'cancelled', 'stale', 'enqueued'], admin: { readOnly: true } },
+    { name: 'proof', type: 'json', required: true, admin: { readOnly: true } },
+  ],
+}
+
 /** Immutable, private renderer input. The worker never reads draft collections. */
 export const PreviewRenderJobs: CollectionConfig = {
   slug: 'preview-render-jobs', admin: { useAsTitle: 'id', group: 'Editorial' },
