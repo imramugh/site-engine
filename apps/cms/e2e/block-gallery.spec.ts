@@ -7,7 +7,7 @@ test('ENG-018 lets an Owner browse accessible blocks and insert a template-filte
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-operations-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   await page.goto('/admin'); const menu = page.locator('button.nav-toggler:visible'); if (await menu.getAttribute('aria-label') === 'Open Menu') { await menu.click(); await expect(menu).toHaveAttribute('aria-label', 'Close Menu') }
-  await page.locator('a[href="/block-gallery"]:visible').click()
+  await page.locator('a.nav__link[href="/block-gallery"]:visible').click()
   await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Supported blocks' })).toBeVisible()
   await expect(page.getByText('Templates: landing, standard, listing, service')).toBeVisible()
