@@ -166,7 +166,7 @@ export const Pages: CollectionConfig = {
       template: data.template,
       status: 'draft',
       blocks: data.blocks ?? [],
-      seoDescription: typeof data.seoDescription === 'string' ? data.seoDescription : undefined,
+      seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
     const [sections, pages] = await Promise.all([

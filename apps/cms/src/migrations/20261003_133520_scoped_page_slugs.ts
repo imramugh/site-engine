@@ -1,5 +1,7 @@
 import { MigrateUpArgs, MigrateDownArgs, sql } from '@payloadcms/db-sqlite'
 
+// Drizzle's schema snapshot cannot express this IFNULL index. Keep it in this
+// migration whenever a future pages-table rebuild replaces indexes.
 export async function up({ db, payload, req }: MigrateUpArgs): Promise<void> {
   await db.run(sql`DROP INDEX IF EXISTS \`pages_slug_idx\`;`)
   await db.run(sql`DROP INDEX IF EXISTS \`_pages_v_version_version_slug_idx\`;`)
