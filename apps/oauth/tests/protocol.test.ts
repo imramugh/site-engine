@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'vitest';
 import { createOAuthService } from '../src/server.js';
 
+async function reserveEphemeralPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const address = probe.address();
+  if (!address || typeof address === 'string') throw new Error('failed to reserve a test port');
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return address.port;
+}
+
 test('enforces same-origin OAuth authorization-code boundaries', async () => {
-const port = 45_000 + (process.pid % 10_000);
+const port = await reserveEphemeralPort();
 const origin = `http://127.0.0.1:${port}`;
 const issuer = `${origin}/oauth`;
 const resource = `${origin}/mcp`;
@@ -191,7 +201,7 @@ try {
   assert.equal(persisted.includes(code), false);
   db.close();
 
-  const gatedPort = port + 1;
+  const gatedPort = await reserveEphemeralPort();
   const gatedOrigin = `http://127.0.0.1:${gatedPort}`;
   const gatedIssuer = `${gatedOrigin}/oauth`;
   const gated = createOAuthService({ issuer: gatedIssuer, resource: `${gatedOrigin}/mcp`, databasePath: `${databasePath}.gated`, cookieKeys: ['test-cookie-key-one', 'test-cookie-key-two'], jwks: { keys: [{ ...signingKey, kid: 'gated-key', use: 'sig', alg: 'RS256' }] } });
