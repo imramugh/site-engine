@@ -6,8 +6,8 @@ const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
-const leadOwnerEmail = 'lead-owner.synthetic@example.test'
-const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
+const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
+const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
@@ -225,7 +225,7 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   const editorList = await page.evaluate(async () => (await fetch('/api/editorial/schedules/list')).status)
   expect(editorList).toBe(403)
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
-  await signInLocalOwner(owner, leadOwnerRecoveryCode, leadOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
+  await signInLocalOwner(owner, scheduleOwnerRecoveryCode, scheduleOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await owner.getByRole('button', { name: 'Unsubmitted edits — submitted' }).last().click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
   const headers = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
   const claimed = await owner.request.post('/api/internal/preview-jobs/claim', { headers, data: {} }); const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
