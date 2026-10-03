@@ -502,6 +502,20 @@ describe('static snapshot renderer', () => {
     } finally { await browser.close(); }
   }, 120_000);
 
+  it('keeps analytics disabled until consent, emits only allowlisted conversion data, and stops after revocation', async () => {
+    const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
+    const snapshot = fixture('Analytics'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
+    const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
+    snapshot.pages.push(inquiry); snapshot.settings.sections[0]!.pageIds.push(inquiry.id);
+    const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }));
+    try {
+      await page.goto(`${served.origin}/`); await page.locator('[data-primary-cta]').click(); expect(events).toEqual([]);
+      await page.evaluate(() => localStorage.setItem('site-analytics-consent', 'granted')); await page.goto(`${served.origin}/analytics-inquiry/?utm_source=search-test`); await page.getByRole('button', { name: 'Send inquiry' }).click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor(); expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'page_view', attribution: 'search-test' }), expect.objectContaining({ event: 'form_accepted', form: 'inquiry' })])); expect(JSON.stringify(events)).not.toMatch(/message|email|Synthetic analytics contact/);
+      await page.evaluate(() => { window.dispatchEvent(new Event('analytics-consent-revoked')); window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })) }); const count = events.length; expect(events).toHaveLength(count);
+    } finally { process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+  }, 120_000);
+
   it('renders application forms only as a disabled, non-enhanced control in private previews', async () => {
     const snapshot = fixture('Application preview');
     const section = snapshot.settings.sections[0]!;
