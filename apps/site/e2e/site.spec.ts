@@ -38,3 +38,7 @@ test('ENG-015 neutral runtime persists reduced motion across routes', async ({ p
 test('ENG-015 pauses offscreen and urgent motion', async ({ page }) => {
  await page.goto('/motion/one'); const off=page.locator('#offscreen'); await expect(off).toHaveCSS('animation-play-state','paused'); await page.evaluate(() => document.querySelector('#offscreen')?.scrollIntoView()); await expect(off).toHaveCSS('animation-play-state','running'); await expect(page.locator('[data-urgent-contact]')).toHaveCSS('animation-play-state','paused');
 });
+test('ENG-015 runtime respects OS preference and static CSS starts paused', async ({ page }) => {
+ await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/motion/one'); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce');
+ await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion','allow');
+});
