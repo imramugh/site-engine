@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
-import { PageSchema, RedirectSchema, SectionSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 
-export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings'
+export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
@@ -19,11 +19,12 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex'],
   sections: ['name', 'summary', 'slug', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
   'theme-settings': ['selection', 'settings'],
+  'site-settings': ['siteName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'contactEmail', 'contactPhone', 'seoDescription', 'searchEnabled'],
 }
 
 function idOf(value: unknown): string | undefined {
@@ -44,18 +45,32 @@ function hash(value: Record<string, unknown> | null): string | null {
   return value === null ? null : createHash('sha256').update(stable(value)).digest('hex')
 }
 
+/** Payload returns null for an omitted optional text field. Review snapshots
+ * omit it too, except where null is the deliberate clear of a prior value. */
+function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior?: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!value || value.seoDescription !== null || (prior && 'seoDescription' in prior)) return value
+  const { seoDescription: _seoDescription, ...normalized } = value
+  return normalized
+}
+
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (!document) return null
   if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0])
   return Object.fromEntries(mutableFields[collection].flatMap((field) => {
     const value = document[field]
-    if (field === 'seoDescription' && (value === null || value === '')) return []
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
+    // Payload materializes an omitted optional section summary as null while
+    // the portable snapshot contract represents omission.
+    if (collection === 'sections' && field === 'summary' && value === null) return []
     // Draft records are the editor's working copy of published content. They
     // must compare to the published snapshot as published, while an explicit
     // archival operation remains visible to the approval candidate.
     if (collection === 'pages' && field === 'status') return [[field, value === 'archived' ? 'archived' : 'published']]
     if (value === undefined) return []
+    // Payload populates relationship fields at hook depth. Captures are the
+    // portable review representation, so retain their immutable identifiers.
+    if (field === 'homepageId') return [[field, idOf(value) ?? null]]
+    if (field === 'logo') return [[field, idOf(value) ?? null]]
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
     if (field === 'parentId') {
       const parentID = idOf(value)
@@ -104,8 +119,17 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   const { collection, doc, previousDoc, operation, req } = input
   const actor = req.user as Actor | undefined
   if (!actor || !hasRole(actor, ['owner', 'editor']) || req.context.editorialInternal) return
-  const after = snapshot(collection, doc)
-  const before = operation === 'create' ? null : snapshot(collection, previousDoc)
+  let after = snapshot(collection, doc)
+  let before = operation === 'create' ? null : snapshot(collection, previousDoc)
+  if (collection === 'pages') {
+    before = normalizePageOptionalNulls(before)
+    after = normalizePageOptionalNulls(after, before)
+  }
+  // A first singleton create receives database nulls for omitted optional
+  // fields; do not let them erase frozen baseline values. On an update, null
+  // is retained only where the reviewed before-image had that field, making an
+  // explicit clear distinguishable from first-create omission.
+  if (collection === 'site-settings' && after) after = Object.fromEntries(Object.entries(after).filter(([field, value]) => value !== null || Boolean(before && field in before)))
   if (equivalent(before, after)) return
   const changeSet = await openSet(req.payload, actor, req)
   const changes = Array.isArray(changeSet.changes) ? [...changeSet.changes] as CapturedChange[] : []
@@ -130,8 +154,9 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
   return payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Promise<Record<string, unknown>>
 }
 
-function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined): Record<string, unknown> | null {
-  return snapshot(collection, value)
+function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
+  const current = snapshot(collection, value)
+  return collection === 'pages' ? normalizePageOptionalNulls(current, expected) : current
 }
 
 export async function markStaleIfNeeded(payload: Payload, set: Record<string, unknown>, req: PayloadRequest): Promise<Record<string, unknown>> {
@@ -144,7 +169,7 @@ export async function markStaleIfNeeded(payload: Payload, set: Record<string, un
     if (!change.afterHash) continue
     try {
       const doc = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
-      if (hash(currentChange(change.collection, doc)) !== change.afterHash) { changed = true; break }
+      if (hash(currentChange(change.collection, doc, change.after)) !== change.afterHash) { changed = true; break }
     } catch { changed = true; break }
   }
   if (!changed) return set
@@ -156,11 +181,13 @@ async function quality(payload: Payload, req: PayloadRequest, changes: CapturedC
   for (const change of changes) {
     if (!change.after) continue
     const result = change.collection === 'pages'
-      ? PageSchema.safeParse({ id: change.id, ...change.after, status: 'draft' })
+      ? PageSchema.safeParse({ id: change.id, ...normalizePageOptionalNulls(change.after), status: 'draft' })
       : change.collection === 'sections'
         ? SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
         : change.collection === 'theme-settings'
           ? ThemeSelectionSchema.safeParse(change.after.selection)
+          : change.collection === 'site-settings'
+            ? SiteSettingsDraftSchema.safeParse(change.after)
           : RedirectSchema.safeParse(change.after)
     if (!result.success) errors.push(...result.error.issues.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.path.join('.')}: ${issue.message}` })))
     if (change.collection === 'pages' && change.after) {
@@ -195,7 +222,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     for (const change of [...changes].reverse()) {
       let current: Record<string, unknown> | undefined
       try { current = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { current = undefined }
-      if (hash(currentChange(change.collection, current)) !== change.afterHash) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
+      if (hash(currentChange(change.collection, current, change.after)) !== change.afterHash) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
       if (change.before === null) {
         await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
       } else {
@@ -208,7 +235,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     for (const change of changes) {
       let current: Record<string, unknown> | undefined
       try { current = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { current = undefined }
-      const after = currentChange(change.collection, current)
+      const after = currentChange(change.collection, current, change.after)
       if (hash(after) !== change.afterHash) throw new Error('This change set conflicts with a later draft edit. Resolve the conflict before refreshing.')
       if (!equivalent(change.before, after)) rebased.push(change)
     }

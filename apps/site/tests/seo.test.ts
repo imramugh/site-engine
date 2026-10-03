@@ -12,6 +12,13 @@ describe('ENG-012 public structured output', () => {
     expect(sitemapXML(model, 'https://public.example.test')).not.toContain('<lastmod>');
   });
 
+  it('omits noindex pages from the sitemap', () => {
+    const snapshot = structuredClone(neutralFixture);
+    snapshot.pages[0].noindex = true;
+    const model = publicModel(snapshot, snapshot.settings.homepageId);
+    expect(sitemapXML(model, 'https://public.example.test')).not.toContain(snapshot.pages[0].slug);
+  });
+
   it('emits JobPosting only for current, explicit job metadata and visible job detail', () => {
     const snapshot = structuredClone(neutralFixture);
     const section = snapshot.settings.sections[0]; section.allowedTemplates.push('job');

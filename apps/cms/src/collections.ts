@@ -1,7 +1,7 @@
 import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
@@ -176,6 +176,7 @@ export const Pages: CollectionConfig = {
       status: archived ? 'archived' : 'draft',
       blocks: data.blocks ?? [],
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
+      noindex: data.noindex === true,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
     const [sections, pages] = await Promise.all([
@@ -213,6 +214,7 @@ export const Pages: CollectionConfig = {
     { name: 'status', type: 'select', defaultValue: 'draft', options: ['draft', 'published', 'archived'], admin: { readOnly: true } },
     { name: 'blocks', type: 'json', defaultValue: [] },
     { name: 'seoDescription', type: 'text', maxLength: 160 },
+    { name: 'noindex', type: 'checkbox', defaultValue: false, admin: { description: 'Keep this published page out of search engines and the public site search index.' } },
   ],
 }
 
@@ -528,4 +530,35 @@ export const ThemeSettings: CollectionConfig = {
     afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'theme-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
   },
   fields: [{ name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' }, { name: 'selection', type: 'json', required: true }, { name: 'settings', type: 'json', defaultValue: {} }],
+}
+
+/** Owner-proposed site identity and default metadata. The frozen snapshot keeps
+ * sections and operator contract version outside this editable singleton. */
+export const SiteSettings: CollectionConfig = {
+  slug: 'site-settings', admin: { useAsTitle: 'key', group: 'Editorial' },
+  access: { create: staff(['owner']), read: staff(editorialRoles), update: staff(['owner']), delete: () => false },
+  hooks: {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      if (operation === 'update' && originalDoc && data.key !== undefined && data.key !== originalDoc.key) throw new Error('Site settings key is immutable.')
+      // Payload supplies persisted nullable values on an update. Treat only a
+      // non-null value as an attempted operator-only edit.
+      if ((data.contractVersion !== undefined && data.contractVersion !== null) || data.sections !== undefined || data.theme !== undefined || data.themeSettings !== undefined) throw new Error('Contract, sections, and theme settings are not editable through site settings.')
+      const editable = { ...originalDoc, ...data }
+      for (const key of ['id', 'key', 'createdAt', 'updatedAt', '_status', 'contractVersion']) delete editable[key]
+      contractError(SiteSettingsDraftSchema.safeParse(editable), req, 'site-settings')
+      return { ...originalDoc, ...data, key: originalDoc?.key ?? 'active' }
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'site-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
+  },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active', admin: { readOnly: true } },
+    { name: 'siteName', type: 'text', required: true, maxLength: 100, admin: { description: 'Public site name.' } },
+    { name: 'homepageId', type: 'relationship', relationTo: 'pages', admin: { description: 'Published landing page to use as the homepage.' } },
+    { name: 'defaultLocale', type: 'select', required: true, options: ['en', 'en-CA'] },
+    { name: 'organizationType', type: 'select', options: ['organization', 'professional-service'] },
+    { name: 'logo', type: 'relationship', relationTo: 'assets' },
+    { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 160 },
+    { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
+    { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
+  ],
 }

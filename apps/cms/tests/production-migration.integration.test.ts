@@ -13,6 +13,8 @@ const inquiryPipelineMigration = '20261003_163801_inquiry_lead_pipeline'
 const redirectLifecycleMigration = '20261003_165038_redirect_lifecycle'
 const mediaMigration = '20261003_171753_media_library'
 const applicationsMigration = '20261003_181059'
+const siteSettingsMigration = '20261003_200100_site_settings'
+const searchControlsMigration = '20261003_210000_search_controls'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -134,6 +136,43 @@ describe('production migrations (ENG-036)', () => {
     expect(legacyApplication.rows[0]).toMatchObject({ name: 'Legacy applicant', email: 'legacy-applicant@example.test', job_id: 'legacy', resume_key: 'legacy', idempotency_key: 'legacy:40000000-0000-4000-8000-000000000001' })
     await expect(sqlite.execute("INSERT INTO applications (id, name, email, cover_letter, consent, job_id, resume_key, idempotency_key, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000002', 'New applicant', 'new-applicant@example.test', 'Synthetic new application write after upgrade.', 1, 'job-1', 'key-1', 'new-key', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')")).resolves.toBeDefined()
     await expect(sqlite.execute("INSERT INTO applications (id, name, email, cover_letter, consent, job_id, resume_key, idempotency_key, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000003', 'Duplicate applicant', 'duplicate@example.test', 'Synthetic duplicate application write.', 1, 'job-1', 'key-2', 'new-key', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')")).rejects.toThrow()
+
+    // Reconstruct the pre-singleton database and replay the real migration.
+    // This proves upgrades add both the singleton table and Payload's lock
+    // relation rather than relying on an empty database schema push.
+    for (const statement of [
+      'DROP INDEX payload_locked_documents_rels_site_settings_id_idx',
+      'ALTER TABLE payload_locked_documents_rels DROP COLUMN site_settings_id',
+      'DROP TABLE site_settings',
+      `DELETE FROM payload_migrations WHERE name = '${siteSettingsMigration}'`,
+    ]) await sqlite.execute(statement)
+    const siteSettingsForward = migrate()
+    expect(siteSettingsForward.status, siteSettingsForward.stderr || siteSettingsForward.stdout).toBe(0)
+    const siteSettingsColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('key', 'site_name', 'default_locale')")
+    expect(siteSettingsColumns.rows.map((row) => row.name)).toEqual(['key', 'site_name', 'default_locale'])
+    const lockColumns = await sqlite.execute("SELECT name FROM pragma_table_info('payload_locked_documents_rels') WHERE name = 'site_settings_id'")
+    expect(lockColumns.rows.map((row) => row.name)).toEqual(['site_settings_id'])
+    const siteSettingsApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${siteSettingsMigration}'`)
+    expect(siteSettingsApplied.rows.map((row) => row.name)).toEqual([siteSettingsMigration])
+
+    // Reconstruct the persisted schema before reviewed search controls and
+    // replay the production migrator. Pages are versioned, so both the live
+    // and version tables must receive noindex alongside the singleton flag.
+    for (const statement of [
+      'ALTER TABLE pages DROP COLUMN noindex',
+      'ALTER TABLE _pages_v DROP COLUMN version_noindex',
+      `DELETE FROM payload_migrations WHERE name = '${searchControlsMigration}'`,
+    ]) await sqlite.execute(statement)
+    const searchControlsForward = migrate()
+    expect(searchControlsForward.status, searchControlsForward.stderr || searchControlsForward.stdout).toBe(0)
+    const searchColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('pages') WHERE name = 'noindex'")
+    expect(searchColumns.rows).toEqual([expect.objectContaining({ name: 'noindex', dflt_value: 'false' })])
+    const versionSearchColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('_pages_v') WHERE name = 'version_noindex'")
+    expect(versionSearchColumns.rows).toEqual([expect.objectContaining({ name: 'version_noindex', dflt_value: 'false' })])
+    const settingsSearchColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('site_settings') WHERE name = 'search_enabled'")
+    expect(settingsSearchColumns.rows).toEqual([expect.objectContaining({ name: 'search_enabled', dflt_value: 'false' })])
+    const searchControlsApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${searchControlsMigration}'`)
+    expect(searchControlsApplied.rows.map((row) => row.name)).toEqual([searchControlsMigration])
     await sqlite.close()
 
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')

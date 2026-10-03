@@ -147,6 +147,7 @@ describe('static snapshot renderer', () => {
     // Private previews use strict CSP: stylesheet rules must be same-origin files.
     expect(html).not.toMatch(/<style(?:\s|>)/i);
     expect(html).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="\/preview\//);
+    expect(html).not.toContain('>Search<');
     expect(Object.keys(alphaBuild.manifest.files).some(path => path.endsWith('.css'))).toBe(true);
     browserOutput = alphaBuild.output;
   }, 180_000);
@@ -175,9 +176,33 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"ProfessionalService"');
   });
 
+  it('keeps search unavailable until an Owner-reviewed setting enables it', async () => {
+    const snapshot = fixture('Search disabled');
+    snapshot.settings.searchEnabled = false;
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'search-disabled.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const served = await staticServer(built.output, '/');
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${served.origin}/`, { waitUntil: 'domcontentloaded' });
+      expect(await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Search', exact: true }).count()).toBe(0);
+      await page.goto(`${served.origin}/search`, { waitUntil: 'domcontentloaded' });
+      expect(await page.getByRole('status').textContent()).toContain('Search is unavailable for this site.');
+      expect(await page.getByRole('search').count()).toBe(0);
+      expect(await page.locator('meta[name="robots"]').getAttribute('content')).toBe('noindex, nofollow, noarchive');
+      const index = await page.request.get(`${served.origin}/search-index.json`);
+      expect(index.ok()).toBe(true);
+      await expect(index.json()).resolves.toEqual({ version: 1, documents: [] });
+    } finally {
+      served.server.closeAllConnections();
+      served.server.close();
+      await browser.close();
+    }
+  }, 120_000);
+
   it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {
     const customComponents = await customThemeComponents(root);
-    const custom = fixture('Custom theme host'); const defaultSnapshot = fixture('Default theme host');
+    const custom = fixture('Custom theme host'); custom.settings.searchEnabled = true; const defaultSnapshot = fixture('Default theme host');
     const section = custom.settings.sections[0]!;
     const jobID = '12121212-1212-4212-8212-121212121212';
     const inquiryID = '13131313-1313-4313-8313-131313131313';

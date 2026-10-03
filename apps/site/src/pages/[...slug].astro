@@ -16,8 +16,10 @@ const { route } = Astro.props;
 const children = childrenOf(route, model);
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 const applicationsEnabled = renderBase === '/';
+const preview = crawlerMode(renderBase) === 'preview';
+const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
 ---
-<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={crawlerMode(renderBase) === 'preview'} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
+<Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={preview || route.page.noindex} searchEnabled={searchEnabled} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   <nav aria-label="Breadcrumb"><ol>{route.breadcrumbs.map((crumb, index) => <li>{index === route.breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span> : <a href={localURL(crumb.href)}>{crumb.label}</a>}</li>)}</ol></nav>
   {!route.page.blocks.some((block) => !block.hidden && block.type === 'hero') && <header class="block"><div class="block__inner"><h1>{route.page.title}</h1><p>{route.page.summary}</p></div></header>}
   {route.page.blocks.map((block) => <><BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />{!block.hidden && block.type === 'contact' && block.inquiryForm && <InquiryForm enabled={renderBase === '/'} />}</>)}

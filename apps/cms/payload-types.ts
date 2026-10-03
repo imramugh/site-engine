@@ -77,6 +77,7 @@ export interface Config {
     assets: Asset;
     redirects: Redirect;
     'theme-settings': ThemeSetting;
+    'site-settings': SiteSetting;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     applications: Application;
@@ -102,6 +103,7 @@ export interface Config {
     assets: AssetsSelect<false> | AssetsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
+    'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -291,6 +293,10 @@ export interface Page {
     | boolean
     | null;
   seoDescription?: string | null;
+  /**
+   * Keep this published page out of search engines and the public site search index.
+   */
+  noindex?: boolean | null;
   updatedAt: string;
   createdAt: string;
   _status?: ('draft' | 'published') | null;
@@ -427,6 +433,35 @@ export interface ThemeSetting {
     | number
     | boolean
     | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "site-settings".
+ */
+export interface SiteSetting {
+  id: string;
+  key: string;
+  /**
+   * Public site name.
+   */
+  siteName: string;
+  /**
+   * Published landing page to use as the homepage.
+   */
+  homepageId?: (string | null) | Page;
+  defaultLocale: 'en' | 'en-CA';
+  organizationType?: ('organization' | 'professional-service') | null;
+  logo?: (string | null) | Asset;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  seoDescription?: string | null;
+  /**
+   * Expose the static public search page and include it in the primary navigation after this change is reviewed and published.
+   */
+  searchEnabled?: boolean | null;
+  contractVersion?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -780,6 +815,10 @@ export interface PayloadLockedDocument {
         value: string | ThemeSetting;
       } | null)
     | ({
+        relationTo: 'site-settings';
+        value: string | SiteSetting;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -946,6 +985,7 @@ export interface PagesSelect<T extends boolean = true> {
   status?: T;
   blocks?: T;
   seoDescription?: T;
+  noindex?: T;
   updatedAt?: T;
   createdAt?: T;
   _status?: T;
@@ -1073,6 +1113,25 @@ export interface ThemeSettingsSelect<T extends boolean = true> {
   key?: T;
   selection?: T;
   settings?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "site-settings_select".
+ */
+export interface SiteSettingsSelect<T extends boolean = true> {
+  key?: T;
+  siteName?: T;
+  homepageId?: T;
+  defaultLocale?: T;
+  organizationType?: T;
+  logo?: T;
+  contactEmail?: T;
+  contactPhone?: T;
+  seoDescription?: T;
+  searchEnabled?: T;
+  contractVersion?: T;
   updatedAt?: T;
   createdAt?: T;
 }

@@ -18,6 +18,8 @@ import * as migration_20261003_165038_redirect_lifecycle from './20261003_165038
 import * as migration_20261003_171753_media_library from './20261003_171753_media_library';
 import * as migration_20261003_181059 from './20261003_181059';
 import * as migration_20261003_191650_theme_settings_selection from './20261003_191650_theme_settings_selection';
+import * as migration_20261003_200100_site_settings from './20261003_200100_site_settings';
+import * as migration_20261003_210000_search_controls from './20261003_210000_search_controls';
 
 export const migrations = [
   {
@@ -120,4 +122,6 @@ export const migrations = [
     down: migration_20261003_191650_theme_settings_selection.down,
     name: '20261003_191650_theme_settings_selection'
   },
+  { up: migration_20261003_200100_site_settings.up, down: migration_20261003_200100_site_settings.down, name: '20261003_200100_site_settings' },
+  { up: migration_20261003_210000_search_controls.up, down: migration_20261003_210000_search_controls.down, name: '20261003_210000_search_controls' },
 ];

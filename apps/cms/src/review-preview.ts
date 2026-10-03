@@ -6,7 +6,7 @@ import { buildCandidate, canonicalHash, changeSetHash } from './publishing'
 import { markStaleIfNeeded } from './editorial'
 
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
-type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
+type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings' | 'site-settings'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
 type Baseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
 const MAX_BODY_BYTES = 16 * 1024

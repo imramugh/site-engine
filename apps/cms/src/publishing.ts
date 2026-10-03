@@ -89,6 +89,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const redirects = new Map(base.redirects.map((redirect) => [redirect.from, structuredClone(redirect)]))
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
   let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
+  let siteSettings = structuredClone(base.settings) as Record<string, unknown>
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
@@ -119,14 +120,33 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       if (!merged?.selection) throw new Error('Theme selection cannot be removed.')
       selectedTheme = merged.selection as SiteSnapshot['settings']['theme']; Object.assign(themeSettings, merged.settings as Record<string, unknown>)
     }
+    if (change.collection === 'site-settings') {
+      // The singleton may be introduced after a baseline exists. Apply only its
+      // reviewed fields so sections, operator contract pins, and theme data stay intact.
+      const merged = change.before === null
+        ? { ...siteSettings, ...structuredClone(change.after) }
+        : mergeCapturedChange(siteSettings, change)
+      if (!merged) throw new Error('Site settings cannot be removed.')
+      siteSettings = merged
+    }
     if (change.collection === 'assets') {
       const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
       if (merged === null) media.delete(change.id)
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
   }
+  if (typeof siteSettings.logo === 'string') {
+    const logo = media.get(siteSettings.logo)
+    if (!logo) throw new Error('Site settings logo must reference an included asset.')
+    siteSettings.logo = logo
+  }
+  // Payload represents omitted optional singleton fields as null. The public
+  // snapshot contract intentionally represents omission, not nullability.
+  for (const field of ['homepageId', 'logo', 'organizationType', 'contactEmail', 'contactPhone', 'seoDescription']) {
+    if (siteSettings[field] === null) delete siteSettings[field]
+  }
   // Keep editor-maintained navigation distinct from derived section membership.
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))

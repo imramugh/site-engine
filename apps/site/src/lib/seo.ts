@@ -18,7 +18,7 @@ export function publicModel(snapshot: SiteSnapshot, homepageId: string | undefin
 }
 
 export function sitemapXML(model: RouteModel, origin: string): string {
-  const entries = model.routes.map((route) => {
+  const entries = model.routes.filter((route) => !route.page.noindex).map((route) => {
     const updatedAt = route.page.updatedAt;
     return `<url><loc>${xml(absolute(origin, route.canonicalPath))}</loc>${updatedAt ? `<lastmod>${xml(new Date(updatedAt).toISOString())}</lastmod>` : ''}</url>`;
   });
@@ -82,13 +82,13 @@ export function schemaForRoute(route: PublicRoute, model: RouteModel, snapshot: 
 }
 
 export function llmsText(model: RouteModel, snapshot: SiteSnapshot, origin: string): string {
-  const pages = model.routes.slice(0, 50).map((route) => `- [${route.page.title}](${absolute(origin, route.canonicalPath)}): ${route.page.summary}`);
+  const pages = model.routes.filter((route) => !route.page.noindex).slice(0, 50).map((route) => `- [${route.page.title}](${absolute(origin, route.canonicalPath)}): ${route.page.summary}`);
   return [`# ${snapshot.settings.siteName}`, '', 'Public, published site information generated from the current content snapshot.', '', '## Pages', ...pages, ''].join('\n');
 }
 
 export function machineReadablePages(model: RouteModel, snapshot: SiteSnapshot, origin: string): Json {
   return {
-    version: 1, site: { name: snapshot.settings.siteName, url: origin }, pages: model.routes.map((route) => ({
+    version: 1, site: { name: snapshot.settings.siteName, url: origin }, pages: model.routes.filter((route) => !route.page.noindex).map((route) => ({
       url: absolute(origin, route.canonicalPath), canonical: absolute(origin, route.canonicalPath), title: route.page.title,
       summary: route.page.summary, template: route.page.template, publishedAt: route.page.publishedAt, updatedAt: route.page.updatedAt,
       breadcrumbs: route.breadcrumbs.map((crumb) => ({ label: crumb.label, url: absolute(origin, crumb.href) })),

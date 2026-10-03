@@ -6,7 +6,7 @@ const block = (id: string, type: string, fields: object, tone = appearance) => (
 
 /** Public, synthetic content only. It deliberately exercises every standard block. */
 export const demoSnapshot: SiteSnapshot = SiteSnapshotSchema.parse({
-  settings: { contractVersion: '1.0.0', siteName: 'Sample Studio', defaultLocale: 'en', homepageId: ids.home, sections: [
+  settings: { contractVersion: '1.0.0', siteName: 'Sample Studio', defaultLocale: 'en', homepageId: ids.home, searchEnabled: true, sections: [
     { id: ids.rootSection, name: 'General', summary: 'Neutral publishing examples.', slug: 'general', allowedTemplates: ['landing', 'standard', 'article'], pageIds: [ids.home, ids.guide, ids.gallery, ids.article] },
     { id: ids.serviceSection, name: 'Services', summary: 'Generic service hierarchy.', slug: 'services', allowedTemplates: ['landing', 'pillar', 'service'], pageIds: [ids.pillar, ids.service] },
     { id: ids.insightSection, name: 'Insights', summary: 'Generic listing hierarchy.', slug: 'insights', allowedTemplates: ['listing', 'article'], pageIds: [ids.listing] },

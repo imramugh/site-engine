@@ -14,10 +14,10 @@ let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
-async function fixture(label: string) {
+async function fixture(label: string, seoDescription?: string) {
   const editor = await payload.create({ collection: 'users', data: { email: `${label}@example.test`, name: label, roles: ['editor'] }, overrideAccess: true })
   const section = await payload.create({ collection: 'sections', data: { name: label, summary: 'A synthetic section for transactional editorial safety regression tests.', slug: label, allowedTemplates: ['standard'] }, overrideAccess: true })
-  const page = await payload.create({ collection: 'pages', data: { title: 'Baseline', summary: 'A synthetic baseline page used to verify reversible draft changes.', slug: 'baseline', sectionId: section.id, template: 'standard', blocks: [] }, overrideAccess: true })
+  const page = await payload.create({ collection: 'pages', data: { title: 'Baseline', summary: 'A synthetic baseline page used to verify reversible draft changes.', slug: 'baseline', sectionId: section.id, template: 'standard', blocks: [], ...(seoDescription ? { seoDescription } : {}) }, overrideAccess: true })
   return { editor, page }
 }
 async function setFor(actorID: string) {
@@ -29,12 +29,13 @@ async function setFor(actorID: string) {
 describe('ENG-008 discard, stale changes and rollback safety', () => {
   it('restores the original draft and clears optional fields added by the editor', async () => {
     const { editor, page } = await fixture('discard-baseline')
-    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Edited', seoDescription: 'An optional description that must disappear on discard.' }, draft: true, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Edited', seoDescription: 'An optional description that must disappear on discard.', noindex: true }, draft: true, user: editor, overrideAccess: false })
     const set = await setFor(editor.id)
     await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }))
     const restored = await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })
     expect(restored.title).toBe('Baseline')
     expect(restored.seoDescription ?? '').toBe('')
+    expect(restored.noindex).toBe(false)
     expect((await setFor(editor.id)).state).toBe('discarded')
   })
   it('refuses stale refresh and discard rather than overwriting a second editor', async () => {
@@ -58,6 +59,17 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'refresh' }))
     const submitted = await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))
     expect(submitted.state).toBe('submitted')
+  })
+  it('keeps an explicit optional-field clear while refreshing an aged page change set', async () => {
+    const { editor, page } = await fixture('aged-clear', 'A baseline optional description that is deliberately cleared in review.')
+    await payload.update({ collection: 'pages', id: page.id, data: { seoDescription: null }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    expect(set.changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'pages', after: expect.objectContaining({ seoDescription: null }) })]))
+    await payload.update({ collection: 'change-sets', id: set.id, data: { createdAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'refresh' }))
+    const refreshed = await setFor(editor.id)
+    expect(refreshed.changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'pages', after: expect.objectContaining({ seoDescription: null }) })]))
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
   })
   it('rolls back content restoration, state, and audit when the outer transaction fails', async () => {
     const { editor, page } = await fixture('discard-rollback')
