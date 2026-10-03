@@ -27,8 +27,9 @@ const consentRequired = import.meta.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'f
     const allowed = new Set(['page_view', 'primary_cta', 'navigation', 'phone_tap', 'form_accepted', 'form_failed']);
     const storageKey = 'site-analytics-consent';
     const readConsent = (): Consent => { try { const value = localStorage.getItem(storageKey); return value === 'granted' || value === 'revoked' ? value : undefined; } catch { return undefined; } };
-    const writeConsent = (value: Exclude<Consent, undefined>) => { try { localStorage.setItem(storageKey, value); } catch { /* Storage is optional; consent stays in this page only. */ } };
-    const allowedByConsent = () => { const value = readConsent(); return value === 'revoked' ? false : value === 'granted' || !consentRequired; };
+    let currentConsent = readConsent();
+    const writeConsent = (value: Exclude<Consent, undefined>) => { currentConsent = value; try { localStorage.setItem(storageKey, value); } catch { /* The in-memory value remains authoritative for this page. */ } };
+    const allowedByConsent = () => currentConsent === 'revoked' ? false : currentConsent === 'granted' || !consentRequired;
     const attribution = () => {
       const source = new URLSearchParams(location.search).get('utm_source')?.toLowerCase();
       if (source && /google|bing|duckduckgo|search/.test(source)) return 'search';
@@ -40,7 +41,7 @@ const consentRequired = import.meta.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'f
     const emit = (event: string, detail: Record<string, string> = {}) => { if (!allowed.has(event) || !allowedByConsent()) return; void fetch(endpoint, { method: 'POST', keepalive: true, credentials: 'omit', referrerPolicy: 'no-referrer', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event, path, attribution: attribution(), ...detail }) }).catch(() => undefined); };
     const status = root.querySelector<HTMLElement>('[data-analytics-consent-status]')!;
     const refresh = () => { status.textContent = allowedByConsent() ? 'Optional measurement is on.' : 'Optional measurement is off.'; };
-    const grant = () => { writeConsent('granted'); refresh(); emit('page_view'); };
+    const grant = () => { if (allowedByConsent()) return; writeConsent('granted'); refresh(); emit('page_view'); };
     const revoke = () => { writeConsent('revoked'); refresh(); };
     (window as HookWindow).siteAnalyticsConsent = { grant, revoke };
     root.querySelector<HTMLElement>('[data-analytics-grant]')!.addEventListener('click', grant);
