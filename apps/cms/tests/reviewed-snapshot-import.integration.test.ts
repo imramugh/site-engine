@@ -168,3 +168,28 @@ describe('reviewed snapshot reconciliation', () => {
     expect(JSON.parse(responseBody)).toMatchObject({ state: 'open', name: 'HTTP import' })
   })
 })
+
+describe('section landing import routing', () => {
+  it('round-trips root and service landing relations without duplicating the section slug', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `landing-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const pending = await payload.find({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, limit: 0, pagination: false, overrideAccess: true })
+    for (const changeSet of pending.docs) await payload.update({ collection: 'change-sets', id: changeSet.id, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+    const baseline = isolatedFixture(); const desired = structuredClone(baseline)
+    const root = desired.settings.sections[0]!; root.slug = ''; root.summary = undefined
+    const serviceID = randomUUID(); const landingID = randomUUID(); const childID = randomUUID()
+    desired.settings.sections.push({ id: serviceID, name: 'Services', slug: 'services', landingPageId: landingID, allowedTemplates: ['pillar', 'service'], pageIds: [landingID, childID] })
+    const source = desired.pages[0]!
+    const landing = { ...structuredClone(source), id: landingID, sectionId: serviceID, title: 'Services', summary: 'A service landing page for the imported neutral route round-trip.', slug: 'services', template: 'pillar' as const, blocks: [] }
+    const child = { ...structuredClone(landing), id: childID, parentId: landingID, title: 'Respond', summary: 'A nested service page whose canonical route must omit the landing slug.', slug: 'respond', template: 'service' as const }
+    desired.pages.push(child, landing)
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Landing routing', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as never[]
+    const candidate = buildCandidate(baseline, changes, (changes as { collection: string; id: string }[]).map(change => `${change.collection}:${change.id}`), { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0' })
+    expect(candidate.settings.sections.find(section => section.id === serviceID)).toMatchObject({ landingPageId: landingID, pageIds: [landingID, childID] })
+    const { deriveRoutes } = await import('@site-engine/engine')
+    expect(deriveRoutes(candidate).byPath.has('/services')).toBe(true)
+    expect(deriveRoutes(candidate).byPath.has('/services/respond')).toBe(true)
+    expect(deriveRoutes(candidate).byPath.has('/services/services/respond')).toBe(false)
+    await withPayloadTransaction(payload, req => { req.user = owner as never; return transitionChangeSet({ payload, req, actor: owner as never, id: String(set.id), action: 'submit' }) })
+  })
+})

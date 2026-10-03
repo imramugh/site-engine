@@ -124,6 +124,6 @@ export const migrations = [
     name: '20261003_191650_theme_settings_selection'
   },
   { up: migration_20261003_200100_site_settings.up, down: migration_20261003_200100_site_settings.down, name: '20261003_200100_site_settings' },
-  { up: migration_20261003_210000_search_controls.up, down: migration_20261003_210000_search_controls.down, name: '20261003_210000_search_controls' },,
+  { up: migration_20261003_210000_search_controls.up, down: migration_20261003_210000_search_controls.down, name: '20261003_210000_search_controls' },
   { up: migration_20261003_230000_section_landing_page.up, down: migration_20261003_230000_section_landing_page.down, name: '20261003_230000_section_landing_page' },
 ];

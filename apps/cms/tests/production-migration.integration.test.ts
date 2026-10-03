@@ -15,6 +15,7 @@ const mediaMigration = '20261003_171753_media_library'
 const applicationsMigration = '20261003_181059'
 const siteSettingsMigration = '20261003_200100_site_settings'
 const searchControlsMigration = '20261003_210000_search_controls'
+const sectionLandingMigration = '20261003_230000_section_landing_page'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -173,6 +174,18 @@ describe('production migrations (ENG-036)', () => {
     expect(settingsSearchColumns.rows).toEqual([expect.objectContaining({ name: 'search_enabled', dflt_value: 'false' })])
     const searchControlsApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${searchControlsMigration}'`)
     expect(searchControlsApplied.rows.map((row) => row.name)).toEqual([searchControlsMigration])
+    for (const statement of [
+      'DROP INDEX sections_landing_page_id_idx',
+      'ALTER TABLE sections DROP COLUMN landing_page_id_id',
+      'DROP INDEX _sections_v_version_landing_page_id_idx',
+      'ALTER TABLE _sections_v DROP COLUMN version_landing_page_id_id',
+      `DELETE FROM payload_migrations WHERE name = '${sectionLandingMigration}'`,
+    ]) await sqlite.execute(statement)
+    const landingForward = migrate()
+    expect(landingForward.status, landingForward.stderr || landingForward.stdout).toBe(0)
+    expect((await sqlite.execute("SELECT name FROM pragma_table_info('sections') WHERE name = 'landing_page_id_id'")).rows).toHaveLength(1)
+    expect((await sqlite.execute("SELECT name FROM pragma_table_info('_sections_v') WHERE name = 'version_landing_page_id_id'")).rows).toHaveLength(1)
+    expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${sectionLandingMigration}'`)).rows).toHaveLength(1)
     await sqlite.close()
 
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')
