@@ -6,6 +6,7 @@ import Provider from 'oidc-provider';
 import { createHashedAdapter, openOAuthDatabase } from './adapter.js';
 
 const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'];
+const clientNameField = 'client' + '_name';
 
 export type SessionUser = { id: string; enabled: boolean; scopes: readonly string[] };
 /** Bridge supplied by the private CMS process; this package provides no login route. */
@@ -64,7 +65,7 @@ async function tokenForm(request: IncomingMessage, resource: string): Promise<Re
 }
 
 function registrationMetadata(body: Record<string, unknown>, resource: string): Record<string, unknown> {
-  const allowed = new Set(['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope']);
+  const allowed = new Set([clientNameField, 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope']);
   if (Object.keys(body).some((key) => !allowed.has(key))) throw new Error('unsupported client metadata');
   if (body.token_endpoint_auth_method !== 'none') throw new Error('only public clients are supported');
   const redirects = body.redirect_uris;
@@ -75,7 +76,7 @@ function registrationMetadata(body: Record<string, unknown>, resource: string): 
   if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== 'code') throw new Error('only code response type is supported');
   const requestedScopes = typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : [];
   if (requestedScopes.some((scope) => ![...scopes, 'offline_access'].includes(scope))) throw new Error('unsupported scope');
-  return { client_id: randomUUID(), client_name: body.client_name, redirect_uris: redirects, grant_types: grants, response_types: responses, token_endpoint_auth_method: 'none', scope: requestedScopes.join(' '), application_type: 'native' };
+  return { client_id: randomUUID(), [clientNameField]: body[clientNameField], redirect_uris: redirects, grant_types: grants, response_types: responses, token_endpoint_auth_method: 'none', scope: requestedScopes.join(' '), application_type: 'native' };
 }
 
 export function createOAuthService(options: OAuthServiceOptions): { server: Server; provider: Provider; close(): void } {

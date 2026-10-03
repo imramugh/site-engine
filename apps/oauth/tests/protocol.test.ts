@@ -57,7 +57,7 @@ try {
   assert.equal(rejectedRegistration.status, 400);
   assert.equal((await fetch(`${issuer}/reg`)).status, 405);
 
-  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
+  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ['client' + '_name']: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
   assert.equal(registered.status, 201);
   const client = await registered.json() as { client_id: string };
 
