@@ -11,7 +11,7 @@ const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', '
 export type SessionUser = { id: string; enabled: boolean; scopes: readonly string[]; sessionId?: string };
 /** Bridge supplied by the private CMS process; this package provides no login route. */
 export type SessionBridge = { resolve(request: IncomingMessage): Promise<SessionUser | undefined>; find(id: string, sessionId?: string): Promise<SessionUser | undefined> };
-export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge };
+export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean };
 
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
 type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
@@ -170,6 +170,10 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     },
     interactions: { url: async (_ctx: unknown, interaction: { jti: string }) => `${prefix}/interaction/${interaction.jti}` },
   });
+  // The public issuer may be HTTPS while this private service receives HTTP
+  // only from an edge that overwrites forwarded headers. Keep this opt-in so
+  // direct deployments never trust caller-supplied X-Forwarded-* headers.
+  (provider as Provider & { proxy: boolean }).proxy = options.trustProxy === true;
   const callback = provider.callback();
   const authorizationMetadata = {
     issuer: options.issuer,
@@ -329,6 +333,6 @@ if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const sessionBridge = cmsOrigin && bridgeSecret
     ? createHttpSessionBridge({ cmsOrigin, secret: bridgeSecret })
     : undefined;
-  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge });
+  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge, trustProxy: process.env.OAUTH_TRUST_PROXY === 'true' });
   service.server.listen(port);
 }

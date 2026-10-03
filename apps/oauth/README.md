@@ -17,3 +17,9 @@ The proof accepts only the configured exact resource indicator and S256 PKCE;
 the edge still needs production request-size, rate-limit, TLS, and audit-log
 policy before release. Supply a private signing JWKS from the deployment secret
 store; this repository contains no usable key material.
+
+For a private HTTP container behind an HTTPS edge, set `OAUTH_TRUST_PROXY=true`.
+This enables oidc-provider's proxy mode so its secure authorization cookies and
+redirect handling use the edge's `X-Forwarded-Proto: https`. Set it only when
+the edge is private to the service and overwrites forwarded headers. Leave it
+unset for loopback and direct deployments.
