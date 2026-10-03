@@ -310,11 +310,25 @@ export const PublishOutbox: CollectionConfig = {
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
     { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, admin: { readOnly: true } },
     { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'reviewRevision', type: 'number', required: true, admin: { readOnly: true } },
+    { name: 'changeHash', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'includedChangeKeys', type: 'json', required: true, admin: { readOnly: true } },
     { name: 'status', type: 'select', required: true, defaultValue: 'pending', options: ['pending', 'processing', 'failed', 'completed'], admin: { readOnly: true } },
     { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
     { name: 'nextAttemptAt', type: 'date', admin: { readOnly: true } },
     { name: 'claimedAt', type: 'date', admin: { readOnly: true } },
     { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
+  ],
+}
+
+/** The authoritative pointer to content verified as public. Snapshots stay immutable. */
+export const PublishedReleases: CollectionConfig = {
+  slug: 'published-releases', admin: { useAsTitle: 'snapshot', group: 'Editorial' },
+  access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
+  fields: [
+    { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, admin: { readOnly: true } },
+    { name: 'activatedAt', type: 'date', required: true, admin: { readOnly: true } },
+    { name: 'healthEvidence', type: 'json', required: true, admin: { readOnly: true } },
   ],
 }

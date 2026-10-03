@@ -81,6 +81,7 @@ export interface Config {
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
     'publish-outbox': PublishOutbox;
+    'published-releases': PublishedRelease;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -102,6 +103,7 @@ export interface Config {
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
     'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
+    'published-releases': PublishedReleasesSelect<false> | PublishedReleasesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -433,12 +435,43 @@ export interface PublishOutbox {
   idempotencyKey: string;
   snapshot: string | PublishSnapshot;
   changeSet: string | ChangeSet;
+  reviewRevision: number;
+  changeHash: string;
+  includedChangeKeys:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   status: 'pending' | 'processing' | 'failed' | 'completed';
   attempts: number;
   nextAttemptAt?: string | null;
   claimedAt?: string | null;
   correlationID: string;
   lastError?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "published-releases".
+ */
+export interface PublishedRelease {
+  id: string;
+  snapshot: string | PublishSnapshot;
+  activatedAt: string;
+  healthEvidence:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -521,6 +554,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'publish-outbox';
         value: string | PublishOutbox;
+      } | null)
+    | ({
+        relationTo: 'published-releases';
+        value: string | PublishedRelease;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -763,12 +800,26 @@ export interface PublishOutboxSelect<T extends boolean = true> {
   idempotencyKey?: T;
   snapshot?: T;
   changeSet?: T;
+  reviewRevision?: T;
+  changeHash?: T;
+  includedChangeKeys?: T;
   status?: T;
   attempts?: T;
   nextAttemptAt?: T;
   claimedAt?: T;
   correlationID?: T;
   lastError?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "published-releases_select".
+ */
+export interface PublishedReleasesSelect<T extends boolean = true> {
+  snapshot?: T;
+  activatedAt?: T;
+  healthEvidence?: T;
   updatedAt?: T;
   createdAt?: T;
 }

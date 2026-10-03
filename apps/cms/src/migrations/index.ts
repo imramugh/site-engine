@@ -8,6 +8,7 @@ import * as migration_20261003_042858_invitation_required_subject from './202610
 import * as migration_20261003_133520_scoped_page_slugs from './20261003_133520_scoped_page_slugs';
 import * as migration_20261003_135539_editorial_change_set_lifecycle from './20261003_135539_editorial_change_set_lifecycle';
 import * as migration_20261003_143750 from './20261003_143750';
+import * as migration_20261003_144959 from './20261003_144959';
 
 export const migrations = [
   {
@@ -58,6 +59,11 @@ export const migrations = [
   {
     up: migration_20261003_143750.up,
     down: migration_20261003_143750.down,
-    name: '20261003_143750'
+    name: '20261003_143750',
+  },
+  {
+    up: migration_20261003_144959.up,
+    down: migration_20261003_144959.down,
+    name: '20261003_144959'
   },
 ];

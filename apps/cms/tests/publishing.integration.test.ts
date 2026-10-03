@@ -1,10 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { randomUUID } from 'node:crypto'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, canonicalHash, changeSetHash, claimNextPublishJob, retryPublishJob } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, retryPublishJob } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
@@ -14,58 +16,101 @@ const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } }) })
 
-async function fixture(label: string, preview = 'ready') {
+const versions = { themeVersion: '1.2.3', engineVersion: '1.2.3', contractVersion: '1.0.0' }
+type Change = { collection: 'pages' | 'sections' | 'redirects'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
+
+function baseline() {
+  const value = structuredClone(neutralFixture)
+  const sectionID = randomUUID(); const pageID = randomUUID()
+  const suffix = sectionID.slice(0, 8)
+  value.settings.homepageId = pageID
+  value.settings.sections[0]!.id = sectionID; value.settings.sections[0]!.pageIds = [pageID]; value.settings.sections[0]!.slug = `general-${suffix}`
+  value.pages[0]!.id = pageID; value.pages[0]!.sectionId = sectionID; value.pages[0]!.slug = `welcome-${suffix}`
+  return value
+}
+
+async function fixture(label: string, options: { preview?: 'ready' | 'pending'; excluded?: boolean } = {}) {
   const reviewer = await payload.create({ collection: 'users', data: { email: `${label}-reviewer@example.test`, name: 'Reviewer', roles: ['approver'] }, overrideAccess: true })
   const editor = await payload.create({ collection: 'users', data: { email: `${label}-editor@example.test`, name: 'Editor', roles: ['editor'] }, overrideAccess: true })
-  const section = await payload.create({ collection: 'sections', data: { name: `${label} section`, summary: 'A section that supports an immutable publishing test page.', slug: `${label}-section`, allowedTemplates: ['standard'] }, overrideAccess: true })
-  const after = { title: 'Included', slug: `${label}-page`, sectionId: section.id, summary: 'A captured document used only to verify immutable release candidates.', template: 'standard' as const, blocks: [] }
-  const page = await payload.create({ collection: 'pages', data: after, overrideAccess: true })
-  const change = { collection: 'pages', id: String(page.id), before: null, after, beforeHash: null, afterHash: canonicalHash(after) }
-  const set = await payload.create({ collection: 'change-sets', data: { name: label, actor: editor.id, state: 'submitted', revision: 4, changes: [change], quality: { checks: [{ name: 'contract-and-tree', status: 'passed' }] }, preview: { status: preview } }, overrideAccess: true, context: { editorialInternal: true } })
+  const currentBase = baseline(); const section = currentBase.settings.sections[0]!; const page = currentBase.pages[0]!
+  await payload.create({ collection: 'sections', data: { id: section.id, name: section.name, summary: section.summary, slug: section.slug, allowedTemplates: section.allowedTemplates, pageIds: [] }, draft: true, overrideAccess: true })
+  await payload.create({ collection: 'pages', data: { id: page.id, sectionId: page.sectionId, title: page.title, summary: page.summary, slug: page.slug, template: page.template, blocks: page.blocks }, overrideAccess: true })
+  const after = { ...page, title: `Approved ${label}`, status: undefined }
+  delete (after as { status?: unknown }).status
+  const changes: Change[] = [{ collection: 'pages', id: page.id, before: { ...page, status: undefined }, after, beforeHash: null, afterHash: null }]
+  if (options.excluded) changes.push({ collection: 'redirects', id: '/remaining', before: null, after: { from: '/remaining', to: '/welcome', status: 301 }, beforeHash: null, afterHash: null })
+  const included = [`pages:${page.id}`]
+  const set = await payload.create({ collection: 'change-sets', data: { name: label, actor: editor.id, state: 'submitted', revision: 4, changes, quality: { checks: [{ name: 'contract-and-tree', status: 'passed' }] }, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
+  const persistedChanges = set.changes as Change[]
+  const candidate = buildCandidate(currentBase, persistedChanges, included, versions)
+  const preview = options.preview === 'pending' ? { status: 'pending' } : { status: 'ready', revision: 4, changeHash: changeSetHash(persistedChanges), includedChangeKeys: included, contentHash: canonicalHash(candidate) }
+  const reviewed = await payload.update({ collection: 'change-sets', id: set.id, data: { preview }, overrideAccess: true, context: { editorialInternal: true } })
   const token = newOpaqueToken()
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: reviewer.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-  return { reviewer, editor, set, change, headers: new Headers({ cookie: `site_engine_session=${token}` }) }
+  return { reviewer, editor, set: reviewed, changes: persistedChanges, included, candidate, baseline: currentBase, headers: new Headers({ cookie: `site_engine_session=${token}` }) }
 }
-const versions = { themeVersion: 'theme-test', engineVersion: 'engine-test', contractVersion: 'contract-test' }
+async function approve(current: Awaited<ReturnType<typeof fixture>>, initialBaseline = current.baseline) {
+  return withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline }) })
+}
+
+async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' } }, overrideAccess: true, context: { editorialInternal: true } })
+}
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
-  it('creates one immutable snapshot and outbox job without foreign pending drafts', async () => {
-    const current = await fixture('approved')
-    const foreign = await fixture('foreign')
-    const changeHash = changeSetHash(current.set.changes)
-    const result = await withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeHash, includedChangeKeys: [`pages:${current.change.id}`], versions }) })
+  it('uses a contract-valid frozen candidate, preserves exclusions, and deduplicates retry', async () => {
+    const current = await fixture('approved', { excluded: true })
+    await installPublishedBaseline(current)
+    const untrustedBaseline = structuredClone(current.baseline)
+    untrustedBaseline.settings.siteName = 'Untrusted baseline must not win'
+    const result = await approve(current, untrustedBaseline)
     const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: result.snapshotID!, overrideAccess: true })
-    const content = (snapshot.manifest as { content: { pages: Record<string, unknown> } }).content.pages
-    expect(content[current.change.id]).toBeTruthy()
-    expect(content[foreign.change.id]).toBeUndefined()
-    expect(await payload.count({ collection: 'publish-outbox', overrideAccess: true })).toMatchObject({ totalDocs: 1 })
-    await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeHash, includedChangeKeys: [`pages:${current.change.id}`], versions }) })).rejects.toThrow('Cannot approve')
-    expect((await payload.count({ collection: 'publish-snapshots', overrideAccess: true })).totalDocs).toBe(1)
+    expect(canonicalHash(snapshot.manifest)).toBe(snapshot.contentHash)
+    expect((snapshot.manifest as typeof current.baseline).redirects).toEqual([])
+    expect((snapshot.manifest as typeof current.baseline).settings).toEqual(current.baseline.settings)
+    expect((snapshot.manifest as typeof current.baseline).media).toEqual(current.baseline.media)
+    expect(snapshot).toMatchObject({ themeVersion: versions.themeVersion, engineVersion: versions.engineVersion })
+    const remaining = await payload.find({ collection: 'change-sets', where: { actor: { equals: current.editor.id } }, overrideAccess: true })
+    expect(remaining.docs.find((set) => set.id !== current.set.id)?.changes).toHaveLength(1)
+    const repeat = await approve(current)
+    expect(repeat).toEqual(result)
+    await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions: { ...versions, themeVersion: 'forged-version' }, initialBaseline: current.baseline }) })).rejects.toThrow('persisted snapshot')
+    expect((await payload.count({ collection: 'publish-snapshots', overrideAccess: true })).totalDocs).toBe(2)
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(1)
     await expect(payload.update({ collection: 'publish-snapshots', id: snapshot.id, data: { themeVersion: 'forged' }, user: current.reviewer, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.delete({ collection: 'publish-snapshots', id: snapshot.id, user: current.reviewer, overrideAccess: false })).rejects.toThrow('not allowed')
   })
 
-  it('rejects pending previews, stale reviewed revisions, and non-fresh sessions', async () => {
-    const pending = await fixture('pending', 'pending')
-    await expect(withPayloadTransaction(payload, req => { req.headers = pending.headers; return approveChangeSet({ payload, req, actor: pending.reviewer, id: pending.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(pending.set.changes), includedChangeKeys: [`pages:${pending.change.id}`], versions }) })).rejects.toThrow('ready private preview')
+  it('rejects mismatched preview, duplicate selection, stale content, and canonical-role revocation', async () => {
+    const pending = await fixture('pending', { preview: 'pending' })
+    await expect(approve(pending)).rejects.toThrow('exact candidate')
+    const duplicate = await fixture('duplicate')
+    await expect(withPayloadTransaction(payload, req => { req.headers = duplicate.headers; return approveChangeSet({ payload, req, actor: duplicate.reviewer, id: duplicate.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(duplicate.changes), includedChangeKeys: [...duplicate.included, ...duplicate.included], previewContentHash: canonicalHash(duplicate.candidate), versions, initialBaseline: duplicate.baseline }) })).rejects.toThrow('unique')
     const stale = await fixture('stale')
-    await expect(withPayloadTransaction(payload, req => { req.headers = stale.headers; return approveChangeSet({ payload, req, actor: stale.reviewer, id: stale.set.id, expectedRevision: 3, expectedChangeHash: changeSetHash(stale.set.changes), includedChangeKeys: [`pages:${stale.change.id}`], versions }) })).rejects.toThrow('reviewed revision')
-    await payload.update({ collection: 'pages', id: stale.change.id, data: { title: 'Edited after review' }, draft: true, overrideAccess: true })
-    await expect(withPayloadTransaction(payload, req => { req.headers = stale.headers; return approveChangeSet({ payload, req, actor: stale.reviewer, id: stale.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(stale.set.changes), includedChangeKeys: [`pages:${stale.change.id}`], versions }) })).rejects.toThrow('stale')
-    const old = await fixture('old')
-    const session = await payload.find({ collection: 'auth-sessions', where: { user: { equals: old.reviewer.id } }, limit: 1, overrideAccess: true })
-    await payload.update({ collection: 'auth-sessions', id: session.docs[0]!.id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true })
-    await expect(withPayloadTransaction(payload, req => { req.headers = old.headers; return approveChangeSet({ payload, req, actor: old.reviewer, id: old.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(old.set.changes), includedChangeKeys: [`pages:${old.change.id}`], versions }) })).rejects.toThrow('Fresh authentication')
+    await payload.create({ collection: 'sections', data: { name: 'Unrelated', summary: 'A valid unrelated draft write makes the set stale only when its record changes.', slug: 'unrelated', allowedTemplates: ['standard'] }, overrideAccess: true })
+    await payload.update({ collection: 'pages', id: stale.changes[0]!.id, data: { title: 'Edited after review' }, draft: true, overrideAccess: true }).catch(() => undefined)
+    await payload.update({ collection: 'change-sets', id: stale.set.id, data: { state: 'stale' }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(approve(stale)).rejects.toThrow(/stale|exact candidate/)
+    const revoked = await fixture('revoked')
+    await payload.update({ collection: 'users', id: revoked.reviewer.id, data: { roles: ['editor'] }, overrideAccess: true })
+    await expect(approve(revoked)).rejects.toThrow('Reviewer role')
   })
 
-  it('rolls back approval writes and claims/retries a durable job without delivery work', async () => {
+  it('removes the old redirect key when an included redirect is renamed', () => {
+    const base = baseline()
+    base.redirects = [{ from: '/old-path', to: '/welcome', status: 301 }]
+    const candidate = buildCandidate(base, [{ collection: 'redirects', id: '/old-path', before: { from: '/old-path', to: '/welcome', status: 301 }, after: { from: '/new-path', to: '/welcome', status: 301 }, afterHash: null }], ['redirects:/old-path'], versions)
+    expect(candidate.redirects).toEqual([{ from: '/new-path', to: '/welcome', status: 301 }])
+  })
+
+  it('rolls back snapshots/outbox and keeps delivery outside a claim/retry transaction', async () => {
     const current = await fixture('rollback')
-    await expect(withPayloadTransaction(payload, async req => { req.headers = current.headers; await approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.set.changes), includedChangeKeys: [`pages:${current.change.id}`], versions }); throw new Error('rollback') })).rejects.toThrow('rollback')
-    expect((await payload.count({ collection: 'publish-snapshots', overrideAccess: true })).totalDocs).toBe(1)
+    await expect(withPayloadTransaction(payload, async req => { req.headers = current.headers; await approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline: current.baseline }); throw new Error('rollback') })).rejects.toThrow('rollback')
     const approved = await fixture('worker')
-    await withPayloadTransaction(payload, req => { req.headers = approved.headers; return approveChangeSet({ payload, req, actor: approved.reviewer, id: approved.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(approved.set.changes), includedChangeKeys: [`pages:${approved.change.id}`], versions }) })
+    await approve(approved)
     const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))
     expect(job?.status).toBe('processing')
     await withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(job!.id), 'synthetic failure', new Date(Date.now() - 1)))
