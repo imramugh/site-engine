@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { SiteSnapshotSchema } from '@site-engine/contract';
 import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
+import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
 import { activatePublicRelease, verifyPublicArtifact } from './public-release.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
@@ -32,9 +33,10 @@ async function externalHealthProbe(origin, expected, signal) {
   try { const response = await fetch(`${origin}/healthz`, { redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000), headers: { accept: 'application/json' } }); if (!response.ok) return false; return sameProof(await response.json(), expected); } catch { return false; }
 }
 function validLease(lease, identity, signal) { return !signal?.aborted && lease?.id === identity.id && lease?.leaseToken === identity.leaseToken && Number.isFinite(Date.parse(lease?.leaseExpiresAt ?? '')) && Date.parse(lease.leaseExpiresAt) > Date.now(); }
-/** @param {{ api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, buildRoot: string, releasesRoot: string, publicOrigin: string, healthOrigin?: string, versionPins: Record<string, string>, render?: typeof buildSnapshot, signal?: AbortSignal, healthProbe?: (proof: { jobID: string, sequence: number, contentHash: string, versionPins: Record<string, string> }) => Promise<boolean> }} options */
-export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, render = buildSnapshot, signal, healthProbe }) {
+/** @param {{ api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, buildRoot: string, releasesRoot: string, publicOrigin: string, healthOrigin?: string, versionPins: Record<string, string>, registry?: Map<string, unknown>, render?: typeof buildSnapshot, signal?: AbortSignal, healthProbe?: (proof: { jobID: string, sequence: number, contentHash: string, versionPins: Record<string, string> }) => Promise<boolean> }} options */
+export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, healthProbe }) {
   const input = claim(await api('claim', {}, signal), versionPins); if (!input) return false;
+  verifyThemeSelection(input.snapshot, registry);
   const identity = { id: input.job.id, leaseToken: input.job.leaseToken }; let scratch;
   try {
     let artifact; let manifest;
@@ -44,7 +46,7 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
       if (error?.code !== 'ENOENT') throw error;
       await mkdir(buildRoot, { recursive: true }); scratch = await mkdtemp(join(resolve(buildRoot), '.publish-build-'));
       const source = join(scratch, 'snapshot.json'); await writeFile(source, stable(input.snapshot));
-      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', versionPins, signal });
+      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', themeSelection: input.snapshot.settings.theme, versionPins, signal });
       manifest = await verifyPublicArtifact(built.output, input.pins); artifact = built.output;
     }
     const expectedProof = { jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, versionPins };
@@ -63,7 +65,8 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const controller = new AbortController(); for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => controller.abort());
   const versionPins = { themeVersion: process.env.SITE_THEME_VERSION, engineVersion: process.env.SITE_ENGINE_VERSION, contractVersion: process.env.SITE_CONTRACT_VERSION };
+  const registry = await loadThemeRegistry();
   const render = await loadRenderer({ genericRenderer: buildSnapshot });
   const api = createPublishAPI({ cmsOrigin: process.env.PUBLISH_CMS_ORIGIN, token: process.env.PUBLISH_WORKER_TOKEN });
-  while (!controller.signal.aborted) { try { await runPublishOnce({ api, buildRoot: process.env.PUBLISH_BUILD_ROOT, releasesRoot: process.env.PUBLISH_RELEASES_ROOT, publicOrigin: process.env.SITE_PUBLIC_ORIGIN, healthOrigin: process.env.PUBLISH_HEALTH_ORIGIN || process.env.SITE_PUBLIC_ORIGIN, versionPins, render, signal: controller.signal }); } catch (error) { console.error(`Publish worker: ${error.code ?? 'WORKER_FAILED'}`); } await new Promise(done => setTimeout(done, 2_000)); }
+  while (!controller.signal.aborted) { try { await runPublishOnce({ api, buildRoot: process.env.PUBLISH_BUILD_ROOT, releasesRoot: process.env.PUBLISH_RELEASES_ROOT, publicOrigin: process.env.SITE_PUBLIC_ORIGIN, healthOrigin: process.env.PUBLISH_HEALTH_ORIGIN || process.env.SITE_PUBLIC_ORIGIN, versionPins, registry, render, signal: controller.signal }); } catch (error) { console.error(`Publish worker: ${error.code ?? 'WORKER_FAILED'}`); } await new Promise(done => setTimeout(done, 2_000)); }
 }

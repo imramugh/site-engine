@@ -8,9 +8,13 @@ export class RendererModuleError extends Error {
 
 /**
  * Loads the operator-trusted renderer before a worker begins claiming work.
- * The module receives the ordinary buildSnapshot options and must return the
- * ordinary `{ output, manifest }` result. Workers still independently verify
- * every output before it can be served or activated.
+ * The module receives the ordinary buildSnapshot options plus `themeSelection`,
+ * copied from a selected immutable snapshot. Legacy snapshots without a frozen
+ * selection stay on the generic renderer. The trusted module must use the
+ * frozen selection rather than mutable process configuration and return
+ * `{ output, manifest }`.
+ * Workers still independently verify every output before it can be served or
+ * activated.
  */
 export async function loadRenderer({ modulePath = process.env.SITE_RENDERER_MODULE, genericRenderer }) {
   if (typeof genericRenderer !== 'function') throw new RendererModuleError('A generic renderer is required.');
@@ -22,5 +26,9 @@ export async function loadRenderer({ modulePath = process.env.SITE_RENDERER_MODU
   try { module = await import(pathToFileURL(modulePath).href); }
   catch { throw new RendererModuleError('SITE_RENDERER_MODULE could not be loaded.'); }
   if (typeof module.buildSnapshot !== 'function') throw new RendererModuleError('SITE_RENDERER_MODULE must export buildSnapshot(options).');
-  return module.buildSnapshot;
+  const selectedRenderer = module.buildSnapshot;
+  return async (options) => {
+    if (options?.themeSelection === undefined) return genericRenderer(options);
+    return selectedRenderer(options);
+  };
 }

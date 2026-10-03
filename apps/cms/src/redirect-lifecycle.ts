@@ -1,6 +1,7 @@
 import { RedirectSchema, SiteSnapshotSchema, type Page, type SiteSnapshot } from '@site-engine/contract'
 import { deriveRoutes } from '@site-engine/engine'
 import type { Payload, PayloadRequest } from 'payload'
+import { captureChange, openSet } from './editorial'
 
 export type RedirectInput = { from: string; to: string; status?: number }
 export type ReferenceLocation = { collection: 'pages' | 'navigation'; id: string; field: string }
@@ -79,26 +80,51 @@ export function redirectForPublishedChange(baseline: SiteSnapshot, pageID: strin
 }
 
 /** Archives a page in the current change set only after all live references are removed. */
-export async function archivePage(input: { payload: Payload; req: PayloadRequest; pageID: string; target?: string; baseline?: SiteSnapshot }): Promise<{ redirect?: ReturnType<typeof normalizedRedirect> }> {
+async function queueBaseline(payload: Payload, req: PayloadRequest): Promise<SiteSnapshot | undefined> {
+  const queued = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
+  const queuedManifest = queued.docs[0]?.snapshot && typeof queued.docs[0].snapshot === 'object' ? queued.docs[0].snapshot.manifest : undefined
+  if (queuedManifest) return SiteSnapshotSchema.parse(queuedManifest)
+  const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
+  const manifest = releases.docs[0]?.snapshot && typeof releases.docs[0].snapshot === 'object' ? releases.docs[0].snapshot.manifest : undefined
+  return manifest ? SiteSnapshotSchema.parse(manifest) : undefined
+}
+
+async function removeLegacyNavigationReference(payload: Payload, req: PayloadRequest, baseline: SiteSnapshot, pageID: string): Promise<string> {
+  const actor = req.user as { id?: string; roles?: ('owner' | 'editor')[] } | undefined
+  if (!actor?.id) throw new Error('Authentication is required.')
+  const section = baseline.settings.sections.find(candidate => candidate.pageIds.includes(pageID))
+  if (!section) throw new Error('The published baseline has no navigation reference to remove.')
+  if (baseline.settings.homepageId === pageID || section.landingPageId === pageID) throw new Error('Homepage and section landing references must be changed through normal navigation editing.')
+  const set = await openSet(payload, actor as never, req)
+  const changes = Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string }> : []
+  if (changes.some(change => change.collection === 'sections' && change.id === section.id)) throw new Error('Resolve the pending section navigation change before archiving this page.')
+  const updated = await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds.filter(id => id !== pageID) }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+  delete (req.context as Record<string, unknown>).editorialInternal
+  await captureChange({ collection: 'sections', doc: updated as unknown as Record<string, unknown>, previousDoc: section as unknown as Record<string, unknown>, operation: 'update', req })
+  delete (req.context as Record<string, unknown>).editorialInternal
+  return section.id
+}
+
+export async function archivePage(input: { payload: Payload; req: PayloadRequest; pageID: string; target?: string; baseline?: SiteSnapshot; removeNavigationReference?: boolean }): Promise<{ redirect?: ReturnType<typeof normalizedRedirect> }> {
   const { payload, req, pageID, target } = input
   const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, overrideAccess: true, req })
   const pages = await payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req })
   let baseline = input.baseline
-  if (!baseline) {
-    const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
-    const source = releases.docs[0]?.snapshot
-    const manifest = source && typeof source === 'object' ? source.manifest : undefined
-    if (manifest) baseline = SiteSnapshotSchema.parse(manifest)
-  }
-  const references = archiveReferences(pageID, pages.docs as Pick<Page, 'id' | 'parentId' | 'blocks'>[], baseline)
+  if (!baseline) baseline = await queueBaseline(payload, req)
+  const removedSectionID = baseline && input.removeNavigationReference ? await removeLegacyNavigationReference(payload, req, baseline, pageID) : undefined
+  const references = archiveReferences(pageID, pages.docs as Pick<Page, 'id' | 'parentId' | 'blocks'>[], baseline).filter(reference => !(removedSectionID === reference.id && reference.collection === 'navigation' && reference.field.startsWith('pageIds.')))
   if (references.length) throw new Error(`Archive blocked by references: ${formatArchiveReferences(references)}`)
   const redirect = baseline ? redirectForPublishedChange(baseline, pageID, target) : undefined
+  await payload.update({ collection: 'pages', id: page.id, data: { status: 'archived' }, draft: true, overrideAccess: true, req, context: { archiveInternal: true } })
+  // Payload reuses the request context from the nested change-set update made
+  // by captureChange. Restore this outer editorial operation before creating
+  // its redirect so both parts of the archive are captured atomically.
+  delete (req.context as Record<string, unknown>).editorialInternal
   if (redirect) {
     const current = await payload.find({ collection: 'redirects', where: { from: { equals: redirect.from } }, limit: 1, depth: 0, overrideAccess: true, req })
     if (current.docs[0] && current.docs[0].to !== redirect.to) throw new Error(`Redirect ${redirect.from} already has a different target.`)
     if (!current.docs[0]) await payload.create({ collection: 'redirects', data: redirect, overrideAccess: true, req })
   }
-  await payload.update({ collection: 'pages', id: page.id, data: { status: 'archived' }, draft: true, overrideAccess: true, req, context: { archiveInternal: true } })
   return { redirect }
 }
 

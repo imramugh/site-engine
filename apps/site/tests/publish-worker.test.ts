@@ -6,19 +6,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import { runPublishOnce } from '../scripts/run-publish-worker.mjs';
 import { createPublicServer } from '../scripts/public-server.mjs';
+import { parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
 const roots: string[] = []; const pins = { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' };
 const job = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', leaseToken: 'b'.repeat(36), leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), sequence: 1 };
+const themeManifest = { name: 'synthetic-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } };
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 describe('publish worker', () => {
   it('builds, renews immediately before atomic activation, health checks, and completes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
-    const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = [];
+    const snapshot = structuredClone(neutralFixture); const registry = parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }); const selection = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: registry.get(themeManifest.name).manifestDigest }; snapshot.settings.theme = selection; const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = []; const renders: Array<Record<string, unknown>> = [];
     const api = async (action: string, body: Record<string, unknown> = {}) => { calls.push(action); if (action === 'claim') return { job, snapshot, contentHash, versionPins: pins }; if (action === 'renew') return { job }; if (action === 'complete') return { job: { status: 'completed' } }; return { job: {} }; };
     const releasesRoot = join(root, 'releases'); const server = createPublicServer({ releasesRoot }); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Test server did not listen.');
-    try { await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${address.port}`, versionPins: pins })).resolves.toBe(true); }
+    const render = async (rendererOptions: Parameters<typeof import('../scripts/build-snapshot.mjs').buildSnapshot>[0] & Record<string, unknown>) => { renders.push(rendererOptions); return (await import('../scripts/build-snapshot.mjs')).buildSnapshot(rendererOptions); };
+    try { await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${address.port}`, versionPins: pins, registry, render })).resolves.toBe(true); }
     finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
-    expect(calls).toEqual(['claim', 'renew', 'complete']); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
+    expect(calls).toEqual(['claim', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
   }, 60_000);
   it('fails closed when a custom renderer returns an artifact with a bad manifest proof', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
@@ -32,6 +35,15 @@ describe('publish worker', () => {
     await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, render, healthProbe: async () => true })).rejects.toThrow('BUILD_FAILED');
     expect(calls).toContain('fail'); await expect(readFile(join(root, 'releases/current/healthz'))).rejects.toThrow();
   }, 60_000);
+  it('rejects a published snapshot whose frozen theme digest is not installed before rendering', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
+    const snapshot = structuredClone(neutralFixture); const registry = parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] });
+    snapshot.settings.theme = { id: themeManifest.name, version: themeManifest.version, contract: themeManifest.contract, manifestDigest: '0'.repeat(64) };
+    const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot);
+    const render = vi.fn(async () => { throw new Error('renderer must not run'); });
+    await expect(runPublishOnce({ api: async (action: string) => action === 'claim' ? { job, snapshot, contentHash, versionPins: pins } : { job: {} }, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, registry, render, healthProbe: async () => true })).rejects.toThrow(/exactly as reviewed/);
+    expect(render).not.toHaveBeenCalled();
+  });
 
   it('does not activate when the final lease renewal is lost', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot);

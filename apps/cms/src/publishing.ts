@@ -88,6 +88,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
   const redirects = new Map(base.redirects.map((redirect) => [redirect.from, structuredClone(redirect)]))
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
+  let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
   const included = new Set(includedChangeKeys)
   for (const change of changes) {
     if (!included.has(`${change.collection}:${change.id}`)) continue
@@ -108,14 +109,24 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
         redirects.set(String(merged.from), merged as SiteSnapshot['redirects'][number])
       }
     }
+    if (change.collection === 'theme-settings') {
+      // A site can already retain namespaced settings before the singleton
+      // theme-settings record is first created. That creation supplies the
+      // selection while preserving those baseline namespaces.
+      const merged = change.before === null
+        ? { selection: selectedTheme, settings: themeSettings, ...structuredClone(change.after) }
+        : mergeCapturedChange({ selection: selectedTheme, settings: themeSettings }, change)
+      if (!merged?.selection) throw new Error('Theme selection cannot be removed.')
+      selectedTheme = merged.selection as SiteSnapshot['settings']['theme']; Object.assign(themeSettings, merged.settings as Record<string, unknown>)
+    }
     if (change.collection === 'assets') {
       const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
       if (merged === null) media.delete(change.id)
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
   }
-  for (const section of sections.values()) section.pageIds = [...pages.values()].filter((page) => page.sectionId === section.id).map((page) => page.id).sort()
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  // Keep editor-maintained navigation distinct from derived section membership.
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...structuredClone(base.settings), contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, pages: [...pages.values()].sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const nextByID = new Map(newRoutes.map((route) => [route.page.id, route]))

@@ -76,6 +76,7 @@ export interface Config {
     sections: Section;
     assets: Asset;
     redirects: Redirect;
+    'theme-settings': ThemeSetting;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     applications: Application;
@@ -100,6 +101,7 @@ export interface Config {
     sections: SectionsSelect<false> | SectionsSelect<true>;
     assets: AssetsSelect<false> | AssetsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
+    'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -397,6 +399,34 @@ export interface Redirect {
    */
   hitCount?: number | null;
   lastHitAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "theme-settings".
+ */
+export interface ThemeSetting {
+  id: string;
+  key: string;
+  selection:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  settings?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -746,6 +776,10 @@ export interface PayloadLockedDocument {
         value: string | Redirect;
       } | null)
     | ({
+        relationTo: 'theme-settings';
+        value: string | ThemeSetting;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -1028,6 +1062,17 @@ export interface RedirectsSelect<T extends boolean = true> {
   status?: T;
   hitCount?: T;
   lastHitAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "theme-settings_select".
+ */
+export interface ThemeSettingsSelect<T extends boolean = true> {
+  key?: T;
+  selection?: T;
+  settings?: T;
   updatedAt?: T;
   createdAt?: T;
 }

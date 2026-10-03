@@ -59,7 +59,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-    const body = await request.json() as { id?: string; name?: string; target?: string; proof?: unknown }
+    const body = await request.json() as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown }
     const { action } = await context.params
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
     const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
@@ -82,7 +82,8 @@ export async function POST(request: Request, context: { params: Promise<{ action
       if (action === 'archive') {
         if (typeof body.id !== 'string') throw new Error('A page ID is required.')
         if (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'editor')) throw new Error('Editor role required.')
-        return archivePage({ payload, req, pageID: body.id, target: body.target })
+        if (body.removeNavigationReference !== undefined && typeof body.removeNavigationReference !== 'boolean') throw new Error('Navigation removal confirmation must be a boolean.')
+        return archivePage({ payload, req, pageID: body.id, target: body.target, removeNavigationReference: body.removeNavigationReference })
       }
       if (action === 'run-quality' && typeof body.id === 'string') {
         const actor = authenticated.user as { roles?: string[] }

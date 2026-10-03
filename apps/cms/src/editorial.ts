@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
-import { PageSchema, RedirectSchema, SectionSchema } from '@site-engine/contract'
+import { PageSchema, RedirectSchema, SectionSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 
-export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets'
+export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
@@ -23,6 +23,7 @@ const mutableFields: Record<CapturedCollection, readonly string[]> = {
   sections: ['name', 'summary', 'slug', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
+  'theme-settings': ['selection', 'settings'],
 }
 
 function idOf(value: unknown): string | undefined {
@@ -53,7 +54,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
     // Draft records are the editor's working copy of published content. They
     // must compare to the published snapshot as published, while an explicit
     // archival operation remains visible to the approval candidate.
-    if (field === 'status') return [[field, value === 'archived' ? 'archived' : 'published']]
+    if (collection === 'pages' && field === 'status') return [[field, value === 'archived' ? 'archived' : 'published']]
     if (value === undefined) return []
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
     if (field === 'parentId') {
@@ -85,7 +86,7 @@ function setIDFromRequest(req: PayloadRequest): string | undefined {
   return candidate && /^[0-9a-f-]{36}$/i.test(candidate) ? candidate : undefined
 }
 
-async function openSet(payload: Payload, actor: Actor, req: PayloadRequest): Promise<Record<string, unknown>> {
+export async function openSet(payload: Payload, actor: Actor, req: PayloadRequest): Promise<Record<string, unknown>> {
   const requested = setIDFromRequest(req)
   if (requested) {
     const selected = await payload.findByID({ collection: 'change-sets', id: requested, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
@@ -158,7 +159,9 @@ async function quality(payload: Payload, req: PayloadRequest, changes: CapturedC
       ? PageSchema.safeParse({ id: change.id, ...change.after, status: 'draft' })
       : change.collection === 'sections'
         ? SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
-        : RedirectSchema.safeParse(change.after)
+        : change.collection === 'theme-settings'
+          ? ThemeSelectionSchema.safeParse(change.after.selection)
+          : RedirectSchema.safeParse(change.after)
     if (!result.success) errors.push(...result.error.issues.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.path.join('.')}: ${issue.message}` })))
     if (change.collection === 'pages' && change.after) {
       const page = { id: change.id, ...change.after } as TreePage

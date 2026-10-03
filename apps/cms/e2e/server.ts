@@ -36,6 +36,7 @@ const applicationChangeSetID = '88888888-8888-4888-8888-888888888888'
 const draftApplicationJobID = '99999999-9999-4999-8999-999999999999'
 const expiredApplicationJobID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
+const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -46,7 +47,10 @@ const serverKey = join(temporaryDirectory, 'synthetic-issuer.key')
 const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
+const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
+const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
+writeFileSync(themeRegistry, JSON.stringify({ themes: [{ manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }))
 const initialBaseline = structuredClone(neutralFixture)
 initialBaseline.settings.sections.push({ id: applicationSectionID, name: 'Careers', slug: 'careers', allowedTemplates: ['listing', 'job'], pageIds: [applicationJobID, draftApplicationJobID, expiredApplicationJobID] })
 initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSectionID, title: 'Synthetic Application Engineer', summary: 'A published synthetic role used only to exercise the private application HTTP flow.', slug: 'synthetic-application-engineer', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2030-01-01T00:00:00.000Z' } })
@@ -65,6 +69,7 @@ process.env.APPLICATION_STORAGE_DIR = join(temporaryDirectory, 'applications')
 process.env.PAYLOAD_SECRET = 'synthetic-browser-payload-secret-not-for-production'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = cmsOrigin
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = bootstrapPath
+process.env.SITE_THEME_REGISTRY_JSON = themeRegistry
 process.env.OIDC_GOOGLE_ISSUER_URL = issuerOrigin
 process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
@@ -183,6 +188,7 @@ async function seed(): Promise<void> {
   localOwnerID = String(localOwner.id)
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
+  const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
@@ -196,10 +202,21 @@ async function seed(): Promise<void> {
   for (const [role, user] of Object.entries({ owner: applicationOwner, hiring: applicationUsers.hiring, editor, sales: applicationUsers.sales }) as Array<[keyof typeof applicationSessionTokens, { id: string }]>) {
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(applicationSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   }
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(initialBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: initialBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+
+  const submitted = await payload.create({ collection: 'change-sets', data: { name: 'Synthetic pending operational review', state: 'submitted', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'inquiries', data: { email: 'new-lead.synthetic@example.test', message: 'A synthetic new lead.', topic: 'general', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-new', stage: 'new', urgent: false }, overrideAccess: true })
+  await payload.create({ collection: 'inquiries', data: { email: 'urgent-lead.synthetic@example.test', message: 'A synthetic urgent lead.', topic: 'active-incident', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-urgent', stage: 'qualified', urgent: true }, overrideAccess: true })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-pending', sequence: 2, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-pending', includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-processing', sequence: 3, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-processing', includedChangeKeys: [], status: 'processing', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-failed', sequence: 4, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-failed', includedChangeKeys: [], status: 'failed', attempts: 2, errorCode: 'synthetic_publish_failure', lastError: 'Synthetic failure detail.', correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  for (let sequence = 5; sequence <= 55; sequence += 1) await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `synthetic-operations-pending-${sequence}`, sequence, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: `synthetic-operations-pending-${sequence}`, includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  for (let index = 0; index < 26; index += 1) await payload.create({ collection: 'audit-events', data: { event: 'operations.fixture.page', actor: operationsOwner.id, detail: { index } }, overrideAccess: true })
+  await payload.create({ collection: 'audit-events', data: { event: 'inquiry.created', actor: operationsOwner.id, detail: { email: 'never-expose@example.test', message: 'Never expose this lead text.', resumeKey: 'private-resume-key' } }, overrideAccess: true })
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
