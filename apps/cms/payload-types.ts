@@ -395,6 +395,15 @@ export interface ChangeSet {
     | number
     | boolean
     | null;
+  reviewComments?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
@@ -863,6 +872,7 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   changes?: T;
   quality?: T;
   preview?: T;
+  reviewComments?: T;
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;

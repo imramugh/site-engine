@@ -32,6 +32,15 @@ export async function POST(request: Request, context: { params: Promise<{ action
         if (typeof body.name !== 'string') throw new Error('A change-set name is required.')
         return createNamedChangeSet(payload, req, authenticated.user as never, body.name)
       }
+      if (action === 'comment' && typeof body.id === 'string' && typeof (body as { comment?: unknown }).comment === 'string') {
+        const actor = authenticated.user as { id: string; roles?: string[] }
+        if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
+        const comment = (body as { comment: string }).comment.trim()
+        if (!comment || comment.length > 2_000) throw new Error('A review comment must contain at most 2,000 characters.')
+        const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req })
+        const comments = Array.isArray(set.reviewComments) ? set.reviewComments : []
+        return payload.update({ collection: 'change-sets', id: body.id, data: { reviewComments: [...comments, { id: crypto.randomUUID(), author: actor.id, body: comment, createdAt: new Date().toISOString() }] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      }
       if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
       return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })
     })

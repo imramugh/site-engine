@@ -278,6 +278,7 @@ export const ChangeSets: CollectionConfig = {
     { name: 'changes', type: 'json', defaultValue: [], admin: { readOnly: true, description: 'Field-level before and after images captured from draft saves.' } },
     { name: 'quality', type: 'json', admin: { readOnly: true } },
     { name: 'preview', type: 'json', admin: { readOnly: true } },
+    { name: 'reviewComments', type: 'json', defaultValue: [], admin: { readOnly: true } },
     { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
     { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
     { name: 'staleAt', type: 'date', admin: { readOnly: true } },
