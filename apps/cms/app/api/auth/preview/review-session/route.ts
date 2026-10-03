@@ -1,6 +1,7 @@
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { changeSetHash } from '../../../../../src/publishing'
 
 export const dynamic = 'force-dynamic'
 const headers = { 'Cache-Control': 'no-store' }
@@ -14,6 +15,7 @@ function comparisonPath(originalURI: string): RegExpExecArray | null {
   // normalization can turn a request into a different artifact path.
   const path = originalURI.split('?', 1)[0]
   if (!path.startsWith('/') || /[\\\\%]/.test(path)) return null
+  if (path.split('/').some((segment) => segment === '.' || segment === '..')) return null
   return reviewPath.exec(path)
 }
 
@@ -33,6 +35,7 @@ export async function GET(request: Request): Promise<Response> {
     if (job.status !== 'completed' || !job.artifactDigest) return response(403)
     const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
     const preview = set.preview as { status?: string; jobID?: string; revision?: number; changeHash?: string; proposedManifestHash?: string; liveManifestHash?: string } | undefined
+    if (Number(set.revision) !== job.reviewRevision || changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) !== job.changeHash) return response(403)
     if (preview?.status !== 'ready' || preview.jobID !== job.id || preview.revision !== job.reviewRevision || preview.changeHash !== job.changeHash || preview.liveManifestHash !== job.liveManifestHash || preview.proposedManifestHash !== job.proposedManifestHash) return response(403)
     return response(204)
   } catch {

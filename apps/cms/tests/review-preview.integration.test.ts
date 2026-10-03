@@ -139,6 +139,7 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(lease?.attempts).toBe(3)
     expect(await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, new Date(start.getTime() + 9_000), 100))).toBeNull()
     expect(await payload.findByID({ collection: 'preview-render-jobs', id: job.id, overrideAccess: true })).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED' })
+    expect((await prepare(current)).id).not.toBe(job.id)
     expect(workerAuthorized(new Request('http://test', { headers: { authorization: `Bearer ${process.env.PREVIEW_WORKER_TOKEN}` } }))).toBe(true)
     expect(workerAuthorized(new Request('http://test', { headers: { authorization: 'Bearer short' } }))).toBe(false)
     await expect(boundedJSON(new Request('http://test', { method: 'POST', body: 'x'.repeat(16 * 1024 + 1) }))).rejects.toThrow('too large')
@@ -165,11 +166,29 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect((await reviewSession(current.headers, `/preview/changes/${job.id}/proposed/assets/app.js?cache=1`)).status).toBe(204)
     expect((await reviewSession(current.headers, `/preview/changes/${job.id}/live/%2e%2e/proposed/`)).status).toBe(403)
     expect((await reviewSession(current.headers, `/preview/changes/${job.id}/live/assets%2fprivate.js`)).status).toBe(403)
+    expect((await reviewSession(current.headers, `/preview/changes/${job.id}/live/../../10000000-0000-4000-8000-000000000001/proposed/`)).status).toBe(403)
+
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await reviewSession(current.headers, root)).status).toBe(403)
 
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'queued', jobID: job.id } }, overrideAccess: true, context: { editorialInternal: true } })
     expect((await reviewSession(current.headers, root)).status).toBe(403)
     const sessions = await payload.find({ collection: 'auth-sessions', where: { user: { equals: current.reviewer.id } }, limit: 1, overrideAccess: true })
     await payload.update({ collection: 'auth-sessions', id: sessions.docs[0]!.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
     expect((await reviewSession(current.headers, root)).status).toBe(401)
+  })
+
+  it('reselects an exact completed job with its immutable ready proof', async () => {
+    const current = await fixture('reselect-completed')
+    const job = await prepare(current)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'queued', jobID: randomUUID(), revision: 4, changeHash: 'other-proof' } }, overrideAccess: true, context: { editorialInternal: true } })
+    const reselected = await prepare(current)
+    expect(reselected.id).toBe(job.id)
+    expect((await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).preview).toMatchObject({ status: 'ready', jobID: job.id, contentHash: canonicalHash(job.proposedManifest), artifactDigest: digest })
+    const approved = await withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], previewContentHash: canonicalHash(job.proposedManifest), versions, initialBaseline: current.live }) })
+    expect(approved.outboxID).toBeTruthy()
   })
 })
