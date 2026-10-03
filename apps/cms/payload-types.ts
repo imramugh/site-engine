@@ -79,6 +79,7 @@ export interface Config {
     'theme-settings': ThemeSetting;
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
+    'integration-configurations': IntegrationConfiguration;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     applications: Application;
@@ -106,6 +107,7 @@ export interface Config {
     'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
+    'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -501,6 +503,23 @@ export interface StyleGuide {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "integration-configurations".
+ */
+export interface IntegrationConfiguration {
+  id: string;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  model: string;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  monthlyCap?: number | null;
+  encryptedCredential?: string | null;
+  credentialFingerprint?: string | null;
+  health: 'unknown' | 'connected' | 'unavailable' | 'rejected' | 'revoked';
+  testedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -857,6 +876,10 @@ export interface PayloadLockedDocument {
         value: string | StyleGuide;
       } | null)
     | ({
+        relationTo: 'integration-configurations';
+        value: string | IntegrationConfiguration;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -1185,6 +1208,22 @@ export interface StyleGuidesSelect<T extends boolean = true> {
   canadianSpelling?: T;
   maximumSentenceWords?: T;
   minimumReadingEase?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "integration-configurations_select".
+ */
+export interface IntegrationConfigurationsSelect<T extends boolean = true> {
+  provider?: T;
+  model?: T;
+  fallbackProvider?: T;
+  monthlyCap?: T;
+  encryptedCredential?: T;
+  credentialFingerprint?: T;
+  health?: T;
+  testedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

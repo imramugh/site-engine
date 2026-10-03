@@ -532,6 +532,22 @@ export const ThemeSettings: CollectionConfig = {
   fields: [{ name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' }, { name: 'selection', type: 'json', required: true }, { name: 'settings', type: 'json', defaultValue: {} }],
 }
 
+/** Credential envelopes are private operational state, never editorial content. */
+export const IntegrationConfigurations: CollectionConfig = {
+  slug: 'integration-configurations', admin: { useAsTitle: 'provider', group: 'Administration' },
+  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: freshStaff(['owner']) },
+  fields: [
+    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'model', type: 'text', required: true, maxLength: 160 },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'monthlyCap', type: 'number', min: 0, max: 1_000_000 },
+    { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
+    { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
+    { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
+    { name: 'testedAt', type: 'date', admin: { readOnly: true } },
+  ],
+}
+
 /** Owner-proposed site identity and default metadata. The frozen snapshot keeps
  * sections and operator contract version outside this editable singleton. */
 export const SiteSettings: CollectionConfig = {
