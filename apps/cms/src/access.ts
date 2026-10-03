@@ -6,7 +6,7 @@ import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, SESSIO
 export const roles = ['owner', 'approver', 'editor', 'sales', 'hiring'] as const
 export type Role = (typeof roles)[number]
 
-type Actor = { roles?: Role[]; disabled?: boolean } | undefined
+type Actor = { roles?: Role[] | null; disabled?: boolean | null } | undefined
 
 export const hasRole = (actor: Actor, allowed: readonly Role[]) =>
   Boolean(actor && !actor.disabled && actor.roles?.some((role) => allowed.includes(role)))

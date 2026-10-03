@@ -77,7 +77,13 @@ export const SectionSchema = z.object({ id, landingPageId: id.optional(), name: 
 export const MediaReferenceSchema = z.object({ id, filename: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,120}$/), alt: safeText(240).optional(), decorative: z.boolean().default(false), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'video/mp4', 'video/webm', 'text/vtt']) }).strict().superRefine((media, ctx) => { if (media.mimeType.startsWith('image/') && (!media.width || !media.height)) ctx.addIssue({ code: 'custom', path: ['width'], message: 'Images require intrinsic width and height' }); if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); });
 export const RedirectSchema = z.object({ from: InternalPathSchema, to: InternalPathSchema, status: z.literal(301) }).strict();
 export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), logo: MediaReferenceSchema.optional(), sections: z.array(SectionSchema).max(20) }).strict();
-export const ChangeSetSchema = z.object({ id, name: safeText(120), state: z.enum(['draft', 'inReview', 'approved', 'published']), revision: z.number().int().nonnegative() }).strict();
+export const ChangeSetStateSchema = z.enum(['open', 'submitted', 'changes-requested', 'approved', 'rejected', 'published', 'discarded', 'stale']);
+export const ChangeSetSchema = z.object({
+  id,
+  name: safeText(120),
+  state: ChangeSetStateSchema,
+  revision: z.number().int().nonnegative(),
+}).strict();
 export const ThemeManifestSchema = z.object({ name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), version: z.string().regex(/^\d+\.\d+\.\d+$/), contract: z.string().regex(/^1\.\d+\.\d+$/), entry: z.string().regex(/^\.\/dist\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.js$/) }).strict();
 export const ThemeInstallSchema = z.object({ manifest: ThemeManifestSchema, installedAt: z.string().datetime() }).strict().superRefine(({ manifest }, ctx) => { if (!compatibleContractVersion(manifest.contract)) ctx.addIssue({ code: 'custom', path: ['manifest', 'contract'], message: `Theme requires incompatible contract ${manifest.contract}` }); });
 export const SiteSnapshotSchema = z.object({

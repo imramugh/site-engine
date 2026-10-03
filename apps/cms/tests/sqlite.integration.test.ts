@@ -61,7 +61,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     await expect(payload.update({ collection: 'pages', id: page.id, data: { seoDescription: '' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ id: page.id })
     await expect(payload.create({ collection: 'pages', data: { title: 'Never published', summary: 'This attempted publication must be denied because review and publishing are not implemented.', slug: 'never-published', sectionId: section.id, template: 'standard', _status: 'published' }, user: owner, overrideAccess: false })).rejects.toThrow('Publishing is unavailable')
     await expect(payload.update({ collection: 'pages', id: page.id, data: { _status: 'published' }, user: owner, overrideAccess: false })).rejects.toThrow('Publishing is unavailable')
-    await expect(payload.create({ collection: 'change-sets', data: { name: 'Cannot approve', state: 'approved', revision: 0 }, user: owner, overrideAccess: false })).rejects.toThrow('Change-set approval is unavailable')
+    await expect(payload.create({ collection: 'change-sets', data: { name: 'Cannot forge workflow state', actor: owner.id, state: 'approved', revision: 0 }, user: owner, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.find({ collection: 'pages', overrideAccess: false })).rejects.toThrow('not allowed')
     const disabledOwner = { ...owner, disabled: true }
     await expect(payload.find({ collection: 'pages', user: disabledOwner, overrideAccess: false })).rejects.toThrow('not allowed')

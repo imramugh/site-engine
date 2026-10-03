@@ -353,8 +353,34 @@ export interface Application {
 export interface ChangeSet {
   id: string;
   name: string;
-  state?: ('draft' | 'inReview' | 'approved' | 'published') | null;
+  actor?: (string | null) | User;
+  state?:
+    ('open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale') | null;
   revision?: number | null;
+  /**
+   * Field-level before and after images captured from draft saves.
+   */
+  changes?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  quality?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  staleAt?: string | null;
   summary?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -634,8 +660,14 @@ export interface ApplicationsSelect<T extends boolean = true> {
  */
 export interface ChangeSetsSelect<T extends boolean = true> {
   name?: T;
+  actor?: T;
   state?: T;
   revision?: T;
+  changes?: T;
+  quality?: T;
+  submittedAt?: T;
+  reviewedAt?: T;
+  staleAt?: T;
   summary?: T;
   updatedAt?: T;
   createdAt?: T;

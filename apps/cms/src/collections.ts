@@ -5,6 +5,7 @@ import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema } from '@sit
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
+import { captureChange } from './editorial'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -180,6 +181,10 @@ export const Pages: CollectionConfig = {
     ], req, 'pages')
       return { ...data, id, status: 'draft', _status: 'draft' }
     }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      await captureChange({ collection: 'pages', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
+      return doc
+    }],
     beforeDelete: [async ({ id, req }) => {
       const children = await req.payload.find({ collection: 'pages', where: { parentId: { equals: id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
       fieldErrors(children.totalDocs ? [{ field: 'parentId', message: 'Move or delete child pages before deleting this page.' }] : [], req, 'pages')
@@ -213,6 +218,10 @@ export const Sections: CollectionConfig = {
     fieldErrors(validateSectionTemplatePolicy(treeSection({ ...data, id }), pages.docs.map((page) => treePage(page as unknown as Record<string, unknown>))), req, 'sections')
       return { ...data, id, _status: 'draft' }
     }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      await captureChange({ collection: 'sections', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
+      return doc
+    }],
     beforeDelete: [async ({ id, req }) => {
       const pages = await req.payload.find({ collection: 'pages', where: { sectionId: { equals: id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
       fieldErrors(pages.totalDocs ? [{ field: 'sectionId', message: 'Move or delete pages before deleting this section.' }] : [], req, 'sections')
@@ -228,7 +237,13 @@ export const Assets: CollectionConfig = {
 
 export const Redirects: CollectionConfig = {
   slug: 'redirects', admin: { useAsTitle: 'from', group: 'Content' }, access: editorialAccess,
-  hooks: { beforeChange: [({ data }) => { contractError(RedirectSchema.safeParse({ from: data.from, to: data.to, status: 301 })); return { ...data, status: 301 } }] },
+  hooks: {
+    beforeChange: [({ data }) => { contractError(RedirectSchema.safeParse({ from: data.from, to: data.to, status: 301 })); return { ...data, status: 301 } }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      await captureChange({ collection: 'redirects', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
+      return doc
+    }],
+  },
   fields: [{ name: 'from', type: 'text', required: true, unique: true }, { name: 'to', type: 'text', required: true }, { name: 'status', type: 'number', defaultValue: 301, admin: { readOnly: true } }],
 }
 
@@ -243,13 +258,25 @@ export const Applications: CollectionConfig = {
 }
 
 export const ChangeSets: CollectionConfig = {
-  slug: 'change-sets', admin: { useAsTitle: 'name', group: 'Editorial' }, access: editorialAccess,
+  slug: 'change-sets', admin: { useAsTitle: 'name', group: 'Editorial' },
+  access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
   hooks: {
-    beforeChange: [({ data, originalDoc }) => {
-      if (data.state && data.state !== 'draft') throw new Error('Change-set approval is unavailable until the review workflow is implemented.')
-      contractError(ChangeSetSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name, state: 'draft', revision: data.revision ?? 0 }))
-      return { ...data, id: data.id ?? originalDoc?.id ?? randomUUID(), state: 'draft', revision: data.revision ?? 0 }
+    beforeChange: [({ data, originalDoc, req }) => {
+      if (!req.context.editorialInternal) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'state', message: 'Change sets are changed through the editorial workflow.' }], req })
+      contractError(ChangeSetSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name ?? originalDoc?.name, state: data.state ?? originalDoc?.state ?? 'open', revision: data.revision ?? originalDoc?.revision ?? 0 }), req, 'change-sets')
+      return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID() }
     }],
   },
-  fields: [{ name: 'name', type: 'text', required: true }, { name: 'state', type: 'select', defaultValue: 'draft', options: ['draft', 'inReview', 'approved', 'published'], admin: { readOnly: true } }, { name: 'revision', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true } }, { name: 'summary', type: 'textarea' }],
+  fields: [
+    { name: 'name', type: 'text', required: true },
+    { name: 'actor', type: 'relationship', relationTo: 'users', admin: { readOnly: true } },
+    { name: 'state', type: 'select', defaultValue: 'open', options: ['open', 'submitted', 'changes-requested', 'approved', 'rejected', 'published', 'discarded', 'stale'], admin: { readOnly: true } },
+    { name: 'revision', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true } },
+    { name: 'changes', type: 'json', defaultValue: [], admin: { readOnly: true, description: 'Field-level before and after images captured from draft saves.' } },
+    { name: 'quality', type: 'json', admin: { readOnly: true } },
+    { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'staleAt', type: 'date', admin: { readOnly: true } },
+    { name: 'summary', type: 'textarea' },
+  ],
 }
