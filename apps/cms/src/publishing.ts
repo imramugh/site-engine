@@ -165,9 +165,10 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   // Captures use null to represent an explicit editor clear. The immutable
   // public contract represents optional page metadata by omission.
   const candidatePages = [...pages.values()].map((page) => {
-    if (page.seoDescription !== null) return page
-    const { seoDescription: _seoDescription, ...withoutSEODescription } = page
-    return withoutSEODescription
+    const normalized = { ...page }
+    if (normalized.seoDescription === null) delete normalized.seoDescription
+    if (normalized.businessCase === null) delete normalized.businessCase
+    return normalized
   })
   const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
