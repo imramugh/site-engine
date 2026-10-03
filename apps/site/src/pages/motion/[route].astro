@@ -2,6 +2,6 @@
 export function getStaticPaths() { return ['one', 'two'].map((route) => ({ params: { route } })); }
 const { route } = Astro.params;
 ---
-<!doctype html><html data-motion="allow"><head><style>@keyframes neutral-motion{to{transform:translateX(1px)}}[data-motion]{animation:neutral-motion 1s infinite;animation-play-state:paused}[data-motion][data-motion-paused="false"]{animation-play-state:running}.spacer{height:1500px}</style></head><body><button data-motion-toggle aria-pressed="false">Reduce motion</button><div data-motion="decorative">Motion fixture</div><div class="spacer"></div><div data-motion="decorative" id="offscreen">Offscreen fixture</div><div data-urgent-contact data-motion="decorative">Urgent still</div><form><div data-motion="decorative">Form still</div></form><script>
+<!doctype html><html lang="en" data-motion="allow"><head><title>Motion fixture</title><style>@keyframes neutral-motion{to{transform:translateX(1px)}}[data-motion-effect]{animation:neutral-motion 1s infinite;animation-play-state:paused}[data-motion-effect][data-motion-paused="false"]{animation-play-state:running}.spacer{height:1500px}</style></head><body><main><h1>Motion fixture</h1><button data-motion-toggle aria-pressed="false">Reduce motion</button><div data-motion-effect="decorative">Motion fixture</div><div class="spacer"></div><div data-motion-effect="decorative" id="offscreen">Offscreen fixture</div><div data-urgent-contact data-motion-effect="decorative">Urgent still</div><form><div data-motion-effect="decorative">Form still</div></form><script>
 import { mountMotionRuntime } from '@site-engine/engine'; mountMotionRuntime(document, window)
-</script><p>{route}</p></body></html>
+</script><p>{route}</p></main></body></html>

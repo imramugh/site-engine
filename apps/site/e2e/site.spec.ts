@@ -28,11 +28,11 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
 });
 test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {
   await page.goto('/motion/one');
-  await page.getByRole('button', { name: 'Reduce motion' }).click({ force: true });
+  await page.getByRole('button', { name: 'Reduce motion' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
   await page.goto('/motion/two');
   await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
-  await expect(page.locator('form [data-motion]')).toHaveAttribute('data-motion-paused', 'true');
+  await expect(page.locator('form [data-motion-effect]')).toHaveAttribute('data-motion-paused', 'true');
 });
 
 test('ENG-015 pauses offscreen and urgent motion', async ({ page }) => {
@@ -42,3 +42,6 @@ test('ENG-015 runtime respects OS preference and static CSS starts paused', asyn
  await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/motion/one'); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce');
  await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion','allow');
 });
+
+test('ENG-015 no-JS fixture remains readable and paused', async ({ browser }) => { const context=await browser.newContext({ javaScriptEnabled:false }); const page=await context.newPage(); await page.goto('/motion/one'); await expect(page.getByRole('heading')).toBeVisible(); await expect(page.locator('[data-motion-effect]').first()).toHaveCSS('animation-play-state','paused'); await context.close(); });
+test('ENG-015 toggle works when storage is blocked', async ({ page }) => { await page.addInitScript(() => { Storage.prototype.getItem=()=>{throw new Error('blocked')}; Storage.prototype.setItem=()=>{throw new Error('blocked')} }); await page.goto('/motion/one'); await page.getByRole('button',{name:'Reduce motion'}).evaluate((button: HTMLButtonElement) => button.click()); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByRole('button',{name:'Reduce motion'})).toHaveAttribute('aria-pressed','true'); });
