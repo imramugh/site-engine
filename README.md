@@ -21,3 +21,7 @@ Run `make check` to validate scaffold metadata. It uses only the Python standard
 Once implementation begins, changes should include unit tests, integration tests against a real SQLite database in WAL mode and permission model, and browser regression tests using Playwright and axe. Browser scenarios should reference the applicable story IDs. Public CI must run without private credentials and must never use a production self-hosted runner.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/release-policy.md](docs/release-policy.md), and [docs/dependency-policy.md](docs/dependency-policy.md).
+
+## Implementation backlog
+
+See [the story index](docs/backlog/README.md) for user stories, acceptance criteria, test requirements, and end-to-end scenarios.

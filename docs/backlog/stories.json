@@ -1,0 +1,1084 @@
+{
+  "schema_version": 1,
+  "repo": "engine",
+  "stories": [
+    {
+      "id": "ENG-001",
+      "title": "Establish workspace and package boundaries",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §8 Repository layout",
+        "Strategy §6 Three layers"
+      ],
+      "user_story": "As a maintainer, I want independently versioned engine, checks, and theme packages so visual work can evolve without changing content behaviour.",
+      "acceptance": [
+        "Create pnpm workspace package boundaries for site, CMS, engine, checks, starter theme, and installable themes.",
+        "Export a versioned public contract package with no imports from a client theme.",
+        "Enforce package dependency direction in CI.",
+        "Provide local development commands for static site, CMS, and preview."
+      ],
+      "testing": {
+        "unit": "Verify package exports and contract-version parsing.",
+        "integration": "Install all workspace packages from a clean lockfile and run dependency-boundary checks."
+      },
+      "e2e": [
+        "Given a theme imports only the contract, when engine internals change, then its contract build remains valid.",
+        "Given a prohibited theme-to-CMS import, when CI runs, then it fails with the offending edge."
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "ENG-002",
+      "title": "Define the versioned content and theme contract",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §3 Content model",
+        "Strategy §6 Theme contract"
+      ],
+      "user_story": "As a platform developer, I want one typed contract for templates, blocks, appearances, and site data so the CMS, renderer, themes, and tests cannot drift.",
+      "acceptance": [
+        "Model singleton site settings, sections, pages, media references, redirects, style guide, and change sets.",
+        "Define standard block schemas, field limits, allowed templates, and visibility behaviour.",
+        "Define six named backgrounds, width and spacing choices, motion intent plus optional preset, and logo tone.",
+        "Expose machine-readable contract version and compatibility rules.",
+        "Reject unknown block fields and raw CSS or colour input."
+      ],
+      "testing": {
+        "unit": "Validate valid and invalid fixtures for every schema.",
+        "integration": "Generate CMS field configuration and theme TypeScript types from the same definitions."
+      },
+      "e2e": [
+        "Given a block with an undeclared appearance value, when saved, then the API returns a field-level validation error.",
+        "Given a supported contract version, when a theme is installed, then the engine records compatibility."
+      ],
+      "dependencies": [
+        "ENG-001"
+      ]
+    },
+    {
+      "id": "ENG-003",
+      "title": "Implement content tree and template invariants",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §3 Content hierarchy",
+        "Strategy §3 Templates"
+      ],
+      "user_story": "As an editor, I want pages constrained by section and template rules so navigation, generated parts, and structured data remain coherent.",
+      "acceptance": [
+        "Support root, services-like, insights-like, careers-like, and future-section presets with allowed templates.",
+        "Enforce parent depth of at most three and template-specific parent relationships.",
+        "Generate template fixed parts such as breadcrumb, child list, or application form instead of storing duplicates.",
+        "Require a page summary and constrain published status to reviewed content.",
+        "Refuse a template change until incompatible blocks are removed or converted."
+      ],
+      "testing": {
+        "unit": "Test each template's allowed blocks, required fields, and schema mapping.",
+        "integration": "Exercise section creation, page movement, duplication, and template conversion through the CMS API."
+      },
+      "e2e": [
+        "Given an article template selected under a services-like section, when submitted, then creation is rejected with allowed-template guidance.",
+        "Given a page with incompatible blocks, when its template is changed, then the response lists each blocking block."
+      ],
+      "dependencies": [
+        "ENG-002"
+      ]
+    },
+    {
+      "id": "ENG-004",
+      "title": "Build generic tree routing and global derivations",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §3 Sitemap",
+        "Strategy §3 How Astro renders it"
+      ],
+      "user_story": "As a visitor, I want content-tree URLs and shared navigation rendered consistently so newly approved pages need no route code.",
+      "acceptance": [
+        "Implement a catch-all static route that resolves published paths from the tree.",
+        "Derive breadcrumbs, header and footer service lists from page relationships.",
+        "Enforce header section limit with a non-blocking footer-only warning.",
+        "Generate canonical URLs and omit draft or archived pages from public routing.",
+        "Return an accessible not-found response for unknown and archived targets without redirects."
+      ],
+      "testing": {
+        "unit": "Test path resolution, breadcrumb ancestry, navigation ordering, and canonical generation.",
+        "integration": "Build fixture sites containing nested pages, hidden navigation, and an archive."
+      },
+      "e2e": [
+        "Given an approved child page, when the static build runs, then its path, breadcrumb, and menu entry render from data.",
+        "Given an archived page with a redirect, when its old URL is requested, then it returns a permanent redirect to the configured target."
+      ],
+      "dependencies": [
+        "ENG-003"
+      ]
+    },
+    {
+      "id": "ENG-005",
+      "title": "Render standard blocks and template layouts",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Block library",
+        "Strategy §3 Page outlines"
+      ],
+      "user_story": "As an editor, I want reusable blocks rendered by the engine so page composition remains content work.",
+      "acceptance": [
+        "Implement renderer support for Hero, Feature grid, Split list, Chip list, Testimonials, FAQ, Callout, Related services, CTA, rich text, contact, and media blocks.",
+        "Do not render a block with an empty list or a hidden state.",
+        "Validate required fields before render and show build diagnostics with page and block IDs.",
+        "Render FAQ with native details/summary and accessible headings.",
+        "Keep related page references and site-detail references live rather than copied."
+      ],
+      "testing": {
+        "unit": "Snapshot semantic HTML for every standard block and empty-list behaviour.",
+        "integration": "Build all template fixtures with long, short, optional, and missing content."
+      },
+      "e2e": [
+        "Given a hidden testimonial block, when a visitor loads the page, then it is absent from HTML and navigation landmarks.",
+        "Given a related-page rename, when rebuilt, then every related card shows the new title."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-004"
+      ]
+    },
+    {
+      "id": "ENG-006",
+      "title": "Create CMS collections and editorial admin foundations",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §8 Payload",
+        "Strategy §9 Admin structure"
+      ],
+      "user_story": "As an editor, I want a conventional admin for all content records so I can work without an assistant.",
+      "acceptance": [
+        "Configure CMS collections from the contract for pages, sections, assets, redirects, inquiries, applications, users, and change sets.",
+        "Provide tree-oriented page management and field validation with useful error messages.",
+        "Expose live draft preview beside editing fields at desktop and mobile widths.",
+        "Ensure every content save belongs to a named or implicit change set.",
+        "Do not expose credential values in admin record views."
+      ],
+      "testing": {
+        "unit": "Test collection access controls and contract-to-field generation.",
+        "integration": "Create and edit a fixture page through admin/local API and read the preview draft."
+      },
+      "e2e": [
+        "Given an Editor changes a page, when save is pressed, then a pending change set receives the diff and public output is unchanged.",
+        "Given a non-owner opens integrations, when access is evaluated, then the view is denied."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-003"
+      ]
+    },
+    {
+      "id": "ENG-007",
+      "title": "Add roles, invite-only identity, and session protection",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §8 Security",
+        "Strategy §9 Roles",
+        "Strategy §9 Sign-in providers"
+      ],
+      "user_story": "As an owner, I want scoped staff access so only appropriate people can change content, approve work, or see personal data.",
+      "acceptance": [
+        "Support Owner, Approver, Editor, Sales, and Hiring roles, including multiple roles per person.",
+        "Implement invite-only Microsoft or Google sign-in and one emergency passkey/authenticator owner path.",
+        "Require reauthentication when an approval session is older than 15 minutes and expire idle sessions after 8 hours.",
+        "Allow Owners to disable a user and revoke active application/MCP sessions immediately with a measurable revocation audit event.",
+        "Record sign-in and authorization decisions in audit history."
+      ],
+      "testing": {
+        "unit": "Test role matrix and session-age decisions.",
+        "integration": "Validate OAuth callback, invitation redemption, disablement, and passkey fallback with test providers."
+      },
+      "e2e": [
+        "Given an Editor tries to approve, when they submit a decision, then the API returns forbidden and no publish begins.",
+        "Given a disabled identity, when it reuses a session, then protected endpoints reject it."
+      ],
+      "dependencies": [
+        "ENG-006"
+      ]
+    },
+    {
+      "id": "ENG-008",
+      "title": "Implement pending change sets and review lifecycle",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §3 Change review",
+        "Strategy §8 How a change goes live"
+      ],
+      "user_story": "As an approver, I want every proposed change grouped and reviewable so public publishing always has human control.",
+      "acceptance": [
+        "Support open, submitted, changes-requested, approved, rejected, published, discarded, and stale states.",
+        "Capture reversible field-level before/after diffs and affected pages.",
+        "Run checks and create a private preview when submitted.",
+        "Allow an approver to exclude individual changes while retaining the remainder pending.",
+        "Flag and require refresh for a set whose base content changed; flag stale sets after 30 days."
+      ],
+      "testing": {
+        "unit": "Test transition guards, diff generation, exclusions, conflicts, and stale calculations.",
+        "integration": "Submit a multi-page CMS change set and load its preview snapshot."
+      },
+      "e2e": [
+        "Given content changes after a set was submitted, when approval is attempted, then approval is blocked until refresh.",
+        "Given a reviewer excludes one change, when approving, then only included changes proceed to publish."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-007"
+      ]
+    },
+    {
+      "id": "ENG-009",
+      "title": "Build protected on-page and admin review comparison",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Review on the page itself",
+        "Page Review Mode"
+      ],
+      "user_story": "As an approver, I want to compare live and proposed pages in context so I can make an informed approval decision.",
+      "acceptance": [
+        "Show review UI only to authenticated Approvers and only on pages affected by pending changes.",
+        "Support Live, Proposed, side-by-side, desktop, and mobile views.",
+        "Highlight changed blocks and show text diffs, check results, and comments.",
+        "Offer approve, request changes, and reject actions using the same review API as admin.",
+        "Mark preview endpoints noindex and require sign-in."
+      ],
+      "testing": {
+        "unit": "Test visibility gates and comparison mapping.",
+        "integration": "Render a proposed fixture through the preview service with changed-block metadata."
+      },
+      "e2e": [
+        "Given an anonymous visitor, when they load a page with pending edits, then no review script or proposed content is delivered.",
+        "Given an Approver with a session older than the policy limit, when approving, then reauthentication is required."
+      ],
+      "dependencies": [
+        "ENG-008",
+        "ENG-004"
+      ]
+    },
+    {
+      "id": "ENG-010",
+      "title": "Publish, build, and rollback approved content",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §8 How a change reaches the live site",
+        "Strategy §9 Change log and rollback"
+      ],
+      "user_story": "As an approver, I want approved changes released through a verifiable build and reversible without unseen edits.",
+      "acceptance": [
+        "Publish only approved included changes and invoke a build webhook with immutable change-set context.",
+        "Track queued, building, deployed, and failed release states with build-log link.",
+        "On failure retain published content and notify Owners.",
+        "Prepare single-change or whole-set rollback as a new reviewable change set.",
+        "Persist actor, reviewer, publish time, and release result in a unified log."
+      ],
+      "testing": {
+        "unit": "Test webhook payload signing, state transitions, and rollback diff construction.",
+        "integration": "Use a fake CI receiver for success, timeout, and failed build responses."
+      },
+      "e2e": [
+        "Given a successful approval, when CI confirms deployment, then the public build uses the approved revision and audit log links the release.",
+        "Given a failed build, when release processing ends, then the prior public revision remains served and Owners are notified."
+      ],
+      "dependencies": [
+        "ENG-008",
+        "ENG-009"
+      ]
+    },
+    {
+      "id": "ENG-011",
+      "title": "Build quality, style, and readiness checks",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §7 Built-in checks",
+        "Strategy §7 How MCP server keeps standards"
+      ],
+      "user_story": "As an editor, I want immediate actionable checks so content remains usable, quoteable, and structurally valid.",
+      "acceptance": [
+        "Check summary, title and description length, one H1, heading order, alt text, self-contained FAQ answers, review freshness, internal links, and orphan pages.",
+        "Check style guide terms, Canadian spelling configuration, banned phrases, sentence length, and reading level as warnings.",
+        "Treat broken structured-data generation as a publish blocker; preserve warning severity separately.",
+        "Return checks on every write, audit, and review submission.",
+        "Expose stale-page listing by review age."
+      ],
+      "testing": {
+        "unit": "Use fixture content for each check, severity, and remediation message.",
+        "integration": "Run checks during CMS save and static build, asserting identical result codes."
+      },
+      "e2e": [
+        "Given invalid structured data, when a reviewer submits for approval, then publication is blocked with the exact block and field.",
+        "Given a style warning only, when a reviewer approves, then the release may continue while the warning remains visible."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-006"
+      ]
+    },
+    {
+      "id": "ENG-012",
+      "title": "Generate SEO, schema, crawler, and machine-readable outputs",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §7 Crawler access",
+        "Strategy §7 Structured data",
+        "Strategy §7 Machine-readable versions"
+      ],
+      "user_story": "As a site operator, I want public structured outputs derived from content so search and AI systems can understand current pages.",
+      "acceptance": [
+        "Generate sitemap with actual last-modified values, robots policies, canonical metadata, and IndexNow publish hook.",
+        "Generate Organization/ProfessionalService, WebPage, Article, FAQPage, BreadcrumbList, JobPosting, and collection schemas from compatible templates.",
+        "Generate root llms.txt from site description, settings, and selected page summaries.",
+        "Provide a machine-readable page representation without exposing drafts or private fields.",
+        "Keep crawler policy names in one versioned configuration reviewed quarterly."
+      ],
+      "testing": {
+        "unit": "Validate JSON-LD outputs against schema fixtures and sitemap dates.",
+        "integration": "Build a fixture tree and verify all public URLs, schemas, llms.txt, and robots output."
+      },
+      "e2e": [
+        "Given a page is published, when the build completes, then its sitemap entry and canonical schema include the new revision date.",
+        "Given a preview URL, when a crawler requests it, then robots/noindex policies prevent indexing."
+      ],
+      "dependencies": [
+        "ENG-004",
+        "ENG-005",
+        "ENG-011"
+      ]
+    },
+    {
+      "id": "ENG-013",
+      "title": "Add redirects, archive safety, and link preservation",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §3 Guardrails",
+        "Strategy §9 Site settings redirects"
+      ],
+      "user_story": "As a site owner, I want safe moves and archives so old links keep resolving.",
+      "acceptance": [
+        "Create a permanent redirect when a published slug changes, page moves, or a page is archived.",
+        "Require a redirect target and default it to the parent when applicable.",
+        "Block archive while page, section, or navigation references remain; return reference locations.",
+        "Maintain redirect uniqueness, loop detection, and hit counts.",
+        "Archive rather than permanently delete public content through editorial tooling."
+      ],
+      "testing": {
+        "unit": "Test redirect normalization, loop detection, reference search, and archive transitions.",
+        "integration": "Move and archive fixture pages then build public redirect rules."
+      },
+      "e2e": [
+        "Given a page is still linked in footer navigation, when archive is requested, then the API lists the footer reference and makes no archive.",
+        "Given an approved slug change, when a visitor follows the old URL, then they receive one permanent redirect to the new URL."
+      ],
+      "dependencies": [
+        "ENG-003",
+        "ENG-008"
+      ]
+    },
+    {
+      "id": "ENG-014",
+      "title": "Implement media library, variants, and safe lifecycle",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Images, media and block appearance",
+        "Strategy §9 Media library"
+      ],
+      "user_story": "As an editor, I want managed media with durable references so pages remain performant and accessible.",
+      "acceptance": [
+        "Upload media with alt text or decorative flag, tags, caption, credit, focal point, and usage references.",
+        "Generate responsive AVIF/WebP variants with fixed dimensions and Astro image markup.",
+        "Provide crop previews for hero, card, and thumbnail slots.",
+        "Replace a file while retaining the asset ID and update every use.",
+        "Prevent deleting in-use assets; send unused assets to a 30-day bin."
+      ],
+      "testing": {
+        "unit": "Test metadata validation, decorative exception, focal-point math, and deletion eligibility.",
+        "integration": "Upload test media, create variants, render it in multiple blocks, and replace it."
+      },
+      "e2e": [
+        "Given an image without alt text and not decorative, when attached to a block, then saving is rejected.",
+        "Given an in-use asset, when deletion is requested, then the admin reports all usage locations."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-011"
+      ]
+    },
+    {
+      "id": "ENG-015",
+      "title": "Implement generic motion preference runtime",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §6 Animation is part of the theme",
+        "Strategy §3 Build rules"
+      ],
+      "user_story": "As a visitor, I want motion that respects my preferences so the site remains comfortable and accessible.",
+      "acceptance": [
+        "Apply motion by content intent with optional theme preset fallback.",
+        "Respect prefers-reduced-motion and a persisted footer Reduce motion choice.",
+        "Pause off-screen effects and provide a still poster/frame for long animation or video.",
+        "Load only minimal vanilla client code for enabled interaction.",
+        "Keep motion disabled in form and urgent-contact contexts where specified by theme."
+      ],
+      "testing": {
+        "unit": "Test preference precedence, persisted setting, intent fallback, and visibility pausing.",
+        "integration": "Run browser tests with reduced-motion emulation and measure delivered runtime modules."
+      },
+      "e2e": [
+        "Given a visitor enables Reduce motion, when navigating between pages, then eligible animations remain still.",
+        "Given a selected preset is unavailable after a theme switch, when rendered, then its declared intent fallback is used."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-005"
+      ]
+    },
+    {
+      "id": "ENG-016",
+      "title": "Expose authenticated MCP discovery and content editing",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 MCP server reference",
+        "Strategy §3 Access and connection"
+      ],
+      "user_story": "As a connected assistant user, I want safe standard tools for content work so I can prepare changes without direct database access.",
+      "acceptance": [
+        "Serve Streamable HTTP MCP with OAuth identity linked to an invited user.",
+        "Implement documented discovery, tree/page read, template/block library, search, structure, block/item, media, quality, review, site, theme, and redirect tools.",
+        "Ensure every write joins a change set, validates contract rules, and returns checks.",
+        "Expose no approve or publish tool and describe that limit in tool metadata.",
+        "Audit every tool invocation with user, client, scope, diff/batch, and result."
+      ],
+      "testing": {
+        "unit": "Test JSON schemas, tool authorization declarations, and write response check envelopes.",
+        "integration": "Use an MCP test client for OAuth, discovery, a block write, submission, and audit retrieval."
+      },
+      "e2e": [
+        "Given an authenticated Editor assistant, when it calls update_block, then it receives a draft result and checks but cannot publish.",
+        "Given an unknown tool parameter, when sent to MCP, then it is rejected without partial mutation."
+      ],
+      "dependencies": [
+        "ENG-007",
+        "ENG-008",
+        "ENG-011",
+        "ENG-014"
+      ]
+    },
+    {
+      "id": "ENG-017",
+      "title": "Enforce assistant scopes, rate limits, and revocation",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Inquiries through MCP",
+        "Strategy §8 Security"
+      ],
+      "user_story": "As an owner, I want each connected assistant scoped and revocable so delegated access remains controlled.",
+      "acceptance": [
+        "Grant content and optional inquiry/career scopes separately per connected client.",
+        "Deny user management, permanent deletion, approval, and publishing through MCP.",
+        "Revoke a client connection immediately and invalidate its tokens.",
+        "Rate-limit MCP by identity and client with safe retry responses.",
+        "Display connected clients, scopes, and last use to Owners.",
+        "Support an Owner-controlled policy to hide inquiry phone numbers from MCP responses, including list/detail/export serializers and derived summaries, independently of admin access."
+      ],
+      "testing": {
+        "unit": "Test scope matrix, token invalidation, and rate-limit keying.",
+        "integration": "Connect two test clients to one user and revoke one without affecting the other."
+      },
+      "e2e": [
+        "Given a content-only assistant, when it calls list_inquiries, then it receives forbidden and no lead metadata.",
+        "Given an Owner revokes a client, when that client repeats a request, then it is rejected immediately.",
+        "Given phone redaction is enabled, when a connected assistant reads or searches a lead it can otherwise access, then no phone value appears in responses or summaries; authorized staff can still view it in the admin."
+      ],
+      "dependencies": [
+        "ENG-007",
+        "ENG-016"
+      ]
+    },
+    {
+      "id": "ENG-018",
+      "title": "Create block gallery and recipe workflow",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Block gallery",
+        "Strategy §3 Working with the assistant"
+      ],
+      "user_story": "As an editor, I want a visual catalogue and reusable recipe so I can compose permitted pages confidently.",
+      "acceptance": [
+        "Render every contract block, template, preset, and installed theme block with fixture content in the active theme.",
+        "Show variants, field limits, allowed templates, usage locations, and appearance controls.",
+        "Use the same fixtures as visual and accessibility tests.",
+        "Provide recipe builder export and MCP get_block_library/create_page_from_recipe support.",
+        "Filter picker choices by the selected template."
+      ],
+      "testing": {
+        "unit": "Test catalog completeness against contract definitions and recipe schema validation.",
+        "integration": "Create a page from a recipe and verify ordered blocks and appearances."
+      },
+      "e2e": [
+        "Given a template that disallows a block, when an editor builds a recipe, then that block cannot be selected.",
+        "Given an assistant submits a valid recipe, when review preview opens, then every chosen block appears in the requested order."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-005",
+        "ENG-016"
+      ]
+    },
+    {
+      "id": "ENG-019",
+      "title": "Build secure contact inquiry intake and lead pipeline",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §9 Leads",
+        "Strategy §3 Contact page outline"
+      ],
+      "user_story": "As a visitor, I want to send an inquiry through an accessible form and as sales staff I want to manage it safely.",
+      "acceptance": [
+        "Implement server-side validation, consent, spam controls, source page, topic, and optional contact fields.",
+        "Create one lead per accepted inquiry with stage, notes, assignee, next action, and source attribution.",
+        "Provide pipeline/list views, urgent pinning, filters, CSV export, and manual lead creation.",
+        "Treat visitor message text as untrusted content in UI and MCP responses.",
+        "Keep public forms separate from content publishing permissions."
+      ],
+      "testing": {
+        "unit": "Test validation, consent, spam decisions, stage transitions, and CSV escaping.",
+        "integration": "Submit form fixtures including malformed input and verify lead persistence and notifications queue."
+      },
+      "e2e": [
+        "Given invalid email or missing consent, when a visitor submits, then accessible inline errors appear and no lead is created.",
+        "Given an active-incident topic, when accepted, then the lead is marked urgent and alert delivery is queued."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-007"
+      ]
+    },
+    {
+      "id": "ENG-020",
+      "title": "Integrate lead mail threading and controlled replies",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Email conversations on each lead",
+        "Strategy §3 Email providers"
+      ],
+      "user_story": "As a sales user, I want replies and matching conversation history on a lead so follow-up has context.",
+      "acceptance": [
+        "Support provider adapters for Microsoft 365, Google Workspace, and SMTP fallback behind one workflow.",
+        "Match mail by provider conversation/thread ID, not subject; suggest other conversations from same address without auto-adding.",
+        "Store only matched lead mail metadata/body/attachments and message links.",
+        "Use mailbox-scoped provider permissions and verify send-as aliases.",
+        "Allow assistant prepare_reply then explicit human confirmation for site-address sends."
+      ],
+      "testing": {
+        "unit": "Test thread matching, alias status, message sanitization, and suggestion logic.",
+        "integration": "Use provider mocks for inbound webhook, polling fallback, send, and thread update."
+      },
+      "e2e": [
+        "Given a visitor replies in the original conversation, when provider delivery arrives, then the same lead timeline gains the message.",
+        "Given an assistant drafts a site-mailbox reply without confirmation, when it requests send, then no email is sent."
+      ],
+      "dependencies": [
+        "ENG-019",
+        "ENG-017"
+      ]
+    },
+    {
+      "id": "ENG-021",
+      "title": "Implement careers, private applications, and hiring access",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Templates job",
+        "Strategy §9 Careers"
+      ],
+      "user_story": "As a hiring user, I want job postings and applications managed privately so applicants can apply and resumes stay protected.",
+      "acceptance": [
+        "Create job pages from open roles with location, type, work mode, closing date, rich-text fields, and JobPosting schema.",
+        "Implement application validation, consent, resume type/size limits, and explicit error states.",
+        "Store resumes outside public media with short-lived signed access links.",
+        "Support Hiring and Owner access only; stages, notes, notification recipient, and reply timeline.",
+        "Closing a role removes it from public listings but preserves its applications."
+      ],
+      "testing": {
+        "unit": "Test role access, application field validation, signed-link expiry, and closing visibility.",
+        "integration": "Submit an application and retrieve a resume through a permitted signed link."
+      },
+      "e2e": [
+        "Given a public user requests a stored resume URL, when no valid signed token is supplied, then access is denied.",
+        "Given a closed role, when its listing is viewed, then it is absent while a Hiring user can still view applications."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-007",
+        "ENG-010"
+      ]
+    },
+    {
+      "id": "ENG-022",
+      "title": "Add audit log, dashboard, and notifications",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §9 Change log and rollback",
+        "Strategy §9 Notifications",
+        "Strategy §9 Dashboard"
+      ],
+      "user_story": "As an owner, I want one operational view of activity and failures so I can act promptly.",
+      "acceptance": [
+        "Record content, media, settings, theme, integration, sign-in, MCP, review, and release events without secret values.",
+        "Provide filtered audit timeline with actor, assistant, target, type, status, diffs, screenshots, and build links.",
+        "Show pending reviews, urgent/new leads, stale/failing pages, latest publish, integration health, and shortcuts.",
+        "Notify configured roles for reviews, leads, applications, follow-ups, publish failure, and integration outage.",
+        "Prevent muting urgent incident alerts; keep notification emails free of personal message/resume contents."
+      ],
+      "testing": {
+        "unit": "Test redaction, event filters, recipient resolution, mute policy, and notification payloads.",
+        "integration": "Trigger fixture events and assert audit persistence and queued role-based notifications."
+      },
+      "e2e": [
+        "Given an integration health check fails, when the monitor runs, then Owners receive a minimal alert with a signed-in admin link.",
+        "Given an urgent alert recipient mutes notifications, when an incident lead arrives, then that urgent alert is still delivered."
+      ],
+      "dependencies": [
+        "ENG-008",
+        "ENG-010",
+        "ENG-019",
+        "ENG-021"
+      ]
+    },
+    {
+      "id": "ENG-023",
+      "title": "Secure integration and AI-provider configuration",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §9 Configuration and credentials",
+        "Strategy §9 AI providers"
+      ],
+      "user_story": "As an owner, I want integrations configurable without exposing keys so operational services can be changed safely.",
+      "acceptance": [
+        "Store keys encrypted using an external master key and present write-only fields with replacement affordances.",
+        "Support connection tests, health states, and Owner-only integration configuration.",
+        "Support OpenAI, Anthropic, Google Gemini, and OpenRouter at launch, each selected per job with model, fallback, monthly cap, and usage visibility.",
+        "Never return secrets through API, MCP, logs, exports, diffs, or audit views.",
+        "Log credential changes by actor and time without values."
+      ],
+      "testing": {
+        "unit": "Test redaction across serializers and encryption/decryption service boundaries.",
+        "integration": "Save test credentials, test connection, invoke provider fallback mock, and read audit history."
+      },
+      "e2e": [
+        "Given an Owner saves a credential, when they reload the settings, then only a masked indicator is visible.",
+        "Given a non-Owner calls integration endpoints, when authorized, then credentials and configuration are denied."
+      ],
+      "dependencies": [
+        "ENG-007",
+        "ENG-022"
+      ]
+    },
+    {
+      "id": "ENG-024",
+      "title": "Add optional static full-text search",
+      "phase": "later",
+      "source_refs": [
+        "Strategy §8 Search later"
+      ],
+      "user_story": "As a visitor, I want fast search over published content so I can find relevant information without a server query.",
+      "acceptance": [
+        "Build a static search index from published, indexable pages only.",
+        "Index title, summary, headings, and approved body text with result URLs.",
+        "Exclude drafts, preview content, applications, inquiries, and noindex pages.",
+        "Provide keyboard-accessible result navigation and empty/error states.",
+        "Rebuild index with the public release."
+      ],
+      "testing": {
+        "unit": "Test index document selection, text extraction, and excluded status handling.",
+        "integration": "Build a fixture release and query expected and excluded pages."
+      },
+      "e2e": [
+        "Given a visitor searches published text, when selecting a result, then they reach its canonical page.",
+        "Given a draft-only phrase, when searched on public site, then no result is returned."
+      ],
+      "dependencies": [
+        "ENG-010",
+        "ENG-012"
+      ]
+    },
+    {
+      "id": "ENG-025",
+      "title": "Implement analytics and conversion event hooks",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §1 Goals and measures",
+        "Strategy §7 Measurement"
+      ],
+      "user_story": "As a site owner, I want privacy-conscious measurements of inquiries and key actions so launch goals can be tracked.",
+      "acceptance": [
+        "Emit configurable events for form submission, phone tap, primary CTA, and approved public navigation interactions.",
+        "Separate direct, search, referral, and AI-assistant attribution where supplied without inventing attribution.",
+        "Keep third-party scripts disabled by default and honor configured consent requirements.",
+        "Document baseline and post-launch reporting fields for conversion, freshness, and performance.",
+        "Do not expose lead message content in analytics events."
+      ],
+      "testing": {
+        "unit": "Test event payload allowlist and attribution parser.",
+        "integration": "Run browser instrumentation against a mock analytics endpoint with consent states."
+      },
+      "e2e": [
+        "Given consent is absent where required, when a visitor taps a CTA, then no analytics request is made.",
+        "Given a form succeeds, when its event is emitted, then it contains only allowlisted metadata."
+      ],
+      "dependencies": [
+        "ENG-019",
+        "ENG-023"
+      ]
+    },
+    {
+      "id": "ENG-026",
+      "title": "Add direct on-page typing for editors",
+      "phase": "later",
+      "source_refs": [
+        "Strategy §9 Visual content editing"
+      ],
+      "user_story": "As an editor, I want to edit selected page text directly in preview so simple revisions require fewer context switches.",
+      "acceptance": [
+        "Gate the feature behind Editor or higher permissions and draft/change-set rules.",
+        "Map selectable rendered text to supported contract fields only.",
+        "Show validation and check results before save.",
+        "Preserve split-view editor as a complete fallback.",
+        "Do not permit direct edits to generated, credential, or protected data."
+      ],
+      "testing": {
+        "unit": "Test field mapping, selection filtering, and validation errors.",
+        "integration": "Edit a fixture block in preview and verify a normal change-set diff."
+      },
+      "e2e": [
+        "Given an Editor selects an editable hero field, when they save a valid change, then it appears only in the proposed preview.",
+        "Given a user selects generated navigation text, when trying to edit, then no edit control is offered."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-008",
+        "ENG-009"
+      ]
+    },
+    {
+      "id": "ENG-027",
+      "title": "Add post-launch AI provider adapters",
+      "phase": "later",
+      "source_refs": [
+        "Strategy §9 AI providers"
+      ],
+      "user_story": "As an owner with cloud or sovereign-provider needs, I want additional adapter choices so configured AI jobs can use approved providers.",
+      "acceptance": [
+        "Add Azure OpenAI, Amazon Bedrock, Mistral, and OpenAI-compatible endpoint adapters behind the launch provider interface.",
+        "Reuse encryption, write-only secret handling, caps, usage, fallback, health checks, and audit rules.",
+        "Require provider-specific capability declaration, including image support where needed.",
+        "Keep MCP client assistants separate from configured in-product AI jobs.",
+        "Document data-processing and regional configuration requirements per adapter."
+      ],
+      "testing": {
+        "unit": "Test adapter capability metadata and common provider-interface conformance.",
+        "integration": "Run mocked completion, image-capable, fallback, cap-exhaustion, and error flows for each adapter."
+      },
+      "e2e": [
+        "Given the selected provider is unavailable, when a configured job runs, then the approved fallback is used and logged.",
+        "Given a job requires image input and the provider lacks it, when configured, then validation rejects the assignment."
+      ],
+      "dependencies": [
+        "ENG-023"
+      ]
+    },
+    {
+      "id": "ENG-028",
+      "title": "Establish executable regression harness",
+      "phase": "foundation",
+      "source_refs": [
+        "ops quality-and-delivery Test layers"
+      ],
+      "user_story": "As a maintainer, I want deterministic future-facing regression tooling so application changes have repeatable evidence.",
+      "acceptance": [
+        "Configure Vitest for contract/unit tests, Playwright for browser flows, and axe WCAG checks across site and CMS apps.",
+        "Use synthetic neutral fixtures only in the public engine.",
+        "Capture traces, screenshots, and scrubbed logs on failures.",
+        "Provide test database lifecycle helpers for isolated SQLite runs.",
+        "Schedule the full browser/theme matrix after applications exist."
+      ],
+      "testing": {
+        "unit": "Self-test fixture isolation and result-artifact naming.",
+        "integration": "Run a smoke suite against a seeded SQLite CMS and static site."
+      },
+      "e2e": [
+        "Given a failing browser assertion, when the harness runs, then trace and screenshot artifacts are retained without private fixture data.",
+        "Given a public CI job, when tests run, then no private repository checkout or secret is required."
+      ],
+      "dependencies": [
+        "ENG-001"
+      ]
+    },
+    {
+      "id": "ENG-029",
+      "title": "Create immutable publish snapshots and durable outbox",
+      "phase": "foundation",
+      "source_refs": [
+        "Strategy §8 How a change goes live",
+        "ops architecture Publish consistency"
+      ],
+      "user_story": "As a publisher, I want approval bound to an exact snapshot so a build cannot accidentally release newer edits.",
+      "acceptance": [
+        "Create an immutable content snapshot and release manifest inside the approval transaction.",
+        "Persist a durable outbox job with idempotency key rather than calling CI directly.",
+        "Bind snapshot to contract, engine, theme-version reference, checks, and revision identifiers.",
+        "Invalidate approval when an included record changes.",
+        "Record release state only after deployment health evidence returns."
+      ],
+      "testing": {
+        "unit": "Test snapshot hashing, approval invalidation, and idempotency-key generation.",
+        "integration": "Run SQLite transaction/outbox commit and simulated worker recovery."
+      },
+      "e2e": [
+        "Given an edit occurs after approval, when the queued publish job runs, then it cannot release the changed content.",
+        "Given a process crashes after transaction commit, when the worker resumes, then exactly one release job is processed."
+      ],
+      "dependencies": [
+        "ENG-008",
+        "ENG-011"
+      ]
+    },
+    {
+      "id": "ENG-030",
+      "title": "Make publish jobs retry-safe and ordered",
+      "phase": "launch",
+      "source_refs": [
+        "ops architecture Publish consistency",
+        "ops quality-and-delivery Recovery/release"
+      ],
+      "user_story": "As an operator, I want duplicate, stale, and failed release jobs handled safely so live content never regresses.",
+      "acceptance": [
+        "Use transactional claiming and idempotent deployment callbacks.",
+        "Reject stale jobs whose approved snapshot is no longer current.",
+        "Ensure concurrent approvals cannot overwrite a newer live release.",
+        "Keep the prior live artifact on failed build or health check.",
+        "Expose retry reason, attempt count, and correlation ID in release history."
+      ],
+      "testing": {
+        "unit": "Test job ordering, stale detection, idempotency, and retry classification.",
+        "integration": "Simulate duplicate callbacks, out-of-order jobs, timeout, and crash recovery against SQLite."
+      },
+      "e2e": [
+        "Given the same deployment callback arrives twice, when processed, then one release record is created.",
+        "Given an older job completes after a newer release, when it reports success, then it cannot replace the newer artifact."
+      ],
+      "dependencies": [
+        "ENG-029",
+        "ENG-010"
+      ]
+    },
+    {
+      "id": "ENG-031",
+      "title": "Model business cases and scheduled publication",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Content model",
+        "Strategy §3 Templates"
+      ],
+      "user_story": "As an editor, I want business cases and scheduled releases represented explicitly so insights publish correctly.",
+      "acceptance": [
+        "Add business-case fields for client/anonymized client, industry, challenge, approach, outcome, services, publication date, and SEO.",
+        "Support scheduled publish time in the page/change-set model with timezone-safe validation.",
+        "Keep scheduled publish subject to completed review and passing blocking checks at execution.",
+        "Render business cases in insights listings and compatible schema outputs.",
+        "Record a skipped/failed scheduled release without changing public content."
+      ],
+      "testing": {
+        "unit": "Test business-case validation and timezone/schedule state transitions.",
+        "integration": "Schedule, approve, execute, and fail a fixture publication through the release worker."
+      },
+      "e2e": [
+        "Given an unapproved scheduled page reaches its time, when the worker runs, then it remains private and records why.",
+        "Given an approved business case publishes, when its index loads, then its card and detail route appear once."
+      ],
+      "dependencies": [
+        "ENG-003",
+        "ENG-010",
+        "ENG-029"
+      ]
+    },
+    {
+      "id": "ENG-032",
+      "title": "Complete MCP resources, prompts, and authorization metadata",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 MCP server reference",
+        "Strategy §3 Resources and prompts"
+      ],
+      "user_story": "As an assistant user, I want discoverable safe resources and prompts so I can perform supported work without guessing capabilities.",
+      "acceptance": [
+        "Expose style guide, glossary, block library, site summary, page tree, and documented ready-made prompts as read-only MCP resources.",
+        "Cover documented discover, structure, content, media, quality, review, site/theme, redirects, leads, and careers tools with schemas.",
+        "State no-publish/no-approve/no-user-management limits in tool metadata.",
+        "Mark visitor-originated inquiry text as untrusted content in tool responses.",
+        "Require effective user authorization even for Local API calls."
+      ],
+      "testing": {
+        "unit": "Test tool/resource registration and authorization metadata completeness.",
+        "integration": "Enumerate resources and tools using a standards-compliant MCP client."
+      },
+      "e2e": [
+        "Given an assistant requests a documented prompt/resource, when authorized, then it receives only scoped read data.",
+        "Given a Local API caller attempts override access without an effective user, when it invokes an MCP write, then it is denied."
+      ],
+      "dependencies": [
+        "ENG-016",
+        "ENG-017"
+      ]
+    },
+    {
+      "id": "ENG-033",
+      "title": "Require explicit authorization for email sends",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §3 Inquiries through MCP",
+        "Strategy §3 Email providers"
+      ],
+      "user_story": "As an owner, I want site-mailbox sends to require explicit confirmation so an assistant cannot email contacts autonomously.",
+      "acceptance": [
+        "Represent prepare, explicit authorization, send, cancel, and expiry as distinct reply states.",
+        "Bind authorization to exact recipient, sender, subject, normalized body, attachments, lead/application, and short expiry.",
+        "Require a fresh human confirmation for every site-mailbox send; never reuse prior consent.",
+        "Log user, assistant, and final provider result without exposing message contents in notifications.",
+        "Reject changed, expired, unauthorized, or replayed send requests."
+      ],
+      "testing": {
+        "unit": "Test authorization digest, expiry, replay, and mutation invalidation.",
+        "integration": "Use deterministic mail adapters for prepared, authorized, failed, and duplicated sends."
+      },
+      "e2e": [
+        "Given an assistant prepares a reply but receives no confirmation, when it requests send, then no provider call occurs.",
+        "Given a body changes after confirmation, when send is attempted, then it is rejected and requires new confirmation."
+      ],
+      "dependencies": [
+        "ENG-020",
+        "ENG-017"
+      ]
+    },
+    {
+      "id": "ENG-034",
+      "title": "Keep public schemas and fixtures client-neutral",
+      "phase": "foundation",
+      "source_refs": [
+        "ops architecture Repository boundaries",
+        "ops decisions Setup defaults"
+      ],
+      "user_story": "As an open-source maintainer, I want public contract examples isolated from client data so the engine can be published safely.",
+      "acceptance": [
+        "Provide neutral schema fixtures, demo content, and synthetic media metadata for public tests and docs.",
+        "Forbid client names, assets, copy, routes, production identifiers, and private fixture imports from public packages.",
+        "Define clean package boundary inputs for private themes and ops composition.",
+        "Scan public tarballs, Git history, generated artifacts, and docs for prohibited provenance markers.",
+        "Document Apache-2.0 engine licensing and separate asset/theme rights."
+      ],
+      "testing": {
+        "unit": "Test provenance allowlist/denylist rules.",
+        "integration": "Pack the public workspace and scan the tarball and demo build."
+      },
+      "e2e": [
+        "Given private fixture data is imported by a public package, when CI runs, then provenance checks fail before publish.",
+        "Given a public demo build, when inspected, then it runs entirely from synthetic neutral data."
+      ],
+      "dependencies": [
+        "ENG-001"
+      ]
+    },
+    {
+      "id": "ENG-035",
+      "title": "Own theme install, switching, and compatibility in the engine",
+      "phase": "launch",
+      "source_refs": [
+        "Strategy §6 Switching to a new theme",
+        "ops architecture Repository boundaries"
+      ],
+      "user_story": "As an owner, I want neutral engine-controlled theme compatibility and switching so private theme packages remain optional consumers of the public contract.",
+      "acceptance": [
+        "Validate theme manifest, contract range, standard block support, settings, motion mappings, and declared theme-specific blocks.",
+        "Generate compatibility report with conversion, replacement, hide, or intent-fallback actions.",
+        "Preview candidate theme against immutable content without importing private source into engine CI.",
+        "Switch only through a reviewed snapshot release and preserve namespaced theme settings.",
+        "Never auto-switch to a fallback theme after a failed deployment; preserve last verified release."
+      ],
+      "testing": {
+        "unit": "Test manifest range, report generation, settings namespacing, and fallback decisions.",
+        "integration": "Install synthetic external theme packages through packed public interfaces."
+      },
+      "e2e": [
+        "Given a theme declares an incompatible contract, when installation is proposed, then it is rejected without loading client code.",
+        "Given a compatible theme switch is approved, when released, then routes/content stay identical and only declared visual output changes."
+      ],
+      "dependencies": [
+        "ENG-002",
+        "ENG-029",
+        "ENG-034"
+      ]
+    },
+    {
+      "id": "ENG-036",
+      "title": "Validate SQLite transactions, migrations, and writer backpressure",
+      "phase": "foundation",
+      "source_refs": [
+        "user correction 2026-10-03",
+        "Strategy §8 SQLite or a full database"
+      ],
+      "user_story": "As a maintainer, I want reliable SQLite transaction behavior under the intended single-writer deployment so concurrent workflows fail safely.",
+      "acceptance": [
+        "Use SQLite WAL, foreign keys, busy_timeout, and explicit transaction boundaries for content, approval, outbox, and audit writes.",
+        "Provide expand/contract migration workflow from empty and previous schema states.",
+        "Serialize CMS writers and return retryable backpressure errors rather than leaking lock failures.",
+        "Test transaction rollback across multi-record changes and audit/outbox insertion.",
+        "Document SQLite operational limits without promising untested database portability."
+      ],
+      "testing": {
+        "unit": "Test transaction boundary and retry classification logic.",
+        "integration": "Run migrations and concurrent write contention suites on real SQLite."
+      },
+      "e2e": [
+        "Given a change set fails midway, when its transaction rolls back, then no partial content, audit, or outbox record is visible.",
+        "Given a locked writer exceeds busy_timeout, when a write is attempted, then the caller gets a retryable response and data remains consistent."
+      ],
+      "dependencies": [
+        "ENG-006",
+        "ENG-008"
+      ]
+    },
+    {
+      "id": "ENG-037",
+      "title": "Enforce retention, deletion, and restore privacy rules",
+      "phase": "launch",
+      "source_refs": [
+        "Product requirements: media lifecycle, inquiries, careers, and privacy"
+      ],
+      "user_story": "As an owner, I want predictable retention and authorized deletion across personal data and media so the system honors its published privacy rules.",
+      "acceptance": [
+        "Provide explicit policies per data class: spam cleanup after 30 days, unused media bin for 30 days, and manual deletion of retained inquiries and applications/resumes as the initial defaults.",
+        "Show retention behavior in the admin; only Owners may change retention settings, and policy changes are audited without storing deleted personal content.",
+        "Apply authorization to deletion through admin and APIs; MCP cannot permanently delete records or bypass retention controls.",
+        "Delete private resume objects and related derived data when an authorized application purge completes; retry partial storage failures without reporting deletion complete prematurely.",
+        "Record minimal deletion tombstones without personal content so restoring an older backup can reapply purges before serving data. Document that expired backups age out on their defined schedule rather than claiming instantaneous deletion from immutable backups.",
+        "Exclude in-use public media from automatic purge and preserve content references; expose failed purge jobs to operators."
+      ],
+      "testing": {
+        "unit": "Test per-class eligibility boundaries, role enforcement, tombstone minimization, and idempotent purge/retry decisions with a controlled clock.",
+        "integration": "Advance time in SQLite fixtures, run cleanup jobs against test object storage, simulate partial failures, and restore an older backup then reapply deletion tombstones."
+      },
+      "e2e": [
+        "Given spam is younger than 30 days, when cleanup runs, then it remains; after 30 days the configured cleanup removes it without deleting an active inquiry.",
+        "Given an Editor or MCP client requests permanent deletion, when the API handles the request, then it rejects the action and retains the record.",
+        "Given an Owner deletes an application, when the purge succeeds, then its resume is unavailable and the audit record contains no resume or message content.",
+        "Given an old backup contains a previously purged application, when operators restore it, then the deletion ledger is applied before access resumes and the application stays unavailable."
+      ],
+      "dependencies": [
+        "ENG-014",
+        "ENG-017",
+        "ENG-019",
+        "ENG-021",
+        "ENG-022"
+      ]
+    }
+  ]
+}
