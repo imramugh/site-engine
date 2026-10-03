@@ -1,0 +1,41 @@
+.workspace {
+  color: #18212f;
+  background: #f5f7fa;
+  min-height: 100vh;
+  margin: -8px;
+  font: 16px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+  color-scheme: light;
+}
+.workspace * { box-sizing: border-box; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 1rem max(1.5rem, calc((100vw - 1200px) / 2)); background: #142235; color: #fff; }
+.header span { font-weight: 700; letter-spacing: .02em; }
+.header a { color: #fff; }
+.workspace main { max-width: 1200px; margin: auto; padding: 2rem 1.5rem 4rem; }
+.workspace h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.2; margin: 0 0 1rem; }
+.workspace h2 { font-size: 1.3rem; line-height: 1.3; margin: 0 0 1rem; }
+.workspace h3 { font-size: 1.1rem; }
+.workspace section, .workspace fieldset { margin: 1.5rem 0; padding: 1.5rem; background: #fff; border: 1px solid #d4dbe5; border-radius: .6rem; min-width: 0; }
+.workspace a { color: #124c8a; text-underline-offset: .2em; }
+.workspace .header a { color: #fff; }
+.workspace nav { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+.workspace label { display: inline-block; font-weight: 600; margin: .5rem .5rem .25rem 0; }
+.workspace input, .workspace select, .workspace textarea, .workspace button { font: inherit; border: 1px solid #8b98ab; border-radius: .3rem; padding: .5rem .75rem; max-width: 100%; }
+.workspace input, .workspace select, .workspace textarea { background: #fff; color: #18212f; margin: .25rem .75rem .5rem 0; }
+.workspace textarea { display: block; width: 100%; min-height: 7rem; }
+.workspace button { cursor: pointer; background: #174c84; color: #fff; margin: .25rem .5rem .25rem 0; min-height: 44px; }
+.workspace button:hover:not(:disabled) { background: #10365e; }
+.workspace button:disabled { background: #e6eaf0; color: #485568; cursor: default; }
+.workspace :focus-visible { outline: 3px solid #bd6900; outline-offset: 3px; }
+.workspace table { width: 100%; border-collapse: collapse; background: #fff; }
+.workspace th, .workspace td { padding: .8rem; border-bottom: 1px solid #d4dbe5; text-align: left; vertical-align: top; }
+.workspace caption { text-align: left; font-weight: 700; padding: .75rem 0; }
+.workspace li { margin: .35rem 0; }
+.workspace [role="alert"] { color: #842020; background: #fff0f0; border-left: 4px solid #ad3030; padding: 1rem; }
+.workspace [role="status"] { padding: 1rem; background: #eaf1f8; border-radius: .3rem; }
+@media (max-width: 600px) {
+  .workspace main { padding: 1.5rem 1rem 3rem; }
+  .workspace section, .workspace fieldset { padding: 1rem; }
+  .workspace table { display: block; overflow-x: auto; }
+  .workspace input, .workspace select { max-width: 100%; }
+}
