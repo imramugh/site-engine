@@ -9,6 +9,7 @@ import * as migration_20261003_133520_scoped_page_slugs from './20261003_133520_
 import * as migration_20261003_135539_editorial_change_set_lifecycle from './20261003_135539_editorial_change_set_lifecycle';
 import * as migration_20261003_143750 from './20261003_143750';
 import * as migration_20261003_144959 from './20261003_144959';
+import * as migration_20261003_150050 from './20261003_150050';
 
 export const migrations = [
   {
@@ -64,6 +65,11 @@ export const migrations = [
   {
     up: migration_20261003_144959.up,
     down: migration_20261003_144959.down,
-    name: '20261003_144959'
+    name: '20261003_144959',
+  },
+  {
+    up: migration_20261003_150050.up,
+    down: migration_20261003_150050.down,
+    name: '20261003_150050'
   },
 ];

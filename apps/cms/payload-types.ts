@@ -433,6 +433,7 @@ export interface PublishSnapshot {
 export interface PublishOutbox {
   id: string;
   idempotencyKey: string;
+  sequence: number;
   snapshot: string | PublishSnapshot;
   changeSet: string | ChangeSet;
   reviewRevision: number;
@@ -450,6 +451,19 @@ export interface PublishOutbox {
   attempts: number;
   nextAttemptAt?: string | null;
   claimedAt?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  completedAt?: string | null;
+  completionEvidence?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  errorCode?: string | null;
   correlationID: string;
   lastError?: string | null;
   updatedAt: string;
@@ -461,9 +475,20 @@ export interface PublishOutbox {
  */
 export interface PublishedRelease {
   id: string;
+  outbox: string | PublishOutbox;
+  sequence: number;
   snapshot: string | PublishSnapshot;
   activatedAt: string;
   healthEvidence:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  artifact:
     | {
         [k: string]: unknown;
       }
@@ -798,6 +823,7 @@ export interface PublishSnapshotsSelect<T extends boolean = true> {
  */
 export interface PublishOutboxSelect<T extends boolean = true> {
   idempotencyKey?: T;
+  sequence?: T;
   snapshot?: T;
   changeSet?: T;
   reviewRevision?: T;
@@ -807,6 +833,11 @@ export interface PublishOutboxSelect<T extends boolean = true> {
   attempts?: T;
   nextAttemptAt?: T;
   claimedAt?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  completedAt?: T;
+  completionEvidence?: T;
+  errorCode?: T;
   correlationID?: T;
   lastError?: T;
   updatedAt?: T;
@@ -817,9 +848,12 @@ export interface PublishOutboxSelect<T extends boolean = true> {
  * via the `definition` "published-releases_select".
  */
 export interface PublishedReleasesSelect<T extends boolean = true> {
+  outbox?: T;
+  sequence?: T;
   snapshot?: T;
   activatedAt?: T;
   healthEvidence?: T;
+  artifact?: T;
   updatedAt?: T;
   createdAt?: T;
 }

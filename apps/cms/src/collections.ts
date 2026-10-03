@@ -308,6 +308,7 @@ export const PublishOutbox: CollectionConfig = {
   access: { create: () => false, read: staff(['owner', 'approver']), update: () => false, delete: () => false },
   fields: [
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'sequence', type: 'number', required: true, unique: true, min: 1, admin: { readOnly: true } },
     { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, admin: { readOnly: true } },
     { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
     { name: 'reviewRevision', type: 'number', required: true, admin: { readOnly: true } },
@@ -317,6 +318,11 @@ export const PublishOutbox: CollectionConfig = {
     { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0, admin: { readOnly: true } },
     { name: 'nextAttemptAt', type: 'date', admin: { readOnly: true } },
     { name: 'claimedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'leaseToken', type: 'text', admin: { readOnly: true } },
+    { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
+    { name: 'completedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'completionEvidence', type: 'json', admin: { readOnly: true } },
+    { name: 'errorCode', type: 'text', admin: { readOnly: true } },
     { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
   ],
@@ -327,8 +333,11 @@ export const PublishedReleases: CollectionConfig = {
   slug: 'published-releases', admin: { useAsTitle: 'snapshot', group: 'Editorial' },
   access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
   fields: [
+    { name: 'outbox', type: 'relationship', relationTo: 'publish-outbox', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'sequence', type: 'number', required: true, unique: true, min: 1, admin: { readOnly: true } },
     { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, admin: { readOnly: true } },
     { name: 'activatedAt', type: 'date', required: true, admin: { readOnly: true } },
     { name: 'healthEvidence', type: 'json', required: true, admin: { readOnly: true } },
+    { name: 'artifact', type: 'json', required: true, admin: { readOnly: true } },
   ],
 }

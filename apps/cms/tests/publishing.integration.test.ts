@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, retryPublishJob } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, retryPublishJob } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
@@ -16,7 +16,10 @@ const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
-afterEach(async () => { await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } }) })
+afterEach(async () => {
+  await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.delete({ collection: 'publish-outbox', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+})
 
 const versions = { themeVersion: '1.2.3', engineVersion: '1.2.3', contractVersion: '1.0.0' }
 type Change = { collection: 'pages' | 'sections' | 'redirects'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
@@ -57,8 +60,11 @@ async function approve(current: Awaited<ReturnType<typeof fixture>>, initialBase
 
 async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'published-releases', data: { snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' } }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: artifact(snapshot.contentHash) }, overrideAccess: true, context: { editorialInternal: true } })
 }
+
+function artifact(sourceContentHash: string) { return { digest: 'a'.repeat(64), sourceContentHash, ...versions, checks: [{ name: 'health', status: 'passed' as const }] } }
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
   it('uses a contract-valid frozen candidate, preserves exclusions, and deduplicates retry', async () => {
@@ -77,9 +83,10 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(remaining.docs.find((set) => set.id !== current.set.id)?.changes).toHaveLength(1)
     const repeat = await approve(current)
     expect(repeat).toEqual(result)
+    await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [...current.included, ...current.included], previewContentHash: canonicalHash(current.candidate), versions, initialBaseline: current.baseline }) })).rejects.toThrow('unique')
     await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions: { ...versions, themeVersion: 'forged-version' }, initialBaseline: current.baseline }) })).rejects.toThrow('persisted snapshot')
     expect((await payload.count({ collection: 'publish-snapshots', overrideAccess: true })).totalDocs).toBe(2)
-    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(1)
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(2)
     await expect(payload.update({ collection: 'publish-snapshots', id: snapshot.id, data: { themeVersion: 'forged' }, user: current.reviewer, overrideAccess: false })).rejects.toThrow('not allowed')
     await expect(payload.delete({ collection: 'publish-snapshots', id: snapshot.id, user: current.reviewer, overrideAccess: false })).rejects.toThrow('not allowed')
   })
@@ -106,6 +113,28 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(candidate.redirects).toEqual([{ from: '/new-path', to: '/welcome', status: 301 }])
   })
 
+  it('serializes the SQLite worker head across leases, crash recovery, and backoff', async () => {
+    const first = await fixture('lease-first')
+    const second = await fixture('lease-second')
+    await approve(first)
+    await approve(second)
+    const started = new Date('2026-10-03T15:05:00.000Z')
+    const lease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000))
+    expect(typeof lease?.changeSet === 'object' ? lease.changeSet.id : lease?.changeSet).toBe(first.set.id)
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000))).toBeNull()
+    await expect(withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(lease!.id), 'stale-lease', 'BUILD_TIMEOUT', new Date(started.getTime() + 1)))).rejects.toThrow('no longer current')
+    const reclaimedAt = new Date(started.getTime() + 1_001)
+    const reclaimed = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, reclaimedAt, 1_000))
+    expect(reclaimed).toMatchObject({ id: lease!.id, attempts: 2 })
+    expect(reclaimed?.leaseToken).not.toBe(lease?.leaseToken)
+    await withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(reclaimed!.id), String(reclaimed!.leaseToken), 'BUILD_TIMEOUT', reclaimedAt))
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(reclaimedAt.getTime() + 999), 1_000))).toBeNull()
+    const finalLease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(reclaimedAt.getTime() + 2_000), 1_000))
+    expect(finalLease).toMatchObject({ id: lease!.id, attempts: 3 })
+    const snapshot = typeof finalLease!.snapshot === 'object' ? finalLease!.snapshot : await payload.findByID({ collection: 'publish-snapshots', id: String(finalLease!.snapshot), overrideAccess: true })
+    await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(finalLease!.id), String(finalLease!.leaseToken), artifact(snapshot.contentHash), new Date(reclaimedAt.getTime() + 2_001)))
+  })
+
   it('rolls back snapshots/outbox and keeps delivery outside a claim/retry transaction', async () => {
     const current = await fixture('rollback')
     await expect(withPayloadTransaction(payload, async req => { req.headers = current.headers; await approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline: current.baseline }); throw new Error('rollback') })).rejects.toThrow('rollback')
@@ -113,7 +142,12 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await approve(approved)
     const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))
     expect(job?.status).toBe('processing')
-    await withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(job!.id), 'synthetic failure', new Date(Date.now() - 1)))
-    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))).toMatchObject({ id: job!.id, attempts: 2 })
+    const retryAt = new Date()
+    await withPayloadTransaction(payload, req => retryPublishJob(payload, req, String(job!.id), String(job!.leaseToken), 'BUILD_TIMEOUT', retryAt))
+    const second = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(retryAt.getTime() + 1_000)))
+    expect(second).toMatchObject({ id: job!.id, attempts: 2 })
+    const snapshot = typeof second!.snapshot === 'object' ? second!.snapshot : await payload.findByID({ collection: 'publish-snapshots', id: String(second!.snapshot), overrideAccess: true })
+    const completed = await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(second!.id), String(second!.leaseToken), artifact(snapshot.contentHash), new Date(retryAt.getTime() + 1_001)))
+    expect(await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(second!.id), 'replayed-token', artifact(snapshot.contentHash), new Date(retryAt.getTime() + 1_002)))).toMatchObject({ id: completed.id })
   })
 })
