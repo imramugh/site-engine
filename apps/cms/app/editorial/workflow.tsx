@@ -5,7 +5,8 @@ import { useCallback, useEffect, useState } from 'react'
 type Change = { collection: string; id: string; before: unknown; after: unknown }
 type ReadinessProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string }; report?: { publishable?: boolean; blockers?: { code: string; path: string; message: string }[]; warnings?: { code: string; path: string; message: string }[] } }
 type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[]; proof?: ReadinessProof }; staleAt?: string; preview?: { status?: string; jobID?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[] }
-type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] } }
+type ScheduledPublication = { id: string; scheduledFor: string; state: string; dispatchReason?: string; snapshot?: { contentHash?: string }; changeSet?: string | { id: string } }
+type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] }; schedules?: ScheduledPublication[] }
 function fields(change: Change): [string, unknown, unknown][] {
   const before = change.before && typeof change.before === 'object' ? change.before as Record<string, unknown> : {}
   const after = change.after && typeof change.after === 'object' ? change.after as Record<string, unknown> : {}
@@ -22,6 +23,7 @@ export function EditorialWorkflow() {
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop')
   const [comment, setComment] = useState('')
   const [includedChangeKeys, setIncludedChangeKeys] = useState<Set<string>>(new Set())
+  const [scheduledFor, setScheduledFor] = useState('')
   const [previewPath, setPreviewPath] = useState('/')
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true)
@@ -29,6 +31,10 @@ export function EditorialWorkflow() {
       const response = await fetch('/api/editorial/list', { cache: 'no-store' })
       if (!response.ok) { setMessage('Sign in to view editorial change sets.'); return }
       const next = await response.json() as Data
+      if (next.actor.roles.some((role) => role === 'owner' || role === 'approver')) {
+        const schedules = await fetch('/api/editorial/schedules/list', { cache: 'no-store' })
+        if (schedules.ok) next.schedules = (await schedules.json() as { schedules: ScheduledPublication[] }).schedules
+      }
       setData(next); setSelected((current) => current ?? next.sets[0]?.id ?? null)
     } catch {
       setMessage('Unable to load editorial change sets. Try again.')
@@ -62,16 +68,27 @@ export function EditorialWorkflow() {
       if (preview && !includedChangeKeys.size) { setMessage('Select at least one captured change for the comparison.'); return }
       const approval = action === 'approve'
       if (approval && !set.quality?.proof) { setMessage('The displayed readiness proof is missing. Reload the comparison and run readiness checks again.'); return }
-      const response = await fetch(preview ? '/api/editorial/prepare-preview' : `/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(preview ? { id: set.id, includedChangeKeys: [...includedChangeKeys] } : approval ? { id: set.id, proof: set.quality?.proof } : { id: set.id }) })
+      const scheduleISO = scheduledFor ? new Date(scheduledFor).toISOString() : undefined
+      const response = await fetch(preview ? '/api/editorial/prepare-preview' : `/api/editorial/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(preview ? { id: set.id, includedChangeKeys: [...includedChangeKeys] } : approval ? { id: set.id, proof: set.quality?.proof, ...(scheduleISO ? { scheduledFor: scheduleISO } : {}) } : { id: set.id }) })
       const body = await response.json() as { error?: string }
       if (!response.ok) { setMessage(body.error ?? 'The workflow action was not accepted.'); return }
-      setMessage(preview ? 'Private comparison queued. It will remain unavailable until the renderer completes.' : action === 'run-quality' ? 'Deterministic readiness checks completed.' : action === 'approve' ? 'Approved snapshot queued for the publish worker.' : action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
+      setMessage(preview ? 'Private comparison queued. It will remain unavailable until the renderer completes.' : action === 'run-quality' ? 'Deterministic readiness checks completed.' : action === 'approve' ? scheduleISO ? 'Approved immutable snapshot scheduled for UTC dispatch.' : 'Approved snapshot queued for the publish worker.' : action === 'submit' ? 'Submitted. Preview generation is pending.' : 'Change set updated.')
       await load()
     } catch {
       setMessage('Unable to update the change set. Try again.')
     } finally {
       setActing(false)
     }
+  }
+  async function scheduleAction(action: 'cancel' | 'reschedule', schedule: ScheduledPublication) {
+    if (acting) return; setActing(true); setMessage('')
+    try {
+      const next = action === 'reschedule' ? window.prompt('New local date and time (for example 2030-01-02T03:04):', schedule.scheduledFor.slice(0, 16)) : undefined
+      if (action === 'reschedule' && !next) return
+      const response = await fetch(`/api/editorial/schedules/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: schedule.id, ...(next ? { scheduledFor: new Date(next).toISOString() } : {}) }) })
+      const body = await response.json() as { error?: string }; if (!response.ok) { setMessage(body.error ?? 'Schedule update was not accepted.'); return }
+      setMessage(action === 'cancel' ? 'Scheduled publication cancelled.' : 'Scheduled publication rescheduled.'); await load()
+    } catch { setMessage('Unable to update the scheduled publication.') } finally { setActing(false) }
   }
   async function addComment() { if (!set || !comment.trim()) return; setActing(true); try { const response = await fetch('/api/editorial/comment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id, comment }) }); if (!response.ok) throw new Error(); setComment(''); await load() } finally { setActing(false) } }
   return <main style={{ maxWidth: 1100, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }} aria-busy={loading || acting}>
@@ -84,7 +101,7 @@ export function EditorialWorkflow() {
         {set.state === 'stale' && <p role="alert">This change set is stale. Refresh it before review.</p>}
         <div aria-label="Workflow actions">
           {owns && (set.state === 'open' || set.state === 'changes-requested') && <button disabled={acting} onClick={() => action('submit')}>Submit for review</button>}
-          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button>{set.preview?.status === 'ready' && <button disabled={acting} onClick={() => action('run-quality')}>Run readiness checks</button>}{set.quality?.proof?.report?.publishable === true && <button disabled={acting} onClick={() => action('approve')}>Approve and queue publish</button>}{set.preview?.status === 'ready' && set.quality?.proof?.report?.publishable !== true && <p role="status">Approval is disabled until the exact comparison has a passing readiness proof.</p>}<button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
+          {reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button>{set.preview?.status === 'ready' && <button disabled={acting} onClick={() => action('run-quality')}>Run readiness checks</button>}{set.quality?.proof?.report?.publishable === true && <><label>Schedule for local time (optional)<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><p>Leave blank to queue immediately. Scheduled times are converted to UTC and dispatch only after the reviewed baseline remains current.</p><button disabled={acting} onClick={() => action('approve')}>{scheduledFor ? 'Approve and schedule publish' : 'Approve and queue publish'}</button></>}{set.preview?.status === 'ready' && set.quality?.proof?.report?.publishable !== true && <p role="status">Approval is disabled until the exact comparison has a passing readiness proof.</p>}<button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button disabled={acting} onClick={() => action('reject')}>Reject</button></>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'stale') && <button disabled={acting} onClick={() => action('refresh')}>Refresh</button>}
           {owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'rejected') && <button disabled={acting} onClick={() => action('discard')}>Discard</button>}
         </div>
@@ -97,6 +114,7 @@ export function EditorialWorkflow() {
         {set.quality?.proof?.report?.blockers?.map((blocker) => <p key={`${blocker.code}-${blocker.path}`} role="alert">Blocker {blocker.code} at {blocker.path}: {blocker.message}</p>)}
         {set.quality?.proof?.report?.warnings?.map((warning) => <p key={`${warning.code}-${warning.path}`}>Warning {warning.code} at {warning.path}: {warning.message}</p>)}
         {reviewer && <section aria-label="Review comments"><h3>Review comments</h3>{set.reviewComments?.map((item) => <p key={item.id}>{item.body}</p>)}<textarea value={comment} onChange={(event) => setComment(event.target.value)} aria-label="Add review comment" /><button disabled={acting} onClick={() => void addComment()}>Add comment</button></section>}
+        {reviewer && <section aria-label="Scheduled publications"><h3>Scheduled publications</h3>{data?.schedules?.length ? <ul>{data.schedules.map((schedule) => <li key={schedule.id}><strong>{schedule.state}</strong> — <time dateTime={schedule.scheduledFor}>{new Date(schedule.scheduledFor).toLocaleString()} (UTC {schedule.scheduledFor})</time>{schedule.snapshot?.contentHash && <p>Frozen snapshot: {schedule.snapshot.contentHash}</p>}{schedule.dispatchReason && <p>Dispatch status: {schedule.dispatchReason}</p>}{data.actor.roles.includes('owner') && schedule.state === 'scheduled' && <p><button disabled={acting} onClick={() => void scheduleAction('reschedule', schedule)}>Reschedule</button><button disabled={acting} onClick={() => void scheduleAction('cancel', schedule)}>Cancel schedule</button></p>}</li>)}</ul> : <p>No scheduled publications.</p>}</section>}
       </section>}
     </div>
   </main>
