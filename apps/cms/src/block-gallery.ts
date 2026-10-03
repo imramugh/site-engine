@@ -33,13 +33,14 @@ export const blockCatalog = blockTypes.map((type) => ({
 
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
 
-export function recipeBlocks(template: string, selected: unknown): Block[] {
+export function recipeBlocks(template: string, selected: unknown, existing: unknown = []): Block[] {
   const parsedTemplate = TemplateSchema.parse(template)
   if (!Array.isArray(selected) || selected.length === 0 || selected.length > 40 || !selected.every((type): type is Block['type'] => typeof type === 'string' && insertableBlockTypes.includes(type as typeof insertableBlockTypes[number]))) throw new Error('Choose between one and forty insertable supported blocks.')
   const disallowed = selected.find((type) => !TemplateAllowedBlocks[parsedTemplate].includes(type))
   if (disallowed) throw new Error(`${disallowed} is not allowed by the ${parsedTemplate} template.`)
-  if (parsedTemplate === 'landing' && selected[0] !== 'hero') throw new Error('Landing recipes must begin with Hero.')
-  return selected.map((type) => {
+  if (!Array.isArray(existing)) throw new Error('Existing page blocks are invalid.')
+  const current = existing.map((block) => BlockSchema.parse(block))
+  const recipe = selected.map((type) => {
     const id = randomUUID(); const base = { id, type, hidden: false, appearance }
     const safe: Partial<Record<Block['type'], Record<string, unknown>>> = {
       hero: { ...base, heading: 'Draft heading', body: 'Replace this neutral draft text before review.' }, incidentBar: { ...base, message: 'Replace this draft status message before review.' },
@@ -50,4 +51,6 @@ export function recipeBlocks(template: string, selected: unknown): Block[] {
     }
     return BlockSchema.parse(safe[type])
   })
+  if (parsedTemplate === 'landing' && [...current, ...recipe].find((block) => !block.hidden)?.type !== 'hero') throw new Error('Landing pages must begin with a visible Hero.')
+  return recipe
 }

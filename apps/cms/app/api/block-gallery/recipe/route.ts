@@ -38,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
       if (set.state !== 'open' || actor !== user.id) throw new Error('Choose an open change set that you own.')
       if (set.revision !== expectedRevision) throw new Error('The selected change set changed. Reload and try again.')
       const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown; blocks?: unknown }
-      const blocks = recipeBlocks(String(page.template ?? ''), body.blockTypes)
+      const blocks = recipeBlocks(String(page.template ?? ''), body.blockTypes, page.blocks)
       req.headers.set('x-site-engine-change-set', changeSetID)
       return payload.update({ collection: 'pages', id: pageID, data: { blocks: [...(Array.isArray(page.blocks) ? page.blocks : []), ...blocks] }, draft: true, user, overrideAccess: false, req }) as Promise<{ id: string; blocks?: unknown }>
     })
