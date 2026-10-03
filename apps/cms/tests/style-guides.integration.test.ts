@@ -25,12 +25,20 @@ describe('reviewed style guide singleton', () => {
     const set = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, depth: 0, overrideAccess: true })
     const change = (set.docs[0]!.changes as Array<{ collection: string; id: string }>).find((item) => item.collection === 'style-guides')!
     const base = structuredClone(neutralFixture)
-    const candidate = buildCandidate(base, [change] as never, [`style-guides:${change.id}`], { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' })
+    // Capture the exact reviewed change before a later mutable save. The
+    // candidate and its readiness input must never follow that later save.
+    const frozenChange = structuredClone(change)
+    const candidate = buildCandidate(base, [frozenChange] as never, [`style-guides:${change.id}`], { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' })
     expect(candidate.styleGuide).toMatchObject({ bannedPhrases: ['placeholder phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn' })
     expect(base.styleGuide).toBeUndefined()
     const hero = candidate.pages[0]!.blocks[0]!; if (hero.type === 'hero') hero.body = 'A placeholder phrase with color.'
     const report = checkSiteSnapshot(candidate, { style: candidate.styleGuide })
     expect(report.publishable).toBe(true)
     expect(report.warnings.map((item) => item.code)).toEqual(expect.arrayContaining(['STYLE_BANNED_PHRASE', 'STYLE_PREFERRED_TERM', 'STYLE_CANADIAN_SPELLING']))
+    const frozenProof = structuredClone({ styleGuide: candidate.styleGuide, warnings: report.warnings.map((item) => item.code).sort() })
+    await payload.update({ collection: 'style-guides', id: guide.id, data: { bannedPhrases: ['later mutable phrase'], canadianSpelling: 'off' }, draft: true, user: owner, overrideAccess: false })
+    const repeated = checkSiteSnapshot(candidate, { style: candidate.styleGuide })
+    expect({ styleGuide: candidate.styleGuide, warnings: repeated.warnings.map((item) => item.code).sort() }).toEqual(frozenProof)
+    expect(candidate.styleGuide).toMatchObject({ bannedPhrases: ['placeholder phrase'], canadianSpelling: 'warn' })
   })
 })

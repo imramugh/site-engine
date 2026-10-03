@@ -115,7 +115,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:redirects:read'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
   tokens.set('owner-token', { clientId: 'owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
-  await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', defaultLocale: 'en-CA', homepageId: page.id, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, user: owner, overrideAccess: false })
+  await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', defaultLocale: 'en-CA', homepageId: page.id, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token')
   try {
     const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'get_block_library', 'get_change_set', 'get_page', 'get_page_quality', 'get_site_settings', 'list_installed_themes', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_page'])
