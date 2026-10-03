@@ -1,0 +1,150 @@
+import assert from 'node:assert/strict';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createOAuthService } from '../src/server.js';
+
+const port = 43991;
+const origin = `http://127.0.0.1:${port}`;
+const issuer = `${origin}/oauth`;
+const resource = `${origin}/mcp`;
+const verifier = randomBytes(48).toString('base64url');
+const challenge = createHash('sha256').update(verifier).digest('base64url');
+const databasePath = join(tmpdir(), `site-engine-oauth-${process.pid}.sqlite`);
+const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' });
+let currentUser = 'synthetic-user';
+
+const service = createOAuthService({
+  issuer,
+  resource,
+  databasePath,
+  cookieKeys: ['test-cookie-key-one', 'test-cookie-key-two'],
+  jwks: { keys: [{ ...signingKey, kid: 'test-key', use: 'sig', alg: 'RS256' }] },
+  sessionBridge: {
+    resolve: async () => ({ id: currentUser, enabled: true, scopes: ['mcp:content:read'] }),
+    find: async (id) => ['synthetic-user', 'other-user'].includes(id) ? { id, enabled: true, scopes: ['mcp:content:read'] } : undefined,
+  },
+});
+
+await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', resolve));
+try {
+  const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
+  assert.equal(protectedMetadata.status, 200);
+  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] });
+
+  const discovery = await fetch(`${issuer}/.well-known/openid-configuration`);
+  assert.equal(discovery.status, 200);
+  const metadata = await discovery.json() as { issuer: string; registration_endpoint: string; token_endpoint: string };
+  assert.equal(metadata.issuer, issuer);
+  assert.equal(metadata.registration_endpoint, `${issuer}/reg`);
+  assert.equal((await fetch(`${origin}/.well-known/oauth-authorization-server/oauth`)).status, 200);
+
+  const rejectedRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://evil.example/callback'], token_endpoint_auth_method: 'none', response_types: ['code'] }) });
+  assert.equal(rejectedRegistration.status, 400);
+  assert.equal((await fetch(`${issuer}/reg`)).status, 405);
+
+  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
+  assert.equal(registered.status, 201);
+  const client = await registered.json() as { client_id: string };
+
+  const authorization = new URL(`${issuer}/auth`);
+  authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+  const authorizationResponse = await fetch(authorization, { redirect: 'manual' });
+  assert.equal(authorizationResponse.status, 303);
+  const interaction = authorizationResponse.headers.get('location');
+  assert.ok(interaction?.startsWith('/oauth/interaction/'), interaction ?? 'missing interaction redirect');
+  const cookies = new Map(authorizationResponse.headers.getSetCookie().map((value) => {
+    const [pair] = value.split(';', 1);
+    return [pair!.split('=', 1)[0]!, pair!];
+  }));
+  let next = new URL(interaction!, issuer);
+  let callback: URL | undefined;
+  for (let redirects = 0; redirects < 8; redirects++) {
+    const response = await fetch(next, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+    if (response.status === 200) {
+      const page = await response.text();
+      const csrf = /name="csrf" value="([^"]+)"/.exec(page)?.[1];
+      assert.ok(csrf, 'interaction page must include a CSRF confirmation');
+      const confirmed = await fetch(next, {
+        method: 'POST', redirect: 'manual', headers: {
+          cookie: [...cookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded',
+        }, body: new URLSearchParams({ csrf, decision: 'allow' }),
+      });
+      assert.equal(confirmed.status, 303);
+      const location = confirmed.headers.get('location');
+      assert.ok(location, 'missing OAuth redirect after confirmation');
+      next = new URL(location, issuer);
+      continue;
+    }
+    assert.equal(response.status, 303);
+    for (const value of response.headers.getSetCookie()) {
+      const [pair] = value.split(';', 1);
+      cookies.set(pair!.split('=', 1)[0]!, pair!);
+    }
+    const location = response.headers.get('location');
+    assert.ok(location, 'missing OAuth redirect');
+    const redirect = new URL(location!, issuer);
+    if (redirect.origin === 'http://127.0.0.1' && redirect.pathname === '/callback') { callback = redirect; break; }
+    next = redirect;
+  }
+  assert.ok(callback, 'authorization did not reach the registered redirect URI');
+  assert.equal(callback.origin + callback.pathname, 'http://127.0.0.1/callback');
+  assert.equal(callback.searchParams.get('state'), 'state-value');
+  const code = callback.searchParams.get('code');
+  assert.ok(code, callback.href);
+
+  const wrongVerifier = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: randomBytes(48).toString('base64url'), resource }) });
+  assert.equal(wrongVerifier.status, 400);
+
+  const token = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier, resource }) });
+  assert.equal(token.status, 200);
+  const tokens = await token.json() as { access_token: string; refresh_token: string; token_type: string };
+  assert.equal(tokens.token_type, 'Bearer');
+  assert.ok(tokens.access_token && tokens.refresh_token, `token response fields: ${Object.keys(tokens).join(', ')}`);
+
+  const refreshed = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) });
+  assert.equal(refreshed.status, 200);
+  const rotated = await refreshed.json() as { refresh_token: string };
+  assert.ok(rotated.refresh_token);
+  const reusedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) });
+  assert.equal(reusedRefresh.status, 400);
+
+  // A CMS session changing after authorization must not grant a second account
+  // access to the first account's pending provider interaction.
+  currentUser = 'other-user';
+  const crossAccountAuthorization = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(crossAccountAuthorization.status, 303);
+  for (const value of crossAccountAuthorization.headers.getSetCookie()) {
+    const [pair] = value.split(';', 1);
+    cookies.set(pair!.split('=', 1)[0]!, pair!);
+  }
+  const crossAccountInteraction = new URL(crossAccountAuthorization.headers.get('location')!, issuer);
+  const crossAccountPage = await fetch(crossAccountInteraction, { headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(crossAccountPage.status, 200);
+  const crossAccountCsrf = /name="csrf" value="([^"]+)"/.exec(await crossAccountPage.text())?.[1];
+  assert.ok(crossAccountCsrf);
+  const crossAccountConfirm = await fetch(crossAccountInteraction, { method: 'POST', redirect: 'manual', headers: { cookie: [...cookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: crossAccountCsrf, decision: 'allow' }) });
+  assert.equal(crossAccountConfirm.status, 400);
+  currentUser = 'synthetic-user';
+
+  const reusedCode = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier, resource }) });
+  assert.equal(reusedCode.status, 400);
+  const invalidVerifier = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: 'not-a-code', redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: 'invalid', resource }) });
+  assert.equal(invalidVerifier.status, 400);
+
+  const sqlite = await import('node:sqlite');
+  const db = new sqlite.DatabaseSync(databasePath);
+  const records = db.prepare('SELECT payload FROM oidc_records').all() as Array<{ payload: string }>;
+  const persisted = records.map((record) => record.payload).join('\n');
+  assert.equal(persisted.includes(tokens.access_token), false);
+  assert.equal(persisted.includes(tokens.refresh_token), false);
+  assert.equal(persisted.includes(code), false);
+  db.close();
+} finally {
+  await new Promise<void>((resolve) => service.server.close(() => resolve()));
+  service.close();
+  rmSync(databasePath, { force: true });
+  rmSync(`${databasePath}-wal`, { force: true });
+  rmSync(`${databasePath}-shm`, { force: true });
+}
