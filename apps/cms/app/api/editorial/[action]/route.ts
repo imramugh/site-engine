@@ -4,7 +4,7 @@ import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { createNamedChangeSet, transitionChangeSet } from '../../../../src/editorial'
 import { archivePage } from '../../../../src/redirect-lifecycle'
 import { serverSessionStrategy } from '../../../../src/identity'
-import { changeSetHash } from '../../../../src/publishing'
+import { changeSetHash, scheduledPublicationTime } from '../../../../src/publishing'
 import { approveChangeSet } from '../../../../src/publishing'
 import { runReviewQuality } from '../../../../src/review-quality'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
@@ -59,7 +59,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-    const body = await request.json() as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown }
+    const body = await request.json() as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown; scheduledFor?: unknown }
     const { action } = await context.params
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
     const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
@@ -102,7 +102,8 @@ export async function POST(request: Request, context: { params: Promise<{ action
         const pins = job.versionPins as { themeVersion?: unknown; engineVersion?: unknown; contractVersion?: unknown } | undefined
         if (!pins || typeof pins.themeVersion !== 'string' || typeof pins.engineVersion !== 'string' || typeof pins.contractVersion !== 'string') throw new Error('The preview version pins are invalid.')
         if (proof.baselineSnapshotID !== (preview as { baselineSnapshotID?: unknown }).baselineSnapshotID || proof.baselineSequence !== (preview as { baselineSequence?: unknown }).baselineSequence || proof.versionPins.themeVersion !== pins.themeVersion || proof.versionPins.engineVersion !== pins.engineVersion || proof.versionPins.contractVersion !== pins.contractVersion) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
-        return approveChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest })
+        const scheduledFor = scheduledPublicationTime(body.scheduledFor)
+        return approveChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest, scheduledFor })
       }
       if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
       return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })

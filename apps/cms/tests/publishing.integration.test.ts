@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, renewPublishLease, retryPublishJob } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, renewPublishLease, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
@@ -18,7 +18,9 @@ beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 afterEach(async () => {
   await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.delete({ collection: 'scheduled-publications', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.delete({ collection: 'publish-outbox', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.delete({ collection: 'publish-snapshots', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
 })
 
 const versions = { themeVersion: '1.2.3', engineVersion: '1.2.3', contractVersion: '1.0.0' }
@@ -60,6 +62,9 @@ async function fixture(label: string, options: { preview?: 'ready' | 'pending'; 
 async function approve(current: Awaited<ReturnType<typeof fixture>>, initialBaseline = current.baseline) {
   return withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline }) })
 }
+async function schedule(current: Awaited<ReturnType<typeof fixture>>, scheduledFor: string, initialBaseline = current.baseline) {
+  return withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline, scheduledFor }) })
+}
 
 async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
@@ -85,6 +90,34 @@ async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixtur
 }
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
+  it('freezes a future approved release without advancing or exposing the publish queue, and retries exactly once', async () => {
+    const current = await fixture('scheduled')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const scheduledFor = '2030-01-02T03:04:05.000Z'
+    const result = await schedule(current, scheduledFor)
+    expect(result).toMatchObject({ scheduledFor, outboxID: undefined })
+    expect(result.scheduledPublicationID).toEqual(expect.any(String))
+    const scheduledPublication = await payload.findByID({ collection: 'scheduled-publications', id: result.scheduledPublicationID!, depth: 1, overrideAccess: true })
+    expect(scheduledPublication).toMatchObject({ state: 'scheduled', scheduledFor, changeSet: expect.objectContaining({ id: current.set.id }), idempotencyKey: result.idempotencyKey })
+    expect(scheduledPublication.proof).toMatchObject({ changeHash: changeSetHash(current.changes), reviewRevision: 4, previewContentHash: canonicalHash(current.candidate), includedChangeKeys: current.included })
+    expect((await payload.find({ collection: 'publish-outbox', sort: '-sequence', overrideAccess: true })).docs).toHaveLength(1)
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))).toBeNull()
+    expect(await schedule(current, scheduledFor)).toEqual(result)
+    expect((await payload.count({ collection: 'scheduled-publications', overrideAccess: true })).totalDocs).toBe(1)
+    await expect(schedule(current, '2030-01-02T03:04:06.000Z')).rejects.toThrow('persisted snapshot')
+  })
+
+  it('rejects non-UTC or elapsed schedules and users without an approval role', async () => {
+    const current = await fixture('scheduled-invalid')
+    expect(() => scheduledPublicationTime('2030-01-02T03:04:05+01:00')).toThrow('UTC ISO')
+    expect(() => scheduledPublicationTime('2020-01-02T03:04:05.000Z')).toThrow('future')
+    await expect(schedule(current, '2020-01-02T03:04:05.000Z')).rejects.toThrow('future')
+    await payload.update({ collection: 'users', id: current.reviewer.id, data: { roles: ['editor'] }, overrideAccess: true })
+    await expect(schedule(current, '2030-01-02T03:04:05.000Z')).rejects.toThrow('Reviewer role')
+    expect((await payload.count({ collection: 'scheduled-publications', overrideAccess: true })).totalDocs).toBe(0)
+  })
+
   it('uses a contract-valid frozen candidate, preserves exclusions, and deduplicates retry', async () => {
     const current = await fixture('approved', { excluded: true })
     const published = await installPublishedBaseline(current)

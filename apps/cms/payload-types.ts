@@ -85,6 +85,7 @@ export interface Config {
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
     'publish-outbox': PublishOutbox;
+    'scheduled-publications': ScheduledPublication;
     'preview-render-jobs': PreviewRenderJob;
     'published-releases': PublishedRelease;
     'payload-kv': PayloadKv;
@@ -112,6 +113,7 @@ export interface Config {
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
     'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
+    'scheduled-publications': ScheduledPublicationsSelect<false> | ScheduledPublicationsSelect<true>;
     'preview-render-jobs': PreviewRenderJobsSelect<false> | PreviewRenderJobsSelect<true>;
     'published-releases': PublishedReleasesSelect<false> | PublishedReleasesSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -299,6 +301,18 @@ export interface Page {
    * Keep this published page out of search engines and the public site search index.
    */
   noindex?: boolean | null;
+  /**
+   * Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.
+   */
+  businessCase?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
   _status?: ('draft' | 'published') | null;
@@ -693,6 +707,29 @@ export interface PublishOutbox {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "scheduled-publications".
+ */
+export interface ScheduledPublication {
+  id: string;
+  idempotencyKey: string;
+  snapshot: string | PublishSnapshot;
+  changeSet: string | ChangeSet;
+  scheduledFor: string;
+  state: 'scheduled' | 'cancelled' | 'stale' | 'enqueued';
+  proof:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "preview-render-jobs".
  */
 export interface PreviewRenderJob {
@@ -881,6 +918,10 @@ export interface PayloadLockedDocument {
         value: string | PublishOutbox;
       } | null)
     | ({
+        relationTo: 'scheduled-publications';
+        value: string | ScheduledPublication;
+      } | null)
+    | ({
         relationTo: 'preview-render-jobs';
         value: string | PreviewRenderJob;
       } | null)
@@ -1024,6 +1065,7 @@ export interface PagesSelect<T extends boolean = true> {
   blocks?: T;
   seoDescription?: T;
   noindex?: T;
+  businessCase?: T;
   updatedAt?: T;
   createdAt?: T;
   _status?: T;
@@ -1303,6 +1345,20 @@ export interface PublishOutboxSelect<T extends boolean = true> {
   errorCode?: T;
   correlationID?: T;
   lastError?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "scheduled-publications_select".
+ */
+export interface ScheduledPublicationsSelect<T extends boolean = true> {
+  idempotencyKey?: T;
+  snapshot?: T;
+  changeSet?: T;
+  scheduledFor?: T;
+  state?: T;
+  proof?: T;
   updatedAt?: T;
   createdAt?: T;
 }
