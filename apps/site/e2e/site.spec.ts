@@ -28,9 +28,13 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
 });
 test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {
   await page.goto('/motion/one');
-  await page.getByRole('button', { name: 'Reduce motion' }).click();
+  await page.getByRole('button', { name: 'Reduce motion' }).click({ force: true });
   await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
   await page.goto('/motion/two');
   await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
   await expect(page.locator('form [data-motion]')).toHaveAttribute('data-motion-paused', 'true');
+});
+
+test('ENG-015 pauses offscreen and urgent motion', async ({ page }) => {
+ await page.goto('/motion/one'); const off=page.locator('#offscreen'); await expect(off).toHaveCSS('animation-play-state','paused'); await page.evaluate(() => document.querySelector('#offscreen')?.scrollIntoView()); await expect(off).toHaveCSS('animation-play-state','running'); await expect(page.locator('[data-urgent-contact]')).toHaveCSS('animation-play-state','paused');
 });
