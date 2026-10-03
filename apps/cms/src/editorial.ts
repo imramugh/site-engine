@@ -45,6 +45,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
   if (!document) return null
   return Object.fromEntries(mutableFields[collection].flatMap((field) => {
     const value = document[field]
+    if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
     if (value === undefined) return []
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
     if (field === 'parentId') {
