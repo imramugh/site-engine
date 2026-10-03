@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
-import { PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
@@ -185,15 +185,17 @@ async function quality(payload: Payload, req: PayloadRequest, changes: CapturedC
   const errors: { collection: string; id: string; message: string }[] = []
   for (const change of changes) {
     if (!change.after) continue
-    const result = change.collection === 'pages'
-      ? PageSchema.safeParse({ id: change.id, ...normalizePageOptionalNulls(change.after), status: 'draft' })
-      : change.collection === 'sections'
-        ? SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
-        : change.collection === 'theme-settings'
-          ? ThemeSelectionSchema.safeParse(change.after.selection)
-          : change.collection === 'site-settings'
-            ? SiteSettingsDraftSchema.safeParse(change.after)
-          : RedirectSchema.safeParse(change.after)
+    const result = (() => {
+      switch (change.collection) {
+        case 'pages': return PageSchema.safeParse({ id: change.id, ...normalizePageOptionalNulls(change.after), status: 'draft' })
+        case 'sections': return SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
+        case 'redirects': return RedirectSchema.safeParse(change.after)
+        case 'assets': return MediaReferenceSchema.safeParse({ id: change.id, ...change.after })
+        case 'theme-settings': return ThemeSelectionSchema.safeParse(change.after.selection)
+        case 'site-settings': return SiteSettingsDraftSchema.safeParse(change.after)
+        case 'style-guides': return StyleGuideSchema.safeParse(change.after)
+      }
+    })()
     if (!result.success) errors.push(...result.error.issues.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.path.join('.')}: ${issue.message}` })))
     if (change.collection === 'pages' && change.after) {
       const page = { id: change.id, ...change.after } as TreePage

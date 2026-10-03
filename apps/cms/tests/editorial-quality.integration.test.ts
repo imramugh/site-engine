@@ -1,0 +1,84 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { getPayload } from 'payload'
+import sharp from 'sharp'
+import { neutralFixture } from '@site-engine/contract/fixtures'
+import { withPayloadTransaction } from '../src/auth-transaction'
+import { transitionChangeSet } from '../src/editorial'
+import { changeSetHash } from '../src/publishing'
+import { prepareReviewPreview } from '../src/review-preview'
+
+const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-quality-'))
+process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
+process.env.PAYLOAD_SECRET = 'synthetic-editorial-quality-secret-that-is-long-enough'
+
+const { default: config } = await import('../payload.config.js')
+let payload: Awaited<ReturnType<typeof getPayload>>
+
+beforeAll(async () => { payload = await getPayload({ config }) })
+afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
+
+const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
+const raster = () => sharp({ create: { width: 1200, height: 800, channels: 3, background: '#155e75' } }).png().toBuffer()
+
+async function setFor(actorID: string) {
+  const found = await payload.find({ collection: 'change-sets', where: { actor: { equals: actorID } }, depth: 0, overrideAccess: true })
+  expect(found.docs).toHaveLength(1)
+  return found.docs[0]!
+}
+
+describe('editorial quality captures all portable change collections', () => {
+  it('submits a real uploaded asset and media page, then prepares its immutable preview', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `asset-owner-${randomUUID()}@example.test`, name: 'Asset Owner', roles: ['owner'] }, overrideAccess: true })
+    const data = await raster()
+    const asset = await payload.create({
+      collection: 'assets',
+      data: { alt: 'A real synthetic teal test image' },
+      file: { data, mimetype: 'image/png', name: 'editorial-quality.png', size: data.length },
+      draft: true,
+      user: owner,
+      overrideAccess: false,
+    })
+    const section = await payload.create({ collection: 'sections', data: { name: 'Gallery', summary: 'A synthetic section that verifies uploaded editorial assets reach review preview.', slug: `gallery-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, draft: true, user: owner, overrideAccess: false })
+    const page = await payload.create({ collection: 'pages', data: { title: 'Gallery page', summary: 'A synthetic gallery page that uses an uploaded image before editorial submission.', slug: `gallery-page-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'media', mediaId: asset.id, hidden: false, appearance }] }, draft: true, user: owner, overrideAccess: false })
+    const set = await setFor(owner.id)
+    const changes = set.changes as Array<{ collection: string; id: string }>
+    const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+    expect(includedChangeKeys).toEqual(expect.arrayContaining([`assets:${asset.id}`, `sections:${section.id}`, `pages:${page.id}`]))
+
+    const submitted = await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'submit' }))
+    const baseline = structuredClone(neutralFixture)
+    const job = await withPayloadTransaction(payload, req => prepareReviewPreview({
+      payload,
+      req,
+      actor: owner,
+      id: set.id,
+      expectedRevision: Number(submitted.revision),
+      expectedChangeHash: changeSetHash(submitted.changes),
+      includedChangeKeys,
+      initialBaseline: { manifest: baseline, sequence: 0, versions: { themeVersion: 'synthetic-theme', engineVersion: 'synthetic-engine', contractVersion: baseline.settings.contractVersion } },
+    }))
+    expect(job.status).toBe('pending')
+    expect((job.proposedManifest as { media: Array<{ id: string }> }).media).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id })]))
+  })
+
+  it('accepts a valid style guide and rejects malformed captured assets and style guides', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `style-owner-${randomUUID()}@example.test`, name: 'Style Owner', roles: ['owner'] }, overrideAccess: true })
+    await payload.create({ collection: 'style-guides', data: { bannedPhrases: ['Very unique phrase'], maximumSentenceWords: 24 }, draft: true, user: owner, overrideAccess: false })
+    const valid = await setFor(owner.id)
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: valid.id, action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+
+    for (const [collection, after] of [
+      ['assets', { filename: 'missing-dimensions.png', mimeType: 'image/png', decorative: false }] as const,
+      ['style-guides', { maximumSentenceWords: 1 }] as const,
+    ]) {
+      const actor = await payload.create({ collection: 'users', data: { email: `${collection}-${randomUUID()}@example.test`, name: `Malformed ${collection}`, roles: ['owner'] }, overrideAccess: true })
+      const set = await payload.create({ collection: 'change-sets', data: { name: `Malformed ${collection}`, actor: actor.id, state: 'open', revision: 0, changes: [{ collection, id: randomUUID(), before: null, after, beforeHash: null, afterHash: null }] }, overrideAccess: true, context: { editorialInternal: true } })
+      await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor, id: set.id, action: 'submit' }))).rejects.toThrow(/quality checks failed/i)
+    }
+  })
+})
