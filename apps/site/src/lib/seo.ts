@@ -20,8 +20,7 @@ export function publicModel(snapshot: SiteSnapshot, homepageId: string | undefin
 export function sitemapXML(model: RouteModel, origin: string): string {
   const entries = model.routes.map((route) => {
     const updatedAt = route.page.updatedAt;
-    if (!updatedAt) throw new Error(`Published page ${route.page.id} has no revision date.`);
-    return `<url><loc>${xml(absolute(origin, route.canonicalPath))}</loc><lastmod>${xml(new Date(updatedAt).toISOString())}</lastmod></url>`;
+    return `<url><loc>${xml(absolute(origin, route.canonicalPath))}</loc>${updatedAt ? `<lastmod>${xml(new Date(updatedAt).toISOString())}</lastmod>` : ''}</url>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${entries.join('')}</urlset>\n`;
 }
@@ -69,9 +68,11 @@ function articleSchema(route: PublicRoute, origin: string): Record<string, Json>
 }
 
 function jobSchema(route: PublicRoute, origin: string, snapshot: SiteSnapshot): Record<string, Json> | undefined {
-  if (route.page.template !== 'job' || !route.page.publishedAt) return undefined;
+  const metadata = route.page.jobPosting;
+  const description = textBlocks(visible(route.page)).join('\n\n');
+  if (route.page.template !== 'job' || !metadata || !description || (metadata.validThrough && new Date(metadata.validThrough) <= new Date())) return undefined;
   const canonical = absolute(origin, route.canonicalPath);
-  return { '@type': 'JobPosting', '@id': `${canonical}#job`, title: route.page.title, description: route.page.summary, datePosted: route.page.publishedAt, hiringOrganization: { '@type': 'Organization', name: snapshot.settings.siteName, url: origin } };
+  return { '@type': 'JobPosting', '@id': `${canonical}#job`, title: route.page.title, description, datePosted: metadata.datePosted, employmentType: metadata.employmentType, ...(metadata.validThrough ? { validThrough: metadata.validThrough } : {}), jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', ...metadata.location } }, hiringOrganization: { '@type': 'Organization', name: snapshot.settings.siteName, url: origin } };
 }
 
 export function schemaForRoute(route: PublicRoute, model: RouteModel, snapshot: SiteSnapshot, origin: string): Schema {

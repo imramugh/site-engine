@@ -12,6 +12,8 @@ export function crawlerMode(basePath: string, configured = process.env.SITE_CRAW
 }
 
 export function robotsText(mode: CrawlerMode, sitemapURL: string): string {
-  const directives = mode === 'preview' ? ['User-agent: *', 'Disallow: /'] : ['User-agent: *', 'Allow: /', `Sitemap: ${sitemapURL}`];
+  const directives = mode === 'preview'
+    ? ['User-agent: *', 'Disallow: /']
+    : ['User-agent: *', 'Disallow: /admin/', 'Disallow: /preview/', 'Disallow: /api/', 'Disallow: /oauth/', 'Disallow: /mcp/', 'Allow: /', `Sitemap: ${sitemapURL}`];
   return [`# site-engine crawler policy ${CRAWLER_POLICY_VERSION}`, ...directives, ''].join('\n');
 }

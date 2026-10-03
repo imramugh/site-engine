@@ -69,15 +69,20 @@ export const SectionPresets = {
   careers: ['listing', 'job'],
   landing: ['landing', 'standard', 'article'],
 } as const satisfies Record<string, readonly z.infer<typeof TemplateSchema>[]>;
-export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(), title: safeText(160), summary: safeText(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), template: TemplateSchema, status: z.enum(['draft', 'published', 'archived']), blocks: z.array(BlockSchema).max(40), seoDescription: safeText(160).optional(), publishedAt: z.string().datetime().optional(), updatedAt: z.string().datetime().optional() }).strict().superRefine((page, ctx) => {
+const JobPostingSchema = z.object({
+  datePosted: z.string().datetime(), employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY', 'INTERN', 'OTHER']),
+  location: z.object({ addressLocality: safeText(100), addressRegion: safeText(100).optional(), addressCountry: safeText(2) }).strict(),
+  validThrough: z.string().datetime().optional(),
+}).strict().superRefine((job, ctx) => { if (job.validThrough && new Date(job.validThrough) <= new Date(job.datePosted)) ctx.addIssue({ code: 'custom', path: ['validThrough'], message: 'Job closing time must be after its posting time.' }); });
+export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(), title: safeText(160), summary: safeText(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), template: TemplateSchema, status: z.enum(['draft', 'published', 'archived']), blocks: z.array(BlockSchema).max(40), seoDescription: safeText(160).optional(), publishedAt: z.string().datetime().optional(), updatedAt: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional() }).strict().superRefine((page, ctx) => {
   if (page.template === 'landing' && page.blocks.find((block) => !block.hidden)?.type !== 'hero') ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Landing pages must begin with a visible Hero' });
-  if (page.status === 'published' && !page.updatedAt) ctx.addIssue({ code: 'custom', path: ['updatedAt'], message: 'Published pages require their actual revision time.' });
+  if (page.template !== 'job' && page.jobPosting) ctx.addIssue({ code: 'custom', path: ['jobPosting'], message: 'Job metadata is only allowed on job pages.' });
   const allowed = TemplateAllowedBlocks[page.template]; page.blocks.forEach((block, index) => { if (!allowed.includes(block.type)) ctx.addIssue({ code: 'custom', path: ['blocks', index, 'type'], message: `${block.type} is not allowed by ${page.template}` }); });
 });
 export const SectionSchema = z.object({ id, landingPageId: id.optional(), name: safeText(80), summary: safeText(300).optional(), slug: z.string().regex(/^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$/), allowedTemplates: z.array(TemplateSchema).min(1), pageIds: z.array(id).max(100) }).strict();
 export const MediaReferenceSchema = z.object({ id, filename: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,120}$/), alt: safeText(240).optional(), decorative: z.boolean().default(false), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'video/mp4', 'video/webm', 'text/vtt']) }).strict().superRefine((media, ctx) => { if (media.mimeType.startsWith('image/') && (!media.width || !media.height)) ctx.addIssue({ code: 'custom', path: ['width'], message: 'Images require intrinsic width and height' }); if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); });
 export const RedirectSchema = z.object({ from: InternalPathSchema, to: InternalPathSchema, status: z.literal(301) }).strict();
-export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).default('organization'), logo: MediaReferenceSchema.optional(), sections: z.array(SectionSchema).max(20) }).strict();
+export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).optional(), logo: MediaReferenceSchema.optional(), sections: z.array(SectionSchema).max(20) }).strict();
 export const ChangeSetStateSchema = z.enum(['open', 'submitted', 'changes-requested', 'approved', 'rejected', 'published', 'discarded', 'stale']);
 export const ChangeSetSchema = z.object({
   id,
