@@ -36,7 +36,7 @@ async function sessionFor(role: 'owner' | 'approver' | 'editor' | 'sales', optio
 }
 
 async function invoke(headers?: HeadersInit) {
-  const response = await route.GET(new Request('http://localhost/api/auth/preview/session', { headers: { 'x-original-uri': '/preview/changes/10000000-0000-4000-8000-000000000001/live/', ...headers } }))
+  const response = await route.GET(new Request('http://localhost/api/auth/preview/session', { headers }))
   expect(response.headers.get('cache-control')).toBe('no-store')
   expect(await response.text()).toBe('')
   return response
@@ -45,15 +45,8 @@ async function invoke(headers?: HeadersInit) {
 const sessionHeaders = (token: string) => ({ cookie: `${cookieName(SESSION_COOKIE)}=${token}` })
 
 describe('preview session auth_request endpoint (ENG-007)', () => {
-  it.each(['owner', 'approver'] as const)('authorizes an enabled %s session from real SQLite', async (role) => {
+  it.each(['owner', 'approver', 'editor'] as const)('authorizes an enabled %s session from real SQLite', async (role) => {
     expect((await invoke(sessionHeaders(await sessionFor(role)))).status).toBe(204)
-  })
-
-  it('rejects editors and a request outside a review comparison path', async () => {
-    expect((await invoke(sessionHeaders(await sessionFor('editor')))).status).toBe(403)
-    const token = await sessionFor('approver')
-    const response = await route.GET(new Request('http://localhost/api/auth/preview/session', { headers: sessionHeaders(token) }))
-    expect(response.status).toBe(403)
   })
 
   it('rejects a disabled canonical user even with a valid session cookie', async () => {

@@ -1,6 +1,8 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const ownerInvite = 'synthetic-browser-owner-invite'
+const reviewOwnerEmail = 'review-owner.synthetic@example.test'
+const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 
 async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string): Promise<string> {
   const start = page.waitForResponse((response) => response.url().startsWith('https://127.0.0.1:4300/api/auth/google') && response.status() === 307)
@@ -13,13 +15,13 @@ async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string)
   return callbackURL
 }
 
-async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-recovery-code-02'): Promise<void> {
+async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-recovery-code-02', email = 'emergency-owner.synthetic@example.test'): Promise<void> {
   const providerRequests: string[] = []
   page.on('request', (request) => {
     if (request.url().startsWith('https://127.0.0.1:4301/')) providerRequests.push(request.url())
   })
   await page.goto('/admin/login')
-  await page.locator('#emergency-email').fill('emergency-owner.synthetic@example.test')
+  await page.locator('#emergency-email').fill(email)
   await page.locator('#emergency-code').fill(recoveryCode)
   await page.getByTestId('emergency-sign-in').click()
   await page.waitForURL(/\/admin(?:\?.*)?$/)
@@ -124,11 +126,47 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
 
   const reviewerContext = await browser.newContext({ baseURL: 'https://127.0.0.1:4300', ignoreHTTPSErrors: true })
   const reviewer = await reviewerContext.newPage()
-  await signIn(reviewer, 'owner')
+  // This test is intentionally runnable on its own. The invitation-backed
+  // synthetic owner belongs to the enrollment test, so use an e2e-only local
+  // owner whose revocation cannot affect the other identity journeys.
+  await signInLocalOwner(reviewer, reviewOwnerRecoveryCode, reviewOwnerEmail)
   await reviewer.goto('/admin/editorial')
   await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
+  await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
+  await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
+  const workerHeaders = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
+  const claimed = await reviewer.request.post('/api/internal/preview-jobs/claim', { headers: workerHeaders, data: {} })
+  expect(claimed.ok(), await claimed.text()).toBeTruthy()
+  const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
+  const hash = async (value: unknown) => await reviewer.evaluate(async (input) => {
+    const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item)
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input)))
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  }, value)
+  const completed = await reviewer.request.post('/api/internal/preview-jobs/complete', { headers: workerHeaders, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'b'.repeat(64) } })
+  expect(completed.ok(), await completed.text()).toBeTruthy()
+  await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
+  await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
+  await reviewer.getByRole('button', { name: 'Live', exact: true }).click()
+  await expect(reviewer.getByTitle('Proposed comparison')).toHaveCount(0)
+  await reviewer.getByRole('button', { name: 'Proposed', exact: true }).click()
+  await expect(reviewer.getByTitle('Live comparison')).toHaveCount(0)
+  await reviewer.getByRole('button', { name: 'Side by side' }).click()
+  await reviewer.getByRole('button', { name: 'Mobile', exact: true }).click()
+  expect(await reviewer.getByTitle('Live comparison').evaluate((frame) => frame.style.width)).toBe('390px')
+  await reviewer.getByRole('button', { name: 'Desktop', exact: true }).click()
+  expect(await reviewer.getByTitle('Proposed comparison').evaluate((frame) => frame.style.width)).toBe('760px')
+  await reviewer.getByLabel('Add review comment').fill('Browser review comment')
+  await reviewer.getByRole('button', { name: 'Add comment' }).click()
+  await expect(reviewer.getByText('Browser review comment')).toBeVisible()
+  await reviewer.reload()
+  await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
+  await expect(reviewer.getByTitle('Live comparison')).toBeVisible()
   await reviewer.getByRole('button', { name: 'Request changes' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'updated' })).toContainText('updated')
+  expect((await reviewer.request.post('/__e2e/review-owner/disable')).status()).toBe(204)
+  await reviewer.reload()
+  await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Sign in to view editorial change sets.')
   await reviewerContext.close()
 
   await page.evaluate(async (id) => {

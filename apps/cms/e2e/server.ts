@@ -8,6 +8,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 
@@ -22,6 +23,8 @@ const emergencyEmail = 'emergency-owner.synthetic@example.test'
 const emergencyRecoveryCode = 'synthetic-recovery-code-01'
 const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
+const reviewOwnerEmail = 'review-owner.synthetic@example.test'
+const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -31,7 +34,9 @@ const serverCertificate = join(temporaryDirectory, 'synthetic-issuer.pem')
 const serverKey = join(temporaryDirectory, 'synthetic-issuer.key')
 const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
+const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
+writeFileSync(initialPreviewBaseline, JSON.stringify(neutralFixture))
 
 Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
@@ -42,6 +47,11 @@ process.env.OIDC_GOOGLE_ISSUER_URL = issuerOrigin
 process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
+process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
+process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'
+process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
+process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -59,6 +69,7 @@ let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
 let localOwnerID: string | undefined
+let reviewOwnerID: string | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -145,14 +156,33 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
+  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
+  reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)\/$/i.test(request.url ?? '')) {
+    html(response, '<!doctype html><title>Synthetic private comparison</title><main>Authenticated private comparison fixture</main>')
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
+    void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable owner.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/local-owner/disable') {
     void payload.update({ collection: 'users', id: localOwnerID!, data: { disabled: true }, overrideAccess: true })
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to disable local owner.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/review-owner/disable') {
+    void payload.update({ collection: 'users', id: reviewOwnerID!, data: { disabled: true }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable review owner.') })
     return
   }
   const upstream = requestUpstream({

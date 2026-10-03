@@ -18,9 +18,14 @@ export async function POST(request: Request) {
     const payload = await getPayload({ config }); const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
     const actor = authenticated.user as { id: string; roles?: string[] }
-    const current = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true })
-    const changes = Array.isArray(current.changes) ? current.changes : []
-    const job = await withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor, id: body.id!, expectedRevision: Number(current.revision), expectedChangeHash: changeSetHash(changes), includedChangeKeys: body.includedChangeKeys!, initialBaseline }))
+    // Capture the reviewed proof on the same SQLite connection as preparation.
+    // An out-of-transaction local read can retain a connection while the
+    // immediate write transaction waits for it under the browser workload.
+    const job = await withPayloadTransaction(payload, async req => {
+      const current = await payload.findByID({ collection: 'change-sets', id: body.id!, depth: 0, overrideAccess: true, req })
+      const changes = Array.isArray(current.changes) ? current.changes : []
+      return prepareReviewPreview({ payload, req, actor, id: body.id!, expectedRevision: Number(current.revision), expectedChangeHash: changeSetHash(changes), includedChangeKeys: body.includedChangeKeys!, initialBaseline })
+    })
     return Response.json({ job }, { headers: noStore })
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Unable to prepare review preview.' }, { status: 400, headers: noStore }) }
 }

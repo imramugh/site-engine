@@ -15,6 +15,7 @@ process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-review-preview'
 process.env.PREVIEW_WORKER_TOKEN = 'worker-token-long-enough-to-be-a-real-test-secret'
 const { default: config } = await import('../payload.config.js')
+const reviewSessionRoute = await import('../app/api/auth/preview/review-session/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -59,6 +60,17 @@ async function fixture(label: string, options: { installed?: boolean } = {}) {
 
 async function prepare(current: Awaited<ReturnType<typeof fixture>>, initialBaseline?: { manifest: ReturnType<typeof baseline>; sequence: number; versions: typeof versions }) {
   return withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], initialBaseline }))
+}
+
+async function reviewSession(headers: Headers, path: string) {
+  return reviewSessionRoute.GET(new Request('http://localhost/api/auth/preview/review-session', { headers: { cookie: headers.get('cookie')!, 'x-original-uri': path } }))
+}
+
+async function reviewHeaders(role: 'owner' | 'editor') {
+  const user = await payload.create({ collection: 'users', data: { email: `${role}-${randomUUID()}@example.test`, name: role, roles: [role] }, overrideAccess: true })
+  const token = newOpaqueToken(); const now = new Date().toISOString()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+  return new Headers({ cookie: `site_engine_session=${token}` })
 }
 
 describe('ENG-030 immutable review preview jobs', () => {
@@ -131,5 +143,33 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(workerAuthorized(new Request('http://test', { headers: { authorization: 'Bearer short' } }))).toBe(false)
     await expect(boundedJSON(new Request('http://test', { method: 'POST', body: 'x'.repeat(16 * 1024 + 1) }))).rejects.toThrow('too large')
     await expect(boundedJSON(new Request('http://test', { method: 'POST', body: '{' }))).rejects.toThrow()
+  })
+
+  it('authorizes only the current completed comparison and its safe nested artifacts', async () => {
+    const current = await fixture('review-session')
+    const job = await prepare(current)
+    const root = `/preview/changes/${job.id}/live/`
+    expect((await reviewSession(current.headers, root)).status).toBe(403)
+    expect((await reviewSession(current.headers, `/preview/changes/${job.id}/proposed/assets/app.js?cache=1`)).status).toBe(403)
+    expect((await reviewSession(current.headers, '/preview/changes/10000000-0000-4000-8000-000000000001/live/')).status).not.toBe(204)
+
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { status: 'failed', errorCode: 'RENDER_TIMEOUT' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await reviewSession(current.headers, root)).status).toBe(403)
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { status: 'pending', errorCode: null }, overrideAccess: true, context: { editorialInternal: true } })
+
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    expect((await reviewSession(current.headers, root)).status).toBe(204)
+    expect((await reviewSession(await reviewHeaders('owner'), root)).status).toBe(204)
+    expect((await reviewSession(await reviewHeaders('editor'), root)).status).toBe(403)
+    expect((await reviewSession(current.headers, `/preview/changes/${job.id}/proposed/assets/app.js?cache=1`)).status).toBe(204)
+    expect((await reviewSession(current.headers, `/preview/changes/${job.id}/live/%2e%2e/proposed/`)).status).toBe(403)
+    expect((await reviewSession(current.headers, `/preview/changes/${job.id}/live/assets%2fprivate.js`)).status).toBe(403)
+
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { status: 'queued', jobID: job.id } }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await reviewSession(current.headers, root)).status).toBe(403)
+    const sessions = await payload.find({ collection: 'auth-sessions', where: { user: { equals: current.reviewer.id } }, limit: 1, overrideAccess: true })
+    await payload.update({ collection: 'auth-sessions', id: sessions.docs[0]!.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    expect((await reviewSession(current.headers, root)).status).toBe(401)
   })
 })
