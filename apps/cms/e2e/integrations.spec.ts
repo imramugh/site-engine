@@ -24,7 +24,7 @@ test('ENG-023 Owner rotates a masked credential without a connection claim', asy
   await expect(owner.page.getByText('Provider connection tests are unavailable')).toBeVisible()
   await owner.page.getByLabel('Model').fill('synthetic-model'); await owner.page.getByLabel('Credential').fill('synthetic-browser-credential')
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
-  await owner.page.getByRole('button', { name: 'Save credential rotation' }).click(); expect((await saved).status()).toBe(201)
+  await owner.page.getByRole('button', { name: 'Save credential rotation' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('Credential rotation saved.')
   await owner.page.reload(); const body = await owner.page.locator('body').textContent() ?? ''
   expect(body).not.toContain('synthetic-browser-credential'); await expect(owner.page.getByLabel('Configured integrations')).toContainText('configured')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
