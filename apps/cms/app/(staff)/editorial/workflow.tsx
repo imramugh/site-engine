@@ -36,7 +36,10 @@ export function EditorialWorkflow() {
         const schedules = await fetch(`/api/editorial/schedules/list?page=${schedulePage}`, { cache: 'no-store' })
         if (schedules.ok) { const body = await schedules.json() as { schedules: ScheduledPublication[]; totalDocs: number; page: number; totalPages: number }; next.schedules = body.schedules; next.totalDocs = body.totalDocs; next.schedulePage = body.page; next.scheduleTotalPages = body.totalPages }
       }
-      setData(next); setSelected((current) => current ?? next.sets[0]?.id ?? null)
+      setData(next); setSelected((current) => {
+        const requested = new URLSearchParams(window.location.search).get('changeSet')
+        return current ?? next.sets.find(item => item.id === requested)?.id ?? next.sets[0]?.id ?? null
+      })
     } catch {
       setMessage('Unable to load editorial change sets. Try again.')
     } finally { if (!background) setLoading(false) }
@@ -101,7 +104,7 @@ export function EditorialWorkflow() {
     <p>Draft edits remain private. Approval queues an immutable snapshot; only the publish worker can activate a release.</p>
     <p role="status" aria-live="polite">{message || (loading ? 'Loading change sets…' : '')}</p>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 18rem), 1fr))', gap: '2rem' }}>
-      <nav aria-label="Change sets"><h2>Change sets</h2>{data?.sets.map((item) => <button key={item.id} onClick={() => setSelected(item.id)} aria-pressed={selected === item.id} style={{ display: 'block', width: '100%', textAlign: 'left', margin: '0.5rem 0', overflowWrap: 'anywhere' }}>{item.name} — {item.state}</button>)}{!loading && data?.sets.length === 0 && <p>No pending change sets.</p>}</nav>
+      <nav aria-label="Change sets"><h2>Change sets</h2>{data?.sets.map((item) => <button data-change-set-id={item.id} key={item.id} onClick={() => setSelected(item.id)} aria-pressed={selected === item.id} style={{ display: 'block', width: '100%', textAlign: 'left', margin: '0.5rem 0', overflowWrap: 'anywhere' }}>{item.name} — {item.state}</button>)}{!loading && data?.sets.length === 0 && <p>No pending change sets.</p>}</nav>
       {set && <section aria-label="Change set detail"><h2>{set.name}</h2><p>State: <strong>{set.state}</strong></p>
         {set.state === 'stale' && <p role="alert">This change set is stale. Refresh it before review.</p>}
         <div aria-label="Workflow actions">
