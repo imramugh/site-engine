@@ -1,9 +1,9 @@
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
-import { credentialFingerprint, encryptCredential, integrationProviders, publicIntegration, testConnection, type IntegrationProvider } from '../../../src/integrations'
+import { integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
 import { serverSessionStrategy } from '../../../src/identity'
-import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { configureIntegration, revokeIntegration } from '../../../src/integration-configuration'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -33,24 +33,13 @@ export async function POST(request: Request) {
     if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return privateJSON({ error: 'Fresh Owner authentication is required.' }, 403)
     const body = await request.json() as Record<string, unknown>
     if (!isProvider(body.provider)) return failure()
-    if (body.action === 'revoke') return withPayloadTransaction(payload, async (req) => {
-      const existing = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true, req })
-      const record = existing.docs[0] as unknown as Record<string, unknown> | undefined
-      if (!record) return failure()
-      const revoked = await payload.update({ collection: 'integration-configurations', id: String(record.id), data: { encryptedCredential: null, credentialFingerprint: null, health: 'revoked', testedAt: new Date().toISOString() }, overrideAccess: true, req })
-      await payload.create({ collection: 'audit-events', data: { event: 'integration.credential_revoked', actor: user.id, detail: { provider: body.provider } }, overrideAccess: true, req })
-      return privateJSON({ integration: publicIntegration(revoked as unknown as Record<string, unknown>) })
-    })
+    if (body.action === 'revoke') {
+      const revoked = await revokeIntegration(payload, { provider: body.provider, actor: user.id })
+      return revoked ? privateJSON({ integration: publicIntegration(revoked as unknown as Record<string, unknown>) }) : failure()
+    }
     if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider)) || (body.monthlyCap !== null && body.monthlyCap !== undefined && (!Number.isInteger(body.monthlyCap) || Number(body.monthlyCap) < 0 || Number(body.monthlyCap) > 1_000_000))) return failure()
-    const encryptedCredential = encryptCredential(body.credential, body.provider)
     const monthlyCap = typeof body.monthlyCap === 'number' ? body.monthlyCap : null
-    const data = { provider: body.provider, model: body.model, fallbackProvider: body.fallbackProvider ?? null, monthlyCap, encryptedCredential, credentialFingerprint: credentialFingerprint(body.credential), health: 'unknown' as const, testedAt: null }
-    return withPayloadTransaction(payload, async (req) => {
-      const existing = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true, req })
-      const record = existing.docs[0] as unknown as Record<string, unknown> | undefined
-      const saved = record ? await payload.update({ collection: 'integration-configurations', id: String(record.id), data, overrideAccess: true, req }) : await payload.create({ collection: 'integration-configurations', data, overrideAccess: true, req })
-      await payload.create({ collection: 'audit-events', data: { event: 'integration.credential_rotated', actor: user.id, detail: { provider: body.provider } }, overrideAccess: true, req })
-      return privateJSON({ integration: publicIntegration(saved as unknown as Record<string, unknown>) }, record ? 200 : 201)
-    })
+    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, monthlyCap, actor: user.id })
+    return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
   } catch { return failure() }
 }
