@@ -728,6 +728,8 @@ export interface ChangeSet {
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
+  creationRequestKey?: string | null;
+  creationRequestHash?: string | null;
   summary?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -1531,6 +1533,8 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;
+  creationRequestKey?: T;
+  creationRequestHash?: T;
   summary?: T;
   updatedAt?: T;
   createdAt?: T;
