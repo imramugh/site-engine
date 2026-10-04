@@ -51,6 +51,7 @@ const directEditSetID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const onPageReviewPageID = '12345678-1234-4234-8234-1234567890ab'
 const onPageReviewBlockID = '12345678-1234-4234-8234-1234567890ac'
 const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
+const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
@@ -221,6 +222,7 @@ async function seed(): Promise<void> {
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
   const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
+  const onPageEditor = await payload.create({ collection: 'users', data: { email: 'on-page-editor.synthetic@example.test', name: 'Synthetic On-page Editor', roles: ['editor'] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
@@ -241,12 +243,13 @@ async function seed(): Promise<void> {
   for (const [role, user] of Object.entries({ owner: applicationOwner, hiring: applicationUsers.hiring, editor, sales: applicationUsers.sales }) as Array<[keyof typeof applicationSessionTokens, { id: string }]>) {
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(applicationSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   }
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageEditorSessionToken), user: onPageEditor.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   const onPageSection = await payload.create({ collection: 'sections', data: { id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: onPageReviewPageID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', sectionId: onPageSection.id, template: 'landing', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'change-sets', data: { id: onPageReviewSetID, name: 'Review the rendered Hero change', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'change-sets', data: { id: onPageReviewSetID, name: 'Review the rendered Hero change', state: 'open', actor: onPageEditor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })

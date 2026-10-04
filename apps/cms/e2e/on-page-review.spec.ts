@@ -15,7 +15,7 @@ async function signedIn(browser: Browser, token: string) {
 
 test('reviewers inspect and act on the actual rendered page while access and immutable proof stay protected', async ({ browser }) => {
   test.setTimeout(240_000)
-  const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
+  const editor = await signedIn(browser, 'synthetic-on-page-editor-session-token')
   const saved = await editor.page.request.patch(`/api/pages/${pageID}?draft=true`, { headers: { origin, 'content-type': 'application/json', 'x-site-engine-change-set': setID }, data: { blocks: [{ id: blockID, type: 'hero', heading: 'Proposed review heading', body: 'This is the proposed rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] } })
   expect(saved.ok(), await saved.text()).toBeTruthy()
   const submitted = await editor.page.request.post('/api/editorial/submit', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID } })
