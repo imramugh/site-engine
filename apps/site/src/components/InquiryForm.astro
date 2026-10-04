@@ -37,9 +37,11 @@ const { enabled } = Astro.props;
         const response = await fetch('/api/inquiries', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...fields, idempotencyKey: key }) });
         const result = await response.json();
         accepted = response.ok && result.accepted === true;
+        window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted } }));
         error.textContent = accepted ? '' : Object.values(result.errors ?? { form: 'Unable to send inquiry. Please try again.' }).join(' ');
         status.textContent = accepted ? 'Your inquiry has been received.' : '';
       } catch {
+        window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } }));
         error.textContent = 'Unable to send inquiry. Please check your connection and try again.';
         status.textContent = '';
       } finally {

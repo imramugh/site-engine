@@ -15,8 +15,11 @@ if (!route) throw new Error('The configured demo homepage is not published.');
 const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 const preview = crawlerMode(renderBase) === 'preview';
 const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
+const analyticsConfigured = !preview && (() => { try { const endpoint = new URL(process.env.PUBLIC_ANALYTICS_ENDPOINT ?? ''); return endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password; } catch { return false; } })();
+const AnalyticsHooks = analyticsConfigured ? (await import('../components/AnalyticsHooks.astro')).default : undefined;
 ---
 <Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={preview || route.page.noindex} searchEnabled={searchEnabled} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   {route.page.blocks.map((block) => <><BlockRenderer block={block} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} />{!block.hidden && block.type === 'contact' && block.inquiryForm && <InquiryForm enabled={renderBase === '/'} />}</>)}
   <MotionRuntime enabled={motionEnabled} />
+  {AnalyticsHooks && <AnalyticsHooks path={route.path} />}
 </Layout>

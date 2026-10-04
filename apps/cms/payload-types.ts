@@ -79,8 +79,11 @@ export interface Config {
     'theme-settings': ThemeSetting;
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
+    'integration-configurations': IntegrationConfiguration;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'mail-drafts': MailDraft;
+    'mail-authorizations': MailAuthorization;
     applications: Application;
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
@@ -107,8 +110,11 @@ export interface Config {
     'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
+    'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
+    'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
@@ -515,6 +521,23 @@ export interface StyleGuide {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "integration-configurations".
+ */
+export interface IntegrationConfiguration {
+  id: string;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  model: string;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  monthlyCap?: number | null;
+  encryptedCredential?: string | null;
+  credentialFingerprint?: string | null;
+  health: 'unknown' | 'connected' | 'unavailable' | 'rejected' | 'revoked';
+  testedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -557,6 +580,48 @@ export interface NotificationOutbox {
     | boolean
     | null;
   availableAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-drafts".
+ */
+export interface MailDraft {
+  id: string;
+  lead: string | Inquiry;
+  threadID: string;
+  recipient: string;
+  sender: string;
+  subject: string;
+  body: string;
+  attachmentHashes?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  revision: number;
+  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-authorizations".
+ */
+export interface MailAuthorization {
+  id: string;
+  draft: string | MailDraft;
+  digest: string;
+  draftRevision: number;
+  authorizedBy: string | User;
+  expiresAt: string;
+  revokedAt?: string | null;
+  consumedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -897,12 +962,24 @@ export interface PayloadLockedDocument {
         value: string | StyleGuide;
       } | null)
     | ({
+        relationTo: 'integration-configurations';
+        value: string | IntegrationConfiguration;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
     | ({
         relationTo: 'notification-outbox';
         value: string | NotificationOutbox;
+      } | null)
+    | ({
+        relationTo: 'mail-drafts';
+        value: string | MailDraft;
+      } | null)
+    | ({
+        relationTo: 'mail-authorizations';
+        value: string | MailAuthorization;
       } | null)
     | ({
         relationTo: 'applications';
@@ -1235,6 +1312,22 @@ export interface StyleGuidesSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "integration-configurations_select".
+ */
+export interface IntegrationConfigurationsSelect<T extends boolean = true> {
+  provider?: T;
+  model?: T;
+  fallbackProvider?: T;
+  monthlyCap?: T;
+  encryptedCredential?: T;
+  credentialFingerprint?: T;
+  health?: T;
+  testedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries_select".
  */
 export interface InquiriesSelect<T extends boolean = true> {
@@ -1267,6 +1360,38 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
   state?: T;
   payload?: T;
   availableAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-drafts_select".
+ */
+export interface MailDraftsSelect<T extends boolean = true> {
+  lead?: T;
+  threadID?: T;
+  recipient?: T;
+  sender?: T;
+  subject?: T;
+  body?: T;
+  attachmentHashes?: T;
+  revision?: T;
+  state?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-authorizations_select".
+ */
+export interface MailAuthorizationsSelect<T extends boolean = true> {
+  draft?: T;
+  digest?: T;
+  draftRevision?: T;
+  authorizedBy?: T;
+  expiresAt?: T;
+  revokedAt?: T;
+  consumedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

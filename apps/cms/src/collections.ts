@@ -102,7 +102,9 @@ export const Users: CollectionConfig = {
 
 export const Invitations: CollectionConfig = {
   slug: 'invitations', admin: { useAsTitle: 'email', group: 'Administration' },
-  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: freshStaff(['owner']) },
+  // The service route is the sole writer: direct collection operations cannot
+  // spoof health, credential fingerprints, or audit history.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'email', type: 'email', required: true, unique: true },
     { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
@@ -395,6 +397,42 @@ export const NotificationOutbox: CollectionConfig = {
   ],
 }
 
+/** Local-only reply intent. No provider configuration or send worker exists. */
+export const MailDrafts: CollectionConfig = {
+  slug: 'mail-drafts', admin: { useAsTitle: 'subject', group: 'Private' },
+  access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  fields: [
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true },
+    { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
+    { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
+    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
+  ],
+  hooks: {
+    beforeChange: [({ data, originalDoc, operation }) => {
+      if (operation !== 'update' || !originalDoc) return data
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
+      // Payload update input is a patch. An omitted draft-bound field must not
+      // be treated as an edit when the authorization service only changes state.
+      return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      if (operation !== 'update' || doc.revision === previousDoc?.revision) return
+      const grants = await req.payload.find({ collection: 'mail-authorizations', where: { draft: { equals: doc.id } }, depth: 0, overrideAccess: true, req })
+      await Promise.all(grants.docs.filter((grant) => !grant.consumedAt && !grant.revokedAt).map((grant) => req.payload.update({ collection: 'mail-authorizations', id: grant.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req })))
+    }],
+  },
+}
+
+/** One immutable, short-lived human authorization per exact draft revision. */
+export const MailAuthorizations: CollectionConfig = {
+  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true },
+    { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
+    { name: 'expiresAt', type: 'date', required: true }, { name: 'revokedAt', type: 'date' }, { name: 'consumedAt', type: 'date' },
+  ],
+}
+
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: { beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data] },
@@ -548,6 +586,24 @@ export const ThemeSettings: CollectionConfig = {
     afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'theme-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
   },
   fields: [{ name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' }, { name: 'selection', type: 'json', required: true }, { name: 'settings', type: 'json', defaultValue: {} }],
+}
+
+/** Credential envelopes are private operational state, never editorial content. */
+export const IntegrationConfigurations: CollectionConfig = {
+  slug: 'integration-configurations', admin: { hidden: true },
+  // Credentials and their operational metadata move only through the audited
+  // integration route. Payload's generic REST and Admin CRUD must not bypass it.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'model', type: 'text', required: true, maxLength: 160 },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'monthlyCap', type: 'number', min: 0, max: 1_000_000 },
+    { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
+    { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
+    { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
+    { name: 'testedAt', type: 'date', admin: { readOnly: true } },
+  ],
 }
 
 /** Owner-proposed site identity and default metadata. The frozen snapshot keeps

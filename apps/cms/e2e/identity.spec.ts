@@ -237,7 +237,7 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); await expect(owner.getByText('UTC 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
   owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.getByText('UTC 2031-01-02T04:04:00.000Z')).toBeVisible()
-  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('cancelled')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Unsubmitted edits — changes-requested' })).toBeVisible()
+  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.getByRole('button', { name: 'Unsubmitted edits — changes-requested' })).toBeVisible()
   const seeded = await owner.request.post('/__e2e/schedule-page'); expect(seeded.ok(), await seeded.text()).toBeTruthy(); await owner.reload()
   await expect(owner.getByText('Page 1 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Next schedules' })).toBeEnabled(); await owner.getByRole('button', { name: 'Next schedules' }).click(); await expect(owner.getByText('Page 2 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Previous schedules' })).toBeEnabled()
   await ownerContext.close()
