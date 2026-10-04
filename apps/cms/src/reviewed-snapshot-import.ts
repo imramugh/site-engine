@@ -23,6 +23,8 @@ function capture(changes: Captured[], collection: CapturedCollection, id: string
   if (collection === 'pages') {
     if (before?.seoDescription === null) { const { seoDescription: _seoDescription, ...normalized } = before; before = normalized }
     if (after?.seoDescription === null && !(before && 'seoDescription' in before)) { const { seoDescription: _seoDescription, ...normalized } = after; after = normalized }
+    if (before?.businessCase === null) { const { businessCase: _businessCase, ...normalized } = before; before = normalized }
+    if (after?.businessCase === null) { const { businessCase: _businessCase, ...normalized } = after; after = normalized }
   }
   const existing = changes.findIndex(change => change.collection === collection && change.id === id)
   if (same(before, after)) {

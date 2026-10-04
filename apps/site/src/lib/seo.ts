@@ -64,7 +64,8 @@ function collectionSchema(route: PublicRoute, model: RouteModel, origin: string)
 function articleSchema(route: PublicRoute, origin: string): Record<string, Json> | undefined {
   if (route.page.template !== 'article' || !route.page.publishedAt || !route.page.updatedAt) return undefined;
   const canonical = absolute(origin, route.canonicalPath);
-  return { '@type': 'Article', '@id': `${canonical}#article`, mainEntityOfPage: { '@id': `${canonical}#webpage` }, headline: route.page.title, description: route.page.seoDescription ?? route.page.summary, datePublished: route.page.publishedAt, dateModified: route.page.updatedAt };
+  const businessCase = route.page.businessCase;
+  return { '@type': 'Article', '@id': `${canonical}#article`, mainEntityOfPage: { '@id': `${canonical}#webpage` }, headline: route.page.title, description: route.page.seoDescription ?? route.page.summary, datePublished: businessCase?.publicationDate ?? route.page.publishedAt, dateModified: route.page.updatedAt, ...(businessCase ? { about: { '@type': 'Thing', name: businessCase.industry, description: businessCase.challenge }, keywords: businessCase.services.join(', '), contributor: { '@type': 'Organization', name: businessCase.client ?? businessCase.anonymizedClient } } : {}) };
 }
 
 function jobSchema(route: PublicRoute, origin: string, snapshot: SiteSnapshot): Record<string, Json> | undefined {

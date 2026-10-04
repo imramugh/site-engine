@@ -64,7 +64,7 @@ function fixture(name: string): SiteSnapshot {
     { id: listingId, sectionId: section.id, title: `${name} docs`, summary: 'Published documentation index.', slug: 'docs', template: 'listing', status: 'published', blocks: [{ id: 'aaaaaaaa-1111-4111-8111-111111111111', type: 'hero', heading: 'Documentation', body: 'Browse the synthetic documentation.', cta: { label: 'Read guide', href: '/docs/guide' }, hidden: false, appearance }] },
     { id: pillarId, sectionId: section.id, parentId: listingId, title: `${name} guide`, summary: 'A synthetic guide.', slug: 'guide', template: 'pillar', status: 'published', blocks: [{ id: 'bbbbbbbb-1111-4111-8111-111111111111', type: 'featureGrid', heading: 'Guide topics', items: [{ title: 'Install', body: 'Install the synthetic example.' }], hidden: false, appearance }] },
     { id: serviceId, sectionId: section.id, parentId: pillarId, title: `${name} install`, summary: 'Synthetic installation service.', slug: 'install', template: 'service', status: 'published', blocks: [{ id: 'cccccccc-1111-4111-8111-111111111111', type: 'imageText', heading: 'Install safely', body: 'Use the synthetic package.', mediaId: snapshot.media[0].id, hidden: false, appearance }, { id: 'cccccccc-2222-4222-8222-222222222222', type: 'cta', heading: 'Continue', body: 'Continue through the guide.', cta: { label: 'Return to docs', href: '/docs' }, hidden: false, appearance }] },
-    { id: articleId, sectionId: section.id, parentId: listingId, title: `${name} release notes`, summary: 'Synthetic release notes.', slug: 'release-notes', template: 'article', status: 'published', blocks: [{ id: 'dddddddd-1111-4111-8111-111111111111', type: 'media', mediaId: snapshot.media[0].id, caption: 'Synthetic image caption.', hidden: false, appearance }, { id: 'dddddddd-2222-4222-8222-222222222222', type: 'video', mediaId: snapshot.media[2].id, posterMediaId: snapshot.media[1].id, captionsMediaId: snapshot.media[3].id, transcript: 'Synthetic transcript.', hidden: false, appearance }] },
+    { id: articleId, sectionId: section.id, parentId: listingId, title: `${name} release notes`, summary: 'Synthetic release notes.', slug: 'release-notes', template: 'article', status: 'published', businessCase: { anonymizedClient: 'Synthetic client', industry: 'Synthetic services', challenge: 'A synthetic challenge.', approach: 'A synthetic approach.', outcome: 'A synthetic outcome.', services: ['Synthetic strategy'], publicationDate: '2026-10-05T12:00:00.000Z' }, blocks: [{ id: 'dddddddd-1111-4111-8111-111111111111', type: 'media', mediaId: snapshot.media[0].id, caption: 'Synthetic image caption.', hidden: false, appearance }, { id: 'dddddddd-2222-4222-8222-222222222222', type: 'video', mediaId: snapshot.media[2].id, posterMediaId: snapshot.media[1].id, captionsMediaId: snapshot.media[3].id, transcript: 'Synthetic transcript.', hidden: false, appearance }] },
     { id: draftId, sectionId: section.id, title: 'DRAFT_MARKER_MUST_NOT_RENDER', summary: 'Draft content.', slug: 'draft-marker', template: 'article', status: 'draft', blocks: [{ id: 'eeeeeeee-1111-4111-8111-111111111111', type: 'richText', body: 'DRAFT_MARKER_MUST_NOT_RENDER', hidden: false, appearance }] },
     { id: archiveId, sectionId: section.id, title: 'ARCHIVE_MARKER_MUST_NOT_RENDER', summary: 'Archived content.', slug: 'archive-marker', template: 'article', status: 'archived', blocks: [{ id: 'ffffffff-1111-4111-8111-111111111111', type: 'richText', body: 'ARCHIVE_MARKER_MUST_NOT_RENDER', hidden: false, appearance }] },
   );
@@ -189,6 +189,9 @@ describe('static snapshot renderer', () => {
     expect(article).toContain('"@type":"Article"');
     expect(article).toContain('"@type":"BreadcrumbList"');
     expect(article).toContain('"@type":"ProfessionalService"');
+    expect(article).toContain('Synthetic client');
+    expect(article).toContain('Synthetic strategy');
+    expect(article).toContain('"keywords":"Synthetic strategy"');
   });
 
   it('keeps search unavailable until an Owner-reviewed setting enables it', async () => {
@@ -453,6 +456,12 @@ describe('static snapshot renderer', () => {
     expect(await page.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
     expect(await page.locator('picture source').count()).toBe(0);
     await page.getByRole('link', { name: 'Return to docs' }).click({ noWaitAfter: true }); await page.waitForURL(`${serverOrigin}${BASE_PATH}docs`, { timeout: 5_000 }); expect(page.url()).toBe(`${serverOrigin}${BASE_PATH}docs`);
+    await page.goto(`${serverOrigin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+    expect(await page.getByRole('heading', { name: 'Case study' }).isVisible()).toBe(true);
+    expect(await page.getByText('Synthetic client').isVisible()).toBe(true);
+    const graph = JSON.parse((await page.locator('script[type="application/ld+json"]').textContent()) ?? '{}') as { '@graph'?: Array<{ '@type'?: string; keywords?: string; contributor?: { name?: string } }> };
+    const articleSchema = graph['@graph']?.find((entry) => entry['@type'] === 'Article');
+    expect(articleSchema).toMatchObject({ keywords: 'Synthetic strategy', contributor: { name: 'Synthetic client' } });
     const noJs = await browser.newContext({ javaScriptEnabled: false }); const noJsPage = await noJs.newPage();
     await noJsPage.goto(`${serverOrigin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'domcontentloaded', timeout: 5_000 });
     expect(await noJsPage.getByRole('heading').first().isVisible({ timeout: 5_000 })).toBe(true); expect(await noJsPage.locator('body').textContent()).toContain('Synthetic transcript.');

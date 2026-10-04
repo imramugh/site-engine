@@ -30,6 +30,8 @@ const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const leadOwnerEmail = 'lead-owner.synthetic@example.test'
 const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
+const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
+const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const themeOwnerEmail = 'theme-owner.synthetic@example.test'
 const themeOwnerRecoveryCode = 'synthetic-theme-owner-code-08'
 const themeOwnerSessionToken = 'synthetic-theme-owner-session-token'
@@ -200,6 +202,7 @@ async function seed(): Promise<void> {
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
@@ -251,6 +254,21 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     void (async () => { for (let index = 0; index < 201; index += 1) await payload.create({ collection: 'audit-events', data: { event: 'e2e.unrelated', detail: { index } }, overrideAccess: true }) })()
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to create audit noise.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/schedule-page') {
+    void Promise.all([
+      payload.find({ collection: 'publish-snapshots', limit: 1, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'change-sets', limit: 1, depth: 0, overrideAccess: true }),
+    ]).then(async ([snapshots, sets]) => {
+      if (!snapshots.docs[0] || !sets.docs[0]) throw new Error('Schedule fixture dependencies are missing.')
+      const source = snapshots.docs[0] as { manifest: Record<string, unknown>; themeVersion: string; engineVersion: string; contractVersion: string; approvedBy: string; baselineSnapshot?: string; baselineSequence?: number }
+      for (let index = 0; index < 26; index += 1) {
+        const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: createHash('sha256').update(`e2e-page-${index}`).digest('hex'), changeSet: sets.docs[0].id, reviewRevision: 1, changeHash: `e2e-page-${index}`, manifest: source.manifest, themeVersion: source.themeVersion, engineVersion: source.engineVersion, contractVersion: source.contractVersion, approvedBy: source.approvedBy, baselineSnapshot: source.baselineSnapshot, baselineSequence: source.baselineSequence ?? 0 }, overrideAccess: true, context: { editorialInternal: true } })
+        await payload.create({ collection: 'scheduled-publications', data: { idempotencyKey: `e2e-page-${index}`, snapshot: snapshot.id, changeSet: sets.docs[0].id, scheduledFor: `2099-01-01T00:${String(index).padStart(2, '0')}:00.000Z`, state: 'scheduled', proof: {} }, overrideAccess: true, context: { editorialInternal: true } })
+      }
+      json(response, { seeded: 26 })
+    }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed schedules.') })
     return
   }
   // The public contact artifact is served under the same synthetic TLS origin

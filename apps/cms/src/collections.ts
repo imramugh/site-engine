@@ -177,6 +177,7 @@ export const Pages: CollectionConfig = {
       blocks: data.blocks ?? [],
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
       noindex: data.noindex === true,
+      businessCase: data.businessCase ?? undefined,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
     const [sections, pages] = await Promise.all([
@@ -215,6 +216,7 @@ export const Pages: CollectionConfig = {
     { name: 'blocks', type: 'json', defaultValue: [] },
     { name: 'seoDescription', type: 'text', maxLength: 160 },
     { name: 'noindex', type: 'checkbox', defaultValue: false, admin: { description: 'Keep this published page out of search engines and the public site search index.' } },
+    { name: 'businessCase', type: 'json', admin: { description: 'Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.' } },
   ],
 }
 
@@ -470,6 +472,22 @@ export const PublishOutbox: CollectionConfig = {
     { name: 'errorCode', type: 'text', admin: { readOnly: true } },
     { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
+  ],
+}
+
+export const ScheduledPublications: CollectionConfig = {
+  slug: 'scheduled-publications', admin: { useAsTitle: 'scheduledFor', group: 'Editorial' },
+  access: { create: () => false, read: staff(['owner', 'approver']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, unique: true, admin: { readOnly: true } },
+    { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
+    { name: 'scheduledFor', type: 'date', required: true, admin: { readOnly: true } },
+    { name: 'state', type: 'select', required: true, defaultValue: 'scheduled', options: ['scheduled', 'cancelled', 'stale', 'enqueued'], admin: { readOnly: true } },
+    { name: 'outbox', type: 'relationship', relationTo: 'publish-outbox', unique: true, admin: { readOnly: true } },
+    { name: 'enqueuedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'dispatchReason', type: 'text', admin: { readOnly: true } },
+    { name: 'proof', type: 'json', required: true, admin: { readOnly: true } },
   ],
 }
 

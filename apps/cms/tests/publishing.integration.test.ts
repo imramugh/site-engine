@@ -6,19 +6,23 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash, claimNextPublishJob, completePublishJob, renewPublishLease, retryPublishJob } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, cancelScheduledPublication, changeSetHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, renewPublishLease, reschedulePublication, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-publishing'
+process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 const { default: config } = await import('../payload.config.js')
+const scheduledPublicationRoute = await import('../app/api/editorial/schedules/[action]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 afterEach(async () => {
   await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.delete({ collection: 'scheduled-publications', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.delete({ collection: 'publish-outbox', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.delete({ collection: 'publish-snapshots', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
 })
 
 const versions = { themeVersion: '1.2.3', engineVersion: '1.2.3', contractVersion: '1.0.0' }
@@ -60,6 +64,16 @@ async function fixture(label: string, options: { preview?: 'ready' | 'pending'; 
 async function approve(current: Awaited<ReturnType<typeof fixture>>, initialBaseline = current.baseline) {
   return withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline }) })
 }
+async function schedule(current: Awaited<ReturnType<typeof fixture>>, scheduledFor: string, initialBaseline = current.baseline) {
+  return withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline, scheduledFor }) })
+}
+
+async function ownerSession(label: string, freshAt = new Date()) {
+  const owner = await payload.create({ collection: 'users', data: { email: `${label}-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+  const token = newOpaqueToken(); const now = new Date()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: freshAt.toISOString(), lastSeenAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString() }, overrideAccess: true })
+  return { owner, headers: new Headers({ cookie: `site_engine_session=${token}` }) }
+}
 
 async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
@@ -85,6 +99,100 @@ async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixtur
 }
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
+  it('freezes a future approved release without advancing or exposing the publish queue, and retries exactly once', async () => {
+    const current = await fixture('scheduled')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const scheduledFor = '2030-01-02T03:04:05.000Z'
+    const result = await schedule(current, scheduledFor)
+    expect(result).toMatchObject({ scheduledFor, outboxID: undefined })
+    expect(result.scheduledPublicationID).toEqual(expect.any(String))
+    const scheduledPublication = await payload.findByID({ collection: 'scheduled-publications', id: result.scheduledPublicationID!, depth: 1, overrideAccess: true })
+    expect(scheduledPublication).toMatchObject({ state: 'scheduled', scheduledFor, changeSet: expect.objectContaining({ id: current.set.id }), idempotencyKey: result.idempotencyKey })
+    expect(scheduledPublication.proof).toMatchObject({ changeHash: changeSetHash(current.changes), reviewRevision: 4, previewContentHash: canonicalHash(current.candidate), includedChangeKeys: current.included })
+    expect((await payload.find({ collection: 'publish-outbox', sort: '-sequence', overrideAccess: true })).docs).toHaveLength(1)
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))).toBeNull()
+    expect(await schedule(current, scheduledFor)).toEqual(result)
+    expect((await payload.count({ collection: 'scheduled-publications', overrideAccess: true })).totalDocs).toBe(1)
+    await expect(schedule(current, '2030-01-02T03:04:06.000Z')).rejects.toThrow('persisted snapshot')
+  })
+
+  it('rejects non-UTC or elapsed schedules and users without an approval role', async () => {
+    const current = await fixture('scheduled-invalid')
+    expect(() => scheduledPublicationTime('2030-01-02T03:04:05+01:00')).toThrow('UTC ISO')
+    expect(() => scheduledPublicationTime('2020-01-02T03:04:05.000Z')).toThrow('future')
+    await expect(schedule(current, '2020-01-02T03:04:05.000Z')).rejects.toThrow('future')
+    await payload.update({ collection: 'users', id: current.reviewer.id, data: { roles: ['editor'] }, overrideAccess: true })
+    await expect(schedule(current, '2030-01-02T03:04:05.000Z')).rejects.toThrow('Reviewer role')
+    expect((await payload.count({ collection: 'scheduled-publications', overrideAccess: true })).totalDocs).toBe(0)
+  })
+
+  it('dispatches only due schedules once, after preserving immediate queue ordering', async () => {
+    const current = await fixture('dispatch-due')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const scheduled = await schedule(current, '2030-01-02T03:04:05.000Z')
+    const beforeDue = await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:04.999Z')))
+    expect(beforeDue).toEqual({ enqueued: 0, skipped: 0 })
+    const due = await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:05.000Z')))
+    expect(due).toEqual({ enqueued: 1, skipped: 0 })
+    expect(await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:06.000Z')))).toEqual({ enqueued: 0, skipped: 0 })
+    const record = await payload.findByID({ collection: 'scheduled-publications', id: scheduled.scheduledPublicationID!, depth: 1, overrideAccess: true })
+    expect(record).toMatchObject({ state: 'enqueued', outbox: expect.objectContaining({ sequence: 2 }) })
+    expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.scheduled_publication_enqueued' } }, overrideAccess: true })).docs).toHaveLength(1)
+    const owner = await ownerSession('post-enqueue-owner')
+    await expect(withPayloadTransaction(payload, req => { req.headers = owner.headers; return cancelScheduledPublication({ payload, req, actor: owner.owner, id: scheduled.scheduledPublicationID! }) })).rejects.toThrow('Only a scheduled publication')
+    await expect(withPayloadTransaction(payload, req => { req.headers = owner.headers; return reschedulePublication({ payload, req, actor: owner.owner, id: scheduled.scheduledPublicationID!, scheduledFor: '2030-01-02T04:04:05.000Z' }) })).rejects.toThrow('Only a scheduled publication')
+    const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date('2030-01-02T03:04:06.000Z')))
+    expect(job).toMatchObject({ id: (record.outbox as { id: string }).id, sequence: 2 })
+    expect((await payload.find({ collection: 'publish-outbox', overrideAccess: true })).docs).toHaveLength(2)
+  })
+
+  it('marks a due schedule stale when an intervening publication changes its queue baseline', async () => {
+    const current = await fixture('dispatch-stale')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const scheduled = await schedule(current, '2030-01-02T03:04:05.000Z')
+    const intervening = await fixture('dispatch-intervening')
+    const prepared = await prepareRedirectApproval(intervening, current.baseline, published.snapshot.id, published.sequence, '/intervening')
+    await withPayloadTransaction(payload, req => { req.headers = intervening.headers; return approveChangeSet({ payload, req, actor: intervening.reviewer, id: intervening.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(prepared.changes), includedChangeKeys: prepared.included, previewContentHash: canonicalHash(prepared.candidate), versions, initialBaseline: current.baseline }) })
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))).toMatchObject({ sequence: 2 })
+    expect(await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 0, skipped: 1 })
+    expect(await payload.findByID({ collection: 'scheduled-publications', id: scheduled.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'stale', dispatchReason: 'BASELINE_STALE' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
+    expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.scheduled_publication_skipped' } }, overrideAccess: true })).docs).toHaveLength(1)
+  })
+
+  it('marks a due schedule stale when its approving user is revoked or disabled', async () => {
+    const current = await fixture('dispatch-revoked')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const scheduled = await schedule(current, '2030-01-02T03:04:05.000Z')
+    await payload.update({ collection: 'users', id: current.reviewer.id, data: { disabled: true }, overrideAccess: true })
+    expect(await withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 0, skipped: 1 })
+    expect(await payload.findByID({ collection: 'scheduled-publications', id: scheduled.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'stale', dispatchReason: 'APPROVAL_AUTHORITY_REVOKED' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
+  })
+
+  it('lets only a fresh owner cancel or reschedule a pre-enqueue schedule through the same-origin API', async () => {
+    const current = await fixture('schedule-owner-api')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const first = await schedule(current, '2030-01-02T03:04:05.000Z')
+    const owner = await ownerSession('schedule-owner')
+    const request = (action: string, body: object, headers = owner.headers) => scheduledPublicationRoute.POST(new Request(`http://cms.test/api/editorial/schedules/${action}`, { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: headers.get('cookie')! }, body: JSON.stringify(body) }), { params: Promise.resolve({ action }) })
+    expect((await request('reschedule', { id: first.scheduledPublicationID, scheduledFor: '2030-01-02T05:04:05.000Z' }, current.headers)).status).toBe(403)
+    const staleOwner = await ownerSession('schedule-stale-owner', new Date(Date.now() - 15 * 60_000 - 1))
+    expect((await request('cancel', { id: first.scheduledPublicationID }, staleOwner.headers)).status).toBe(403)
+    const rescheduled = await request('reschedule', { id: first.scheduledPublicationID, scheduledFor: '2030-01-02T04:04:05.000Z' })
+    expect(rescheduled.status).toBe(200)
+    expect(await rescheduled.json()).toMatchObject({ state: 'scheduled', scheduledFor: '2030-01-02T04:04:05.000Z' })
+    expect((await request('cancel', { id: first.scheduledPublicationID })).status).toBe(200)
+    expect(await payload.findByID({ collection: 'scheduled-publications', id: first.scheduledPublicationID!, overrideAccess: true })).toMatchObject({ state: 'cancelled', dispatchReason: 'CANCELLED_BY_OWNER' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'changes-requested', revision: Number(current.set.revision) + 1 })
+    expect((await scheduledPublicationRoute.POST(new Request('http://cms.test/api/editorial/schedules/cancel', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify({ id: first.scheduledPublicationID }) }), { params: Promise.resolve({ action: 'cancel' }) })).status).toBe(401)
+  })
+
   it('uses a contract-valid frozen candidate, preserves exclusions, and deduplicates retry', async () => {
     const current = await fixture('approved', { excluded: true })
     const published = await installPublishedBaseline(current)

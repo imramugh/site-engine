@@ -19,7 +19,7 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex', 'businessCase'],
   sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
@@ -49,8 +49,12 @@ function hash(value: Record<string, unknown> | null): string | null {
 /** Payload returns null for an omitted optional text field. Review snapshots
  * omit it too, except where null is the deliberate clear of a prior value. */
 function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior?: Record<string, unknown> | null): Record<string, unknown> | null {
-  if (!value || value.seoDescription !== null || (prior && 'seoDescription' in prior)) return value
-  const { seoDescription: _seoDescription, ...normalized } = value
+  if (!value) return value
+  const normalized = { ...value }
+  if (normalized.seoDescription === null && !(prior && 'seoDescription' in prior)) delete normalized.seoDescription
+  // The portable contract represents an omitted business case as absence;
+  // removing it still remains visible because the prior snapshot has the key.
+  if (normalized.businessCase === null) delete normalized.businessCase
   return normalized
 }
 

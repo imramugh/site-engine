@@ -23,6 +23,14 @@ const idOf = (value: unknown) => typeof value === 'string' ? value : value && ty
 const keysEqual = (left: readonly string[], right: readonly string[]) => stable([...left].sort()) === stable([...right].sort())
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 const cleanErrorCode = (value: string) => /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : 'PUBLISH_FAILED'
+export function scheduledPublicationTime(value: unknown, now = Date.now()): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) throw new Error('scheduledFor must be a UTC ISO timestamp.')
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== (value.includes('.') ? value : `${value.slice(0, -1)}.000Z`)) throw new Error('scheduledFor must be a UTC ISO timestamp.')
+  if (timestamp <= now) throw new Error('scheduledFor must be in the future.')
+  return new Date(timestamp).toISOString()
+}
 function exactQualityProof(quality: unknown, expected: { revision: number; changeHash: string; contentHash: string; includedChangeKeys: readonly string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID?: string }): boolean {
   const proof = quality && typeof quality === 'object' ? (quality as { proof?: Record<string, unknown> }).proof : undefined
   const report = proof?.report as { publishable?: unknown } | undefined
@@ -157,9 +165,10 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   // Captures use null to represent an explicit editor clear. The immutable
   // public contract represents optional page metadata by omission.
   const candidatePages = [...pages.values()].map((page) => {
-    if (page.seoDescription !== null) return page
-    const { seoDescription: _seoDescription, ...withoutSEODescription } = page
-    return withoutSEODescription
+    const normalized = { ...page }
+    if (normalized.seoDescription === null) delete normalized.seoDescription
+    if (normalized.businessCase === null) delete normalized.businessCase
+    return normalized
   })
   const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
@@ -206,11 +215,24 @@ async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: A
   return user
 }
 
-export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot }) {
+async function canonicalOwner(payload: Payload, req: PayloadRequest, actor: Actor | undefined): Promise<Actor> {
+  if (!actor?.id) throw new Error('Owner role required.')
+  const user = await payload.findByID({ collection: 'users', id: actor.id, overrideAccess: true, req }) as unknown as Actor
+  if (!hasRole(user, ['owner'])) throw new Error('Owner role required.')
+  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
+  if (!token) throw new Error('Fresh authentication is required.')
+  const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
+  const session = sessions.docs[0]
+  if (!session || idOf(session.user) !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) throw new Error('Fresh authentication is required.')
+  return user
+}
+
+export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot; scheduledFor?: string }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, previewContentHash, versions, initialBaseline } = input
   requireTransaction(req, 'Approval')
   const reviewer = await canonicalReviewer(payload, req, actor)
   if (!includedChangeKeys.length || new Set(includedChangeKeys).size !== includedChangeKeys.length) throw new Error('Approval must explicitly include unique captured changes only.')
+  const scheduledFor = scheduledPublicationTime(input.scheduledFor)
   const idempotencyKey = `publish:${id}:${expectedRevision}:${previewContentHash}`
   const existing = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { equals: idempotencyKey } }, limit: 1, depth: 1, overrideAccess: true, req })
   if (existing.docs[0]) {
@@ -219,6 +241,15 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
     if (approvedBy !== reviewer.id) throw new Error('This approval belongs to a different reviewer.')
     if (Number(existing.docs[0].reviewRevision) !== expectedRevision || existing.docs[0].changeHash !== expectedChangeHash || !Array.isArray(existing.docs[0].includedChangeKeys) || !keysEqual(existing.docs[0].includedChangeKeys as string[], includedChangeKeys) || !source || typeof source !== 'object' || source.contentHash !== previewContentHash || source.themeVersion !== versions.themeVersion || source.engineVersion !== versions.engineVersion || source.contractVersion !== versions.contractVersion) throw new Error('The idempotent approval request no longer matches its persisted snapshot.')
     return { snapshotID: idOf(source), outboxID: existing.docs[0].id, idempotencyKey }
+  }
+  const existingSchedule = await payload.find({ collection: 'scheduled-publications', where: { idempotencyKey: { equals: idempotencyKey } }, limit: 1, depth: 1, overrideAccess: true, req })
+  if (existingSchedule.docs[0]) {
+    const schedule = existingSchedule.docs[0]
+    const source = schedule.snapshot
+    const approvedBy = idOf(source && typeof source === 'object' ? source.approvedBy : undefined)
+    const proof = schedule.proof as Record<string, unknown> | undefined
+    if (!scheduledFor || approvedBy !== reviewer.id || String(schedule.scheduledFor) !== scheduledFor || !source || typeof source !== 'object' || source.contentHash !== previewContentHash || source.themeVersion !== versions.themeVersion || source.engineVersion !== versions.engineVersion || source.contractVersion !== versions.contractVersion || proof?.idempotencyKey !== idempotencyKey || proof?.changeHash !== expectedChangeHash || proof?.reviewRevision !== expectedRevision || !Array.isArray(proof?.includedChangeKeys) || !keysEqual(proof.includedChangeKeys.filter((key): key is string => typeof key === 'string'), includedChangeKeys)) throw new Error('The idempotent approval request no longer matches its persisted snapshot.')
+    return { snapshotID: idOf(source), scheduledPublicationID: schedule.id, idempotencyKey, scheduledFor }
   }
   let set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
   set = await markStaleIfNeeded(payload, set, req)
@@ -237,15 +268,88 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   const excluded = changes.filter((change) => !includedChangeKeys.includes(`${change.collection}:${change.id}`))
   if (excluded.length) await payload.create({ collection: 'change-sets', data: { name: `${String(set.name)} — remaining changes`, actor: idOf(set.actor), state: 'open', revision: 0, changes: excluded }, overrideAccess: true, req, context: { editorialInternal: true } })
   const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence }, overrideAccess: true, req, context: { editorialInternal: true } })
-  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshotDoc.id, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const scheduled = scheduledFor ? await payload.create({ collection: 'scheduled-publications', data: { idempotencyKey, snapshot: snapshotDoc.id, changeSet: id, scheduledFor, state: 'scheduled', proof: { ...(structuredClone((set.quality as { proof?: Record<string, unknown> } | undefined)?.proof ?? {})), idempotencyKey, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, previewContentHash, approvedBy: reviewer.id } }, overrideAccess: true, req, context: { editorialInternal: true } }) : undefined
+  const outbox = scheduled ? undefined : await payload.create({ collection: 'publish-outbox', data: { idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshotDoc.id, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.update({ collection: 'change-sets', id, data: { state: 'approved', changes: changes.filter((change) => includedChangeKeys.includes(`${change.collection}:${change.id}`)), reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
-  await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', user: reviewer.id, actor: reviewer.id, detail: { changeSet: id, snapshot: snapshotDoc.id, outbox: outbox.id, includedChangeKeys } }, overrideAccess: true, req })
-  return { snapshotID: snapshotDoc.id, outboxID: outbox.id, idempotencyKey }
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', user: reviewer.id, actor: reviewer.id, detail: { changeSet: id, snapshot: snapshotDoc.id, outbox: outbox?.id, scheduledPublication: scheduled?.id, scheduledFor, includedChangeKeys } }, overrideAccess: true, req })
+  return { snapshotID: snapshotDoc.id, outboxID: outbox?.id, scheduledPublicationID: scheduled?.id, idempotencyKey, scheduledFor }
+}
+
+type ScheduledPublication = { id: string; idempotencyKey: string; state?: string; scheduledFor?: string; snapshot?: unknown; outbox?: unknown; proof?: { includedChangeKeys?: unknown } }
+
+async function skipScheduledPublication(payload: Payload, req: PayloadRequest, schedule: ScheduledPublication, reason: string) {
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'stale', dispatchReason: reason }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) return false
+  const snapshot = schedule.snapshot as Record<string, unknown> | undefined
+  const changeSetID = idOf(snapshot?.changeSet)
+  if (changeSetID) {
+    const set = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    if (set.state === 'approved') await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'changes-requested', revision: Number(set.revision ?? 0) + 1, quality: undefined, preview: undefined, reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  }
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_skipped', detail: { scheduledPublication: schedule.id, reason, changeSet: changeSetID, reopenedForReview: Boolean(changeSetID) } }, overrideAccess: true, req })
+  return true
+}
+
+/** Dispatches due schedules only when the frozen approval baseline remains the queue head. */
+export async function dispatchDueScheduledPublications(payload: Payload, req: PayloadRequest, now = new Date()) {
+  requireTransaction(req, 'Scheduled publication dispatch')
+  const due = await payload.find({ collection: 'scheduled-publications', where: { and: [{ state: { equals: 'scheduled' } }, { scheduledFor: { less_than_equal: now.toISOString() } }] }, sort: 'scheduledFor', limit: 100, depth: 2, overrideAccess: true, req })
+  let enqueued = 0; let skipped = 0
+  for (const schedule of due.docs as unknown as ScheduledPublication[]) {
+    const snapshot = schedule.snapshot as Record<string, unknown> | undefined
+    const approvedBy = snapshot && typeof snapshot === 'object' ? snapshot.approvedBy : undefined
+    const approver = approvedBy && typeof approvedBy === 'object' ? approvedBy as Actor : undefined
+    if (!snapshot || !hasRole(approver, ['owner', 'approver'])) {
+      if (await skipScheduledPublication(payload, req, schedule, 'APPROVAL_AUTHORITY_REVOKED')) skipped += 1
+      continue
+    }
+    const frozenSnapshotID = idOf(snapshot.baselineSnapshot)
+    const frozenSequence = Number(snapshot.baselineSequence ?? 0)
+    const baseline = await approvalBaseline(payload, req)
+    if (!baseline || baseline.snapshotID !== frozenSnapshotID || baseline.sequence !== frozenSequence) {
+      if (await skipScheduledPublication(payload, req, schedule, 'BASELINE_STALE')) skipped += 1
+      continue
+    }
+    const existing = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { equals: schedule.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req })
+    const includedChangeKeys = Array.isArray(schedule.proof?.includedChangeKeys) ? schedule.proof.includedChangeKeys : []
+    const outbox = existing.docs[0] ?? await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: schedule.idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshot.id as string, changeSet: idOf(snapshot.changeSet)!, reviewRevision: Number(snapshot.reviewRevision), changeHash: String(snapshot.changeHash), includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
+    const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'enqueued', outbox: outbox.id, enqueuedAt: now.toISOString(), dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+    if (!updated.docs[0]) throw new Error('The scheduled publication is no longer current.')
+    await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_enqueued', detail: { scheduledPublication: schedule.id, outbox: outbox.id, sequence: outbox.sequence } }, overrideAccess: true, req })
+    enqueued += 1
+  }
+  return { enqueued, skipped }
+}
+
+export async function cancelScheduledPublication(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string }) {
+  const { payload, req, actor, id } = input; requireTransaction(req, 'Scheduled publication cancellation')
+  const owner = await canonicalOwner(payload, req, actor)
+  const schedule = await payload.findByID({ collection: 'scheduled-publications', id, depth: 0, overrideAccess: true, req }) as unknown as { changeSet?: unknown }
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'cancelled', dispatchReason: 'CANCELLED_BY_OWNER' }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) throw new Error('Only a scheduled publication can be cancelled.')
+  const changeSetID = idOf(schedule.changeSet)
+  if (changeSetID) {
+    const set = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    if (set.state === 'approved') await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'changes-requested', revision: Number(set.revision ?? 0) + 1, quality: undefined, preview: undefined, reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
+  }
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_cancelled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id, changeSet: changeSetID, reopenedForReview: Boolean(changeSetID) } }, overrideAccess: true, req })
+  return updated.docs[0]
+}
+
+export async function reschedulePublication(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; scheduledFor: unknown }) {
+  const { payload, req, actor, id } = input; requireTransaction(req, 'Scheduled publication rescheduling')
+  const owner = await canonicalOwner(payload, req, actor); const scheduledFor = scheduledPublicationTime(input.scheduledFor)
+  if (!scheduledFor) throw new Error('scheduledFor is required.')
+  const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: id } }, { state: { equals: 'scheduled' } }] }, data: { scheduledFor, dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!updated.docs[0]) throw new Error('Only a scheduled publication can be rescheduled.')
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_rescheduled', user: owner.id, actor: owner.id, detail: { scheduledPublication: id, scheduledFor } }, overrideAccess: true, req })
+  return updated.docs[0]
 }
 
 /** Claims only the oldest unfinished job. A backoff or live lease deliberately blocks later jobs. */
 export async function claimNextPublishJob(payload: Payload, req: PayloadRequest, now = new Date(), leaseMilliseconds = 60_000, maxAttempts = MAX_PUBLISH_ATTEMPTS) {
   requireTransaction(req, 'Publish claim')
+  await dispatchDueScheduledPublications(payload, req, now)
   const result = await payload.find({ collection: 'publish-outbox', where: { status: { in: ['pending', 'processing'] } }, sort: 'sequence', limit: 1, depth: 0, overrideAccess: true, req })
   const job = result.docs[0]
   if (!job) return null
