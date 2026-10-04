@@ -114,7 +114,7 @@ export async function openSet(payload: Payload, actor: Actor, req: PayloadReques
   const requested = setIDFromRequest(req)
   if (requested) {
     const selected = await payload.findByID({ collection: 'change-sets', id: requested, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
-    if (selected.state !== 'open' || idOf(selected.actor) !== actor.id) throw new Error('The selected change set is not an open set owned by this editor.')
+    if (!['open', 'changes-requested'].includes(String(selected.state)) || idOf(selected.actor) !== actor.id) throw new Error('The selected change set is not an editable set owned by this editor.')
     return selected
   }
   const existing = await payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: actor.id } }, { or: [{ state: { equals: 'open' } }, { state: { equals: 'changes-requested' } }] }] }, limit: 1, depth: 0, overrideAccess: true, req })

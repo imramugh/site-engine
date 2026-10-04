@@ -66,18 +66,18 @@ function previewVersions(live: Baseline, proposed: SiteSnapshot, base: Baseline)
 }
 
 /** Prepares exact immutable worker inputs; callers load the configured file before opening SQLite. */
-export async function prepareReviewPreview(input: { payload: Payload; req: PayloadRequest; actor: { id: string; roles?: string[] }; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; initialBaseline?: Baseline }) {
-  const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, initialBaseline } = input
+export async function prepareReviewPreview(input: { payload: Payload; req: PayloadRequest; actor: { id: string; roles?: string[] }; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; initialBaseline?: Baseline; draft?: boolean }) {
+  const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, initialBaseline, draft = false } = input
   requireTransaction(req, 'Review preview preparation')
   const reviewer = await payload.findByID({ collection: 'users', id: actor.id, depth: 0, overrideAccess: true, req }) as { disabled?: boolean; roles?: string[] }
-  if (reviewer.disabled || !reviewer.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
+  if (reviewer.disabled || !(draft ? reviewer.roles?.some((role) => role === 'owner' || role === 'editor') : reviewer.roles?.some((role) => role === 'owner' || role === 'approver'))) throw new Error(draft ? 'Editor role required.' : 'Reviewer role required.')
   if (!includedChangeKeys.length || new Set(includedChangeKeys).size !== includedChangeKeys.length) throw new Error('Preview selection must contain unique captured changes.')
   let set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
   set = await markStaleIfNeeded(payload, set, req)
   const changes = Array.isArray(set.changes) ? set.changes as Change[] : []
-  if (set.state !== 'submitted' || Number(set.revision) !== expectedRevision || changeSetHash(changes) !== expectedChangeHash) throw new Error('The reviewed revision no longer matches the submitted change set.')
+  if ((draft ? !['open', 'changes-requested'].includes(String(set.state)) || idOf(set.actor) !== actor.id : set.state !== 'submitted') || Number(set.revision) !== expectedRevision || changeSetHash(changes) !== expectedChangeHash) throw new Error(draft ? 'The editable draft has changed.' : 'The reviewed revision no longer matches the submitted change set.')
   const checks = (set.quality as { checks?: { status?: string }[] } | undefined)?.checks
-  if (!checks?.length || checks.some((check) => check.status !== 'passed')) throw new Error('Review checks must pass before preparing a preview.')
+  if (!draft && (!checks?.length || checks.some((check) => check.status !== 'passed'))) throw new Error('Review checks must pass before preparing a preview.')
   const known = new Set(changes.map((change) => `${change.collection}:${change.id}`))
   if (includedChangeKeys.some((key) => !known.has(key))) throw new Error('Preview selection must contain captured changes only.')
   const live = await latestPublished(payload, req) ?? initialBaseline
@@ -89,11 +89,11 @@ export async function prepareReviewPreview(input: { payload: Payload; req: Paylo
   const existing = await payload.find({ collection: 'preview-render-jobs', where: { and: [{ changeSet: { equals: id } }, { reviewRevision: { equals: expectedRevision } }, { changeHash: { equals: expectedChangeHash } }, { proposedManifestHash: { equals: proposedManifestHash } }, { liveManifestHash: { equals: liveManifestHash } }, { baselineSequence: { equals: base.sequence } }, { liveSequence: { equals: live.sequence } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true, req })
   const duplicate = existing.docs[0]
   if (duplicate && duplicate.status !== 'failed' && Array.isArray(duplicate.includedChangeKeys) && keysEqual(duplicate.includedChangeKeys as string[], includedChangeKeys) && idOf(duplicate.baselineSnapshot) === base.snapshotID && idOf(duplicate.liveSnapshot) === live.snapshotID && versionsEqual(duplicate.versionPins, pinnedVersions)) {
-    await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(duplicate as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
+    if (!draft) await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(duplicate as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
     return duplicate
   }
   const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, baselineSnapshot: base.snapshotID, baselineSequence: base.sequence, liveSnapshot: live.snapshotID, liveSequence: live.sequence, liveManifest: live.manifest, proposedManifest: proposed, liveManifestHash, proposedManifestHash, versionPins: pinnedVersions, status: 'pending', attempts: 0 }, overrideAccess: true, req, context: { editorialInternal: true } })
-  await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(job as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (!draft) await payload.update({ collection: 'change-sets', id, data: { preview: selectionFromJob(job as unknown as Record<string, unknown>) }, overrideAccess: true, req, context: { editorialInternal: true } })
   return job
 }
 

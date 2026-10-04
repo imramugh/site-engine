@@ -218,11 +218,11 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     return pageBody.doc.id
   })
   await page.goto('/admin/editorial')
-  await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Reviews', exact: true })).toBeVisible()
 
   const changeSetID = await selectCapturedSet(page, created)
 
-  await expect(page.getByText('title', { exact: true })).toBeVisible()
+  await expect(page.getByText('Title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
   const editorQuality = await page.evaluate(async () => (await fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: document.querySelector('button[aria-pressed="true"]')?.textContent?.split(' — ')[0] }) })).status)
@@ -263,8 +263,10 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
-  await expect(reviewer.getByRole('link', { name: 'Review on page' })).toHaveAttribute('href', /\/preview\/changes\/.+\/proposed/)
-  await expect(reviewer.locator('[data-editorial-change-rail]')).toContainText('Field diffs')
+  const proposedPreview = reviewer.getByRole('link', { name: 'Open proposed preview' })
+  await expect(proposedPreview).toHaveAttribute('href', new RegExp(`/preview/changes/${claim.job.id}/proposed/workflow-browser/workflow-page$`))
+  await expect(reviewer.getByText('This rendered preview does not yet include on-page review controls.')).toBeVisible()
+  await expect(reviewer.locator('[data-editorial-change-rail]')).toContainText('Changes')
   await reviewer.setViewportSize({ width: 1440, height: 1000 })
   const desktopFrames = reviewer.locator('[data-editorial-frame]')
   const liveBox = (await desktopFrames.nth(0).boundingBox())!
@@ -301,7 +303,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const comment = reviewer.getByLabel('Add review comment'); await comment.fill('Retry-safe browser comment'); await reviewer.getByRole('button', { name: 'Add comment' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Unable to add this comment' })).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click(); await expect(comment).toHaveValue('')
-  await expect(reviewer.getByText('Approval is disabled until the exact comparison has a passing readiness proof.')).toBeVisible()
+  await expect(reviewer.getByText('Approval requires a passing readiness proof for this exact comparison.')).toBeVisible()
   await reviewer.getByRole('button', { name: 'Run readiness checks' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Deterministic readiness checks completed' })).toContainText('completed')
   await expect(reviewer.getByText(/SEO_DESCRIPTION_MISSING/).first()).toBeVisible()
