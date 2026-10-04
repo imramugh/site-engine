@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Payload } from 'payload'
 import { TemplateSchema, type Page } from '@site-engine/contract'
 import { z } from 'zod'
@@ -166,42 +166,35 @@ function initialBlocks(input: PageCreationInput) {
   }]
 }
 
+function creationRequestHash(input: PageCreationInput): string {
+  return createHash('sha256').update(JSON.stringify(input)).digest('hex')
+}
+
 async function priorResult(
   payload: Payload,
   actor: PageCreatorActor,
   input: PageCreationInput,
 ): Promise<PageCreationResult | undefined> {
-  let page: Record<string, unknown>
-  try {
-    page = await payload.findByID({
-      collection: 'pages',
-      id: input.requestKey,
-      depth: 0,
-      draft: true,
-      user: actor as never,
-      overrideAccess: false,
-    }) as unknown as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-  const matches = page.title === input.title && page.summary === input.summary &&
-    page.slug === input.slug && relationID(page.sectionId) === input.sectionID &&
-    relationID(page.parentId) === input.parentID && page.template === input.template
-  if (!matches) throw new Error('REQUEST_KEY_REUSED')
   const sets = await payload.find({
     collection: 'change-sets',
-    where: { actor: { equals: actor.id } },
-    limit: 0,
-    pagination: false,
+    where: { and: [
+      { actor: { equals: actor.id } },
+      { creationRequestKey: { equals: input.requestKey } },
+    ] } as never,
+    limit: 2,
     depth: 0,
     overrideAccess: true,
   })
-  const set = sets.docs.find((candidate) => Array.isArray(candidate.changes) && candidate.changes.some((change) => {
+  const set = sets.docs[0]
+  if (!set) return undefined
+  if ((set as unknown as { creationRequestHash?: string }).creationRequestHash !== creationRequestHash(input)) throw new Error('REQUEST_KEY_REUSED')
+  const captured = Array.isArray(set.changes) && set.changes.some((change) => {
     if (!change || typeof change !== 'object') return false
     const item = change as Record<string, unknown>
     return item.collection === 'pages' && item.id === input.requestKey && item.before === null
-  }))
-  if (!set) throw new Error('REQUEST_KEY_REUSED')
+  })
+  if (!captured) throw new Error('REQUEST_KEY_REUSED')
+  await payload.findByID({ collection: 'pages', id: input.requestKey, depth: 0, draft: true, user: actor as never, overrideAccess: false })
   return {
     pageID: input.requestKey,
     changeSetID: String(set.id),
@@ -224,6 +217,14 @@ export async function createPageDraft(input: {
     return await withPayloadTransaction(payload, async (req) => {
       req.user = actor as never
       const set = await createNamedChangeSet(payload, req, actor, `Create ${value.title}`)
+      await payload.update({
+        collection: 'change-sets',
+        id: String(set.id),
+        data: { creationRequestKey: value.requestKey, creationRequestHash: creationRequestHash(value) } as never,
+        overrideAccess: true,
+        req,
+        context: { editorialInternal: true },
+      })
       // The internal set write shares this transaction request. Restore the
       // ordinary editorial hook context before creating the page so its first
       // draft image is captured into the explicitly selected set.

@@ -470,6 +470,8 @@ export const ChangeSets: CollectionConfig = {
     { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
     { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
     { name: 'staleAt', type: 'date', admin: { readOnly: true } },
+    { name: 'creationRequestKey', type: 'text', unique: true, admin: { hidden: true, readOnly: true } },
+    { name: 'creationRequestHash', type: 'text', admin: { hidden: true, readOnly: true } },
     { name: 'summary', type: 'textarea' },
   ],
 }
