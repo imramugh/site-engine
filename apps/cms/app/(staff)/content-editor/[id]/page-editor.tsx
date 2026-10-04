@@ -25,6 +25,7 @@ type ChangeSet = {
   state: string
   revision: number
   changes: number
+  theme: { name: string; version: string } | null
 }
 type Reference = { id: string; label: string; mimeType?: string }
 type CatalogItem = {
@@ -50,7 +51,7 @@ type Context = {
     motionIntents: string[]
     logoTones: string[]
   }
-  activeTheme: { name: string; version: string }
+  activeTheme: { name: string; version: string } | null
   references: { media: Reference[]; pages: Reference[] }
 }
 type Preview = { id: string; status: string; path?: string }
@@ -870,6 +871,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const selectedSet =
     data?.changeSets.find((item) => item.id === changeSetID) ??
     data?.changeSets[0]
+  const selectedTheme = selectedSet ? selectedSet.theme : data?.activeTheme
   const dirty = Boolean(
     draft && saved && JSON.stringify(draft) !== JSON.stringify(saved),
   )
@@ -1275,8 +1277,8 @@ export function PageEditor({ pageID }: { pageID: string }) {
     <main
       className={styles.editor}
       data-page-editor
-      data-page-editor-theme={data.activeTheme.name}
-      data-page-editor-theme-version={data.activeTheme.version}
+      data-page-editor-theme={selectedTheme?.name}
+      data-page-editor-theme-version={selectedTheme?.version}
     >
       <header className={styles.editorHeader}>
         <div>
@@ -1490,8 +1492,9 @@ export function PageEditor({ pageID }: { pageID: string }) {
           <header>
             <span>
               <i />
-              Saved draft preview · {title(data.activeTheme.name)}{' '}
-              {data.activeTheme.version}
+              Saved draft preview · {selectedTheme
+                ? `${title(selectedTheme.name)} ${selectedTheme.version}`
+                : 'Theme unavailable'}
             </span>
             <div>
               <button

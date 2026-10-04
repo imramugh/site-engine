@@ -8,10 +8,14 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import {
   applyPageEditorSave,
   executePageEditorSave,
+  pageEditorContext,
   pageEditorHash,
   pageEditorProjection,
   parsePageEditorDraft,
 } from '../src/page-editor'
+import { neutralFixture } from '@site-engine/contract/fixtures'
+import { changeSetHash } from '../src/publishing'
+import { prepareReviewPreview, type PreviewBaseline } from '../src/review-preview'
 import {
   cookieName,
   hashOpaqueToken,
@@ -164,6 +168,80 @@ afterAll(async () => {
 })
 
 describe('ENG-006/ENG-026 full page draft editor', () => {
+  it('labels saved previews from the exact initial and proposed theme selection without inventing a fallback', async () => {
+    const editor = await actor()
+    const current = await fixture(editor)
+    const unconfigured = await pageEditorContext(payload, editor as never, current.page.id)
+    expect(unconfigured.activeTheme).toBeNull()
+    expect(unconfigured.changeSets.find((set) => set.id === current.set.id)?.theme).toBeNull()
+    const manifest = structuredClone(neutralFixture)
+    manifest.settings.theme = {
+      id: 'watchfloor',
+      version: '1.0.0',
+      contract: '1.0.0',
+      manifestDigest: 'a'.repeat(64),
+    }
+    const initialBaseline: PreviewBaseline = {
+      manifest,
+      sequence: 0,
+      versions: {
+        themeVersion: '1.0.0',
+        engineVersion: 'test-engine',
+        contractVersion: '1.0.0',
+      },
+    }
+    const baselineContext = await pageEditorContext(
+      payload,
+      editor as never,
+      current.page.id,
+      initialBaseline,
+    )
+    expect(baselineContext.activeTheme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+    expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.theme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+
+    const selection = {
+      id: 'counsel',
+      version: '2.0.0',
+      contract: '1.0.0',
+      manifestDigest: 'b'.repeat(64),
+    }
+    const changes = [{
+      collection: 'theme-settings' as const,
+      id: randomUUID(),
+      before: null,
+      after: { selection, settings: {} },
+      beforeHash: null,
+      afterHash: null,
+    }]
+    const set = await payload.update({
+      collection: 'change-sets',
+      id: current.set.id,
+      data: { changes, revision: 1 },
+      overrideAccess: true,
+      context: { editorialInternal: true },
+    })
+    const proposedContext = await pageEditorContext(
+      payload,
+      editor as never,
+      current.page.id,
+      initialBaseline,
+    )
+    const contextTheme = proposedContext.changeSets.find((item) => item.id === current.set.id)?.theme
+    expect(contextTheme).toEqual({ name: 'counsel', version: '2.0.0' })
+    const job = await withPayloadTransaction(payload, (req) => prepareReviewPreview({
+      payload,
+      req,
+      actor: editor as never,
+      id: current.set.id,
+      expectedRevision: 1,
+      expectedChangeHash: changeSetHash(set.changes),
+      includedChangeKeys: [`theme-settings:${changes[0]!.id}`],
+      initialBaseline,
+      draft: true,
+    }))
+    expect((job.proposedManifest as typeof manifest).settings.theme).toMatchObject({ id: contextTheme?.name, version: contextTheme?.version })
+  })
+
   it('builds a schema-valid conventional starting shape for every contract block', () => {
     const references = {
       media: [
