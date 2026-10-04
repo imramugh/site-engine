@@ -7,6 +7,7 @@ import {
   type PageEditorSave,
 } from '../../../../../src/page-editor'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { loadInitialPreviewBaseline } from '../../../../../src/review-preview'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -56,6 +57,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    const initialBaseline = await loadInitialPreviewBaseline()
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({
       headers: request.headers,
@@ -68,7 +70,7 @@ export async function GET(
       )
     const { id } = await context.params
     return Response.json(
-      await pageEditorContext(payload, authenticated.user as never, id),
+      await pageEditorContext(payload, authenticated.user as never, id, initialBaseline),
       { headers: noStore },
     )
   } catch {
