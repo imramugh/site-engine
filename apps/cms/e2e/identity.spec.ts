@@ -395,9 +395,11 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
 
 test('a locally provisioned owner uses the authenticator without OIDC, browses collections, and is disabled authoritatively', async ({ page }) => {
   await signInLocalOwner(page)
-  await expect(page.getByRole('heading', { name: 'Collections' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Sections', exact: true })).toBeVisible()
+  const collections = page.locator('details').filter({ has: page.locator('summary', { hasText: 'CMS collections' }) })
+  await collections.locator('summary').click()
+  const collectionNavigation = collections.getByRole('navigation', { name: 'CMS collections' })
+  await expect(collectionNavigation.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
+  await expect(collectionNavigation.getByRole('link', { name: 'Sections', exact: true })).toBeVisible()
 
   const me = await page.request.get('/api/users/me')
   expect(me.ok()).toBeTruthy()

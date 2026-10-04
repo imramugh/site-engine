@@ -7,7 +7,7 @@ import { serverSessionStrategy } from '../../src/identity'
 function date(value: string | undefined): string {
   if (!value) return 'Recorded release time unavailable'
   const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? 'Recorded release time unavailable' : parsed.toISOString().replace('T', ' ').replace('.000Z', ' UTC')
+  return Number.isNaN(parsed.getTime()) ? 'Recorded release time unavailable' : new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Toronto', timeZoneName: 'short' }).format(parsed)
 }
 
 /** Server component intentionally has no props so the shell cannot pass untrusted dashboard data. */

@@ -15,6 +15,7 @@ if (process.env.NODE_ENV === 'production' && !isProductionBuild && !secret) {
 
 export default buildConfig({
   admin: {
+    avatar: 'default',
     user: Users.slug,
     components: {
       Nav: './app/components/admin-navigation#AdminNavigation',
