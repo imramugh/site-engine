@@ -393,6 +393,14 @@ describe('static snapshot renderer', () => {
       expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(`${PUBLIC_ORIGIN}/docs/guide/install`);
       await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
       expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('nav', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${served.origin}/docs/guide/install/`, { waitUntil: 'domcontentloaded' });
+      await page.locator('.mobile-primary > summary').click();
+      const mobilePrimary = page.getByRole('navigation', { name: 'Mobile primary' });
+      expect(await mobilePrimary.getByRole('link').count()).toBe(9);
+      expect(await mobilePrimary.getByRole('link', { name: 'Epsilon', exact: true }).count()).toBe(1);
+      await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('[aria-label="Mobile primary"]', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
       for (const path of ['/unknown-target/', '/docs/draft-marker/', '/docs/archive-marker/']) {
         const response = await page.goto(`${served.origin}${path}`, { waitUntil: 'domcontentloaded' });
         expect(response?.status()).toBe(404);

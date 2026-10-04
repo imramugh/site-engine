@@ -342,9 +342,6 @@ importers:
       '@site-engine/contract':
         specifier: workspace:^
         version: link:../contract
-      '@site-engine/engine':
-        specifier: workspace:^
-        version: link:../engine
 
 packages:
 

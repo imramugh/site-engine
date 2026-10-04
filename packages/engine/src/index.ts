@@ -52,11 +52,13 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
   if (modelSections.length > HEADER_SECTION_LIMIT) warnings.push(`Header has more than ${HEADER_SECTION_LIMIT} published sections; excess sections are footer-only.`);
   const redirects = new Map<string, string>();
   for (const redirect of snapshot.redirects) { if (byPath.has(redirect.from)) throw new Error(`Redirect ${redirect.from} conflicts with a published route`); if (!byPath.has(redirect.to)) warnings.push(`Redirect ${redirect.from} points to an unavailable route ${redirect.to}`); else redirects.set(redirect.from, redirect.to); }
-  return { sections: modelSections, routes, byPath, redirects, warnings };
+  const footerSections = routesForSections(modelSections, routes);
+  const footerServices = routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title));
+  return { sections: modelSections, routes, navigation: { desktopSections: footerSections.slice(0, HEADER_SECTION_LIMIT), mobileSections: footerSections, footerSections, footerServices }, byPath, redirects, warnings };
 }
 
 export function childrenOf(route: PublicRoute, model: RouteModel): PublicRoute[] { return model.routes.filter((candidate) => candidate.page.parentId === route.page.id); }
-export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title)); }
+export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.navigation.footerServices; }
 
 /**
  * A section links to its configured landing page when public, otherwise its
@@ -64,15 +66,19 @@ export function serviceNavigation(model: RouteModel): PublicRoute[] { return mod
  * navigation data-driven even while a section is being assembled.
  */
 export function sectionNavigation(model: RouteModel): PublicRoute[] {
-  return model.sections.flatMap((section) => {
+  return model.navigation.footerSections;
+}
+
+function routesForSections(sections: readonly Section[], routes: readonly PublicRoute[]): PublicRoute[] {
+  return sections.flatMap((section) => {
     const pageIDs = section.landingPageId ? [section.landingPageId, ...section.pageIds.filter((id) => id !== section.landingPageId)] : section.pageIds;
-    const route = pageIDs.map((id) => model.routes.find((candidate) => candidate.page.id === id)).find((candidate): candidate is PublicRoute => Boolean(candidate));
+    const route = pageIDs.map((id) => routes.find((candidate) => candidate.page.id === id)).find((candidate): candidate is PublicRoute => Boolean(candidate));
     return route ? [route] : [];
   });
 }
 
 /** Header exposes up to five published sections; the footer retains every one. */
-export function headerSectionNavigation(model: RouteModel): PublicRoute[] { return sectionNavigation(model).slice(0, HEADER_SECTION_LIMIT); }
+export function headerSectionNavigation(model: RouteModel): PublicRoute[] { return model.navigation.desktopSections; }
 export {
   effectiveMotion,
   motionPreferenceKey,
