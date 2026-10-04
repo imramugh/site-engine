@@ -115,6 +115,13 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   await page.getByRole('button', { name: 'Upload image' }).click()
   await expect(page.getByRole('status')).toContainText('Image uploaded')
   await expect(page.locator('[data-media-detail] h2')).toHaveText(uploadName)
+  const enabledBin = page.getByRole('button', { name: 'Move to bin' })
+  await expect(enabledBin).toBeEnabled()
+  expect(await enabledBin.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { background: style.backgroundColor, color: style.color }
+  })).toEqual({ background: 'rgb(255, 255, 255)', color: 'rgb(160, 39, 32)' })
+  await axe(page)
 
   await page.locator('#asset-alt').fill('Updated blue browser square')
   await page.getByLabel('Caption').fill('A caption saved through the Media workspace')
