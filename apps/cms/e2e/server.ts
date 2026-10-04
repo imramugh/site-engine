@@ -9,6 +9,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import sharp from 'sharp'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
@@ -40,6 +41,7 @@ const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const themeOwnerEmail = 'theme-owner.synthetic@example.test'
 const themeOwnerRecoveryCode = 'synthetic-theme-owner-code-08'
 const themeOwnerSessionToken = 'synthetic-theme-owner-session-token'
+const mediaOwnerSessionToken = 'synthetic-media-owner-session-token'
 const applicationJobID = '66666666-6666-4666-8666-666666666666'
 const applicationSectionID = '77777777-7777-4777-8777-777777777777'
 const applicationChangeSetID = '88888888-8888-4888-8888-888888888888'
@@ -226,6 +228,7 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
+  const mediaOwner = await payload.create({ collection: 'users', data: { email: 'media-owner.synthetic@example.test', name: 'Synthetic Media Owner', roles: ['owner'] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
   for (const [role, identity] of Object.entries({ hiring: identities.hiring, sales: identities.sales }) as Array<['hiring' | 'sales', Identity]>) {
@@ -240,6 +243,23 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(mediaOwnerSessionToken), user: mediaOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  const mediaRaster = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#155e75' } }).png().toBuffer()
+  const mediaAssets = []
+  for (let index = 0; index < 26; index += 1) {
+    mediaAssets.push(await payload.create({
+      collection: 'assets',
+      data: { alt: `Synthetic media fixture ${String(index).padStart(2, '0')}`, caption: index === 1 ? 'Searchable lighthouse caption' : undefined },
+      file: { data: mediaRaster, mimetype: 'image/png', name: `media-fixture-${String(index).padStart(2, '0')}.png`, size: mediaRaster.length },
+      user: mediaOwner,
+      overrideAccess: false,
+    }))
+  }
+  const mediaSection = await payload.create({ collection: 'sections', data: { name: 'Media browser fixtures', summary: 'Synthetic section for media workspace browser verification.', slug: 'media-browser-fixtures', allowedTemplates: ['standard'] }, user: mediaOwner, overrideAccess: false })
+  await payload.create({ collection: 'pages', data: { title: 'Media usage fixture page', summary: 'Synthetic page that keeps one media fixture in use.', slug: 'media-usage-fixture', sectionId: mediaSection.id, template: 'standard', blocks: [{ id: 'a1000000-0000-4000-8000-000000000001', type: 'media', mediaId: mediaAssets[0]!.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: mediaOwner, overrideAccess: false })
+  const binnedAsset = await payload.create({ collection: 'assets', data: { alt: 'Synthetic restorable media fixture' }, file: { data: mediaRaster, mimetype: 'image/png', name: 'media-restorable.png', size: mediaRaster.length }, user: mediaOwner, overrideAccess: false })
+  const binnedAt = new Date().toISOString()
+  await payload.update({ collection: 'assets', id: binnedAsset.id, data: { deletedAt: binnedAt, deleteAfter: new Date(Date.now() + 30 * 86_400_000).toISOString() }, overrideAccess: true, user: mediaOwner, context: { mediaLifecycle: 'bin' } })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(initialBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: initialBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })

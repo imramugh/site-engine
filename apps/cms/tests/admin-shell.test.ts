@@ -7,7 +7,7 @@ import { navigationForRoles } from '../src/admin-navigation'
 
 describe('ENG-006 / ENG-022 admin shell contracts', () => {
   it('keeps role discovery separate from route authorization', () => {
-    expect(navigationForRoles(['owner']).map((item) => item.href)).toEqual(['/admin', '/content-tree', '/block-gallery', '/admin/collections/assets', '/leads', '/applications', '/editorial', '/operations'])
+    expect(navigationForRoles(['owner']).map((item) => item.href)).toEqual(['/admin', '/content-tree', '/block-gallery', '/media', '/leads', '/applications', '/editorial', '/operations'])
     expect(navigationForRoles(['editor']).map((item) => item.href)).toContain('/content-tree')
     expect(navigationForRoles(['approver']).map((item) => item.href)).not.toContain('/block-gallery')
     expect(navigationForRoles(['sales']).map((item) => item.href)).toEqual(['/admin', '/leads'])
