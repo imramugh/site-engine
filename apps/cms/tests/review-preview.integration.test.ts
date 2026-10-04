@@ -9,7 +9,7 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
 import { runReviewQuality } from '../src/review-quality'
-import { loadReviewModeData, routeForReviewPreview } from '../src/review-mode'
+import { loadReviewModeData, loadReviewModePages, routeForReviewPreview } from '../src/review-mode'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-review-preview-'))
@@ -21,6 +21,7 @@ const { default: config } = await import('../payload.config.js')
 const reviewSessionRoute = await import('../app/api/auth/preview/review-session/route.js')
 const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 const reviewModeRoute = await import('../app/api/editorial/review/[id]/route.js')
+const pageReviewEntryRoute = await import('../app/api/editorial/page-review-entry/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -44,12 +45,18 @@ function baseline() {
   return value
 }
 
-async function fixture(label: string, options: { installed?: boolean } = {}) {
+async function fixture(label: string, options: { installed?: boolean; secondPage?: boolean } = {}) {
   const reviewer = await payload.create({ collection: 'users', data: { email: `${label}-${randomUUID()}@example.test`, name: 'Reviewer', roles: ['approver'] }, overrideAccess: true })
   const editor = await payload.create({ collection: 'users', data: { email: `${label}-editor-${randomUUID()}@example.test`, name: 'Editor', roles: ['editor'] }, overrideAccess: true })
   const live = baseline(); const page = live.pages[0]!; const before = { ...page, status: undefined }; delete (before as { status?: unknown }).status
   const after = { ...before, title: `Proposed ${label}` }
   const changes: Change[] = [{ collection: 'pages', id: page.id, before, after, beforeHash: canonicalHash(before), afterHash: null }]
+  if (options.secondPage) {
+    const second = { ...structuredClone(page), id: randomUUID(), title: `Second ${label}`, slug: `second-${page.id.slice(0, 8)}` }
+    live.pages.push(second); live.settings.sections[0]!.pageIds.push(second.id)
+    const secondBefore = { ...second, status: undefined }; delete (secondBefore as { status?: unknown }).status
+    changes.push({ collection: 'pages', id: second.id, before: secondBefore, after: { ...secondBefore, title: `Proposed second ${label}` }, beforeHash: canonicalHash(secondBefore), afterHash: null })
+  }
   const set = await payload.create({ collection: 'change-sets', data: { name: label, actor: editor.id, state: 'submitted', revision: 4, changes, quality: { checks: [{ name: 'contract-and-tree', status: 'passed' }] }, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
   let snapshotID: string | undefined
   if (options.installed !== false) {
@@ -64,7 +71,7 @@ async function fixture(label: string, options: { installed?: boolean } = {}) {
 }
 
 async function prepare(current: Awaited<ReturnType<typeof fixture>>, initialBaseline?: { manifest: ReturnType<typeof baseline>; sequence: number; versions: typeof versions }) {
-  return withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], initialBaseline }))
+  return withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.changes.filter((change) => change.collection === 'pages').map((change) => `pages:${change.id}`), initialBaseline }))
 }
 
 async function reviewSession(headers: Headers, path: string) {
@@ -121,8 +128,47 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect((await call(await reviewHeaders('editor'))).status).toBe(403)
     expect((await call(new Headers())).status).toBe(401)
 
+    const entry = (headers: Headers, path: string, internal = false) => pageReviewEntryRoute.GET(new Request(`http://cms.test/api/editorial/page-review-entry${internal ? '' : `?path=${encodeURIComponent(path)}`}`, { headers: { cookie: headers.get('cookie') ?? '', ...(internal ? { 'x-original-uri': path } : {}) } }))
+    const internalEntry = await entry(current.headers, '/', true)
+    expect(internalEntry.status).toBe(200)
+    expect(internalEntry.headers.get('x-page-review-set')).toBe(String(current.set.id))
+    expect(internalEntry.headers.get('cache-control')).toBe('private, no-store')
+    await expect((await entry(current.headers, '/')).json()).resolves.toMatchObject({ entries: [{ id: current.set.id, path: '/', name: 'on-page-review' }] })
+    expect((await entry(current.headers, '/unaffected', true)).status).toBe(403)
+    expect((await entry(await reviewHeaders('editor'), '/', true)).status).toBe(403)
+    expect((await entry(new Headers(), '/', true)).status).toBe(401)
+
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
     expect((await call(current.headers)).status).toBe(409)
+    expect((await entry(current.headers, '/', true)).status).toBe(403)
+  })
+
+  it('finds older submitted comparisons by page and selects every affected page explicitly', async () => {
+    const current = await fixture('multi-page-entry', { secondPage: true })
+    const job = await prepare(current)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    const pages = await loadReviewModePages(payload, String(current.set.id))
+    expect(pages).toHaveLength(2)
+    expect(new Set(pages.map((page) => page.pageID))).toEqual(new Set(current.changes.map((change) => change.id)))
+    expect(pages.every((page) => page.pageFields.includes('title'))).toBe(true)
+
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { submittedAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } })
+    for (let index = 0; index < 50; index += 1) {
+      await payload.create({ collection: 'change-sets', data: { name: `Newer unrelated ${index}`, actor: current.editor.id, state: 'submitted', revision: 1, submittedAt: `2099-01-01T00:${String(index).padStart(2, '0')}:00.000Z`, changes: [], preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
+    }
+    const entry = (path: string) => pageReviewEntryRoute.GET(new Request(`http://cms.test/api/editorial/page-review-entry?path=${encodeURIComponent(path)}`, { headers: current.headers }))
+    for (const page of pages) {
+      const response = await entry(page.path)
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toMatchObject({ entries: [{ id: current.set.id, pageID: page.pageID, path: page.path }] })
+      const selected = await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}?pageID=${page.pageID}`, { headers: current.headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
+      expect(selected.status).toBe(200)
+      await expect(selected.json()).resolves.toMatchObject({ review: { pageID: page.pageID, path: page.path, pageFields: ['title'] } })
+    }
+    expect((await entry('/unrelated-page')).status).toBe(403)
+    const excluded = await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}?pageID=${randomUUID()}`, { headers: current.headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
+    expect(excluded.status).toBe(400)
   })
 
   it('requires a freshly authenticated reviewer for approval', async () => {

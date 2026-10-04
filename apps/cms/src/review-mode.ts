@@ -39,6 +39,8 @@ export type ReviewModeData = {
   approvalProof?: Record<string, unknown>
 }
 
+export type ReviewPageRoute = { path: string; pageID?: string }
+
 export type ReviewQuality = {
   checks?: Array<{ name: string; status: string; errors?: Array<{ code?: string; path?: string; message: string }> }>
   warnings?: string[]
@@ -89,12 +91,23 @@ function blockPositions(manifest: unknown, pageID?: string): Map<string, { type:
   return positions
 }
 
-export function routeForReviewPreview(manifest: unknown, includedChangeKeys: unknown): { path: string; pageID?: string } {
+export function routesForReviewPreview(manifest: unknown, includedChangeKeys: unknown): ReviewPageRoute[] {
   const snapshot = SiteSnapshotSchema.parse(manifest)
-  const pageID = Array.isArray(includedChangeKeys) ? includedChangeKeys.find((key): key is string => typeof key === 'string' && key.startsWith('pages:'))?.slice('pages:'.length) : undefined
-  if (!pageID) return { path: '/' }
-  const route = deriveRoutes(snapshot).routes.find((candidate) => candidate.page.id === pageID)
-  return { path: route?.path ?? '/', pageID }
+  const pageIDs = Array.isArray(includedChangeKeys) ? [...new Set(includedChangeKeys.filter((key): key is string => typeof key === 'string' && key.startsWith('pages:')).map((key) => key.slice('pages:'.length)))] : []
+  if (!pageIDs.length) return [{ path: '/' }]
+  const routes = deriveRoutes(snapshot).routes
+  return pageIDs.map((pageID) => {
+    const route = routes.find((candidate) => candidate.page.id === pageID)
+    if (!route) throw new Error('A selected review page has no canonical route in this comparison.')
+    return { path: route.path, pageID }
+  })
+}
+
+export function routeForReviewPreview(manifest: unknown, includedChangeKeys: unknown, selection: { pageID?: string; path?: string } = {}): ReviewPageRoute {
+  const routes = routesForReviewPreview(manifest, includedChangeKeys)
+  const selected = selection.pageID ? routes.find((route) => route.pageID === selection.pageID) : selection.path ? routes.find((route) => route.path === selection.path) : routes[0]
+  if (!selected) throw new Error('The selected page is not part of this immutable comparison.')
+  return selected
 }
 
 export function describeReviewChanges(changes: CapturedChange[], pageID?: string) {
@@ -120,7 +133,7 @@ export function describeReviewChanges(changes: CapturedChange[], pageID?: string
   return { changedBlocks, pageFields, otherChanges }
 }
 
-export async function loadReviewModeData(payload: Payload, id: string): Promise<ReviewModeData> {
+async function validatedReview(payload: Payload, id: string) {
   const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true })
   const preview = set.preview as { status?: unknown; jobID?: unknown; revision?: unknown; changeHash?: unknown; contentHash?: unknown; includedChangeKeys?: unknown; baselineSnapshotID?: unknown; baselineSequence?: unknown; liveManifestHash?: unknown; proposedManifestHash?: unknown } | undefined
   if (!preview || preview.status !== 'ready' || typeof preview.jobID !== 'string') throw new Error('This review does not have a ready comparison.')
@@ -129,9 +142,13 @@ export async function loadReviewModeData(payload: Payload, id: string): Promise<
   const includedChangeKeys = Array.isArray(job.includedChangeKeys) ? job.includedChangeKeys.filter((value): value is string => typeof value === 'string') : []
   const previewKeys = Array.isArray(preview.includedChangeKeys) ? preview.includedChangeKeys.filter((value): value is string => typeof value === 'string') : []
   if (job.status !== 'completed' || !job.artifactDigest || relationID(job.changeSet) !== String(set.id) || String(job.id) !== preview.jobID || Number(set.revision) !== Number(job.reviewRevision) || Number(preview.revision) !== Number(job.reviewRevision) || preview.changeHash !== job.changeHash || changeSetHash(changes as never[]) !== job.changeHash || JSON.stringify([...includedChangeKeys].sort()) !== JSON.stringify([...previewKeys].sort()) || preview.liveManifestHash !== job.liveManifestHash || preview.proposedManifestHash !== job.proposedManifestHash) throw new Error('This comparison is no longer current.')
-  const route = routeForReviewPreview(job.proposedManifest, job.includedChangeKeys)
   const included = new Set(includedChangeKeys)
-  const described = describeReviewChanges(changes.filter((change) => included.has(`${change.collection}:${change.id}`)), route.pageID)
+  return { set, preview, job, changes: changes.filter((change) => included.has(`${change.collection}:${change.id}`)) }
+}
+
+function reviewForRoute(validated: Awaited<ReturnType<typeof validatedReview>>, route: ReviewPageRoute): ReviewModeData {
+  const { set, preview, job, changes } = validated
+  const described = describeReviewChanges(changes, route.pageID)
   const livePositions = blockPositions(job.liveManifest, route.pageID)
   const proposedPositions = blockPositions(job.proposedManifest, route.pageID)
   described.changedBlocks = described.changedBlocks.map((change) => {
@@ -141,9 +158,19 @@ export async function loadReviewModeData(payload: Payload, id: string): Promise<
   const quality = set.quality as ReviewQuality | undefined
   const currentProof = typeof preview.contentHash === 'string' && Array.isArray(preview.includedChangeKeys) && preview.includedChangeKeys.every((value): value is string => typeof value === 'string') && Number.isInteger(preview.baselineSequence) && quality?.proof?.previewJobID === preview.jobID && exactQualityProof(quality, { revision: Number(set.revision), changeHash: String(job.changeHash), contentHash: preview.contentHash, includedChangeKeys: preview.includedChangeKeys, baselineSnapshotID: typeof preview.baselineSnapshotID === 'string' ? preview.baselineSnapshotID : undefined, baselineSequence: Number(preview.baselineSequence) })
   return {
-    id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), previewJobID: preview.jobID,
+    id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), previewJobID: String(preview.jobID),
     path: route.path, pageID: route.pageID, ...described, quality,
     approvalProof: currentProof ? quality?.proof : undefined,
     reviewComments: Array.isArray(set.reviewComments) ? set.reviewComments as ReviewModeData['reviewComments'] : [],
   }
+}
+
+export async function loadReviewModePages(payload: Payload, id: string): Promise<ReviewModeData[]> {
+  const validated = await validatedReview(payload, id)
+  return routesForReviewPreview(validated.job.proposedManifest, validated.job.includedChangeKeys).map((route) => reviewForRoute(validated, route))
+}
+
+export async function loadReviewModeData(payload: Payload, id: string, selection: { pageID?: string; path?: string } = {}): Promise<ReviewModeData> {
+  const validated = await validatedReview(payload, id)
+  return reviewForRoute(validated, routeForReviewPreview(validated.job.proposedManifest, validated.job.includedChangeKeys, selection))
 }

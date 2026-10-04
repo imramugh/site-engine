@@ -16,7 +16,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (!hasRole(user, ['owner', 'approver'])) return Response.json({ error: 'Reviewer role required.' }, { status: 403, headers: privateHeaders })
     const { id } = await context.params
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return Response.json({ error: 'A valid change set is required.' }, { status: 400, headers: privateHeaders })
-    const review = await loadReviewModeData(payload, id)
+    const pageID = new URL(request.url).searchParams.get('pageID') ?? undefined
+    if (pageID && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pageID)) return Response.json({ error: 'A valid review page is required.' }, { status: 400, headers: privateHeaders })
+    const review = await loadReviewModeData(payload, id, { pageID })
     const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
     return Response.json({ review, fresh }, { headers: privateHeaders })
   } catch (error) {
