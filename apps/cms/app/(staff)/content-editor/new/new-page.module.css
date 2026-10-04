@@ -1,0 +1,47 @@
+.creator {
+  --line: #dce3e9;
+  --ink: #0f1b26;
+  --muted: #5f6b76;
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  color: var(--ink);
+}
+.creator.creator section,
+.creator.creator form { margin: 0; padding: 0; min-width: 0; }
+.creator.creator input,
+.creator.creator textarea,
+.creator.creator select,
+.creator.creator button { margin: 0; font: inherit; }
+.header nav { color: var(--muted); font-size: .8125rem; }
+.header nav a { color: #006485; }
+.header h1 { margin: .4rem 0; font-size: 1.5rem; }
+.header p { margin: 0; color: var(--muted); }
+.creator form { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap: 1rem; }
+.fields,
+.structure,
+.empty { display: grid; align-content: start; gap: 1rem; padding: 1.25rem !important; border: 1px solid var(--line); border-radius: .5rem; background: #fff; }
+.fields h2,
+.structure h2,
+.empty h2 { margin: 0; font-size: 1rem; }
+.control { display: grid; gap: .35rem; }
+.creator label { font-weight: 600; }
+.creator input,
+.creator textarea,
+.creator select { width: 100%; box-sizing: border-box; min-height: 40px; padding: .55rem .65rem; border: 1px solid #aab6c0; border-radius: .375rem; background: #fff; color: var(--ink); }
+.creator textarea { resize: vertical; }
+.creator small { color: var(--muted); font-weight: 400; }
+.creator code { overflow-wrap: anywhere; color: #013a63; }
+.error { grid-column: 1 / -1; margin: 0; padding: .75rem; border-left: 3px solid #a51d2d; background: #fff0f1; color: #751321; }
+.actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; gap: .75rem; }
+.actions a,
+.actions button { min-height: 40px; padding: .55rem 1rem; border-radius: .375rem; }
+.actions a { color: #013a63; }
+.actions button { border: 1px solid #013a63; background: #013a63; color: #fff; font-weight: 600; cursor: pointer; }
+.actions button:disabled { cursor: wait; opacity: .6; }
+@media (max-width: 720px) {
+  .creator form { grid-template-columns: minmax(0, 1fr); }
+  .actions { justify-content: stretch; }
+  .actions a,
+  .actions button { flex: 1; text-align: center; }
+}

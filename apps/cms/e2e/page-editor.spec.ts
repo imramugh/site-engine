@@ -96,7 +96,7 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     .click()
   await expect(editor.page).toHaveURL(new RegExp(`/content-editor/${pageID}$`))
   await expect(editor.page.locator('[data-admin-page-title]')).toHaveText(
-    'Page editor',
+    'Edit page',
   )
   expect(
     await editor.page.locator('[data-page-editor]').getAttribute(

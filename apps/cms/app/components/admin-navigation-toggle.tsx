@@ -25,7 +25,8 @@ const titleForPath = (pathname: string) => {
   const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events', 'site-settings': 'Site' }
   const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]
   if (collection && collectionTitles[collection]) return collectionTitles[collection]
-  if (/^\/content-editor\/[0-9a-f-]+$/i.test(pathname)) return 'Page editor'
+  if (pathname === '/content-editor/new') return 'Create page'
+  if (/^\/content-editor\/[0-9a-f-]+$/i.test(pathname)) return 'Edit page'
   return titles[pathname] ?? 'Workspace'
 }
 
