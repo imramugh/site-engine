@@ -53,7 +53,7 @@ function endpoint(provider: IntegrationProvider, model: string, credential: stri
   if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}`, headers: { 'x-goog-api-key': credential } }
   const [author, slug, ...rest] = model.split('/')
   if (!author || !slug || rest.length) return undefined
-  return { url: `https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
+  return { url: `https://openrouter.ai/api/v1/model/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
 }
 
 async function drainBounded(response: Response) {

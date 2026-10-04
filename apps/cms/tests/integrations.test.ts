@@ -40,7 +40,7 @@ describe('ENG-023 credential envelopes', () => {
       'https://api.anthropic.com/v1/models/claude-test',
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-test',
       'https://openrouter.ai/api/v1/key',
-      'https://openrouter.ai/api/v1/models/openai/gpt-test',
+      'https://openrouter.ai/api/v1/model/openai/gpt-test',
     ])
     expect(requests[0]!.headers.get('authorization')).toBe('Bearer secret')
     expect(requests[1]!.headers.get('x-api-key')).toBe('secret')
