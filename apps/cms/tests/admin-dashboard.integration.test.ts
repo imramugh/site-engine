@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { getAdminDashboardData } from '../src/admin-dashboard'
 import { createAcceptedInquiry, validateInquiry } from '../src/inquiries'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-admin-dashboard-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -31,15 +32,18 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
     await createAcceptedInquiry(payload, validateInquiry({ email: 'standard-dashboard@example.test', message: 'A new project inquiry needs attention.', topic: 'project', sourcePage: '/contact', consent: true, idempotencyKey: 'standard-dashboard-idempotency-key' }).input!)
 
     const set = (await payload.find({ collection: 'change-sets', where: { name: { equals: 'Ready for review' } }, overrideAccess: true })).docs[0]!
-    const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: 'a'.repeat(64), changeSet: set.id, reviewRevision: 1, changeHash: 'b'.repeat(64), manifest: { version: '1.0.0', pages: [], sections: [], redirects: [] }, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', approvedBy: owner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+    const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: 'a'.repeat(64), changeSet: set.id, reviewRevision: 1, changeHash: 'b'.repeat(64), manifest: neutralFixture, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', approvedBy: owner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
     const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'dashboard-release-outbox-key', sequence: 1, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 1, changeHash: 'b'.repeat(64), includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: 'dashboard-release-correlation' }, overrideAccess: true, context: { editorialInternal: true } })
     const activatedAt = '2026-10-04T12:00:00.000Z'
     await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt, healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', checks: [] } }, overrideAccess: true, context: { editorialInternal: true } })
 
     const result = await getAdminDashboardData(observedPayload([]), owner)
-    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 2 }, pages: { total: 0, draft: 0, readiness: { state: 'available', issues: 0 }, withIssues: { state: 'unavailable' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt } })
+    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 2 }, pages: { readiness: { state: 'available', issues: 0 }, withIssues: { state: 'available' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt } })
     expect(result.pendingReviews?.items.find((item) => item.name === 'Ready for review')).toMatchObject({ readiness: 'not-run', issues: 0 })
     expect(result.pendingReviews?.items.find((item) => item.name === 'Blocked review')).toMatchObject({ readiness: 'blocked', issues: 0 })
+    expect(result.leads?.items).toHaveLength(2)
+    expect(JSON.stringify(result.leads)).not.toContain('active incident needs attention')
+    expect(result.actions.map((item) => item.href)).toContain('/integrations')
     expect(result.shortcuts.map((item) => item.href)).toContain('/leads')
   })
 
@@ -51,6 +55,7 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
       const collections: string[] = []
       const result = await getAdminDashboardData(observedPayload(collections), actor)
       expect(result.leads).toBeUndefined()
+      expect(result.providers).toBeUndefined()
       expect(collections).not.toContain('inquiries')
       expect(result.shortcuts.map((item) => item.href)).not.toContain('/leads')
       expect(result.shortcuts.map((item) => item.href)).not.toContain('/applications')
@@ -69,13 +74,15 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
     const hiring = await payload.create({ collection: 'users', data: { email: 'dashboard-hiring@example.test', name: 'Dashboard Hiring', roles: ['hiring'] }, overrideAccess: true })
     const salesCollections: string[] = []
     const salesResult = await getAdminDashboardData(observedPayload(salesCollections), sales)
-    expect(salesResult.leads).toEqual({ new: 2, urgent: 1 })
-    expect(salesCollections).toEqual(['inquiries', 'inquiries'])
+    expect(salesResult.leads).toMatchObject({ new: 2, urgent: 1 })
+    expect(salesCollections).toEqual(['inquiries', 'inquiries', 'inquiries'])
+    expect(salesResult.actions).toEqual([])
     expect(salesResult.shortcuts.map((item) => item.href)).toEqual(['/leads'])
     const hiringCollections: string[] = []
     const hiringResult = await getAdminDashboardData(observedPayload(hiringCollections), hiring)
     expect(hiringCollections).toEqual([])
     expect(hiringResult.leads).toBeUndefined()
+    expect(hiringResult.actions).toEqual([])
     expect(hiringResult.shortcuts.map((item) => item.href)).toEqual(['/applications'])
   })
 
