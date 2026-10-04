@@ -19,5 +19,19 @@ describe('ENG-002 exported schema fixtures', () => {
     ['hero', { ...block, type: 'hero', heading: 'Hero', body: 'Neutral hero.' }],
     ['faq', { id, hidden: false, type: 'faq', heading: 'Questions', items: [{ question: 'Question?', answer: 'Answer.' }], appearance }],
     ['media', { id, hidden: false, type: 'media', mediaId: id, appearance }],
-  ])('strict block fixture %s rejects unknown and raw CSS fields', (_name, valid) => { expect(BlockSchema.safeParse(valid).success).toBe(true); expect(BlockSchema.safeParse({ ...valid, unexpected: true }).success).toBe(false); expect(BlockSchema.safeParse({ ...valid, appearance: { ...appearance, background: '#fff' } }).success).toBe(false) })
+    ['incidentBar', { id, hidden: false, type: 'incidentBar', message: 'Notice', appearance }],
+    ['pillarGrid', { id, hidden: false, type: 'pillarGrid', heading: 'Pillars', items: [{ title: 'One', body: 'Body', href: '/one' }], appearance }],
+    ['featureGrid', { id, hidden: false, type: 'featureGrid', heading: 'Features', items: [{ title: 'One', body: 'Body' }], appearance }],
+    ['splitList', { id, hidden: false, type: 'splitList', heading: 'List', items: [{ title: 'One', body: 'Body' }], appearance }],
+    ['chipList', { id, hidden: false, type: 'chipList', chips: ['One'], appearance }],
+    ['testimonials', { id, hidden: false, type: 'testimonials', items: [{ quote: 'Quote', attribution: 'Person', permissionConfirmed: true }], appearance }],
+    ['callout', { id, hidden: false, type: 'callout', heading: 'Callout', body: 'Body', appearance }],
+    ['relatedServices', { id, hidden: false, type: 'relatedServices', heading: 'Related', pageIds: [id], appearance }],
+    ['richText', { id, hidden: false, type: 'richText', body: 'Body', appearance }],
+    ['contact', { id, hidden: false, type: 'contact', heading: 'Contact', body: 'Body', appearance }],
+    ['imageText', { id, hidden: false, type: 'imageText', heading: 'Image', body: 'Body', mediaId: id, appearance }],
+    ['gallery', { id, hidden: false, type: 'gallery', mediaIds: [id], appearance }],
+    ['logoStrip', { id, hidden: false, type: 'logoStrip', mediaIds: [id], appearance }],
+    ['video', { id, hidden: false, type: 'video', mediaId: id, posterMediaId: id, captionsMediaId: id, appearance }],
+  ])('strict block fixture %s rejects unknown and raw CSS fields', (_name, valid) => { expect(BlockSchema.safeParse(valid).success).toBe(true); expect(BlockSchema.safeParse({ ...valid, type: undefined }).success).toBe(false); expect(BlockSchema.safeParse({ ...valid, unexpected: true }).success).toBe(false); expect(BlockSchema.safeParse({ ...valid, appearance: { ...appearance, background: '#fff' } }).success).toBe(false) })
 })
