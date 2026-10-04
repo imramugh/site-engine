@@ -20,6 +20,7 @@ writeFileSync(tokenFile, 'test-only-bootstrap-token')
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = tokenFile
 
 const { default: config } = await import('../payload.config.js')
+const { GET: mediaWorkspaceGET, PATCH: mediaWorkspacePATCH } = await import('../app/api/media/workspace/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => {
@@ -267,6 +268,34 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     await expect(payload.create({ collection: 'pages', data: { title: 'Missing asset alt', summary: 'This page proves server validation refuses assets that have no accessible description.', slug: 'missing-asset-alt', sectionId: section.id, template: 'standard', blocks: [{ id: 'c1000000-0000-4000-8000-000000000001', type: 'media', mediaId: asset.id, hidden: false, appearance }] }, user: owner, overrideAccess: false })).resolves.toMatchObject({ id: expect.any(String) })
     const lifecycle = await moveAssetToBin(payload, { payload } as never, owner, asset.id, new Date('2026-10-03T00:00:00.000Z'))
     expect(lifecycle).toMatchObject({ status: 'blocked', usages: [{ pageTitle: 'Missing asset alt', locations: ['blocks[0].mediaId'] }] })
+  })
+
+
+  it('authorizes the bounded media workspace read and metadata routes without leaking asset usage', async () => {
+    process.env.PAYLOAD_PUBLIC_SERVER_URL = 'https://cms.example.test'
+    const owner = await payload.create({ collection: 'users', data: { email: 'workspace-owner@example.test', name: 'Workspace Owner', roles: ['owner'] }, overrideAccess: true })
+    const editor = await payload.create({ collection: 'users', data: { email: 'workspace-editor@example.test', name: 'Workspace Editor', roles: ['editor'] }, overrideAccess: true })
+    const denied = []; for (const role of ['sales', 'hiring'] as const) denied.push(await payload.create({ collection: 'users', data: { email: `workspace-${role}@example.test`, name: role, roles: [role] }, overrideAccess: true }))
+    const disabled = await payload.create({ collection: 'users', data: { email: 'workspace-disabled@example.test', name: 'Disabled', roles: ['editor'], disabled: true }, overrideAccess: true })
+    const raster = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#155e75' } }).png().toBuffer()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Private synthetic usage image' }, file: { data: raster, mimetype: 'image/png', name: 'workspace-private.png', size: raster.length }, user: owner, overrideAccess: false })
+    const section = await payload.create({ collection: 'sections', data: { name: 'Workspace use', summary: 'Synthetic section for media route safety.', slug: 'workspace-use', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
+    await payload.create({ collection: 'pages', data: { title: 'Private usage page', summary: 'Synthetic page with an asset reference.', slug: 'workspace-private-use', sectionId: section.id, template: 'standard', blocks: [{ id: 'd1000000-0000-4000-8000-000000000001', type: 'media', mediaId: asset.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: owner, overrideAccess: false })
+    const token = async (user: { id: string }) => { const value = newOpaqueToken(); const now = new Date().toISOString(); await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(value), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true }); return value }
+    const headers = async (user: { id: string }) => new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${await token(user)}` })
+    const ownerHeaders = await headers(owner); const editorHeaders = await headers(editor); const status = async (response: Promise<Response>) => { const result = await response; await result.text(); return result.status }
+    expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-private', { headers: ownerHeaders })))).toBe(200)
+    const ownerBody = await (await mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-private', { headers: ownerHeaders }))).json() as { assets: Array<{ id: string; usages: unknown[] }> }
+    expect(ownerBody.assets.find((item) => item.id === asset.id)?.usages).toHaveLength(1)
+    expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace', { headers: editorHeaders })))).toBe(200)
+    for (const user of [...denied, disabled]) expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace', { headers: await headers(user) })))).toBe(403)
+    expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace')))).toBe(403)
+    const patch = (body: unknown, headers: Headers) => mediaWorkspacePATCH(new Request('https://cms.example.test/api/media/workspace', { method: 'PATCH', headers: new Headers({ ...Object.fromEntries(headers), origin: 'https://cms.example.test', 'content-type': 'application/json' }), body: JSON.stringify(body) }))
+    expect(await status(mediaWorkspacePATCH(new Request('https://cms.example.test/api/media/workspace', { method: 'PATCH', headers: ownerHeaders, body: '{}' })))).toBe(403)
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, unexpected: true }, ownerHeaders))).toBe(400)
+    expect(await status(patch({ id: asset.id, alt: 'x'.repeat(9_000), decorative: false }, ownerHeaders))).toBe(413)
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'] }, editorHeaders))).toBe(200)
+    expect((await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).alt).toBe('Updated safe description')
   })
 
   it('allows a decorative image and bins an unused asset for exactly thirty days', async () => {
