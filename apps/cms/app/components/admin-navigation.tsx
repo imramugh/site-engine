@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { navigationForRoles, payloadCollectionItems, type AdminRole } from '../../src/admin-navigation'
 import { loadAdminBranding } from '../../src/admin-branding'
-import { AdminNavigationToggle } from './admin-navigation-toggle'
+import { AdminNavigationToggle, SkipNavigation } from './admin-navigation-toggle'
 import styles from './staff-shell.module.css'
 
 type AdminNavProps = { user?: WorkspaceUser | null }
@@ -17,7 +17,7 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
 
   return <aside className={styles.adminSidebar} data-admin-sidebar style={branding.tokens as CSSProperties} aria-label="Workspace navigation">
     {branding.stylesheetUrl ? <link rel="stylesheet" href={branding.stylesheetUrl} /> : null}
-    <a className={styles.skipLink} href="#admin-workspace">Skip navigation</a>
+    <SkipNavigation />
     <a className={styles.adminBrand} href="/admin" aria-label={`${branding.name} overview`}>
       {branding.logoUrl ? <img src={branding.logoUrl} alt={branding.name} /> : <span aria-hidden="true">{branding.initials}</span>}
       <strong>{branding.name}</strong>

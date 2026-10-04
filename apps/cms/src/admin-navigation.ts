@@ -15,7 +15,7 @@ const allStaff: readonly AdminRole[] = ['owner', 'editor', 'approver', 'sales', 
 export const adminNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/admin', label: 'Overview', roles: allStaff },
   { href: '/content-tree', label: 'Content tree', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/editorial', label: 'Editorial review', roles: ['owner', 'editor', 'approver'] },
+  { href: '/editorial', label: 'Editorial review', roles: ['owner', 'editor', 'approver'] },
   { href: '/block-gallery', label: 'Block gallery', roles: ['owner', 'editor'] },
   { href: '/leads', label: 'Lead pipeline', roles: ['owner', 'sales'] },
   { href: '/applications', label: 'Applications', roles: ['owner', 'hiring'] },

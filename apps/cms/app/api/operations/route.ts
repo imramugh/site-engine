@@ -78,7 +78,7 @@ export async function GET(request: Request) {
       totalPages: audit.totalPages,
     },
     shortcuts: [
-      { label: 'Editorial review', href: '/admin/editorial' },
+      { label: 'Editorial review', href: '/editorial' },
       { label: 'Leads', href: '/leads' },
       { label: 'Applications', href: '/applications' },
     ],

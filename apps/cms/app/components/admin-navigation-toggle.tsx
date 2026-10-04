@@ -23,6 +23,18 @@ function NavIcon({ label }: { label: string }) {
   return <svg className={styles.navIcon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[label] ?? paths.Overview} /></svg>
 }
 
+export function SkipNavigation() {
+  const skip = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault()
+    const target = document.getElementById('admin-workspace') ?? document.querySelector<HTMLElement>('main, .template-default__wrap')
+    if (!target) return
+    target.tabIndex = -1
+    target.focus()
+  }
+
+  return <a className={styles.skipLink} href="#admin-workspace" onClick={skip}>Skip navigation</a>
+}
+
 export function AdminNavigationToggle({ items, collections, displayName, roles }: Props) {
   const [open, setOpen] = useState(false)
   const id = useId()
