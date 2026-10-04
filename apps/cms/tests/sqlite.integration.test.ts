@@ -69,6 +69,13 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     expect((await resolve(roleToken)).status).toBe(200)
     await payload.update({ collection: 'users', id: roleUser.id, data: { roles: ['approver'] }, overrideAccess: true })
     expect((await resolve(roleToken)).status).toBe(401)
+
+    const approver = await payload.create({ collection: 'users', data: { email: 'bridge-approver@example.test', name: 'Bridge approver', roles: ['approver'] }, overrideAccess: true })
+    const approverToken = newOpaqueToken()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(approverToken), user: approver.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const approverResolution = await resolve(approverToken)
+    expect(approverResolution.status).toBe(200)
+    await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] } })
   })
 
   it('rejects unauthenticated, malformed, oversized, and non-POST OAuth bridge requests', async () => {
