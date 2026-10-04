@@ -8,10 +8,11 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { Block } from '@site-engine/contract'
+import type { Block, Page } from '@site-engine/contract'
+import { MetadataFields, type PageMetadataValue } from './metadata-fields'
 import styles from './page-editor.module.css'
 
-type Draft = {
+type Draft = PageMetadataValue & {
   title: string
   summary: string
   slug: string
@@ -36,7 +37,7 @@ type CatalogItem = {
 type Context = {
   page: {
     id: string
-    template: string
+    template: Page['template']
     state: string
     draft: Draft
     hash: string
@@ -1370,7 +1371,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
         <div className={styles.controls}>
           <details className={styles.pageFields} data-page-editor-fields>
             <summary>
-              Page fields <span>Title, summary, URL and SEO</span>
+              Page fields <span>Title, summary, metadata, URL and SEO</span>
             </summary>
             <div>
               <label>
@@ -1437,6 +1438,14 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 />{' '}
                 Hide from search engines and public search
               </label>
+              <MetadataFields
+                template={data.page.template}
+                value={draft}
+                disabled={busy}
+                onChange={(metadata) =>
+                  edit((current) => ({ ...current, ...metadata }))
+                }
+              />
             </div>
           </details>
           <section className={styles.blocks} data-page-editor-blocks>

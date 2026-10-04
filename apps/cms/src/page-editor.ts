@@ -1,6 +1,8 @@
 import type { Payload, PayloadRequest } from 'payload'
 import {
   BlockSchema,
+  BusinessCaseSchema,
+  JobPostingSchema,
   AppearanceOptions,
   PageSchema,
   TemplateAllowedBlocks,
@@ -25,6 +27,12 @@ export type PageEditorDraft = {
   slug: string
   seoDescription?: string
   noindex: boolean
+  kicker?: ContractPage['kicker']
+  lede?: ContractPage['lede']
+  publishedAt?: ContractPage['publishedAt']
+  lastReviewed?: ContractPage['lastReviewed']
+  jobPosting?: ContractPage['jobPosting']
+  businessCase?: ContractPage['businessCase']
   blocks: Block[]
 }
 export type PageEditorSave = {
@@ -90,6 +98,12 @@ export function parsePageEditorDraft(value: unknown): PageEditorDraft {
       'slug',
       'seoDescription',
       'noindex',
+      'kicker',
+      'lede',
+      'publishedAt',
+      'lastReviewed',
+      'jobPosting',
+      'businessCase',
       'blocks',
     ]) ||
     typeof draft.title !== 'string' ||
@@ -97,6 +111,10 @@ export function parsePageEditorDraft(value: unknown): PageEditorDraft {
     typeof draft.slug !== 'string' ||
     (draft.seoDescription !== undefined &&
       typeof draft.seoDescription !== 'string') ||
+    (draft.kicker !== undefined && typeof draft.kicker !== 'string') ||
+    (draft.lede !== undefined && typeof draft.lede !== 'string') ||
+    (draft.publishedAt !== undefined && typeof draft.publishedAt !== 'string') ||
+    (draft.lastReviewed !== undefined && typeof draft.lastReviewed !== 'string') ||
     typeof draft.noindex !== 'boolean' ||
     !Array.isArray(draft.blocks) ||
     draft.blocks.length > 40
@@ -104,11 +122,23 @@ export function parsePageEditorDraft(value: unknown): PageEditorDraft {
     throw new Error('INVALID_PAGE_EDIT')
   const blocks = draft.blocks.map((block) => BlockSchema.parse(block))
   const seoDescription = draft.seoDescription?.trim()
+  const kicker = typeof draft.kicker === 'string' ? draft.kicker.trim() : undefined
+  const lede = typeof draft.lede === 'string' ? draft.lede.trim() : undefined
+  const publishedAt = typeof draft.publishedAt === 'string' ? draft.publishedAt : undefined
+  const lastReviewed = typeof draft.lastReviewed === 'string' ? draft.lastReviewed : undefined
+  const jobPosting = draft.jobPosting === undefined ? undefined : JobPostingSchema.parse(draft.jobPosting)
+  const businessCase = draft.businessCase === undefined ? undefined : BusinessCaseSchema.parse(draft.businessCase)
   return {
     title: draft.title,
     summary: draft.summary,
     slug: draft.slug,
     ...(seoDescription ? { seoDescription } : {}),
+    ...(kicker ? { kicker } : {}),
+    ...(lede ? { lede } : {}),
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(lastReviewed ? { lastReviewed } : {}),
+    ...(jobPosting ? { jobPosting } : {}),
+    ...(businessCase ? { businessCase } : {}),
     noindex: draft.noindex,
     blocks,
   }
@@ -124,6 +154,12 @@ export function pageEditorProjection(
     ...(typeof page.seoDescription === 'string' && page.seoDescription.trim()
       ? { seoDescription: page.seoDescription }
       : {}),
+    ...(typeof page.kicker === 'string' && page.kicker.trim() ? { kicker: page.kicker } : {}),
+    ...(typeof page.lede === 'string' && page.lede.trim() ? { lede: page.lede } : {}),
+    ...(typeof page.publishedAt === 'string' ? { publishedAt: page.publishedAt } : {}),
+    ...(typeof page.lastReviewed === 'string' ? { lastReviewed: page.lastReviewed } : {}),
+    ...(page.jobPosting ? { jobPosting: page.jobPosting } : {}),
+    ...(page.businessCase ? { businessCase: page.businessCase } : {}),
     noindex: page.noindex === true,
     blocks: Array.isArray(page.blocks) ? page.blocks : [],
   })
@@ -186,7 +222,6 @@ function contractPage(
     ...draft,
     template: page.template,
     status: 'draft',
-    ...(page.businessCase ? { businessCase: page.businessCase } : {}),
   })
 }
 
@@ -270,7 +305,13 @@ export async function applyPageEditorSave(input: {
     id: save.pageID,
     data: {
       ...desired,
+      kicker: desired.kicker ?? null,
+      lede: desired.lede ?? null,
       seoDescription: desired.seoDescription ?? null,
+      publishedAt: desired.publishedAt ?? null,
+      lastReviewed: desired.lastReviewed ?? null,
+      jobPosting: desired.jobPosting ?? null,
+      businessCase: desired.businessCase ?? null,
       status: 'draft',
     },
     draft: true,

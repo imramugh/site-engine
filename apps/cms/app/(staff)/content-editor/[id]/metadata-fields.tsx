@@ -1,6 +1,7 @@
 'use client'
 
 import type { Page } from '@site-engine/contract'
+import { useEffect, useRef, useState } from 'react'
 import styles from './metadata-fields.module.css'
 
 export type PageMetadataValue = Pick<
@@ -25,7 +26,7 @@ export const dateFromInput = (value: string): string | undefined =>
   value ? `${value}T00:00:00.000Z` : undefined
 
 const emptyBusinessCase = (): NonNullable<Page['businessCase']> => ({
-  client: 'Client name',
+  client: '',
   industry: '',
   challenge: '',
   approach: '',
@@ -90,8 +91,22 @@ export function MetadataFields({ template, value, disabled = false, onChange }: 
 
 function BusinessCaseFields({ value, disabled, onChange }: { value?: Page['businessCase']; disabled: boolean; onChange: (value?: Page['businessCase']) => void }) {
   if (!value) return <button type="button" disabled={disabled} onClick={() => onChange(emptyBusinessCase())}>Add business case details</button>
+  return <BusinessCaseForm value={value} disabled={disabled} onChange={onChange} />
+}
+
+function BusinessCaseForm({ value, disabled, onChange }: { value: NonNullable<Page['businessCase']>; disabled: boolean; onChange: (value?: Page['businessCase']) => void }) {
   const update = <Key extends keyof NonNullable<Page['businessCase']>>(key: Key, next: NonNullable<Page['businessCase']>[Key]) => onChange({ ...value, [key]: next })
   const identified = value.client !== undefined
+  const normalizedServices = value.services.join(', ')
+  const [servicesText, setServicesText] = useState(normalizedServices)
+  const lastEmittedServices = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (lastEmittedServices.current === normalizedServices) {
+      lastEmittedServices.current = undefined
+      return
+    }
+    setServicesText(normalizedServices)
+  }, [normalizedServices])
   return (
     <fieldset disabled={disabled} data-page-editor-business-case>
       <legend>Business case</legend>
@@ -101,7 +116,7 @@ function BusinessCaseFields({ value, disabled, onChange }: { value?: Page['busin
       </div>
       <label>
         {identified ? 'Client' : 'Anonymized client'}
-        <input maxLength={160} value={(identified ? value.client : value.anonymizedClient) ?? ''} onChange={(event) => identified ? update('client', event.target.value) : update('anonymizedClient', event.target.value)} />
+        <input maxLength={160} placeholder={identified ? 'Client or organization name' : 'Anonymized client description'} value={(identified ? value.client : value.anonymizedClient) ?? ''} onChange={(event) => identified ? update('client', event.target.value) : update('anonymizedClient', event.target.value)} />
       </label>
       <label>Industry<input maxLength={100} value={value.industry} onChange={(event) => update('industry', event.target.value)} /></label>
       <label>Challenge<textarea maxLength={2000} value={value.challenge} onChange={(event) => update('challenge', event.target.value)} /></label>
@@ -109,7 +124,13 @@ function BusinessCaseFields({ value, disabled, onChange }: { value?: Page['busin
       <label>Outcome<textarea maxLength={2000} value={value.outcome} onChange={(event) => update('outcome', event.target.value)} /></label>
       <label>
         Services <span className={styles.hint}>Separate names with commas.</span>
-        <input value={value.services.join(', ')} onChange={(event) => update('services', event.target.value.split(',').map((item) => item.trim()).filter(Boolean).slice(0, 12))} />
+        <input value={servicesText} onChange={(event) => {
+          const raw = event.target.value
+          const services = raw.split(',').map((item) => item.trim()).filter(Boolean).slice(0, 12)
+          setServicesText(raw)
+          lastEmittedServices.current = services.join(', ')
+          update('services', services)
+        }} />
       </label>
       <label>Case publication date<input type="date" value={isoDate(value.publicationDate)} onChange={(event) => update('publicationDate', dateFromInput(event.target.value) ?? '')} /></label>
       <button type="button" className={styles.remove} onClick={() => onChange(undefined)}>Remove business case details</button>

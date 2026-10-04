@@ -89,14 +89,14 @@ async function session(user: { id: string }) {
   })
   return `${cookieName(SESSION_COOKIE)}=${token}`
 }
-async function fixture(user: { id: string }) {
+async function fixture(user: { id: string }, template: 'landing' | 'article' | 'job' = 'landing') {
   const unique = randomUUID().replaceAll('-', '').slice(0, 12)
   const section = await payload.create({
     collection: 'sections',
     data: {
       name: `Section ${unique}`,
       slug: `section-${unique}`,
-      allowedTemplates: ['landing', 'standard'],
+      allowedTemplates: ['landing', 'standard', 'article', 'job'],
     },
     overrideAccess: true,
     context: { editorialInternal: true },
@@ -109,8 +109,8 @@ async function fixture(user: { id: string }) {
         'A synthetic page with enough summary text for page editor tests.',
       slug: `page-${unique}`,
       sectionId: section.id,
-      template: 'landing',
-      blocks: [hero, text],
+      template,
+      blocks: template === 'landing' ? [hero, text] : [text],
     },
     overrideAccess: true,
     context: { editorialInternal: true },
@@ -328,6 +328,29 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     expect(set.changes).toEqual([
       expect.objectContaining({ collection: 'pages', id: current.page.id }),
     ])
+  })
+
+  it('saves, clears, and hashes article and job metadata as part of the whole-page draft', async () => {
+    const editor = await actor()
+    const article = await fixture(editor, 'article')
+    const current = pageEditorProjection(article.page as unknown as Record<string, unknown>)
+    const businessCase = { anonymizedClient: 'Regional organization', industry: 'Services', challenge: 'A clear challenge.', approach: 'A clear approach.', outcome: 'A clear outcome.', services: ['Advisory'], publicationDate: '2026-09-30T00:00:00.000Z' }
+    const desired = { ...current, publishedAt: '2026-09-29T00:00:00.000Z', lastReviewed: '2026-10-01T00:00:00.000Z', businessCase }
+    await withPayloadTransaction(payload, (req) => applyPageEditorSave({ payload, req, actor: editor as never, save: { pageID: article.page.id, changeSetID: article.set.id, expectedPageHash: pageEditorHash(current), expectedChangeSetRevision: 0, draft: desired } }))
+    const stored = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
+    expect(pageEditorProjection(stored as unknown as Record<string, unknown>)).toMatchObject(desired)
+    const changedSet = await payload.findByID({ collection: 'change-sets', id: article.set.id, overrideAccess: true })
+    const withMetadata = pageEditorProjection(stored as unknown as Record<string, unknown>)
+    await withPayloadTransaction(payload, (req) => applyPageEditorSave({ payload, req, actor: editor as never, save: { pageID: article.page.id, changeSetID: article.set.id, expectedPageHash: pageEditorHash(withMetadata), expectedChangeSetRevision: Number(changedSet.revision), draft: { ...withMetadata, publishedAt: undefined, lastReviewed: undefined, businessCase: undefined } } }))
+    const cleared = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
+    expect(cleared).toMatchObject({ publishedAt: null, lastReviewed: null, businessCase: null })
+
+    const job = await fixture(editor, 'job')
+    const jobCurrent = pageEditorProjection(job.page as unknown as Record<string, unknown>)
+    const jobPosting = { datePosted: '2026-10-01T00:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2026-11-01T00:00:00.000Z' }
+    const parsed = parsePageEditorDraft({ ...jobCurrent, jobPosting })
+    expect(parsed.jobPosting).toEqual(jobPosting)
+    expect(pageEditorHash(parsed)).not.toBe(pageEditorHash(jobCurrent))
   })
 
   it('serializes duplicate and competing writes while rejecting stale page and set revisions', async () => {

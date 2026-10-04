@@ -10,6 +10,7 @@ import { createRequire } from 'node:module'
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const pageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
+const metadataPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
 
 async function signedIn(browser: Browser, token: string) {
   const context = await browser.newContext({
@@ -87,6 +88,29 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     .get('/__e2e/publish-state')
     .then((response) => response.json())) as { releaseCount: number }
   await editor.page.setViewportSize({ width: 1440, height: 900 })
+  await editor.page.goto(`/content-editor/${metadataPageID}`)
+  await editor.page.getByText('Page fields', { exact: false }).first().click()
+  await editor.page.getByRole('button', { name: 'Add business case details' }).click()
+  await editor.page.getByLabel('Client', { exact: true }).fill('Synthetic organization')
+  const services = editor.page.getByLabel(/Services Separate names with commas/)
+  await services.pressSequentially('Advisory, Strategy')
+  await expect(services).toHaveValue('Advisory, Strategy')
+  await editor.page.getByLabel('Last reviewed').fill('2026-10-01')
+  await expect(editor.page.getByText('You have unsaved page changes.')).toBeVisible()
+  await editor.page.addScriptTag({ path: axeSource })
+  const metadataViolations = await editor.page.evaluate(async () =>
+    // @ts-expect-error axe is injected for browser accessibility verification.
+    (await window.axe.run(document)).violations.map((violation) => ({
+      id: violation.id,
+      impact: violation.impact,
+      nodes: violation.nodes.map((node: { target: string[] }) => node.target),
+    })),
+  )
+  expect(metadataViolations).toEqual([])
+  await editor.page.reload()
+  await editor.page.getByText('Page fields', { exact: false }).first().click()
+  await expect(editor.page.getByRole('button', { name: 'Add business case details' })).toBeVisible()
+
   await editor.page.goto('/content-tree')
   await editor.page
     .getByRole('link', { name: /Page editor browser page/ })
