@@ -1,4 +1,6 @@
 import { expect, test, type Browser } from '@playwright/test'
+import { createRequire } from 'node:module'
+const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 async function signedIn(browser: Browser, token: string) {
@@ -12,9 +14,12 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   const before = await editor.page.request.get('/__e2e/publish-state').then(response => response.json()) as { releaseCount: number }
   await editor.page.goto('/direct-edit')
   await expect(editor.page.getByRole('heading', { name: 'Hero draft editor' })).toBeVisible()
+  await editor.page.setViewportSize({ width: 1440, height: 900 })
   await editor.page.getByLabel('Heading').fill('Browser saved heading')
+  await editor.page.getByLabel('Body').fill('Unsaved body is retained while heading saves.')
   await editor.page.getByRole('button', { name: 'Save heading' }).click()
   await expect(editor.page.getByRole('status')).toContainText('Draft saved.')
+  await expect(editor.page.getByLabel('Body')).toHaveValue('Unsaved body is retained while heading saves.')
   const queued = editor.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST' && response.status() === 200)
   await editor.page.getByRole('button', { name: 'Prepare preview' }).click()
   await queued
@@ -22,6 +27,13 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   const worker = await editor.page.request.post('/__e2e/direct-preview-worker'); expect(worker.status(), await worker.text()).toBe(200)
   const frame = editor.page.frameLocator('iframe[title="Proposed draft preview"]')
   await expect(frame.getByText('Browser saved heading')).toBeVisible()
+  await editor.page.addScriptTag({ path: axeSource })
+  expect(await editor.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  await editor.page.screenshot({ path: 'artifacts/direct-edit-1440.png', fullPage: true })
+  await editor.page.setViewportSize({ width: 390, height: 844 })
+  expect(await editor.page.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  expect(await editor.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  await editor.page.screenshot({ path: 'artifacts/direct-edit-390.png', fullPage: true })
   const previewURL = await editor.page.locator('iframe').getAttribute('src')
   await editor.page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(editor.page.getByRole('status')).toContainText('Submitted for review.')
