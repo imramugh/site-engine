@@ -411,7 +411,9 @@ export const MailDrafts: CollectionConfig = {
     beforeChange: [({ data, originalDoc, operation }) => {
       if (operation !== 'update' || !originalDoc) return data
       const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
-      return fields.some((field) => JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
+      // Payload update input is a patch. An omitted draft-bound field must not
+      // be treated as an edit when the authorization service only changes state.
+      return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       if (operation !== 'update' || doc.revision === previousDoc?.revision) return
@@ -425,7 +427,7 @@ export const MailDrafts: CollectionConfig = {
 export const MailAuthorizations: CollectionConfig = {
   slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
   fields: [
-    { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true, unique: true },
+    { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true },
     { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
     { name: 'expiresAt', type: 'date', required: true }, { name: 'revokedAt', type: 'date' }, { name: 'consumedAt', type: 'date' },
   ],
