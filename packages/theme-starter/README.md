@@ -6,7 +6,7 @@ Theme-specific extensions must use a namespaced identifier such as `exampleAgenc
 
 ## Hero fields
 
-The standard Hero accepts its original eyebrow, heading, body, and optional primary CTA. It may also include an optional `secondaryCta` and a `supportPanel` with an optional eyebrow, required heading and body, and optional CTA. The starter renders the actions together, labels the supporting content as an `aside`, and collapses the two-column presentation to one column on narrow screens. Themes should omit empty optional wrappers and validate internal link targets at their rendering boundary.
+The standard Hero accepts its original eyebrow, heading, body, and optional primary CTA. It may also include an optional `secondaryCta` and a `supportPanel` with an optional eyebrow, required heading and body, optional internal CTA, and optional E.164 `phoneCta`. The starter renders the actions together, labels the supporting content as an `aside`, and collapses the two-column presentation to one column on narrow screens. Themes should omit empty optional wrappers and validate internal link and telephone targets at their rendering boundary.
 
 The public contract is now `1.1.0`. It continues to parse frozen `1.0.0` snapshots, but `secondaryCta` and `supportPanel` are rejected from `1.0.0` snapshots. A selected theme must declare the exact snapshot contract, so a `1.1.0` snapshot requires a `1.1.0` renderer manifest. The starter renderer can still render legacy `1.0.0` snapshot data.
 

@@ -240,7 +240,7 @@ describe('static snapshot renderer', () => {
     if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
     snapshot.settings.contractVersion = '1.1.0';
     hero.secondaryCta = { label: 'Compare options', href: '/docs' };
-    hero.supportPanel = { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review this neutral supporting information before continuing. <img id="hero-injected" src=x onerror=alert(1)>', cta: { label: 'Read details', href: '/docs' } };
+    hero.supportPanel = { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review this neutral supporting information before continuing. <img id="hero-injected" src=x onerror=alert(1)>', cta: { label: 'Read details', href: '/docs' }, phoneCta: { label: 'Call the team', number: '+15551234567' } };
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'hero-supporting-content.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
     const served = await staticServer(built.output, '/');
     const browser = await chromium.launch();
@@ -254,6 +254,7 @@ describe('static snapshot renderer', () => {
       expect(await support.textContent()).toContain('Review this neutral supporting information');
       expect(await page.locator('#hero-injected').count()).toBe(0);
       expect(await support.getByRole('link', { name: 'Read details' }).getAttribute('href')).toBe('/docs');
+      expect(await support.getByRole('link', { name: 'Call the team' }).getAttribute('href')).toBe('tel:+15551234567');
       await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
       for (const width of [1280, 390]) {
         await page.setViewportSize({ width, height: 900 });

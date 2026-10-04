@@ -59,12 +59,15 @@ describe('ENG-002 versioned contract', () => {
     const enhanced = {
       ...legacy,
       secondaryCta: { label: 'Compare options', href: '/options' },
-      supportPanel: { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review the neutral supporting information.', cta: { label: 'Read details', href: '/details' } },
+      supportPanel: { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review the neutral supporting information.', cta: { label: 'Read details', href: '/details' }, phoneCta: { label: 'Call the team', number: '+15551234567' } },
     };
     expect(BlockSchema.safeParse(legacy).success).toBe(true);
     expect(BlockSchema.safeParse(enhanced).success).toBe(true);
     expect(BlockSchema.safeParse({ ...enhanced, secondaryCta: { label: 'Unsafe', href: 'javascript:alert(1)' } }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, cta: { label: 'Unsafe', href: '//evil.example/path' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Unsafe', number: 'tel:+15551234567' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Unsafe', number: 'javascript:alert(1)' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Too short', number: '+1555' } } }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { heading: '', body: 'Missing heading.' } }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, extra: '<script>alert(1)</script>' } }).success).toBe(false);
     const legacySnapshot = fixture();
