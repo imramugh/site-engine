@@ -10,7 +10,9 @@ import { createRequire } from 'node:module'
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const pageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
-const metadataPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
+const metadataArticleID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
+const metadataServiceID = 'abcd0000-0000-4000-8000-000000000003'
+const metadataJobID = 'abcd0000-0000-4000-8000-000000000004'
 
 async function signedIn(browser: Browser, token: string) {
   const context = await browser.newContext({
@@ -88,29 +90,6 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     .get('/__e2e/publish-state')
     .then((response) => response.json())) as { releaseCount: number }
   await editor.page.setViewportSize({ width: 1440, height: 900 })
-  await editor.page.goto(`/content-editor/${metadataPageID}`)
-  await editor.page.getByText('Page fields', { exact: false }).first().click()
-  await editor.page.getByRole('button', { name: 'Add business case details' }).click()
-  await editor.page.getByLabel('Client', { exact: true }).fill('Synthetic organization')
-  const services = editor.page.getByLabel(/Services Separate names with commas/)
-  await services.pressSequentially('Advisory, Strategy')
-  await expect(services).toHaveValue('Advisory, Strategy')
-  await editor.page.getByLabel('Last reviewed').fill('2026-10-01')
-  await expect(editor.page.getByText('You have unsaved page changes.')).toBeVisible()
-  await editor.page.addScriptTag({ path: axeSource })
-  const metadataViolations = await editor.page.evaluate(async () =>
-    // @ts-expect-error axe is injected for browser accessibility verification.
-    (await window.axe.run(document)).violations.map((violation) => ({
-      id: violation.id,
-      impact: violation.impact,
-      nodes: violation.nodes.map((node: { target: string[] }) => node.target),
-    })),
-  )
-  expect(metadataViolations).toEqual([])
-  await editor.page.reload()
-  await editor.page.getByText('Page fields', { exact: false }).first().click()
-  await expect(editor.page.getByRole('button', { name: 'Add business case details' })).toBeVisible()
-
   await editor.page.goto('/content-tree')
   await editor.page
     .getByRole('link', { name: /Page editor browser page/ })
@@ -437,4 +416,74 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await hiring.page.goto(`/content-editor/${pageID}`)
   await expect(hiring.page).toHaveURL(/\/admin\/login/)
   await hiring.context.close()
+})
+
+test('ENG-006 persists service, article, business-case, and job metadata through the real editor', async ({ browser }) => {
+  test.setTimeout(120_000)
+  const editor = await signedIn(browser, 'synthetic-metadata-editor-owner-session-token')
+  const openFields = async (id: string) => {
+    await editor.page.goto(`/content-editor/${id}`)
+    await editor.page.getByText('Page fields', { exact: false }).first().click()
+  }
+  const saveAndReload = async (id: string) => {
+    const saved = editor.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${id}`) && response.request().method() === 'POST')
+    await editor.page.getByRole('button', { name: 'Save draft' }).click()
+    expect((await saved).status()).toBe(200)
+    await expect(editor.page.getByRole('button', { name: 'Save draft' })).toBeDisabled()
+    await editor.page.reload()
+    await editor.page.getByText('Page fields', { exact: false }).first().click()
+  }
+
+  await openFields(metadataArticleID)
+  await editor.page.getByLabel('Published').fill('2026-09-29')
+  await editor.page.getByLabel('Last reviewed').fill('2026-10-01')
+  await editor.page.getByRole('button', { name: 'Add business case details' }).click()
+  await editor.page.getByLabel('Client', { exact: true }).fill('Synthetic organization')
+  await editor.page.getByLabel('Industry').fill('Professional services')
+  await editor.page.getByLabel('Challenge').fill('A synthetic business challenge.')
+  await editor.page.getByLabel('Approach').fill('A synthetic delivery approach.')
+  await editor.page.getByLabel('Outcome').fill('A synthetic measured outcome.')
+  const services = editor.page.getByLabel(/Services Separate names with commas/)
+  await services.pressSequentially('Advisory, Strategy')
+  await expect(services).toHaveValue('Advisory, Strategy')
+  await editor.page.getByLabel('Case publication date').fill('2026-09-30')
+  await editor.page.addScriptTag({ path: axeSource })
+  const metadataViolations = await editor.page.evaluate(async () =>
+    // @ts-expect-error axe is injected for browser accessibility verification.
+    (await window.axe.run('main')).violations.map((violation) => ({
+      id: violation.id,
+      impact: violation.impact,
+      nodes: violation.nodes.map((node: { target: string[] }) => node.target),
+    })),
+  )
+  expect(metadataViolations).toEqual([])
+  await saveAndReload(metadataArticleID)
+  await expect(editor.page.getByLabel('Published')).toHaveValue('2026-09-29')
+  await expect(editor.page.getByLabel('Last reviewed')).toHaveValue('2026-10-01')
+  await expect(editor.page.getByLabel('Client', { exact: true })).toHaveValue('Synthetic organization')
+  await expect(editor.page.getByLabel(/Services Separate names with commas/)).toHaveValue('Advisory, Strategy')
+
+  await openFields(metadataServiceID)
+  await editor.page.getByLabel('Kicker').fill('Advisory')
+  await editor.page.getByLabel('Lede').fill('A persisted service introduction.')
+  await editor.page.getByLabel('Last reviewed').fill('2026-10-02')
+  await saveAndReload(metadataServiceID)
+  await expect(editor.page.getByLabel('Kicker')).toHaveValue('Advisory')
+  await expect(editor.page.getByLabel('Lede')).toHaveValue('A persisted service introduction.')
+  await expect(editor.page.getByLabel('Last reviewed')).toHaveValue('2026-10-02')
+
+  await openFields(metadataJobID)
+  await editor.page.getByRole('button', { name: 'Add job posting details' }).click()
+  await editor.page.getByLabel('Date posted').fill('2026-10-01')
+  await editor.page.getByLabel('Employment type').selectOption('CONTRACTOR')
+  await editor.page.getByLabel('City or locality').fill('Example City')
+  await editor.page.getByLabel('Region').fill('Region')
+  await editor.page.getByLabel(/Country code/).fill('ca')
+  await editor.page.getByLabel('Closing date').fill('2026-11-01')
+  await saveAndReload(metadataJobID)
+  await expect(editor.page.getByLabel('Employment type')).toHaveValue('CONTRACTOR')
+  await expect(editor.page.getByLabel('City or locality')).toHaveValue('Example City')
+  await expect(editor.page.getByLabel(/Country code/)).toHaveValue('CA')
+  await expect(editor.page.getByLabel('Closing date')).toHaveValue('2026-11-01')
+  await editor.context.close()
 })

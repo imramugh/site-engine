@@ -281,6 +281,31 @@ describe('static snapshot renderer', () => {
     } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }
   }, 120_000);
 
+  it('composes service page metadata into one hero and generates one header when no hero exists', async () => {
+    const snapshot = fixture('Service metadata');
+    snapshot.settings.contractVersion = '1.4.0';
+    const service = snapshot.pages.find((page) => page.template === 'service')!;
+    service.kicker = 'Advisory';
+    service.lede = 'A persisted service introduction.';
+    service.lastReviewed = '2026-10-01T00:00:00.000Z';
+    service.blocks.unshift({ id: 'cccccccc-0000-4000-8000-000000000001', type: 'hero', heading: 'Stored hero heading', body: 'Stored hero body.', cta: { label: 'Preserved action', href: '/docs' }, hidden: false, appearance: { background: 'accent', width: 'wide', spacing: 'spacious', motionIntent: 'none', logoTone: 'default' } });
+    const withoutHero = { ...structuredClone(service), id: 'cccccccc-0000-4000-8000-000000000002', slug: 'without-hero', title: 'Service without hero', kicker: 'Planning', lede: 'A generated service introduction.', blocks: service.blocks.filter((block) => block.type !== 'hero') };
+    snapshot.pages.push(withoutHero);
+    snapshot.settings.sections[0]!.pageIds.push(withoutHero.id);
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'service-metadata.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const withHero = await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8');
+    const generated = await readFile(join(built.output, 'docs/guide/without-hero/index.html'), 'utf8');
+    expect(withHero.match(/<h1(?:\s|>)/g)).toHaveLength(1);
+    expect(withHero).toContain('Service metadata install');
+    expect(withHero).toContain('A persisted service introduction.');
+    expect(withHero).toContain('Preserved action');
+    expect(withHero).toContain('block--accent');
+    expect(withHero).toContain('Last reviewed');
+    expect(generated.match(/<h1(?:\s|>)/g)).toHaveLength(1);
+    expect(generated).toContain('Service without hero');
+    expect(generated).toContain('A generated service introduction.');
+  }, 120_000);
+
   it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {
     const customComponents = await customThemeComponents(root);
     const custom = fixture('Custom theme host'); custom.settings.searchEnabled = true; const defaultSnapshot = fixture('Default theme host');
