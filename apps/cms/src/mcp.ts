@@ -128,7 +128,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   const auditTool = body.method === 'tools/call' && knownTools.has(tool ?? '') ? tool : body.method === 'tools/call' ? 'unknown' : undefined
   await payload.create({ collection: 'audit-events', data: { event: 'mcp.request', user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), method: auditMethod, tool: auditTool } }, overrideAccess: true })
   const read = identity.scopes.includes(contentReadScope); const redirects = identity.scopes.includes(redirectsReadScope)
-  const write = identity.scopes.includes(contentWriteScope) && Array.isArray((current as { roles?: string[] }).roles) && (current as { roles: string[] }).roles.some((role) => role === 'editor' || role === 'owner')
+  const write = identity.scopes.includes(contentWriteScope) && Array.isArray((current as { roles?: string[] }).roles) && (current as { roles: string[] }).roles.some((role) => role === 'editor' || role === 'approver' || role === 'owner')
   const denied = (scope: string) => ({ isError: true, ...text({ error: 'insufficient_scope', required: scope }) })
   const unavailable = () => ({ isError: true, ...text({ error: 'read_failed' }) })
   const owner = Array.isArray((current as { roles?: unknown }).roles) && (current as { roles: unknown[] }).roles.includes('owner')
