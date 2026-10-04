@@ -113,6 +113,56 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
   expect(adminHTML).not.toContain('synthetic-recovery-hash-sentinel')
 })
 
+test('ENG-002 rejects an editor draft block with an undeclared appearance value without changing the draft', async ({ page }) => {
+  await signIn(page, 'editor')
+  await page.goto('/block-gallery')
+  await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
+  await page.addScriptTag({ path: axeSource })
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+
+  const result = await page.evaluate(async () => {
+    const sectionResponse = await fetch('/api/sections', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        name: 'Appearance browser validation',
+        summary: 'A synthetic section for browser-level contract validation.',
+        slug: 'appearance-browser-validation',
+        allowedTemplates: ['standard'],
+      }),
+    })
+    const section = await sectionResponse.json() as { doc?: { id: string } }
+    if (!section.doc) return { sectionStatus: sectionResponse.status, section }
+    const validBlock = {
+      id: crypto.randomUUID(), type: 'hero', heading: 'Valid browser appearance', body: 'This neutral block is the unchanged draft baseline.', hidden: false,
+      appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' },
+    }
+    const createdResponse = await fetch('/api/pages', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        title: 'Appearance validation draft', summary: 'A synthetic page for browser-level appearance validation.', slug: 'appearance-validation-draft', sectionId: section.doc.id, template: 'standard', blocks: [validBlock],
+      }),
+    })
+    const created = await createdResponse.json() as { doc?: { id: string; blocks: unknown[] } }
+    if (!created.doc) return { sectionStatus: sectionResponse.status, createdStatus: createdResponse.status, section, created }
+    const rejectedResponse = await fetch(`/api/pages/${created.doc.id}?draft=true`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        blocks: [{ ...validBlock, appearance: { ...validBlock.appearance, background: 'rawCSS' } }],
+      }),
+    })
+    const rejected = await rejectedResponse.json() as { errors?: Array<{ data?: { errors?: Array<{ path?: string; message?: string }> } }> }
+    const afterResponse = await fetch(`/api/pages/${created.doc.id}?draft=true`)
+    const after = await afterResponse.json() as { blocks?: unknown[] }
+    return { sectionStatus: sectionResponse.status, createdStatus: createdResponse.status, rejectedStatus: rejectedResponse.status, afterStatus: afterResponse.status, rejected, beforeBlocks: created.doc.blocks, afterBlocks: after.blocks, after }
+  })
+
+  expect(result.sectionStatus).toBe(201)
+  expect(result.createdStatus).toBe(201)
+  expect(result.rejectedStatus).toBe(400)
+  expect(result.rejected?.errors?.flatMap((error) => error.data?.errors ?? [])).toEqual(expect.arrayContaining([
+    expect.objectContaining({ path: 'blocks.0.appearance.background' }),
+  ]))
+  expect(result.afterStatus).toBe(200)
+  expect(result.afterBlocks).toEqual(result.beforeBlocks)
+})
+
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
   await signIn(page, 'editor')
