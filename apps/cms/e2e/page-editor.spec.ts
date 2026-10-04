@@ -37,6 +37,9 @@ async function attachRenderedFontEvidence(page: Page, testInfo: TestInfo) {
   const evidence = []
   for (const [name, selector] of [
     ['page title', '[data-page-editor] h1'],
+    ['title label', '[data-page-editor-fields] label'],
+    ['title input', '[data-page-editor-fields] input'],
+    ['block summary', '[data-page-editor-block] summary strong'],
     ['save action', '[data-page-editor-actions] button'],
   ] as const) {
     const { nodeId } = await session.send('DOM.querySelector', {
@@ -302,6 +305,28 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   ).toEqual([])
   const fontEvidence = await attachRenderedFontEvidence(editor.page, testInfo)
   console.info(`Rendered platform fonts: ${JSON.stringify(fontEvidence)}`)
+  await faq.locator('summary').click()
+  await expect(faq).toHaveAttribute('open', '')
+  const desktopShellGeometry = await editor.page.evaluate(async () => {
+    window.scrollTo(0, 0)
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    )
+    const bounds = (selector: string) => {
+      const rect = document.querySelector(selector)!.getBoundingClientRect()
+      return { top: rect.top, left: rect.left }
+    }
+    return {
+      scrollY: window.scrollY,
+      sidebar: bounds('[data-admin-sidebar]'),
+      header: bounds('[data-admin-header]'),
+    }
+  })
+  expect(desktopShellGeometry.scrollY).toBe(0)
+  expect(desktopShellGeometry.sidebar.top).toBe(0)
+  expect(desktopShellGeometry.sidebar.left).toBe(0)
+  expect(desktopShellGeometry.header.top).toBe(0)
+  expect(desktopShellGeometry.header.left).toBe(240)
   await editor.page.screenshot({
     path: 'artifacts/page-editor-1440.png',
     fullPage: true,
