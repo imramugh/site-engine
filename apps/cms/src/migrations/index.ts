@@ -3,6 +3,7 @@ import * as migration_20261003_230000_section_landing_page from './20261003_2300
 import * as migration_20261003_240000_integration_configurations from './20261003_240000_integration_configurations';
 import * as migration_20261003_241000_integration_usage from './20261003_241000_integration_usage';
 import * as migration_20261004_000000_mail_authorizations from './20261004_000000_mail_authorizations';
+import * as migration_20261004_010000_provider_monetary_accounting from './20261004_010000_provider_monetary_accounting';
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
@@ -140,4 +141,5 @@ export const migrations = [
   { up: migration_20261003_240000_integration_configurations.up, down: migration_20261003_240000_integration_configurations.down, name: '20261003_240000_integration_configurations' },
   { up: migration_20261003_241000_integration_usage.up, down: migration_20261003_241000_integration_usage.down, name: '20261003_241000_integration_usage' },
   { up: migration_20261004_000000_mail_authorizations.up, down: migration_20261004_000000_mail_authorizations.down, name: '20261004_000000_mail_authorizations' },
+  { up: migration_20261004_010000_provider_monetary_accounting.up, down: migration_20261004_010000_provider_monetary_accounting.down, name: '20261004_010000_provider_monetary_accounting' },
 ];

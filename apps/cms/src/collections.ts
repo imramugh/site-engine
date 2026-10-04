@@ -598,9 +598,15 @@ export const IntegrationConfigurations: CollectionConfig = {
     { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
-    { name: 'monthlyCap', type: 'number', min: 0, max: 1_000_000 },
-    { name: 'monthlyUsage', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
+    { name: 'monthlyCapMicroUsd', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'monthlyUsageMicroUsd', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
     { name: 'usageMonth', type: 'text', maxLength: 7, admin: { readOnly: true } },
+    // Rates are manually reviewed and pinned to this configured provider/model.
+    // A job fails closed when this evidence is absent; it never fetches live prices.
+    { name: 'inputMicroUsdPerMillionTokens', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'outputMicroUsdPerMillionTokens', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'pricingSource', type: 'text', maxLength: 500 },
+    { name: 'pricingAsOf', type: 'date' },
     { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
     { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
