@@ -4,10 +4,11 @@ import './admin/admin-payload-shell.css'
 import config from '@payload-config'
 import { handleServerFunctions, RootLayout } from '@payloadcms/next/layouts'
 import { importMap } from './admin/importMap.js'
+import { AdminNavigationClientRuntime } from '../components/admin-navigation-toggle'
 
 export default function Layout({ children }: { children: ReactNode }) {
   return RootLayout({
-    children,
+    children: <><AdminNavigationClientRuntime />{children}</>,
     config,
     importMap,
     serverFunction: async (args) => {
