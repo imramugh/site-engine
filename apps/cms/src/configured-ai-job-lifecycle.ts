@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto'
-import type { Payload } from 'payload'
+import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 
 const leaseMs = 60_000
@@ -8,9 +8,16 @@ const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.m
 const proof = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
 type Job = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; resultDigest?: string | null }
 export type ConfiguredAICompletion = { output: string; usageCostMicroUsd: number | null; reservedMicroUsd: number; costStatus: 'actual' | 'reserved' }
-const expired = (job: Job, now: number) => !job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= now
+const expired = (job: Job, now: number) => {
+  const leaseUntil = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN
+  return !Number.isFinite(leaseUntil) || leaseUntil <= now
+}
 const busy = (error: unknown) => (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'SQLITE_BUSY') || error instanceof Error && error.message.includes('SQLITE_BUSY')
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
+async function leaseJob(payload: Payload, id: string, req: PayloadRequest) {
+  try { return await payload.findByID({ collection: 'configured-ai-jobs', id, depth: 0, overrideAccess: true, req }) as unknown as Job }
+  catch (error) { if (error instanceof Error && error.message.includes('Invalid time value')) throw new Error('LEASE_INVALID'); throw error }
+}
 
 async function transition<T>(payload: Payload, operation: Parameters<typeof withPayloadTransaction<T>>[1]) {
   for (let attempt = 0; attempt < retries; attempt += 1) try {
@@ -31,12 +38,12 @@ function completion(value: unknown): asserts value is ConfiguredAICompletion {
 
 export async function claimConfiguredAIJob(payload: Payload, actor = 'worker', now = Date.now()) {
   return transition(payload, async req => {
-    const rows = await payload.find({ collection: 'configured-ai-jobs', where: { state: { in: ['queued', 'running'] } }, sort: 'createdAt', limit: 100, depth: 0, overrideAccess: true, req })
+    const rows = await payload.find({ collection: 'configured-ai-jobs', where: { or: [{ state: { equals: 'queued' } }, { and: [{ state: { equals: 'running' } }, { leaseExpiresAt: { less_than_equal: new Date(now).toISOString() } }] }] }, sort: 'createdAt', limit: 100, depth: 0, overrideAccess: true, req })
     for (const raw of rows.docs as unknown as Job[]) {
-      if (raw.state === 'running' && !expired(raw, now)) continue
-      if (raw.state === 'running' && raw.dispatchStartedAt) {
-        await payload.update({ collection: 'configured-ai-jobs', id: raw.id, data: { state: 'manual-review', failureCode: 'LEASE_EXPIRED_AFTER_DISPATCH' }, overrideAccess: true, req })
-        await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: raw.id, reason: 'LEASE_EXPIRED_AFTER_DISPATCH' } }, overrideAccess: true, req })
+      if (raw.dispatchStartedAt) {
+        const reason = raw.state === 'queued' ? 'DISPATCH_WITHOUT_LEASE' : 'LEASE_EXPIRED_AFTER_DISPATCH'
+        await payload.update({ collection: 'configured-ai-jobs', id: raw.id, data: { state: 'manual-review', failureCode: reason }, overrideAccess: true, req })
+        await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: raw.id, reason } }, overrideAccess: true, req })
         continue
       }
       const token = randomUUID(); const leaseExpiresAt = new Date(now + leaseMs).toISOString()
@@ -50,7 +57,7 @@ export async function claimConfiguredAIJob(payload: Payload, actor = 'worker', n
 
 export async function renewConfiguredAIJob(payload: Payload, id: string, token: string, now = Date.now()) {
   return transition(payload, async req => {
-    const job = await payload.findByID({ collection: 'configured-ai-jobs', id, depth: 0, overrideAccess: true, req }) as unknown as Job
+    const job = await leaseJob(payload, id, req)
     if (job.state !== 'running' || job.leaseToken !== token || expired(job, now)) throw new Error('LEASE_INVALID')
     return payload.update({ collection: 'configured-ai-jobs', id, data: { leaseExpiresAt: new Date(now + leaseMs).toISOString() }, overrideAccess: true, req })
   })
@@ -58,7 +65,7 @@ export async function renewConfiguredAIJob(payload: Payload, id: string, token: 
 
 export async function beginConfiguredAIJob(payload: Payload, id: string, token: string, now = Date.now()) {
   return transition(payload, async req => {
-    const job = await payload.findByID({ collection: 'configured-ai-jobs', id, depth: 0, overrideAccess: true, req }) as unknown as Job
+    const job = await leaseJob(payload, id, req)
     if (job.state !== 'running' || job.leaseToken !== token || expired(job, now)) throw new Error('LEASE_INVALID')
     if (job.dispatchStartedAt) throw new Error('ALREADY_DISPATCHED')
     return payload.update({ collection: 'configured-ai-jobs', id, data: { dispatchStartedAt: new Date(now).toISOString() }, overrideAccess: true, req })
@@ -69,13 +76,14 @@ export async function completeConfiguredAIJob(payload: Payload, id: string, toke
   completion(result)
   const resultDigest = proof(result)
   return transition(payload, async req => {
-    const job = await payload.findByID({ collection: 'configured-ai-jobs', id, depth: 0, overrideAccess: true, req }) as unknown as Job
-    if (job.leaseToken !== token || expired(job, now)) throw new Error('LEASE_INVALID')
-    if (!job.dispatchStartedAt) throw new Error('DISPATCH_NOT_BEGUN')
+    const job = await leaseJob(payload, id, req)
+    if (job.leaseToken !== token) throw new Error('LEASE_INVALID')
     if (job.state === 'completed') {
       if (job.resultDigest === resultDigest) return job
       throw new Error('COMPLETION_CONFLICT')
     }
+    if (expired(job, now)) throw new Error('LEASE_INVALID')
+    if (!job.dispatchStartedAt) throw new Error('DISPATCH_NOT_BEGUN')
     if (job.state !== 'running' || expired(job, now)) throw new Error('LEASE_INVALID')
     const completed = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'completed', result: canonical(result), resultDigest, costStatus: result.costStatus }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'ai.job_completed', detail: { job: id, resultDigest, costStatus: result.costStatus } }, overrideAccess: true, req })

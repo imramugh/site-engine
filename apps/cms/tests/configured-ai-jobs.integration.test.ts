@@ -69,6 +69,22 @@ describe('configured AI job lease lifecycle', () => {
     expect(winners[0]!.job.id).toBe(job.job.id)
   })
 
+  it('skips the first hundred active leases to claim the next eligible queued job', async () => {
+    for (let index = 0; index < 100; index += 1) {
+      const active = await queued()
+      await payload.update({ collection: 'configured-ai-jobs', id: active.job.id, data: { state: 'running', leaseToken: `active-${index}`, leaseExpiresAt: new Date(61_000).toISOString() }, overrideAccess: true })
+    }
+    const eligible = await queued()
+    await expect(lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)).resolves.toMatchObject({ job: { id: eligible.job.id } })
+  })
+
+  it('moves a queued job with recorded dispatch to manual review instead of reclaiming it', async () => {
+    const job = await queued()
+    await payload.update({ collection: 'configured-ai-jobs', id: job.job.id, data: { dispatchStartedAt: new Date(1_000).toISOString() }, overrideAccess: true })
+    expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_001)).toBeUndefined()
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: job.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'DISPATCH_WITHOUT_LEASE' })
+  })
+
   it('denies a second parallel begin before a second transport intent can be sent', async () => {
     const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
     const starts = await Promise.allSettled([lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001), lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)])
@@ -91,8 +107,8 @@ describe('configured AI job lease lifecycle', () => {
     await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, 'wrong-token', reserved, 1_002)).rejects.toThrow('LEASE_INVALID')
     await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, actual, 1_002)).resolves.toMatchObject({ state: 'completed', costStatus: 'actual' })
     await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, 'wrong-token', actual, 1_003)).rejects.toThrow('LEASE_INVALID')
-    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { costStatus: 'actual', reservedMicroUsd: 120, output: 'synthetic output', usageCostMicroUsd: 91 }, 1_003)).resolves.toMatchObject({ state: 'completed' })
-    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { ...actual, output: 'different synthetic output' }, 1_003)).rejects.toThrow('COMPLETION_CONFLICT')
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { costStatus: 'actual', reservedMicroUsd: 120, output: 'synthetic output', usageCostMicroUsd: 91 }, 61_003)).resolves.toMatchObject({ state: 'completed' })
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { ...actual, output: 'different synthetic output' }, 61_003)).rejects.toThrow('COMPLETION_CONFLICT')
   })
 
   it('accepts reserved money while rejecting invalid bounded completion values', async () => {
@@ -113,5 +129,13 @@ describe('configured AI job lease lifecycle', () => {
     expect(audit.docs).toHaveLength(1)
     expect(JSON.stringify(audit.docs[0])).not.toContain('bounded prompt')
     expect(JSON.stringify(audit.docs[0])).not.toContain('synthetic output')
+  })
+
+  it('fails closed when a lease expiry timestamp is invalid', async () => {
+    const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    await payload.db.client.execute({ sql: 'UPDATE configured_ai_jobs SET lease_expires_at = ? WHERE id = ?', args: ['invalid-lease-date', job.job.id] })
+    await expect(lifecycle.renewConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)).rejects.toThrow('LEASE_INVALID')
+    await expect(lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)).rejects.toThrow('LEASE_INVALID')
+    expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_001)).toBeUndefined()
   })
 })
