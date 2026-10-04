@@ -4,4 +4,4 @@
 .workspace { display: grid; grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 1fr); gap: 1.5rem; align-items: start; }
 .workspace section { min-width: 0; }
 .previewFrame { display: block; width: 100%; min-height: 34rem; border: 1px solid currentColor; margin-top: 1rem; }
-@media (max-width: 600px) { .editor { padding: 1rem; } .workspace { grid-template-columns: 1fr; } .previewFrame { min-height: 22rem; } }
+@media (max-width: 1100px) { .editor { padding: 1rem; } .workspace { grid-template-columns: 1fr; } .previewFrame { min-height: 22rem; } }
