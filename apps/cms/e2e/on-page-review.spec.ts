@@ -33,7 +33,7 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   expect((await sales.page.request.get(`/api/editorial/review/${setID}`)).status()).toBe(403)
   await sales.context.close()
 
-  const reviewer = await signedIn(browser, 'synthetic-application-owner-session-token')
+  const reviewer = await signedIn(browser, 'synthetic-on-page-reviewer-session-token')
   const prepared = await reviewer.page.request.post('/api/editorial/prepare-preview', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID, includedChangeKeys: [`pages:${pageID}`] } })
   expect(prepared.ok(), await prepared.text()).toBeTruthy()
   const rendered = await reviewer.page.request.post('/__e2e/direct-preview-worker')
