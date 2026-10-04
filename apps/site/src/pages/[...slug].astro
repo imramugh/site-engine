@@ -10,7 +10,6 @@ import { publicOrigin, renderBase } from '../lib/snapshot.js';
 import { schemaForRoute } from '../lib/seo.js';
 import ApplicationForm from '../components/ApplicationForm.astro';
 import InquiryForm from '../components/InquiryForm.astro';
-import AnalyticsHooks from '../components/AnalyticsHooks.astro';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 export function getStaticPaths() { const staticModel = deriveRoutes(siteSnapshot, siteHomepageId); return staticModel.routes.filter((route) => route.path !== '/').map((route) => ({ params: { slug: route.path.slice(1) }, props: { route } })); }
 const { route } = Astro.props;
@@ -19,6 +18,8 @@ const motionEnabled = pageHasEnabledMotion(route.page.blocks);
 const applicationsEnabled = renderBase === '/';
 const preview = crawlerMode(renderBase) === 'preview';
 const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
+const analyticsConfigured = !preview && (() => { try { const endpoint = new URL(process.env.PUBLIC_ANALYTICS_ENDPOINT ?? ''); return endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password; } catch { return false; } })();
+const AnalyticsHooks = analyticsConfigured ? (await import('../components/AnalyticsHooks.astro')).default : undefined;
 ---
 <Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={preview || route.page.noindex} searchEnabled={searchEnabled} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   <nav aria-label="Breadcrumb"><ol>{route.breadcrumbs.map((crumb, index) => <li>{index === route.breadcrumbs.length - 1 ? <span aria-current="page">{crumb.label}</span> : <a href={localURL(crumb.href)}>{crumb.label}</a>}</li>)}</ol></nav>
@@ -28,7 +29,7 @@ const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
   {route.page.template === 'article' && <aside class="block"><div class="block__inner"><h2>Article information</h2><p>{route.page.summary}</p></div></aside>}
   {route.page.template === 'job' && route.page.jobPosting && <section class="block"><div class="block__inner"><h2>Application information</h2><dl><dt>Employment type</dt><dd>{route.page.jobPosting.employmentType.replaceAll('_', ' ').toLowerCase()}</dd><dt>Location</dt><dd>{[route.page.jobPosting.location.addressLocality, route.page.jobPosting.location.addressRegion, route.page.jobPosting.location.addressCountry].filter(Boolean).join(', ')}</dd><dt>Posted</dt><dd><time datetime={route.page.jobPosting.datePosted}>{route.page.jobPosting.datePosted.slice(0, 10)}</time></dd>{route.page.jobPosting.validThrough && <><dt>Closing date</dt><dd><time datetime={route.page.jobPosting.validThrough}>{route.page.jobPosting.validThrough.slice(0, 10)}</time></dd></>}</dl><h2>Apply for this role</h2><ApplicationForm jobId={route.page.id} enabled={applicationsEnabled} /></div></section>}
   <MotionRuntime enabled={motionEnabled} />
-  <AnalyticsHooks path={route.path} />
+  {AnalyticsHooks && <AnalyticsHooks path={route.path} />}
 </Layout>
 
 <style>

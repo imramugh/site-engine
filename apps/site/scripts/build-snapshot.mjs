@@ -98,7 +98,7 @@ async function copyThemeComponents(source, destination) {
   await copyDirectory(source, destination);
 }
 
-async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot }) {
+async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot, analytics }) {
   // Astro writes prerender intermediates to <root>/.astro independently of its
   // cacheDir. Separate source roots prevent simultaneous jobs deleting each
   // other's intermediates. Copy only reviewed renderer inputs, never .env/data.
@@ -114,7 +114,14 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
     let timedOut = false; let aborted = false; let forceTimer;
-    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...process.env, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
+    const environment = { ...process.env };
+    if (analytics) {
+      if (analytics.endpoint === undefined) delete environment.PUBLIC_ANALYTICS_ENDPOINT;
+      else environment.PUBLIC_ANALYTICS_ENDPOINT = analytics.endpoint;
+      if (analytics.consentRequired === undefined) delete environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
+      else environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED = String(analytics.consentRequired);
+    }
+    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...environment, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
     const stop = () => { terminate(child, 'SIGTERM'); forceTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 5_000); };
     const abort = () => { aborted = true; stop(); };
     const cleanup = () => { clearTimeout(timeout); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort); };
@@ -125,8 +132,8 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string } }} options */
-export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, versionPins }) {
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
+export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, versionPins, analytics }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
@@ -145,7 +152,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   // validated artifact is renamed into outputRoot under its public snapshot name.
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
-    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot });
+    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
     await copyReferencedMedia(snapshot, staged);
     await writeIndexNowVerificationFile({ output: staged });
     // This is consumed by the edge deployment adapter only after approval. It

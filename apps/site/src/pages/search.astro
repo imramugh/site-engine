@@ -3,10 +3,11 @@ import Layout from '@site-engine/theme-starter/components/Layout.astro';
 import { deriveRoutes } from '@site-engine/engine';
 import { crawlerMode } from '../lib/crawler-config.js';
 import { localURL, renderBase, siteHomepageId, siteSnapshot } from '../lib/snapshot.js';
-import AnalyticsHooks from '../components/AnalyticsHooks.astro';
 const model = deriveRoutes(siteSnapshot, siteHomepageId);
 const preview = crawlerMode(renderBase) === 'preview';
 const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
+const analyticsConfigured = !preview && (() => { try { const endpoint = new URL(process.env.PUBLIC_ANALYTICS_ENDPOINT ?? ''); return endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password; } catch { return false; } })();
+const AnalyticsHooks = analyticsConfigured ? (await import('../components/AnalyticsHooks.astro')).default : undefined;
 ---
 <Layout model={model} snapshot={siteSnapshot} title={`Search | ${siteSnapshot.settings.siteName}`} description="Search published site content." noindex={preview || !searchEnabled} searchEnabled={searchEnabled}>
   <section class="block"><div class="block__inner">
@@ -17,7 +18,7 @@ const searchEnabled = !preview && siteSnapshot.settings.searchEnabled;
       <ol data-search-results></ol>
     </>}
   </div></section>
-  <AnalyticsHooks path="/search" />
+  {AnalyticsHooks && <AnalyticsHooks path="/search" />}
 </Layout>
 {searchEnabled && <script define:vars={{ indexURL: localURL('/search-index.json') }}>
   const form = document.querySelector('[data-search-form]');

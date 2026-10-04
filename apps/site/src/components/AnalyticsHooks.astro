@@ -3,13 +3,13 @@ import { crawlerMode } from '../lib/crawler-config.js';
 import { renderBase } from '../lib/snapshot.js';
 interface Props { path: string }
 const { path } = Astro.props;
-const configured = import.meta.env.PUBLIC_ANALYTICS_ENDPOINT;
-const preview = crawlerMode(renderBase) === 'preview';
+const configured = process.env.PUBLIC_ANALYTICS_ENDPOINT;
+const preview = crawlerMode(process.env.SITE_BASE_PATH ?? renderBase) === 'preview';
 let endpoint: string | undefined;
 if (configured && !preview) {
   try { const parsed = new URL(configured); if (parsed.protocol === 'https:' && !parsed.username && !parsed.password) endpoint = parsed.href; } catch { /* Invalid deployment configuration leaves collection disabled. */ }
 }
-const consentRequired = import.meta.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'false';
+const consentRequired = process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'false';
 ---
 {endpoint && <section data-analytics-consent data-endpoint={endpoint} data-path={path} data-consent-required={String(consentRequired)} aria-label="Optional measurement">
   <p data-analytics-consent-status>Optional measurement is off.</p>

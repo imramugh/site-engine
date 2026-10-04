@@ -122,18 +122,28 @@ function staticServer(root: string, mount: string, headers: Record<string, strin
   }));
 }
 
-describe('static snapshot renderer', { concurrent: false }, () => {
+describe('static snapshot renderer', () => {
   let root: string;
   let browserOutput: string;
   let server: Server | undefined;
   let serverOrigin = '';
+  let priorAnalyticsEndpoint: string | undefined;
+  let priorAnalyticsConsentRequired: string | undefined;
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'site-snapshot-tests-'));
+    priorAnalyticsEndpoint = process.env.PUBLIC_ANALYTICS_ENDPOINT;
+    priorAnalyticsConsentRequired = process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
+    delete process.env.PUBLIC_ANALYTICS_ENDPOINT;
+    delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
     process.env.SITE_THEME_VERSION = '1.0.0';
     process.env.SITE_ENGINE_VERSION = '1.0.0';
   });
-  afterAll(async () => { server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true }); });
+  afterAll(async () => {
+    if (priorAnalyticsEndpoint === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = priorAnalyticsEndpoint;
+    if (priorAnalyticsConsentRequired === undefined) delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED; else process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = priorAnalyticsConsentRequired;
+    server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true });
+  });
 
   it('builds two concurrent, content-distinct snapshots without sharing Astro intermediates', async () => {
     const alpha = fixture('Alpha'); const beta = fixture('Beta');
@@ -141,8 +151,8 @@ describe('static snapshot renderer', { concurrent: false }, () => {
     const priorMediaDirectory = process.env.SITE_MEDIA_DIR;
     process.env.SITE_MEDIA_DIR = await mkdtemp(join(root, 'empty-upload-source-'));
     const [alphaBuild, betaBuild] = await Promise.all([
-      renderer.buildSnapshot({ input: alphaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
-      renderer.buildSnapshot({ input: betaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root }),
+      renderer.buildSnapshot({ input: alphaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, analytics: {} }),
+      renderer.buildSnapshot({ input: betaInput, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, analytics: {} }),
     ]);
     if (priorMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = priorMediaDirectory;
     expect(alphaBuild.manifest.snapshotContentHash).toBe(hash(alpha));
@@ -288,16 +298,14 @@ describe('static snapshot renderer', { concurrent: false }, () => {
   });
 
   it('hosts consent hooks outside custom theme layouts and excludes them from private previews', async () => {
-    const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
     const components = await customThemeComponents(root); const input = await writeSnapshot(root, fixture('Analytics custom theme'), 'analytics-custom.json');
-    try {
-      const publicBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: components });
-      const previewBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components });
-      const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
-      expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+type="module"/);
-      expect(await artifactContents(previewBuild.output)).not.toContain('data-analytics-consent');
-    } finally { if (prior === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; }
-  });
+    const analytics = { endpoint: 'https://analytics.example.test/events' };
+    const publicBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeComponentsRoot: components, analytics });
+    const previewBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components, analytics });
+    const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
+    expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+type="module"/);
+    expect(await artifactContents(previewBuild.output)).not.toContain('data-analytics-consent');
+  }, 120_000);
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
     const snapshot = fixture('Redirect rules')
@@ -519,11 +527,10 @@ describe('static snapshot renderer', { concurrent: false }, () => {
   }, 120_000);
 
   it('keeps analytics disabled until consent, sends allowlisted CTA, navigation, phone and form outcomes, and stops after revocation', async () => {
-    const prior = process.env.PUBLIC_ANALYTICS_ENDPOINT; process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
     const snapshot = fixture('Analytics'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
     const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
     snapshot.pages.push(inquiry); snapshot.settings.sections[0]!.pageIds.push(inquiry.id);
-    const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
+    const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events' } }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
     let inquiries = 0;
     await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => { inquiries += 1; await route.fulfill(inquiries === 1 ? { status: 400, contentType: 'application/json', body: JSON.stringify({ errors: { form: 'Try again.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
     try {
@@ -544,19 +551,15 @@ describe('static snapshot renderer', { concurrent: false }, () => {
       await page.getByRole('button', { name: 'Disable optional measurement' }).click();
       await page.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })));
       await page.waitForTimeout(100); expect(events).toHaveLength(count);
-    } finally { if (prior === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = prior; await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+    } finally { await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
   }, 120_000);
 
   it('keeps consent decisions effective for the current page when browser storage is unavailable', async () => {
-    const priorEndpoint = process.env.PUBLIC_ANALYTICS_ENDPOINT;
-    const priorConsentRequired = process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
-    process.env.PUBLIC_ANALYTICS_ENDPOINT = 'https://analytics.example.test/events';
     const snapshot = fixture('Analytics storage unavailable');
     const input = await writeSnapshot(root, snapshot, 'analytics-storage-unavailable.json');
     const browser = await chromium.launch();
     try {
-      process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = 'false';
-      const optionalBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+      const optionalBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events', consentRequired: false } });
       const optionalServer = await staticServer(optionalBuild.output, '/');
       const optionalContext = await browser.newContext();
       const optionalPage = await optionalContext.newPage();
@@ -586,8 +589,7 @@ describe('static snapshot renderer', { concurrent: false }, () => {
         optionalServer.server.close();
       }
 
-      delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
-      const requiredBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+      const requiredBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events' } });
       const requiredServer = await staticServer(requiredBuild.output, '/');
       const requiredContext = await browser.newContext();
       const requiredPage = await requiredContext.newPage();
@@ -615,8 +617,6 @@ describe('static snapshot renderer', { concurrent: false }, () => {
         requiredServer.server.close();
       }
     } finally {
-      if (priorEndpoint === undefined) delete process.env.PUBLIC_ANALYTICS_ENDPOINT; else process.env.PUBLIC_ANALYTICS_ENDPOINT = priorEndpoint;
-      if (priorConsentRequired === undefined) delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED; else process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = priorConsentRequired;
       await browser.close();
     }
   }, 120_000);
