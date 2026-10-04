@@ -455,7 +455,10 @@ export const ChangeSets: CollectionConfig = {
     beforeChange: [async ({ data, originalDoc, req }) => {
       if (!req.context.editorialInternal) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'state', message: 'Change sets are changed through the editorial workflow.' }], req })
       contractError(ChangeSetSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name ?? originalDoc?.name, state: data.state ?? originalDoc?.state ?? 'open', revision: data.revision ?? originalDoc?.revision ?? 0 }), req, 'change-sets')
-      return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID() }
+      const creationRequestKey = originalDoc?.creationRequestKey ?? data.creationRequestKey
+      const creationRequestHash = originalDoc?.creationRequestHash ?? data.creationRequestHash
+      if (Boolean(creationRequestKey) !== Boolean(creationRequestHash)) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'creationRequestKey', message: 'Page creation receipts require both the request key and request hash.' }], req })
+      return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID(), creationRequestKey, creationRequestHash }
     }],
   },
   fields: [

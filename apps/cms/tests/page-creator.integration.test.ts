@@ -91,6 +91,8 @@ describe('ENG-006/ENG-026 custom new page flow', () => {
     await payload.update({ collection: 'pages', id: first.pageID, data: { title: 'Landing draft edited after creation' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
     const replay = await createPageDraft({ payload, actor: editor as never, value: input })
     expect(replay).toEqual({ ...first, replayed: true })
+    await payload.update({ collection: 'change-sets', id: first.changeSetID, data: { creationRequestHash: '0'.repeat(64) } as never, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(payload.findByID({ collection: 'change-sets', id: first.changeSetID, depth: 0, overrideAccess: true })).resolves.toMatchObject({ creationRequestHash: set.creationRequestHash })
     expect((await payload.find({ collection: 'pages', where: { id: { equals: input.requestKey } }, depth: 0, draft: true, overrideAccess: true })).totalDocs).toBe(1)
     expect((await payload.findByID({ collection: 'pages', id: original.id, depth: 0, draft: true, overrideAccess: true })).summary).toBe(original.summary)
     await expect(createPageDraft({ payload, actor: editor as never, value: { ...input, title: 'Conflicting retry' } })).rejects.toThrow('REQUEST_KEY_REUSED')
