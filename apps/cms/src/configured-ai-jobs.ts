@@ -11,7 +11,7 @@ export async function enqueueConfiguredAIJob(payload: Payload, actor: string, in
   const requestDigest = digest(request)
   for (let attempt = 0; attempt < 8; attempt += 1) try { return await withPayloadTransaction(payload, async req => {
     const existing = await payload.find({ collection: 'configured-ai-jobs', where: { idempotencyKey: { equals: input.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req })
-    if (existing.docs[0]) { const job = existing.docs[0] as unknown as { requestDigest: string }; if (job.requestDigest !== requestDigest) throw new Error('IDEMPOTENCY_KEY_REUSED'); return { job: existing.docs[0], created: false } }
+    if (existing.docs[0]) { const job = existing.docs[0] as unknown as { requestDigest: string; actor: string | { id?: string } }; const actorID = typeof job.actor === 'string' ? job.actor : job.actor?.id; if (actorID !== actor || job.requestDigest !== requestDigest) throw new Error('IDEMPOTENCY_KEY_REUSED'); return { job: existing.docs[0], created: false } }
     const configurations = await payload.find({ collection: 'integration-configurations', where: { provider: { in: [input.provider, input.fallbackProvider].filter(Boolean) } }, limit: 2, depth: 0, overrideAccess: true, req })
     const snapshot = configurations.docs.map((config: any) => ({ id: config.id, provider: config.provider, model: config.model, credentialFingerprint: config.credentialFingerprint ?? null, inputMicroUsdPerMillionTokens: config.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: config.outputMicroUsdPerMillionTokens, pricingSource: config.pricingSource, pricingAsOf: config.pricingAsOf }))
     if (!snapshot.some((config: any) => config.provider === input.provider)) throw new Error('AI_JOB_UNAVAILABLE')

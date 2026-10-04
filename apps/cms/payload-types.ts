@@ -87,6 +87,7 @@ export interface Config {
     'mail-authorizations': MailAuthorization;
     applications: Application;
     'change-sets': ChangeSet;
+    'configured-ai-jobs': ConfiguredAiJob;
     'publish-snapshots': PublishSnapshot;
     'publish-outbox': PublishOutbox;
     'scheduled-publications': ScheduledPublication;
@@ -119,6 +120,7 @@ export interface Config {
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
+    'configured-ai-jobs': ConfiguredAiJobsSelect<false> | ConfiguredAiJobsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
     'publish-outbox': PublishOutboxSelect<false> | PublishOutboxSelect<true>;
     'scheduled-publications': ScheduledPublicationsSelect<false> | ScheduledPublicationsSelect<true>;
@@ -732,6 +734,39 @@ export interface ChangeSet {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "configured-ai-jobs".
+ */
+export interface ConfiguredAiJob {
+  id: string;
+  actor: string | User;
+  idempotencyKey: string;
+  requestDigest: string;
+  input: string;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  maxOutputTokens: number;
+  configurationSnapshot:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  state: 'queued' | 'running' | 'completed' | 'manual-review' | 'failed';
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  dispatchStartedAt?: string | null;
+  result?: string | null;
+  resultDigest?: string | null;
+  costStatus?: ('actual' | 'reserved') | null;
+  failureCode?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "publish-snapshots".
  */
 export interface PublishSnapshot {
@@ -1023,6 +1058,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'change-sets';
         value: string | ChangeSet;
+      } | null)
+    | ({
+        relationTo: 'configured-ai-jobs';
+        value: string | ConfiguredAiJob;
       } | null)
     | ({
         relationTo: 'publish-snapshots';
@@ -1491,6 +1530,30 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   reviewedAt?: T;
   staleAt?: T;
   summary?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "configured-ai-jobs_select".
+ */
+export interface ConfiguredAiJobsSelect<T extends boolean = true> {
+  actor?: T;
+  idempotencyKey?: T;
+  requestDigest?: T;
+  input?: T;
+  provider?: T;
+  fallbackProvider?: T;
+  maxOutputTokens?: T;
+  configurationSnapshot?: T;
+  state?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  dispatchStartedAt?: T;
+  result?: T;
+  resultDigest?: T;
+  costStatus?: T;
+  failureCode?: T;
   updatedAt?: T;
   createdAt?: T;
 }
