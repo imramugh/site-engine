@@ -878,6 +878,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
     if (timer.current) window.clearTimeout(timer.current)
     timer.current = undefined
     setPreview(undefined)
+    setPreviewInteractive(undefined)
   }, [])
   const closePicker = useCallback(() => {
     setPicker(false)
@@ -1487,7 +1488,8 @@ export function PageEditor({ pageID }: { pageID: string }) {
           <header>
             <span>
               <i />
-              Saved draft preview · real renderer
+              Saved draft preview · {title(data.activeTheme.name)}{' '}
+              {data.activeTheme.version}
             </span>
             <div>
               <button

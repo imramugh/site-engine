@@ -163,6 +163,9 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(
     editor.page.locator('[data-page-editor-preview-selection]'),
   ).toContainText('Select a rendered block')
+  await expect(
+    editor.page.locator('[data-page-editor-preview] > header'),
+  ).toContainText(/Saved draft preview · \S+ \S+/)
   const renderedBlocks = preview.locator('[data-page-editor-preview-block-id]')
   await expect(renderedBlocks).toHaveCount(2)
   await editor.page.emulateMedia({ reducedMotion: 'reduce' })
