@@ -15,7 +15,7 @@ describe('ENG-002 versioned contract', () => {
     expect(SiteSnapshotSchema.safeParse(neutralFixture).success).toBe(true);
     expect(compatibleContractVersion('1.0.0')).toBe(true);
     expect(compatibleContractVersion('1.1.0')).toBe(true);
-    expect(compatibleContractVersion('1.2.0')).toBe(false);
+    expect(compatibleContractVersion('1.2.0')).toBe(true);
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
@@ -41,6 +41,41 @@ describe('ENG-002 versioned contract', () => {
     delete legacy.pages[0].publishedAt;
     delete legacy.pages[0].updatedAt;
     expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true);
+  });
+
+  it('keeps legacy parsed snapshots byte-for-byte stable while gating new optional content to 1.2', () => {
+    const legacy = fixture();
+    expect(SiteSnapshotSchema.parse(legacy)).toEqual(legacy);
+    const page = legacy.pages[0]!;
+    page.blocks.push({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', type: 'featureGrid', eyebrow: 'Optional context', heading: 'Options', body: 'Neutral introductory copy.', items: [{ title: 'One', body: 'One neutral option.' }], hidden: false, appearance } as never);
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(false);
+    legacy.settings.contractVersion = '1.2.0';
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true);
+  });
+
+  it('requires contract 1.2 for link fragments while preserving existing paths', () => {
+    const legacy = fixture();
+    const hero = legacy.pages[0]!.blocks[0]!;
+    if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
+    hero.cta = { label: 'Jump to details', href: '/#details' };
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(false);
+    legacy.settings.contractVersion = '1.2.0';
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true);
+    const legacyWithEmptyLinks = fixture();
+    legacyWithEmptyLinks.pages[0]!.blocks.push({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'pillarGrid', heading: 'Options', items: [{ title: 'One', body: 'One neutral option.', href: '/', links: [] }], hidden: false, appearance } as never);
+    expect(SiteSnapshotSchema.safeParse(legacyWithEmptyLinks).success).toBe(false);
+  });
+
+  it('accepts bounded structured service links and rejects unsafe fragments', () => {
+    const page = fixture().pages[0]!;
+    const pillar = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', type: 'pillarGrid' as const, heading: 'Pillars', items: [{ title: 'One', body: 'Neutral detail.', href: '/services#details', links: [{ label: 'Details', href: '/services#details' }] }], hidden: false, appearance };
+    expect(BlockSchema.safeParse(pillar).success).toBe(true);
+    expect(BlockSchema.safeParse({ ...pillar, items: [{ ...pillar.items[0], links: Array.from({ length: 13 }, () => ({ label: 'Details', href: '/services#details' })) }] }).success).toBe(false);
+    for (const href of ['/services?query=1', '/services#bad%20anchor', '//services#details', '/services#Details']) expect(BlockSchema.safeParse({ ...pillar, items: [{ ...pillar.items[0], links: [{ label: 'Unsafe', href }] }] }).success).toBe(false);
+    const related = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'relatedServices' as const, heading: 'Related', pageIds: [], links: [{ label: 'Service detail', href: '/services#details' }], hidden: false, appearance };
+    expect(BlockSchema.safeParse(related).success).toBe(true);
+    expect(BlockSchema.safeParse({ ...related, links: [{ label: 'One', href: '/one' }, { label: 'Two', href: '/two' }, { label: 'Three', href: '/three' }, { label: 'Four', href: '/four' }] }).success).toBe(false);
+    expect(PageSchema.safeParse(page).success).toBe(true);
   });
 
   it('rejects unknown appearance fields without confusing escaped prose with styling', () => {
