@@ -69,7 +69,9 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   let dialog = editor.page.getByRole('dialog', { name: 'Add a block' })
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused()
   await expect(dialog.locator('[data-page-block-type]')).toHaveCount(18)
-  await expect(dialog.locator('[data-page-block-type]:enabled')).toHaveCount(12)
+  // Media-dependent recipes become available after earlier upload scenarios.
+  // The required FAQ flow must remain available independently of those assets.
+  await expect(dialog.locator('[data-page-block-type="faq"]')).toBeEnabled()
   await editor.page.keyboard.press('Shift+Tab')
   await expect(
     dialog.locator('[data-page-block-type]:enabled').last(),
