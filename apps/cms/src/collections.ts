@@ -407,6 +407,18 @@ export const MailDrafts: CollectionConfig = {
     { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
     { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
   ],
+  hooks: {
+    beforeChange: [({ data, originalDoc, operation }) => {
+      if (operation !== 'update' || !originalDoc) return data
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
+      return fields.some((field) => JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
+    }],
+    afterChange: [async ({ doc, previousDoc, operation, req }) => {
+      if (operation !== 'update' || doc.revision === previousDoc?.revision) return
+      const grants = await req.payload.find({ collection: 'mail-authorizations', where: { draft: { equals: doc.id } }, depth: 0, overrideAccess: true, req })
+      await Promise.all(grants.docs.filter((grant) => !grant.consumedAt && !grant.revokedAt).map((grant) => req.payload.update({ collection: 'mail-authorizations', id: grant.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req })))
+    }],
+  },
 }
 
 /** One immutable, short-lived human authorization per exact draft revision. */
