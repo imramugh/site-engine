@@ -77,7 +77,7 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
       <section className={styles.contentList} aria-label="Content pages" data-content-list data-testid="content-list">
         <div className={styles.toolbar}>
           <nav className={styles.tabs} aria-label="Page status" data-content-tabs>{filters.map((item) => <a key={item.value} className={styles.tab} href={hrefFor(item.value, search)} aria-current={filter === item.value ? 'page' : undefined} data-content-tab={item.value}>{item.label} ({counts[item.value]})</a>)}</nav>
-          {canCreate ? <a className={styles.newPage} href="/admin/collections/pages/create" data-content-new-page>+ New page</a> : null}
+          {canCreate ? <a className={styles.newPage} href="/content-editor/new" data-content-new-page>+ New page</a> : null}
         </div>
         <div className={styles.tableWrap} tabIndex={0} aria-label="Page list. Scroll horizontally for all columns on small screens." data-content-table-scroll data-testid="content-table-scroll">
           <table className={styles.table} data-content-table><caption className={styles.visuallyHidden}>Pages matching the selected status and search</caption><thead><tr><th scope="col">Page</th><th scope="col">Template</th><th scope="col">Status</th><th scope="col">Checks</th><th scope="col">Updated</th></tr></thead><tbody>
