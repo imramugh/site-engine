@@ -94,7 +94,7 @@ export function DirectHeroEditor() {
   const ready = Boolean(page && hero && changeSet)
   return <main className={styles.editor}>
     <h1>Hero draft editor</h1>
-    <p>Edit a Hero heading or body. Use the standard editor for other fields.</p>
+    <p>Edit a Hero heading or body. Use the <a href="/content-tree">Content tree</a> for other fields.</p>
     <p role="status" aria-live="polite">{message}</p>{(data as Data & { truncated?: boolean }).truncated ? <p>Some older drafts are not shown. Use the standard editor to find them.</p> : null}
     <div className={styles.selectors}>
       <label>Page <select value={page?.id ?? ''} disabled={busy} onChange={(event) => { clearPreview(); setPageID(event.target.value) }}>{data.pages.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
