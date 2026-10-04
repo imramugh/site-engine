@@ -18,17 +18,8 @@ async function rolePage(browser: Browser, role: 'editor' | 'sales'): Promise<{ c
 }
 
 async function openAdminNavigation(page: Page): Promise<void> {
-  const menus = page.locator('button.nav-toggler')
-  for (let index = 0; index < await menus.count(); index += 1) {
-    const menu = menus.nth(index)
-    if (!await menu.isVisible()) continue
-    if (await menu.getAttribute('aria-label') === 'Open Menu') {
-      await menu.click()
-      await expect(menu).toHaveAttribute('aria-label', 'Close Menu')
-    }
-    return
-  }
-  throw new Error('The admin navigation menu control is unavailable.')
+  const menu = page.getByTestId('mobile-menu')
+  if (await menu.isVisible() && await menu.getAttribute('aria-expanded') === 'false') await menu.click()
 }
 
 test('ENG-035 lets an Owner choose a compatible installed theme into a named reviewed change set', async ({ browser }) => {
