@@ -28,6 +28,7 @@ const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKe
 let currentUser = 'synthetic-user';
 let userEnabled = true;
 let currentScopes = ['mcp:content:read'];
+const registrationFailures: string[] = [];
 const previousIntrospectionSecret = process.env.OAUTH_INTROSPECTION_SECRET;
 process.env.OAUTH_INTROSPECTION_SECRET = 'test-introspection-secret';
 
@@ -41,6 +42,7 @@ const service = createOAuthService({
     resolve: async () => ({ id: currentUser, sessionId: `${currentUser}-session`, enabled: userEnabled, scopes: currentScopes }),
     find: async (id, sessionId) => ['synthetic-user', 'other-user'].includes(id) && (!sessionId || sessionId === `${id}-session`) ? { id, sessionId: `${id}-session`, enabled: userEnabled, scopes: currentScopes } : undefined,
   },
+  onRegistrationFailure: (reason) => registrationFailures.push(reason),
 });
 
 await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', resolve));
@@ -60,11 +62,40 @@ try {
   assert.equal(rejectedRegistration.status, 400);
   const wildcardRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://*.example.test/callback'], token_endpoint_auth_method: 'none', response_types: ['code'] }) });
   assert.equal(wildcardRegistration.status, 400);
+  assert.deepEqual(registrationFailures, ['invalid_redirect_uri', 'invalid_redirect_uri']);
   assert.equal((await fetch(`${issuer}/reg`)).status, 405);
+
+  const webRegistration = await fetch(`${issuer}/reg`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      client_name: 'HTTPS public client', redirect_uris: ['https://client.example.test/oauth/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access', application_type: 'web',
+      client_uri: 'https://client.example.test', logo_uri: 'https://client.example.test/logo.svg', tos_uri: 'https://client.example.test/terms', policy_uri: 'https://client.example.test/privacy', contacts: ['support@example.test'], software_id: 'neutral-test-client', software_version: '1.0.0', extension_metadata: 'ignored',
+    }),
+  });
+  assert.equal(webRegistration.status, 201);
+  const webClient = await webRegistration.json() as { application_type: string; client_uri?: string; logo_uri?: string; policy_uri?: string; tos_uri?: string; contacts?: string[]; software_id?: string; software_version?: string; extension_metadata?: string };
+  assert.equal(webClient.application_type, 'web');
+  for (const key of ['client_uri', 'logo_uri', 'policy_uri', 'tos_uri', 'contacts', 'software_id', 'software_version', 'extension_metadata'] as const) assert.equal(webClient[key], undefined);
+
+  const mismatchedApplicationType = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], application_type: 'web' }) });
+  assert.equal(mismatchedApplicationType.status, 400);
+  assert.equal(registrationFailures.at(-1), 'application_type_mismatch');
+
+  const nativeHttpsRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Native HTTPS client', redirect_uris: ['https://native-client.example.test/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], application_type: 'native', scope: 'mcp:content:read' }) });
+  assert.equal(nativeHttpsRegistration.status, 201);
+  assert.equal((await nativeHttpsRegistration.json() as { application_type: string }).application_type, 'native');
+
+  const defaultScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/default-scope'], token_endpoint_auth_method: 'none', response_types: ['code'] }) });
+  assert.equal(defaultScopeRegistration.status, 201);
+  assert.equal((await defaultScopeRegistration.json() as { scope: string }).scope, 'mcp:content:read');
+
+  const nonStringScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/non-string-scope'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: ['mcp:content:read'] }) });
+  assert.equal(nonStringScopeRegistration.status, 400);
+  assert.equal(registrationFailures.at(-1), 'unsupported_scope');
 
   const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
   assert.equal(registered.status, 201);
-  const client = await registered.json() as { client_id: string };
+  const client = await registered.json() as { client_id: string; application_type: string };
+  assert.equal(client.application_type, 'native');
   const registeredSecond = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Independent synthetic client', redirect_uris: ['http://127.0.0.1/second-callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
   assert.equal(registeredSecond.status, 201);
   const secondClient = await registeredSecond.json() as { client_id: string };

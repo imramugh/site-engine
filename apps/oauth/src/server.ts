@@ -12,7 +12,8 @@ const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', '
 export type SessionUser = { id: string; enabled: boolean; scopes: readonly string[]; sessionId?: string };
 /** Bridge supplied by the private CMS process; this package provides no login route. */
 export type SessionBridge = { resolve(request: IncomingMessage): Promise<SessionUser | undefined>; find(id: string, sessionId?: string): Promise<SessionUser | undefined> };
-export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean };
+export type RegistrationFailureReason = 'invalid_request' | 'public_client_required' | 'invalid_redirect_uri' | 'application_type_mismatch' | 'unsupported_grant_type' | 'unsupported_response_type' | 'unsupported_scope' | 'provider_rejected_metadata';
+export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean; onRegistrationFailure?: (reason: RegistrationFailureReason) => void };
 
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
 type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
@@ -37,6 +38,15 @@ function validRedirect(value: unknown): value is string {
   if (!url || url.hash || url.username || url.password || value.includes('*')) return false;
   if (url.protocol === 'https:') return true;
   return url.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
+}
+
+function loopbackRedirect(value: string): boolean {
+  const url = URL.parse(value);
+  return url?.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
+}
+
+class RegistrationMetadataError extends Error {
+  constructor(readonly reason: RegistrationFailureReason) { super(reason); }
 }
 
 function secretMatches(value: string | undefined, expected: string | undefined): boolean {
@@ -79,18 +89,26 @@ async function tokenForm(request: IncomingMessage, resource: string): Promise<Re
 }
 
 function registrationMetadata(body: Record<string, unknown>, resource: string): Record<string, unknown> {
-  const allowed = new Set(['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope']);
-  if (Object.keys(body).some((key) => !allowed.has(key))) throw new Error('unsupported client metadata');
-  if (body.token_endpoint_auth_method !== 'none') throw new Error('only public clients are supported');
+  // Only the metadata below affects authorization. Unknown RFC 7591 metadata
+  // is ignored and never retained or fetched.
+  if (body.token_endpoint_auth_method !== 'none') throw new RegistrationMetadataError('public_client_required');
   const redirects = body.redirect_uris;
-  if (!Array.isArray(redirects) || redirects.length === 0 || !redirects.every(validRedirect)) throw new Error('redirect URIs must be HTTPS or loopback HTTP');
+  if (!Array.isArray(redirects) || redirects.length === 0 || !redirects.every(validRedirect)) throw new RegistrationMetadataError('invalid_redirect_uri');
+  const hasLoopbackRedirect = redirects.some(loopbackRedirect);
+  const requestedApplicationType = body.application_type;
+  if (requestedApplicationType !== undefined && requestedApplicationType !== 'native' && requestedApplicationType !== 'web') throw new RegistrationMetadataError('application_type_mismatch');
+  if (requestedApplicationType === 'web' && hasLoopbackRedirect) throw new RegistrationMetadataError('application_type_mismatch');
+  const applicationType = requestedApplicationType ?? (hasLoopbackRedirect ? 'native' : 'web');
   const grants = body.grant_types ?? ['authorization_code'];
-  if (!Array.isArray(grants) || grants.some((grant) => grant !== 'authorization_code' && grant !== 'refresh_token') || !grants.includes('authorization_code')) throw new Error('unsupported grant type');
+  if (!Array.isArray(grants) || grants.some((grant) => grant !== 'authorization_code' && grant !== 'refresh_token') || !grants.includes('authorization_code')) throw new RegistrationMetadataError('unsupported_grant_type');
   const responses = body.response_types ?? ['code'];
-  if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== 'code') throw new Error('only code response type is supported');
+  if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== 'code') throw new RegistrationMetadataError('unsupported_response_type');
+  if (body.scope !== undefined && typeof body.scope !== 'string') throw new RegistrationMetadataError('unsupported_scope');
   const requestedScopes = typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : [];
-  if (requestedScopes.some((scope) => ![...scopes, 'offline_access'].includes(scope))) throw new Error('unsupported scope');
-  return { client_id: randomUUID(), client_name: body.client_name, redirect_uris: redirects, grant_types: grants, response_types: responses, token_endpoint_auth_method: 'none', scope: requestedScopes.join(' '), application_type: 'native' };
+  if (requestedScopes.some((scope) => ![...scopes, 'offline_access'].includes(scope))) throw new RegistrationMetadataError('unsupported_scope');
+  // An omitted scope must not turn into an unrestricted client allow-list.
+  const effectiveScopes = requestedScopes.length ? requestedScopes : [scopes[0]!];
+  return { client_id: randomUUID(), client_name: body.client_name, redirect_uris: redirects, grant_types: grants, response_types: responses, token_endpoint_auth_method: 'none', scope: effectiveScopes.join(' '), application_type: applicationType };
 }
 
 export function createOAuthService(options: OAuthServiceOptions): { server: Server; provider: Provider; close(): void } {
@@ -213,12 +231,20 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
       return json(response, 200, authorizationMetadata);
     }
     if (requestUrl.pathname === `${prefix}/reg` && request.method === 'POST') {
+      let metadata: Record<string, unknown>;
       try {
-        const metadata = registrationMetadata(await requestJson(request), options.resource);
+        metadata = registrationMetadata(await requestJson(request), options.resource);
+      } catch (error) {
+        const reason: RegistrationFailureReason = error instanceof RegistrationMetadataError ? error.reason : 'invalid_request';
+        try { options.onRegistrationFailure?.(reason); } catch { /* diagnostics must not affect registration */ }
+        return json(response, 400, { error: 'invalid_client_metadata' });
+      }
+      try {
         const client = new provider.Client(metadata);
         await provider.Client.adapter.upsert(client.clientId, client.metadata());
         return json(response, 201, client.metadata());
       } catch {
+        try { options.onRegistrationFailure?.('provider_rejected_metadata'); } catch { /* diagnostics must not affect registration */ }
         return json(response, 400, { error: 'invalid_client_metadata' });
       }
     }
@@ -334,6 +360,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const sessionBridge = cmsOrigin && bridgeSecret
     ? createHttpSessionBridge({ cmsOrigin, secret: bridgeSecret })
     : undefined;
-  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge, trustProxy: process.env.OAUTH_TRUST_PROXY === 'true' });
+  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge, trustProxy: process.env.OAUTH_TRUST_PROXY === 'true', onRegistrationFailure: (reason) => console.warn(`oauth_registration_rejected reason=${reason}`) });
   service.server.listen(port);
 }
