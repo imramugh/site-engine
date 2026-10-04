@@ -40,6 +40,7 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   expect(await editor.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
   await editor.page.screenshot({ path: 'artifacts/direct-edit-1440.png', fullPage: true })
   await editor.page.setViewportSize({ width: 390, height: 844 })
+  await editor.page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   expect(await editor.page.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
   expect(await editor.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
   await editor.page.screenshot({ path: 'artifacts/direct-edit-390.png', fullPage: true })

@@ -9,6 +9,7 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
 import { runReviewQuality } from '../src/review-quality'
+import { loadReviewModeData, routeForReviewPreview } from '../src/review-mode'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-review-preview-'))
@@ -19,6 +20,7 @@ process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 const { default: config } = await import('../payload.config.js')
 const reviewSessionRoute = await import('../app/api/auth/preview/review-session/route.js')
 const editorialRoute = await import('../app/api/editorial/[action]/route.js')
+const reviewModeRoute = await import('../app/api/editorial/review/[id]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -83,6 +85,61 @@ async function reviewHeaders(role: 'owner' | 'editor') {
 }
 
 describe('ENG-030 immutable review preview jobs', () => {
+  it('uses canonical engine routes for section landings and rejects cyclic ancestry', () => {
+    const snapshot = baseline()
+    const section = snapshot.settings.sections[0]!
+    const landingID = randomUUID()
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: landingID, title: 'Section landing', slug: 'section-start', parentId: undefined, sectionId: section.id })
+    section.pageIds.push(landingID); section.landingPageId = landingID
+    expect(routeForReviewPreview(snapshot, [`pages:${landingID}`])).toEqual({ path: `/${section.slug}`, pageID: landingID })
+
+    const firstID = randomUUID(); const secondID = randomUUID()
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: firstID, title: 'Cycle one', slug: 'cycle-one', parentId: secondID, sectionId: section.id })
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: secondID, title: 'Cycle two', slug: 'cycle-two', parentId: firstID, sectionId: section.id })
+    section.pageIds.push(firstID, secondID)
+    expect(() => routeForReviewPreview(snapshot, [`pages:${firstID}`])).toThrow(/cycle|cyclic/i)
+  })
+
+  it('serves exact review-mode data only to current reviewers and describes stable rendered blocks', async () => {
+    const current = await fixture('on-page-review')
+    const blockID = String((current.changes[0]!.before.blocks as Array<{ id: string }>)[0]!.id)
+    const after = structuredClone(current.changes[0]!.after) as Record<string, unknown>
+    const blocks = structuredClone(after.blocks) as Array<Record<string, unknown>>
+    blocks[0] = { ...blocks[0], heading: 'A changed synthetic heading' }
+    current.changes[0]!.after = { ...after, blocks }
+    const sectionBefore = structuredClone(current.live.settings.sections[0]!) as unknown as Record<string, unknown>
+    ;(current.changes as unknown as Array<Record<string, unknown>>).push({ collection: 'sections', id: String(sectionBefore.id), before: sectionBefore, after: { ...sectionBefore, name: 'Excluded section change' }, beforeHash: canonicalHash(sectionBefore), afterHash: null })
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: current.changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const job = await prepare(current)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+
+    await expect(loadReviewModeData(payload, String(current.set.id))).resolves.toMatchObject({ id: current.set.id, path: '/', changedBlocks: [{ id: blockID, label: 'A changed synthetic heading', fields: ['heading'], liveType: 'hero', proposedType: 'hero', liveOccurrence: 0, proposedOccurrence: 0, liveTypeCount: 1, proposedTypeCount: 1, details: [{ field: 'heading', before: expect.any(String), after: 'A changed synthetic heading' }] }], otherChanges: [] })
+    const call = (headers: Headers) => reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
+    expect((await call(current.headers)).status).toBe(200)
+    expect((await call(await reviewHeaders('owner'))).status).toBe(200)
+    expect((await call(await reviewHeaders('editor'))).status).toBe(403)
+    expect((await call(new Headers())).status).toBe(401)
+
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await call(current.headers)).status).toBe(409)
+  })
+
+  it('requires a freshly authenticated reviewer for approval', async () => {
+    const current = await fixture('stale-approval')
+    const job = await prepare(current)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
+    const set = await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })
+    const sessions = await payload.find({ collection: 'auth-sessions', where: { user: { equals: current.reviewer.id } }, limit: 1, overrideAccess: true })
+    await payload.update({ collection: 'auth-sessions', id: sessions.docs[0]!.id, data: { authenticatedAt: new Date(Date.now() - 15 * 60_000 - 1).toISOString() }, overrideAccess: true })
+    const response = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof: (set.quality as { proof: unknown }).proof }) }), { params: Promise.resolve({ action: 'approve' }) })
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Fresh reviewer authentication/) })
+    await expect(payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).resolves.toMatchObject({ state: 'submitted' })
+  })
+
   it('prepares immutable live/proposed inputs, canonical reviewer state, stale revisions, and exact deduplication', async () => {
     const current = await fixture('prepare')
     const job = await prepare(current)
