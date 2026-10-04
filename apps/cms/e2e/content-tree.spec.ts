@@ -35,7 +35,7 @@ test('ENG-003 and ENG-006 give owner and editor a usable filtered content list',
     await rowLink.focus()
     await expect(rowLink).toBeFocused()
     await session.page.keyboard.press('Enter')
-    await expect(session.page).toHaveURL(/\/admin\/collections\/pages\//)
+    await expect(session.page).toHaveURL(/\/content-editor\/[0-9a-f-]+$/)
 
     await session.page.goto('/content-tree?status=archived')
     await expect(session.page.getByTestId('content-empty')).toContainText('No pages match')
