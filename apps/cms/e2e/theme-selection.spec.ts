@@ -72,8 +72,9 @@ test('ENG-035 reports incompatibility and limits theme selection to installed ow
   const owner = await signedInOwner(browser)
   const metadata = await owner.page.request.get('/api/themes')
   expect(metadata.status()).toBe(200)
-  const body = await metadata.json() as { themes: Array<{ id: string; compatibility: { compatible: boolean } }> }
+  const body = await metadata.json() as { themes: Array<{ id: string; manifestDigest: string; compatibility: { compatible: boolean } }> }
   expect(body.themes.find((theme) => theme.id === 'browser-theme')?.compatibility.compatible).toBe(true)
+  expect(body.themes.find((theme) => theme.id === 'browser-theme')?.manifestDigest).toMatch(/^[a-f0-9]{64}$/)
   expect(body.themes.find((theme) => theme.id === 'incomplete-browser-theme')?.compatibility.compatible).toBe(false)
   expect(JSON.stringify(body)).not.toContain('./dist/')
   await owner.page.goto('/themes')

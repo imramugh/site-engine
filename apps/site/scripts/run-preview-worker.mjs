@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { SiteSnapshotSchema } from '@site-engine/contract';
+import { SiteSnapshotSchema, compatibleContractVersion } from '@site-engine/contract';
 import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
@@ -30,7 +30,7 @@ function claimInput(value, expectedVersions) {
     || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now()
     || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed'
     || versions.some(key => typeof versionPins?.[key] !== 'string')
-    || ['engineVersion', 'contractVersion'].some(key => versionPins[key] !== expectedVersions[key])) {
+    || versionPins.engineVersion !== expectedVersions.engineVersion || !compatibleContractVersion(versionPins.contractVersion)) {
     throw new WorkerError('INVALID_CLAIM');
   }
   const input = { job, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
