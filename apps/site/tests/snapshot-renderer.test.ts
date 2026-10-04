@@ -113,7 +113,9 @@ function staticServer(root: string, mount: string, headers: Record<string, strin
     const isPagePath = pathname.endsWith('/') || !pathname.split('/').at(-1)?.includes('.');
     const filePath = resolve(rootPath, `.${isPagePath ? `${pathname.replace(/\/$/, '')}/index.html` : pathname}`);
     if (filePath !== rootPath && !filePath.startsWith(`${rootPath}${sep}`)) { response.writeHead(400).end(); return; }
-    try { const body = await readFile(filePath); response.writeHead(200, { ...headers, 'content-type': filePath.endsWith('.js') ? 'text/javascript' : filePath.endsWith('.css') ? 'text/css' : filePath.endsWith('.avif') ? 'image/avif' : filePath.endsWith('.svg') ? 'image/svg+xml' : filePath.endsWith('.webm') ? 'video/webm' : filePath.endsWith('.vtt') ? 'text/vtt' : 'text/html' }); response.end(body); } catch { response.writeHead(404).end('Not found'); }
+    try { const body = await readFile(filePath); response.writeHead(200, { ...headers, 'content-type': filePath.endsWith('.js') ? 'text/javascript' : filePath.endsWith('.css') ? 'text/css' : filePath.endsWith('.avif') ? 'image/avif' : filePath.endsWith('.svg') ? 'image/svg+xml' : filePath.endsWith('.webm') ? 'video/webm' : filePath.endsWith('.vtt') ? 'text/vtt' : 'text/html' }); response.end(body); } catch {
+      try { response.writeHead(404, { ...headers, 'content-type': 'text/html; charset=utf-8' }).end(await readFile(join(rootPath, '404.html'))); } catch { response.writeHead(404).end('Not found'); }
+    }
   });
   return new Promise((resolveServer) => server.listen(0, '127.0.0.1', () => {
     const address = server.address();
@@ -363,6 +365,50 @@ describe('static snapshot renderer', () => {
     const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
     expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+type="module"/);
     expect(await readFile(join(previewBuild.output, 'index.html'), 'utf8')).not.toContain('data-analytics-consent');
+  }, 120_000);
+
+  it('ENG-004 renders bounded header sections, complete footer navigation, and accessible unknown or archived targets', async () => {
+    const snapshot = fixture('Routing navigation');
+    const listing = snapshot.pages.find((page) => page.slug === 'docs')!;
+    const names = ['Zeta', 'Alpha', 'Gamma', 'Beta', 'Epsilon', 'Delta', 'Eta'];
+    for (const [index, title] of names.entries()) {
+      const id = `90000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      const sectionID = `91000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      snapshot.pages.push({ ...listing, id, sectionId: sectionID, parentId: undefined, title, slug: title.toLowerCase() });
+      snapshot.settings.sections.push({ id: sectionID, name: title, slug: title.toLowerCase(), allowedTemplates: ['listing'], landingPageId: id, pageIds: [id] });
+    }
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'routing-navigation.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const served = await staticServer(built.output, '/');
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${served.origin}/docs/guide/install/`, { waitUntil: 'domcontentloaded' });
+      const primary = page.getByRole('navigation', { name: 'Primary' });
+      expect(await primary.getByRole('link').count()).toBe(6);
+      expect(await primary.getByRole('link', { name: 'Routing navigation section', exact: true }).getAttribute('href')).toBe('/docs');
+      expect(await primary.getByRole('link', { name: 'Epsilon', exact: true }).count()).toBe(0);
+      expect(await page.getByRole('navigation', { name: 'Footer sections' }).getByRole('link').count()).toBe(8);
+      expect(await page.getByRole('navigation', { name: 'Footer services' }).getByRole('link').count()).toBe(1);
+      expect(await page.getByRole('navigation', { name: 'Breadcrumb' }).textContent()).toContain('Routing navigation guide');
+      expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(`${PUBLIC_ORIGIN}/docs/guide/install`);
+      await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('nav', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${served.origin}/docs/guide/install/`, { waitUntil: 'domcontentloaded' });
+      await page.locator('.mobile-primary > summary').click();
+      const mobilePrimary = page.getByRole('navigation', { name: 'Mobile primary' });
+      expect(await mobilePrimary.getByRole('link').count()).toBe(9);
+      expect(await mobilePrimary.getByRole('link', { name: 'Epsilon', exact: true }).count()).toBe(1);
+      await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('[aria-label="Mobile primary"]', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+      for (const path of ['/unknown-target/', '/docs/draft-marker/', '/docs/archive-marker/']) {
+        const response = await page.goto(`${served.origin}${path}`, { waitUntil: 'domcontentloaded' });
+        expect(response?.status()).toBe(404);
+        expect(await page.getByRole('heading', { name: 'Page not found' }).isVisible()).toBe(true);
+        await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+        expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+      }
+    } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }
   }, 120_000);
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
