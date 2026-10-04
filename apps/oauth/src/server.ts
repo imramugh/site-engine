@@ -103,6 +103,7 @@ function registrationMetadata(body: Record<string, unknown>, resource: string): 
   if (!Array.isArray(grants) || grants.some((grant) => grant !== 'authorization_code' && grant !== 'refresh_token') || !grants.includes('authorization_code')) throw new RegistrationMetadataError('unsupported_grant_type');
   const responses = body.response_types ?? ['code'];
   if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== 'code') throw new RegistrationMetadataError('unsupported_response_type');
+  if (body.scope !== undefined && typeof body.scope !== 'string') throw new RegistrationMetadataError('unsupported_scope');
   const requestedScopes = typeof body.scope === 'string' ? body.scope.split(' ').filter(Boolean) : [];
   if (requestedScopes.some((scope) => ![...scopes, 'offline_access'].includes(scope))) throw new RegistrationMetadataError('unsupported_scope');
   // An omitted scope must not turn into an unrestricted client allow-list.

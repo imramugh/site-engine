@@ -88,6 +88,10 @@ try {
   assert.equal(defaultScopeRegistration.status, 201);
   assert.equal((await defaultScopeRegistration.json() as { scope: string }).scope, 'mcp:content:read');
 
+  const nonStringScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/non-string-scope'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: ['mcp:content:read'] }) });
+  assert.equal(nonStringScopeRegistration.status, 400);
+  assert.equal(registrationFailures.at(-1), 'unsupported_scope');
+
   const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
   assert.equal(registered.status, 201);
   const client = await registered.json() as { client_id: string; application_type: string };
