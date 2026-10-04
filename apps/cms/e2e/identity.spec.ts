@@ -192,6 +192,8 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   }, { changeSetID: isolatedSet.set.id!, pageID: result.pageID, sectionID: result.sectionID })
   expect(cleanup).toEqual({ listed: 200, matching: 1, discarded: 200 })
 })
+
+
 async function selectCapturedSet(page: import('@playwright/test').Page, pageID: string) {
   const response = await page.request.get('/api/editorial/list')
   expect(response.ok()).toBeTruthy()
@@ -201,6 +203,7 @@ async function selectCapturedSet(page: import('@playwright/test').Page, pageID: 
   await page.locator(`[data-change-set-id="${set!.id}"]`).click()
   return set!.id
 }
+
 
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
@@ -259,9 +262,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
-  const proposedPreview = reviewer.getByRole('link', { name: 'Review on page' })
-  await expect(proposedPreview).toHaveAttribute('href', `/review/${changeSetID}`)
-  await expect(reviewer.getByText('Open the protected rendered page with block navigation and review actions.')).toBeVisible()
+  const proposedPreview = reviewer.getByRole('link', { name: 'Open proposed preview' })
+  await expect(proposedPreview).toHaveAttribute('href', new RegExp(`/preview/changes/${claim.job.id}/proposed/workflow-browser/workflow-page$`))
+  await expect(reviewer.getByText('This rendered preview does not yet include on-page review controls.')).toBeVisible()
   await expect(reviewer.locator('[data-editorial-change-rail]')).toContainText('Changes')
   await reviewer.setViewportSize({ width: 1440, height: 1000 })
   const desktopFrames = reviewer.locator('[data-editorial-frame]')
@@ -340,7 +343,6 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow refreshed' }) })
   }, created)
   await page.reload()
-  await page.locator('[data-editorial-queue-item]').filter({ has: page.locator('[data-editorial-state="open"]') }).first().click()
   await expect(page.locator('[data-editorial-detail] [data-editorial-state="open"]')).toBeVisible()
   await expect(page.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"] [data-editorial-state="approved"]`)).toBeVisible()
 })
@@ -356,12 +358,12 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
     await fetch(`/api/pages/${createdBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow revised' }) })
     return createdBody.doc.id
   })
-  await page.goto('/admin/editorial'); await selectCapturedSet(page, scheduledPageID); await page.getByRole('button', { name: 'Submit for review' }).click()
+  await page.goto('/admin/editorial'); const scheduledSetID = await selectCapturedSet(page, scheduledPageID); await page.getByRole('button', { name: 'Submit for review' }).click()
   const editorList = await page.evaluate(async () => (await fetch('/api/editorial/schedules/list')).status)
   expect(editorList).toBe(403)
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
   await signInLocalOwner(owner, scheduleOwnerRecoveryCode, scheduleOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
-  await owner.getByRole('button', { name: 'Unsubmitted edits — submitted' }).last().click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
+  await owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"]`).click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
   const headers = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
   const claimed = await owner.request.post('/api/internal/preview-jobs/claim', { headers, data: {} }); const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
   const hash = async (value: unknown) => owner.evaluate(async (input) => { const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input))); return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') }, value)
@@ -372,7 +374,7 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); await expect(owner.getByText('UTC 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
   owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.getByText('UTC 2031-01-02T04:04:00.000Z')).toBeVisible()
-  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.getByRole('button', { name: 'Unsubmitted edits — changes-requested' })).toBeVisible()
+  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"] [data-editorial-state="changes-requested"]`)).toBeVisible()
   const seeded = await owner.request.post('/__e2e/schedule-page'); expect(seeded.ok(), await seeded.text()).toBeTruthy(); await owner.reload()
   await expect(owner.getByText('Page 1 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Next schedules' })).toBeEnabled(); await owner.getByRole('button', { name: 'Next schedules' }).click(); await expect(owner.getByText('Page 2 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Previous schedules' })).toBeEnabled()
   await ownerContext.close()
