@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.1.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.2.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -29,25 +29,36 @@ export const AppearanceSchema = z.object({
   motionPreset: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/).optional(), logoTone: LogoToneSchema.default('default'),
 }).strict();
 
-const InternalPathSchema = z.string().max(240).regex(/^\/(?!\/)(?!.*[\\\u0000-\u001f])[a-z0-9/_-]*$/i, 'Expected a safe root-relative path');
+export const InternalPathSchema = z.string().max(240).regex(/^\/(?!\/)(?!.*[\\\u0000-\u001f])[a-z0-9/_-]*$/i, 'Expected a safe root-relative path');
+export const AnchorFragmentSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/, 'Expected a safe anchor fragment');
+/** A safe root-relative path with an optional unescaped fragment identifier. */
+export const isSafeInternalPathWithFragment = (value: string): boolean => {
+  const [path, ...fragments] = value.split('#');
+  return fragments.length <= 1
+    && InternalPathSchema.safeParse(path).success
+    && (fragments.length === 0 || AnchorFragmentSchema.safeParse(fragments[0]).success);
+};
+export const VisitorInternalLinkSchema = z.string().max(305).refine(isSafeInternalPathWithFragment, 'Expected a safe root-relative path with an optional anchor fragment');
+/** @deprecated Use VisitorInternalLinkSchema for visitor-facing paths. */
+export const InternalPathWithFragmentSchema = VisitorInternalLinkSchema;
 /** A visitor-facing internal navigation target. Renderers must still treat this
  * as untrusted input at their boundary. */
-export const LinkSchema = z.object({ label: safeText(80), href: InternalPathSchema }).strict();
+export const LinkSchema = z.object({ label: safeText(80), href: VisitorInternalLinkSchema }).strict();
 export const PhoneCtaSchema = z.object({ label: safeText(80), number: z.string().regex(/^\+[1-9]\d{6,14}$/, 'Expected an E.164 telephone number') }).strict();
 // Plain text is escaped by renderers. Structured rich text is a separate editor format.
 const RichTextSchema = z.string().trim().min(1).max(10_000).refine((v) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(v), 'Control characters are not allowed');
 const BaseBlockSchema = z.object({ id, hidden: z.boolean().default(false), anchorId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), appearance: AppearanceSchema });
 export const BlockSchemas = {
-  hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), secondaryCta: LinkSchema.optional(), supportPanel: z.object({ eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional() }).strict().optional() }).strict(),
+  hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), secondaryCta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional(), supportPanel: z.object({ eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional() }).strict().optional() }).strict(),
   incidentBar: BaseBlockSchema.extend({ type: z.literal('incidentBar'), message: safeText(240), cta: LinkSchema.optional() }).strict(),
-  pillarGrid: BaseBlockSchema.extend({ type: z.literal('pillarGrid'), heading: safeText(120), items: z.array(z.object({ title: safeText(100), body: safeText(300), href: InternalPathSchema }).strict()).min(1).max(12) }).strict(),
-  featureGrid: BaseBlockSchema.extend({ type: z.literal('featureGrid'), heading: safeText(120), items: z.array(z.object({ title: safeText(100), body: safeText(300) }).strict()).min(1).max(12) }).strict(),
-  splitList: BaseBlockSchema.extend({ type: z.literal('splitList'), heading: safeText(120), items: z.array(z.object({ title: safeText(100), body: safeText(500) }).strict()).min(1).max(10) }).strict(),
-  chipList: BaseBlockSchema.extend({ type: z.literal('chipList'), heading: safeText(120).optional(), chips: z.array(safeText(48)).min(1).max(24) }).strict(),
+  pillarGrid: BaseBlockSchema.extend({ type: z.literal('pillarGrid'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000).optional(), items: z.array(z.object({ title: safeText(100), body: safeText(300), href: VisitorInternalLinkSchema, links: z.array(LinkSchema).max(12).optional() }).strict()).min(1).max(12) }).strict(),
+  featureGrid: BaseBlockSchema.extend({ type: z.literal('featureGrid'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000).optional(), items: z.array(z.object({ title: safeText(100), body: safeText(300) }).strict()).min(1).max(12) }).strict(),
+  splitList: BaseBlockSchema.extend({ type: z.literal('splitList'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000).optional(), items: z.array(z.object({ title: safeText(100), body: safeText(500) }).strict()).min(1).max(10) }).strict(),
+  chipList: BaseBlockSchema.extend({ type: z.literal('chipList'), eyebrow: safeText(80).optional(), heading: safeText(120).optional(), body: RichTextSchema.max(1_000).optional(), chips: z.array(safeText(48)).min(1).max(24) }).strict(),
   testimonials: BaseBlockSchema.extend({ type: z.literal('testimonials'), items: z.array(z.object({ quote: safeText(500), attribution: safeText(100), role: safeText(100).optional(), permissionConfirmed: z.boolean() }).strict()).min(1).max(8) }).strict(),
-  faq: BaseBlockSchema.extend({ type: z.literal('faq'), heading: safeText(120), items: z.array(z.object({ question: safeText(180), answer: RichTextSchema.max(2_000) }).strict()).min(1).max(16) }).strict(),
-  callout: BaseBlockSchema.extend({ type: z.literal('callout'), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional() }).strict(),
-  relatedServices: BaseBlockSchema.extend({ type: z.literal('relatedServices'), heading: safeText(120), pageIds: z.array(id).min(1).max(3) }).strict(),
+  faq: BaseBlockSchema.extend({ type: z.literal('faq'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000).optional(), items: z.array(z.object({ question: safeText(180), answer: RichTextSchema.max(2_000) }).strict()).min(1).max(16) }).strict(),
+  callout: BaseBlockSchema.extend({ type: z.literal('callout'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), items: z.array(safeText(500)).max(12).optional(), cta: LinkSchema.optional() }).strict(),
+  relatedServices: BaseBlockSchema.extend({ type: z.literal('relatedServices'), heading: safeText(120), pageIds: z.array(id).max(3), links: z.array(LinkSchema).max(3).optional() }).strict().superRefine((block, ctx) => { if (!block.pageIds.length && !block.links?.length) ctx.addIssue({ code: 'custom', path: ['pageIds'], message: 'Related services require at least one page or link.' }); if (block.pageIds.length + (block.links?.length ?? 0) > 3) ctx.addIssue({ code: 'custom', path: ['links'], message: 'Related services allow at most three combined pages and links.' }); }),
   cta: BaseBlockSchema.extend({ type: z.literal('cta'), heading: safeText(120), body: RichTextSchema.max(500), cta: LinkSchema }).strict(),
   richText: BaseBlockSchema.extend({ type: z.literal('richText'), body: RichTextSchema }).strict(),
   contact: BaseBlockSchema.extend({ type: z.literal('contact'), heading: safeText(120), body: RichTextSchema.max(500), inquiryForm: z.boolean().optional() }).strict(),
@@ -63,6 +74,19 @@ export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, Bloc
   }
 });
 export type Block = z.infer<typeof BlockSchema>;
+const hrefUsesFragment = (href: string | undefined) => Boolean(href?.includes('#'));
+const linkUsesFragment = (link: z.infer<typeof LinkSchema> | undefined) => hrefUsesFragment(link?.href);
+function requiresContract12(block: Block): boolean {
+  switch (block.type) {
+    case 'hero': return Boolean(block.phoneCta || linkUsesFragment(block.cta) || linkUsesFragment(block.secondaryCta) || linkUsesFragment(block.supportPanel?.cta));
+    case 'incidentBar': case 'cta': return linkUsesFragment(block.cta);
+    case 'pillarGrid': return Boolean(block.eyebrow || block.body || block.items.some((item) => hrefUsesFragment(item.href) || item.links !== undefined));
+    case 'featureGrid': case 'splitList': case 'chipList': case 'faq': return Boolean(block.eyebrow || block.body);
+    case 'callout': return Boolean(block.eyebrow || block.items || linkUsesFragment(block.cta));
+    case 'relatedServices': return block.links !== undefined;
+    default: return false;
+  }
+}
 
 export const TemplateSchema = z.enum(['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job']);
 const generalBlocks = Object.keys(BlockSchemas).filter((type) => type !== 'contact') as Block['type'][];
@@ -199,6 +223,7 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
+      if (snapshot.settings.contractVersion !== '1.2.0' && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

@@ -185,6 +185,9 @@ describe('static snapshot renderer', () => {
     const llms = await readFile(join(browserOutput, 'llms.txt'), 'utf8');
     const machine = JSON.parse(await readFile(join(browserOutput, 'machine-readable.json'), 'utf8'));
     const article = await readFile(join(browserOutput, 'docs/release-notes/index.html'), 'utf8');
+    const listing = await readFile(join(browserOutput, 'docs/index.html'), 'utf8');
+    const pillar = await readFile(join(browserOutput, 'docs/guide/index.html'), 'utf8');
+    const service = await readFile(join(browserOutput, 'docs/guide/install/index.html'), 'utf8');
     expect(sitemap).toContain('<lastmod>2026-10-05T12:00:00.000Z</lastmod>');
     expect(sitemap).toContain('<loc>https://public.example.test/docs/release-notes</loc>');
     expect(sitemap).not.toContain('draft-marker');
@@ -197,6 +200,11 @@ describe('static snapshot renderer', () => {
     expect(JSON.stringify(machine)).not.toContain('"id"');
     expect(JSON.stringify(machine)).not.toContain('"sectionId"');
     expect(JSON.stringify(machine)).not.toContain('"parentId"');
+    expect(listing).toContain('>Pages</h2>');
+    expect(pillar).toContain('>Child pages</h2>');
+    expect(pillar).toContain('Alpha install');
+    expect(service).not.toContain('>Child pages</h2>');
+    expect(service).not.toContain('No child pages are published.');
     expect(article).toContain('application/ld+json');
     expect(article).toContain('"@type":"Article"');
     expect(article).toContain('"@type":"BreadcrumbList"');
@@ -238,9 +246,12 @@ describe('static snapshot renderer', () => {
     const snapshot = fixture('Hero supporting content');
     const hero = snapshot.pages[0]!.blocks[0]!;
     if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
-    snapshot.settings.contractVersion = '1.1.0';
+    snapshot.settings.contractVersion = '1.2.0';
+    hero.anchorId = 'overview';
     hero.secondaryCta = { label: 'Compare options', href: '/docs' };
+    hero.phoneCta = { label: 'Call urgent support', number: '+15551234567' };
     hero.supportPanel = { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review this neutral supporting information before continuing. <img id="hero-injected" src=x onerror=alert(1)>', cta: { label: 'Read details', href: '/docs' }, phoneCta: { label: 'Call the team', number: '+15551234567' } };
+    snapshot.pages[0]!.blocks.push({ id: 'abababab-abab-4bab-8bab-abababababab', type: 'pillarGrid', eyebrow: 'Optional context', heading: 'Helpful services', body: 'Neutral introduction copy.', items: [{ title: 'Service', body: 'A neutral service detail.', href: '/docs', links: [{ label: 'Back to overview', href: '/#overview' }] }], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } } as never);
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'hero-supporting-content.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
     const served = await staticServer(built.output, '/');
     const browser = await chromium.launch();
@@ -250,6 +261,8 @@ describe('static snapshot renderer', () => {
       expect(await page.locator('[data-primary-cta]').count()).toBe(1);
       expect(await page.locator('[data-secondary-cta]').count()).toBe(1);
       expect(await page.getByRole('link', { name: 'Compare options' }).getAttribute('href')).toBe('/docs');
+      expect(await page.getByRole('link', { name: 'Call urgent support' }).getAttribute('href')).toBe('tel:+15551234567');
+      expect(await page.getByRole('link', { name: 'Back to overview' }).getAttribute('href')).toBe('/#overview');
       const support = page.getByRole('complementary', { name: 'Before you begin' });
       expect(await support.textContent()).toContain('Review this neutral supporting information');
       expect(await page.locator('#hero-injected').count()).toBe(0);

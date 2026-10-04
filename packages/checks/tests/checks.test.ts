@@ -96,6 +96,28 @@ describe('ENG-011 deterministic readiness report', () => {
     expect(paths).toEqual(expect.arrayContaining(['pages.0.blocks.0.secondaryCta.href', 'pages.0.blocks.0.supportPanel.cta.href']))
   })
 
+  it('resolves fragment links to actual published block anchors and reports missing anchors precisely', () => {
+    const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.2.0'
+    snapshot.pages[0]!.blocks.push({ id: '99999999-9999-4999-8999-999999999999', type: 'featureGrid', anchorId: 'overview', heading: 'Overview', items: [{ title: 'Context', body: 'Neutral supporting context.' }], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } } as never)
+    snapshot.pages[0]!.blocks.push({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', type: 'pillarGrid', heading: 'Services', items: [{ title: 'Service', body: 'Neutral service detail.', href: '/#overview', links: [{ label: 'Overview', href: '/#overview' }] }], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } } as never)
+    expect(checkSiteSnapshot(snapshot, { asOf }).blockers.filter(issue => issue.code.startsWith('INTERNAL_LINK'))).toEqual([])
+    const target = snapshot.pages[0]!.blocks.at(-2)!
+    const pillar = snapshot.pages[0]!.blocks.at(-1) as { items: Array<{ href: string; links?: Array<{ href: string }> }> }
+    target.hidden = true
+    expect(checkSiteSnapshot(snapshot, { asOf }).blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'INTERNAL_LINK_ANCHOR_BROKEN', path: 'pages.0.blocks.3.items.0.href' })]))
+    target.hidden = false
+    pillar.items[0]!.href = '/#missing-anchor'
+    expect(checkSiteSnapshot(snapshot, { asOf }).blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'INTERNAL_LINK_ANCHOR_BROKEN', path: 'pages.0.blocks.3.items.0.href' })]))
+  })
+
+  it('checks banned phrases in callout text items', () => {
+    const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.2.0'
+    snapshot.pages[0]!.blocks.push({ id: 'abababab-abab-4bab-8bab-abababababab', type: 'callout', heading: 'Included work', body: 'Neutral overview.', items: ['restricted phrase'], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } } as never)
+    expect(checkSiteSnapshot(snapshot, { asOf, style: { bannedPhrases: ['restricted phrase'] } }).warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE' })]))
+  })
+
   it('keeps style, freshness, FAQ, lengths, and orphan checks as visible warnings', () => {
     const snapshot = structuredClone(neutralFixture)
     const page = snapshot.pages[0]!

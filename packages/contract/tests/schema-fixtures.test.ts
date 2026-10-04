@@ -7,11 +7,11 @@ const block = { id, hidden: false, type: 'cta' as const, heading: 'Continue', bo
 
 describe('ENG-002 exported schema fixtures', () => {
   it.each([
-    ['contract version', ContractVersionSchema, '1.1.0', '2.0.0'],
+    ['contract version', ContractVersionSchema, '1.2.0', '2.0.0'],
     ...['default', 'subtle', 'brand', 'accent', 'highlight', 'inverse'].map(value => [`background ${value}`, BackgroundSchema, value, 'raw-css']),
     ['width', WidthSchema, 'wide', 'raw'], ['spacing', SpacingSchema, 'spacious', 'raw'], ['motion', MotionIntentSchema, 'ambient', 'raw'], ['logo tone', LogoToneSchema, 'inverse', 'raw'],
     ['template', TemplateSchema, 'service', 'raw'], ['change state', ChangeSetStateSchema, 'published', 'raw'],
-    ['link', LinkSchema, { label: 'Neutral', href: '/neutral' }, { label: 'Neutral', href: 'https://example.test' }],
+    ['link', LinkSchema, { label: 'Neutral', href: '/neutral#details' }, { label: 'Neutral', href: '/neutral?query=1' }],
     ['phone', PhoneCtaSchema, { label: 'Call', number: '+14165550123' }, { label: 'Call', number: '4165550123' }],
   ])('%s accepts valid and rejects invalid fixture', (_name, schema, valid, invalid) => { expect(schema.safeParse(valid).success).toBe(true); expect(schema.safeParse(invalid).success).toBe(false) })
   it.each([
