@@ -1,5 +1,7 @@
 /* Payload owns its outer template; these stable data hooks make the custom
  * workspace navigation visible without replacing collection controls. */
+body:has([data-admin-sidebar]) .app-header { display: none !important; }
+
 @media (min-width: 701px) {
   body:has([data-admin-sidebar]) .template-default__nav-toggler-wrapper { display: none; }
   body:has([data-admin-sidebar]) [data-admin-sidebar] {
@@ -10,11 +12,11 @@
     z-index: 20;
     transform: none !important;
   }
-  body:has([data-admin-sidebar]) .template-default__wrap { margin-left: var(--admin-sidebar-width, 240px); width: calc(100vw - var(--admin-sidebar-width, 240px)) !important; min-height: 100vh; }
+  body:has([data-admin-sidebar]) .template-default__wrap { margin-left: var(--admin-sidebar-width, 240px); width: calc(100vw - var(--admin-sidebar-width, 240px)) !important; min-height: 100vh; padding-top: 60px; }
 }
 @media (max-width: 700px) {
   body:has([data-admin-sidebar]) .template-default { display: block !important; grid-template-columns: 1fr !important; }
   body:has([data-admin-sidebar]) [data-admin-sidebar] { position: static; inset: auto; width: 100%; min-height: 0 !important; height: auto !important; max-height: none; align-self: start; z-index: auto; }
-  body:has([data-admin-sidebar]) .template-default__wrap { grid-column: 1 !important; margin-left: 0; width: 100% !important; min-width: 0; }
+  body:has([data-admin-sidebar]) .template-default__wrap { grid-column: 1 !important; margin-left: 0; width: 100% !important; min-width: 0; padding-top: 0; }
   body:has([data-admin-sidebar]) .template-default__nav-toggler-wrapper { display: none; }
 }

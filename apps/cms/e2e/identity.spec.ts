@@ -41,9 +41,9 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   await expect(page).not.toHaveURL(/\/admin\/login/)
   await expect(page.locator('body')).not.toContainText('Synthetic identity provider')
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' })
-  await expect(workspaceNavigation.getByRole('link', { name: 'Content tree', exact: true })).toBeVisible()
-  await expect(workspaceNavigation.getByRole('link', { name: 'Editorial review', exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await expect(workspaceNavigation.getByRole('link', { name: 'Content', exact: true })).toBeVisible()
+  await expect(workspaceNavigation.getByRole('link', { name: 'Reviews', exact: true })).toBeVisible()
+  await expect(page.locator('[data-admin-page-title]')).toHaveText('Dashboard')
   expect(await page.locator('html').evaluate((element) => getComputedStyle(element).getPropertyValue('--theme-elevation-0').trim())).not.toBe('')
   const session = (await page.context().cookies()).find((cookie) => cookie.name === '__Host-site_engine_session')
   expect(session).toMatchObject({ secure: true, httpOnly: true, path: '/', sameSite: 'Lax' })
@@ -193,6 +193,16 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   expect(cleanup).toEqual({ listed: 200, matching: 1, discarded: 200 })
 })
 
+
+async function selectCapturedSet(page: import('@playwright/test').Page, pageID: string) {
+  const response = await page.request.get('/api/editorial/list')
+  expect(response.ok()).toBeTruthy()
+  const data = await response.json() as { sets: Array<{ id: string; state: string; changes?: Array<{ id: string; collection: string }> }> }
+  const set = data.sets.find(item => item.state === 'open' && item.changes?.some(change => change.collection === 'pages' && change.id === pageID))
+  expect(set, 'The created page must have its own captured open change set').toBeTruthy()
+  await page.locator(`[data-change-set-id="${set!.id}"]`).click()
+}
+
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
   await signIn(page, 'editor')
@@ -206,6 +216,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   })
   await page.goto('/admin/editorial')
   await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
+  await selectCapturedSet(page, created)
   await expect(page.getByText('title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
@@ -295,14 +306,15 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
 test('an owner schedules, reschedules, and cancels a reviewed future publication without queuing it immediately', async ({ browser, page }) => {
   test.setTimeout(60_000)
   await signIn(page, 'editor')
-  await page.evaluate(async () => {
+  const scheduledPageID = await page.evaluate(async () => {
     const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Scheduled workflow', summary: 'This synthetic section exercises reviewed future publication scheduling in a real browser.', slug: 'scheduled-workflow', allowedTemplates: ['standard'] }) })
     const sectionBody = await section.json() as { doc: { id: string } }
     const created = await fetch('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow page', summary: 'This synthetic page provides a real reviewed candidate for a future publication.', slug: 'scheduled-workflow-page', sectionId: sectionBody.doc.id, template: 'standard' }) })
     const createdBody = await created.json() as { doc: { id: string } }
     await fetch(`/api/pages/${createdBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow revised' }) })
+    return createdBody.doc.id
   })
-  await page.goto('/admin/editorial'); await page.getByRole('button', { name: 'Submit for review' }).click()
+  await page.goto('/admin/editorial'); await selectCapturedSet(page, scheduledPageID); await page.getByRole('button', { name: 'Submit for review' }).click()
   const editorList = await page.evaluate(async () => (await fetch('/api/editorial/schedules/list')).status)
   expect(editorList).toBe(403)
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
@@ -396,9 +408,9 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
 
 test('a locally provisioned owner uses the authenticator without OIDC, browses collections, and is disabled authoritatively', async ({ page }) => {
   await signInLocalOwner(page)
-  const collections = page.locator('details').filter({ has: page.locator('summary', { hasText: 'CMS collections' }) })
+  const collections = page.locator('details').filter({ has: page.locator('summary', { hasText: 'More tools' }) })
   await collections.locator('summary').click()
-  const collectionNavigation = collections.getByRole('navigation', { name: 'CMS collections' })
+  const collectionNavigation = collections.getByRole('navigation', { name: 'More tools' })
   await expect(collectionNavigation.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
   await expect(collectionNavigation.getByRole('link', { name: 'Sections', exact: true })).toBeVisible()
 
@@ -422,7 +434,7 @@ test('a locally provisioned owner uses the authenticator without OIDC, browses c
   page.on('request', (request) => {
     if (request.url().includes('logout')) logoutRequests.push(`${request.method()} ${new URL(request.url()).pathname}`)
   })
-  const logout = page.getByRole('link', { name: 'Log out' })
+  const logout = page.locator('[data-admin-account] a[href="/admin/logout"]')
   const accountMenu = page.getByRole('group', { name: 'Account menu' })
   await accountMenu.getByText('Synthetic Emergency Owner').click()
   await logout.click()
