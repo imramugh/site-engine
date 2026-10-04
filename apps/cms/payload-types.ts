@@ -81,6 +81,8 @@ export interface Config {
     'style-guides': StyleGuide;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'mail-drafts': MailDraft;
+    'mail-authorizations': MailAuthorization;
     applications: Application;
     'change-sets': ChangeSet;
     'publish-snapshots': PublishSnapshot;
@@ -108,6 +110,8 @@ export interface Config {
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
+    'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
@@ -548,6 +552,48 @@ export interface NotificationOutbox {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-drafts".
+ */
+export interface MailDraft {
+  id: string;
+  lead: string | Inquiry;
+  threadID: string;
+  recipient: string;
+  sender: string;
+  subject: string;
+  body: string;
+  attachmentHashes?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  revision: number;
+  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-authorizations".
+ */
+export interface MailAuthorization {
+  id: string;
+  draft: string | MailDraft;
+  digest: string;
+  draftRevision: number;
+  authorizedBy: string | User;
+  expiresAt: string;
+  revokedAt?: string | null;
+  consumedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "applications".
  */
 export interface Application {
@@ -863,6 +909,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-outbox';
         value: string | NotificationOutbox;
+      } | null)
+    | ({
+        relationTo: 'mail-drafts';
+        value: string | MailDraft;
+      } | null)
+    | ({
+        relationTo: 'mail-authorizations';
+        value: string | MailAuthorization;
       } | null)
     | ({
         relationTo: 'applications';
@@ -1222,6 +1276,38 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
   state?: T;
   payload?: T;
   availableAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-drafts_select".
+ */
+export interface MailDraftsSelect<T extends boolean = true> {
+  lead?: T;
+  threadID?: T;
+  recipient?: T;
+  sender?: T;
+  subject?: T;
+  body?: T;
+  attachmentHashes?: T;
+  revision?: T;
+  state?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-authorizations_select".
+ */
+export interface MailAuthorizationsSelect<T extends boolean = true> {
+  draft?: T;
+  digest?: T;
+  draftRevision?: T;
+  authorizedBy?: T;
+  expiresAt?: T;
+  revokedAt?: T;
+  consumedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }
