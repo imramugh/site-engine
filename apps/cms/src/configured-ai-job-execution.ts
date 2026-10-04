@@ -6,7 +6,7 @@ import type { IntegrationProvider } from './integrations'
 
 type StoredJob = { id: string; state: string; leaseToken?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; maxOutputTokens: number; configurationSnapshot: unknown }
 export type ClaimedConfiguredAIJob = { job: StoredJob; leaseToken: string }
-export type ConfiguredAIExecutionOptions = { transport: ProviderFetch; now?: Date; timeoutMs?: number }
+export type ConfiguredAIExecutionOptions = { transport: ProviderFetch; now?: Date; clock?: () => Date; timeoutMs?: number }
 
 const providers = new Set<IntegrationProvider>(['openai', 'anthropic', 'google-gemini', 'openrouter'])
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -37,44 +37,50 @@ async function snapshotsStillCurrent(payload: Payload, snapshot: AIConfiguration
  * manual review because a provider may already have accepted the request.
  */
 export async function executeClaimedConfiguredAIJob(payload: Payload, claim: ClaimedConfiguredAIJob, options: ConfiguredAIExecutionOptions) {
-  const now = options.now ?? new Date()
-  const job = claim.job
+  const clock = options.clock ?? (() => options.now ?? new Date())
+  const expectedToken = claim.leaseToken
+  const job = await payload.findByID({ collection: 'configured-ai-jobs', id: claim.job.id, depth: 0, overrideAccess: true }) as unknown as StoredJob
   const snapshot = snapshots(job.configurationSnapshot)
-  if (!snapshot || !job.leaseToken || claim.leaseToken !== job.leaseToken || job.state !== 'running' || job.dispatchStartedAt) {
-    if (job.dispatchStartedAt) await manualReviewConfiguredAIJob(payload, job.id, 'DISPATCH_RECOVERY_REQUIRED')
-    else if (job.leaseToken) await failUnbegunConfiguredAIJob(payload, job.id, job.leaseToken, 'CONFIGURATION_SNAPSHOT_INVALID', now.getTime())
+  if (!job.leaseToken || expectedToken !== job.leaseToken || job.state !== 'running') throw new Error('LEASE_INVALID')
+  if (job.dispatchStartedAt) {
+    await manualReviewConfiguredAIJob(payload, job.id, 'DISPATCH_RECOVERY_REQUIRED', expectedToken)
+    throw new Error('AI_JOB_UNAVAILABLE')
+  }
+  if (!snapshot) {
+    await failUnbegunConfiguredAIJob(payload, job.id, expectedToken, 'CONFIGURATION_SNAPSHOT_INVALID', clock().getTime())
     throw new Error('AI_JOB_UNAVAILABLE')
   }
   const required = [job.provider, job.fallbackProvider].filter((provider): provider is IntegrationProvider => Boolean(provider))
   if (required.some(provider => !snapshot.some(item => item.provider === provider))) {
-    await failUnbegunConfiguredAIJob(payload, job.id, claim.leaseToken, 'CONFIGURATION_SNAPSHOT_INVALID', now.getTime())
+    await failUnbegunConfiguredAIJob(payload, job.id, expectedToken, 'CONFIGURATION_SNAPSHOT_INVALID', clock().getTime())
     throw new Error('AI_JOB_UNAVAILABLE')
   }
   if (!await snapshotsStillCurrent(payload, snapshot)) {
-    await failUnbegunConfiguredAIJob(payload, job.id, claim.leaseToken, 'CONFIGURATION_SNAPSHOT_STALE', now.getTime())
+    await failUnbegunConfiguredAIJob(payload, job.id, expectedToken, 'CONFIGURATION_SNAPSHOT_STALE', clock().getTime())
     throw new Error('AI_JOB_UNAVAILABLE')
   }
   // Refresh the lease before writing the irreversible dispatch intent. Two
   // bounded 15-second provider attempts remain within the 60-second lease.
-  await renewConfiguredAIJob(payload, job.id, claim.leaseToken, now.getTime())
-  await beginConfiguredAIJob(payload, job.id, claim.leaseToken, now.getTime())
+  await renewConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
+  await beginConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
   try {
     const result = await executeConfiguredAIJob(payload, { provider: job.provider, fallbackProvider: job.fallbackProvider, input: job.input, maxOutputTokens: job.maxOutputTokens }, {
       transport: options.transport,
-      now,
+      now: clock(),
       timeoutMs: Math.min(options.timeoutMs ?? 15_000, 15_000),
       configurationSnapshot: snapshot,
       executionKey: provider => configuredAIReservationKey(job.id, provider),
     })
-    return await completeConfiguredAIJob(payload, job.id, claim.leaseToken, { output: result.output, usageCostMicroUsd: result.usageCostMicroUsd, reservedMicroUsd: result.reservedMicroUsd, costStatus: result.usageCostStatus, usedProvider: result.provider, fallbackUsed: result.fallbackUsed }, now.getTime())
+    return await completeConfiguredAIJob(payload, job.id, expectedToken, { output: result.output, usageCostMicroUsd: result.usageCostMicroUsd, reservedMicroUsd: result.reservedMicroUsd, costStatus: result.usageCostStatus, usedProvider: result.provider, fallbackUsed: result.fallbackUsed }, clock().getTime())
   } catch (error) {
-    await manualReviewConfiguredAIJob(payload, job.id, 'DISPATCH_OUTCOME_UNKNOWN')
+    await manualReviewConfiguredAIJob(payload, job.id, 'DISPATCH_OUTCOME_UNKNOWN', expectedToken)
     throw error instanceof Error && error.message === 'AI_JOB_UNAVAILABLE' ? error : new Error('AI_JOB_UNAVAILABLE')
   }
 }
 
 /** Convenience for a single in-process CMS worker; it does not create another database writer. */
 export async function claimAndExecuteConfiguredAIJob(payload: Payload, options: ConfiguredAIExecutionOptions, actor = 'cms-ai-executor') {
-  const claimed = await claimConfiguredAIJob(payload, actor, (options.now ?? new Date()).getTime())
+  const now = (options.clock ?? (() => options.now ?? new Date()))()
+  const claimed = await claimConfiguredAIJob(payload, actor, now.getTime())
   return claimed ? executeClaimedConfiguredAIJob(payload, claimed as ClaimedConfiguredAIJob, options) : undefined
 }

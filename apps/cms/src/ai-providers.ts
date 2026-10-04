@@ -360,10 +360,19 @@ export async function executeConfiguredAIJob(payload: Payload, job: AIJob, optio
     const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
     await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome, now)
-    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : result
+    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : { ...result, reservedMicroUsd: result.outcome === 'unavailable' ? reservation.reservedMicroUsd : 0, usageCostMicroUsd: null, usageCostStatus: result.outcome === 'unavailable' ? 'reserved' : 'actual' }
   }
   const primary = await attempt(job.provider)
   if (primary.outcome === 'success') return { provider: job.provider, fallbackUsed: false, output: primary.output, usageCostMicroUsd: primary.usageCostMicroUsd!, reservedMicroUsd: primary.reservedMicroUsd!, usageCostStatus: primary.usageCostStatus! }
-  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) { const fallback = await attempt(job.fallbackProvider); if (fallback.outcome === 'success') return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: fallback.usageCostMicroUsd!, reservedMicroUsd: fallback.reservedMicroUsd!, usageCostStatus: fallback.usageCostStatus! } }
+  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) {
+    const fallback = await attempt(job.fallbackProvider)
+    if (fallback.outcome === 'success') {
+      const reservedMicroUsd = sumSafe([primary.reservedMicroUsd ?? 0, fallback.reservedMicroUsd])
+      if (reservedMicroUsd === undefined) throw new Error('AI_JOB_UNAVAILABLE')
+      // The primary timeout remains billable until reconciled, so the job total
+      // is reserved even when the fallback reported exact usage.
+      return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: primary.reservedMicroUsd ? null : fallback.usageCostMicroUsd!, reservedMicroUsd, usageCostStatus: primary.reservedMicroUsd ? 'reserved' : fallback.usageCostStatus! }
+    }
+  }
   throw new Error('AI_JOB_UNAVAILABLE')
 }

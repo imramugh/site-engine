@@ -181,4 +181,33 @@ describe('configured AI job CMS execution', () => {
     expect(reservations.docs[0]).toMatchObject({ executionKey: executor.configuredAIReservationKey(queuedJob.job.id, 'openai'), state: 'reserved', settledMicroUsd: null })
     await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN' })
   })
+
+  it('refuses late completion after the lease expires and quarantines the begun dispatch', async () => {
+    await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let time = now.getTime(); let calls = 0
+    const clock = () => new Date(time)
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { clock, transport: async () => { calls += 1; time += 60_001; return answer() } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(1)
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { clock, transport: async () => { calls += 1; return answer() } })).rejects.toThrow()
+    expect(calls).toBe(1)
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN' })
+  })
+
+  it('does not let a stale claimed payload change a newer lease', async () => {
+    await usableConfiguration(); const queuedJob = await queued(); const first = await claim()
+    const second = await lifecycle.claimConfiguredAIJob(payload, 'replacement-worker', now.getTime() + 60_001)
+    await expect(executor.executeClaimedConfiguredAIJob(payload, first, { now, transport: async () => answer() })).rejects.toThrow('LEASE_INVALID')
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'running', leaseToken: second.leaseToken, dispatchStartedAt: null })
+  })
+
+  it('reports the full held reservation when an unavailable primary falls back successfully', async () => {
+    await usableConfiguration()
+    await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-test', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback-fingerprint', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-04T00:00:00.000Z' }, overrideAccess: true })
+    const queuedJob = await enqueueConfiguredAIJob(payload, ownerID, { ...input, fallbackProvider: 'anthropic', idempotencyKey: `fallback-${randomBytes(8).toString('hex')}` }); const claimed = await claim(); let calls = 0
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async (request: Request) => { calls += 1; if (request.url.includes('openai.com')) throw new Error('synthetic timeout'); return Response.json({ content: [{ type: 'text', text: 'fallback result' }], usage: { input_tokens: 2, output_tokens: 3 } }) } })).resolves.toMatchObject({ state: 'completed', usedProvider: 'anthropic', fallbackUsed: true, costStatus: 'reserved' })
+    expect(calls).toBe(2)
+    const completed = await payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true }) as any
+    expect(JSON.parse(completed.result)).toMatchObject({ reservedMicroUsd: 4, usageCostMicroUsd: null, costStatus: 'reserved', usedProvider: 'anthropic', fallbackUsed: true })
+    const reservations = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
+    expect(reservations.docs).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'reserved' }), expect.objectContaining({ state: 'settled', settledMicroUsd: 2 })]))
+  })
 })

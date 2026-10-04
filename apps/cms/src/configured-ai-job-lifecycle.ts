@@ -93,9 +93,10 @@ export async function completeConfiguredAIJob(payload: Payload, id: string, toke
 }
 
 /** A begun job may have reached a provider. It is never returned to the queue. */
-export async function manualReviewConfiguredAIJob(payload: Payload, id: string, reason: string) {
+export async function manualReviewConfiguredAIJob(payload: Payload, id: string, reason: string, expectedToken?: string) {
   return transition(payload, async req => {
     const job = await leaseJob(payload, id, req)
+    if (expectedToken !== undefined && (job.state !== 'running' || job.leaseToken !== expectedToken || !job.dispatchStartedAt)) throw new Error('LEASE_INVALID')
     if (job.state === 'completed') return job
     const updated = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'manual-review', failureCode: reason, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: id, reason } }, overrideAccess: true, req })
