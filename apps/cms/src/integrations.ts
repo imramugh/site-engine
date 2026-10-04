@@ -4,6 +4,10 @@ export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'op
 export type IntegrationProvider = (typeof integrationProviders)[number]
 export type ConnectionResult = { ok: boolean; code: 'connected' | 'unavailable' | 'rejected' }
 export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null }) => Promise<ConnectionResult>
+export type ConnectionFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+
+const CONNECTION_TIMEOUT_MS = 5_000
+const CONNECTION_MAX_RESPONSE_BYTES = 64 * 1024
 
 function key(): Buffer {
   const encoded = process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY
@@ -40,6 +44,49 @@ export async function testConnection(input: { provider: IntegrationProvider; enc
     return result?.ok === true && result.code === 'connected' ? { ok: true, code: 'connected' } : result?.code === 'unavailable' ? { ok: false, code: 'unavailable' } : { ok: false, code: 'rejected' }
   }
   catch { return { ok: false, code: 'rejected' } }
+}
+
+function endpoint(provider: IntegrationProvider, model: string, credential: string): { url: string; headers: Record<string, string> } | undefined {
+  const encodedModel = encodeURIComponent(model)
+  if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
+  if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }
+  if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}?key=${encodeURIComponent(credential)}`, headers: {} }
+  const [author, slug, ...rest] = model.split('/')
+  if (!author || !slug || rest.length) return undefined
+  return { url: `https://openrouter.ai/api/v1/model/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
+}
+
+async function drainBounded(response: Response) {
+  if (!response.body) return
+  const reader = response.body.getReader()
+  let bytes = 0
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) return
+      bytes += next.value.byteLength
+      if (bytes > CONNECTION_MAX_RESPONSE_BYTES) return
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+}
+
+/** Explicit, non-billable provider metadata lookup used only by the Owner test action. */
+export async function providerConnectionTransport(input: { provider: IntegrationProvider; credential: string; model?: string | null }, fetcher: ConnectionFetch = fetch): Promise<ConnectionResult> {
+  if (!input.model) return { ok: false, code: 'unavailable' }
+  const target = endpoint(input.provider, input.model, input.credential)
+  if (!target) return { ok: false, code: 'unavailable' }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
+  try {
+    const response = await fetcher(target.url, { method: 'GET', headers: target.headers, signal: controller.signal, redirect: 'error' })
+    await drainBounded(response)
+    if (response.status === 401 || response.status === 403) return { ok: false, code: 'rejected' }
+    return response.ok ? { ok: true, code: 'connected' } : { ok: false, code: 'unavailable' }
+  } catch {
+    return { ok: false, code: 'unavailable' }
+  } finally { clearTimeout(timeout) }
 }
 
 export function publicIntegration(doc: Record<string, unknown>) {
