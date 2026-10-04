@@ -22,7 +22,7 @@ const mutableFields: Record<CapturedCollection, readonly string[]> = {
   pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'kicker', 'lede', 'seoDescription', 'noindex', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'],
   sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
-  assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
+  assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'focalX', 'focalY', 'sizes'],
   'theme-settings': ['selection', 'settings'],
   'style-guides': ['bannedPhrases', 'preferredTerms', 'canadianSpelling', 'maximumSentenceWords', 'minimumReadingEase'],
   'site-settings': ['siteName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'contactEmail', 'contactPhone', 'seoDescription', 'searchEnabled'],
@@ -57,9 +57,9 @@ function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior
   return normalized
 }
 
-export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined): Record<string, unknown> | null {
+export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined, includeFocalPoint = false): Record<string, unknown> | null {
   if (!document) return null
-  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0])
+  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint)
   return Object.fromEntries(mutableFields[collection].flatMap((field): [string, unknown][] => {
     const value = document[field]
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
@@ -127,8 +127,9 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   const { collection, doc, previousDoc, operation, req } = input
   const actor = req.user as Actor | undefined
   if (!actor || !hasRole(actor, ['owner', 'editor']) || req.context.editorialInternal) return
-  let after = snapshot(collection, doc)
-  let before = operation === 'create' ? null : snapshot(collection, previousDoc)
+  const includeFocalPoint = req.context.mediaFocalContract === '1.4.0'
+  let after = snapshot(collection, doc, includeFocalPoint)
+  let before = operation === 'create' ? null : snapshot(collection, previousDoc, includeFocalPoint)
   if (collection === 'pages') {
     before = normalizePageOptionalNulls(before)
     after = normalizePageOptionalNulls(after, before)

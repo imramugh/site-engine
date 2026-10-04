@@ -270,8 +270,6 @@ export const Assets: CollectionConfig = {
     staticDir: (() => { ensureMediaStorageDirectory(); return mediaStorageDirectory() })(),
     mimeTypes: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'],
     pasteURL: false,
-    focalPoint: true,
-    crop: true,
     imageSizes: Object.entries(MEDIA_VARIANTS).map(([name, size]) => ({
       name,
       width: size.width,
@@ -287,15 +285,8 @@ export const Assets: CollectionConfig = {
     // Reject byte-changing operations before that stage to preserve pinned snapshots.
     beforeOperation: [async ({ args, operation, req }) => {
       if (operation !== 'update') return args
-      const immutableMessage = 'Upload a new asset to replace image bytes or change the crop; existing snapshots retain their original files.'
+      const immutableMessage = 'Upload a new asset to replace image bytes; existing snapshots retain their original files.'
       if (req.file) throw new Error(immutableMessage)
-      const data = 'data' in args ? args.data : undefined
-      const focalFields = ['focalX', 'focalY'] as const
-      if (data && focalFields.some(field => data[field] !== undefined)) {
-        if (!('id' in args) || (typeof args.id !== 'string' && typeof args.id !== 'number')) throw new Error(immutableMessage)
-        const original = await req.payload.findByID({ collection: 'assets', id: args.id, depth: 0, overrideAccess: true, req })
-        if (focalFields.some(field => data[field] !== undefined && data[field] !== original[field])) throw new Error(immutableMessage)
-      }
       return args
     }],
     beforeValidate: [async ({ data, req }) => {

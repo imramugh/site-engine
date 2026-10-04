@@ -1,19 +1,20 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import type { MediaAsset } from '../../../src/media-workspace'
 import styles from './media-workspace.module.css'
 
-type Data = { assets: MediaAsset[]; total: number; truncated: boolean; page: number; totalPages: number; pageSize: number }
+type Data = { assets: MediaAsset[]; total: number; truncated: boolean; page: number; totalPages: number; pageSize: number; focalEditingAvailable: boolean }
 type Filter = 'all' | 'missing-alt' | 'unused' | 'large' | 'bin'
-type Metadata = { alt: string; decorative: boolean; caption: string; credit: string; tags: string[] }
+type Metadata = { alt: string; decorative: boolean; caption: string; credit: string; tags: string[]; focalX: number; focalY: number }
 type View = { filter: Filter; query: string; page: number }
 const filters: Array<{ value: Filter; label: string }> = [
   { value: 'all', label: 'All' }, { value: 'missing-alt', label: 'Missing alt text' },
   { value: 'unused', label: 'Unused' }, { value: 'large', label: 'Large files' },
   { value: 'bin', label: 'Deletion bin' },
 ]
-const metadata = (asset?: MediaAsset): Metadata => ({ alt: asset?.alt ?? '', decorative: Boolean(asset?.decorative), caption: asset?.caption ?? '', credit: asset?.credit ?? '', tags: asset?.tags ?? [] })
+const focal = (value?: number | null) => typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.min(100, Math.max(0, value))) : 50
+const metadata = (asset?: MediaAsset): Metadata => ({ alt: asset?.alt ?? '', decorative: Boolean(asset?.decorative), caption: asset?.caption ?? '', credit: asset?.credit ?? '', tags: asset?.tags ?? [], focalX: focal(asset?.focalX), focalY: focal(asset?.focalY) })
 const sameMetadata = (left: Metadata, right: Metadata) => JSON.stringify(left) === JSON.stringify(right)
 const size = (bytes?: number | null) => !bytes ? 'Size unavailable' : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 const dimensions = (asset: MediaAsset) => asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensions unavailable'
@@ -92,6 +93,27 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
   function submitSearch(event: FormEvent) { event.preventDefault(); changeView({ filter: view.filter, query: search.trim(), page: 1 }) }
   function select(asset: MediaAsset) { if (asset.id !== selectedID && confirmDiscard()) { useAsset(asset); setError(''); setMessage('') } }
 
+  function setFocalPoint(focalX: number, focalY: number) {
+    setDraft((current) => ({ ...current, focalX: focal(focalX), focalY: focal(focalY) }))
+  }
+
+  function pointFromPointer(event: PointerEvent<HTMLDivElement>) {
+    if (saving || !data.focalEditingAvailable) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setFocalPoint((event.clientX - bounds.left) / bounds.width * 100, (event.clientY - bounds.top) / bounds.height * 100)
+  }
+
+  function moveFocalPoint(event: KeyboardEvent<HTMLDivElement>) {
+    const amount = event.shiftKey ? 10 : 1
+    const movement: Record<string, [number, number]> = { ArrowLeft: [-amount, 0], ArrowRight: [amount, 0], ArrowUp: [0, -amount], ArrowDown: [0, amount] }
+    const delta = movement[event.key]
+    if (!delta || saving || !data.focalEditingAvailable) return
+    event.preventDefault()
+    setFocalPoint(draft.focalX + delta[0], draft.focalY + delta[1])
+  }
+
   async function save() {
     if (!selected || saving) return
     setSaving(true); setError(''); setMessage('')
@@ -168,7 +190,21 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
       <aside className={styles.detail} aria-label="Selected media" data-media-detail>{selected ? <>
         <header className={styles.detailHeading}><div><h2>{selected.filename}</h2><span>{selected.id}</span></div><p>{selected.mimeType} · {dimensions(selected)} · {size(selected.filesize)}</p></header>
         <div className={styles.detailBody}>
-          <div className={styles.preview} data-media-preview>{selected.url ? <img src={selected.url} alt="" /> : <span>Preview unavailable</span>}</div>
+          <section className={styles.focalEditor} aria-labelledby="focal-heading">
+            <div><h3 id="focal-heading">Focal point</h3><p>{data.focalEditingAvailable ? 'Choose the most important part of the image. Use arrow keys for precise changes; hold Shift for larger steps.' : 'Focal-point editing becomes available when the active site theme supports contract 1.4.'}</p></div>
+            <div className={styles.preview} data-media-preview data-media-focal data-media-focal-available={data.focalEditingAvailable} tabIndex={selected.url && data.focalEditingAvailable ? 0 : -1} role="group" aria-label={`Focal point ${draft.focalX}% from the left and ${draft.focalY}% from the top`} aria-disabled={!data.focalEditingAvailable} onPointerDown={pointFromPointer} onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) pointFromPointer(event) }} onKeyDown={moveFocalPoint}>
+              {selected.url ? <><img src={selected.url} alt="" draggable={false} /><span className={styles.focalMarker} data-media-focal-marker style={{ left: `${draft.focalX}%`, top: `${draft.focalY}%` }} aria-hidden="true" /></> : <span>Preview unavailable</span>}
+            </div>
+            <div className={styles.focalInputs}>
+              <label htmlFor="asset-focal-x">Horizontal (%)<input id="asset-focal-x" type="number" min="0" max="100" step="1" value={draft.focalX} disabled={saving || !data.focalEditingAvailable} onChange={(event) => setFocalPoint(event.currentTarget.valueAsNumber, draft.focalY)} /></label>
+              <label htmlFor="asset-focal-y">Vertical (%)<input id="asset-focal-y" type="number" min="0" max="100" step="1" value={draft.focalY} disabled={saving || !data.focalEditingAvailable} onChange={(event) => setFocalPoint(draft.focalX, event.currentTarget.valueAsNumber)} /></label>
+            </div>
+            {selected.url ? <div className={styles.cropPreviews} aria-label="Crop previews">
+              <figure><div className={styles.cropHero} data-media-crop-preview="hero"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Wide · 16:9</figcaption></figure>
+              <figure><div className={styles.cropCard} data-media-crop-preview="card"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Portrait · 4:5</figcaption></figure>
+              <figure><div className={styles.cropSquare} data-media-crop-preview="square"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Square · 1:1</figcaption></figure>
+            </div> : null}
+          </section>
           <label htmlFor="asset-alt">Alt text<textarea id="asset-alt" rows={3} value={draft.alt} maxLength={240} disabled={draft.decorative || saving} onChange={(event) => setDraft((current) => ({ ...current, alt: event.target.value }))} /><small>{draft.decorative ? 'Decorative images do not need alt text.' : 'Describe the image’s purpose and relevant content.'}</small></label>
           <label className={styles.checkLabel}><input type="checkbox" checked={draft.decorative} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, decorative: event.target.checked }))} />Decorative image</label>
           <label htmlFor="asset-caption">Caption<textarea id="asset-caption" rows={2} value={draft.caption} maxLength={300} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, caption: event.target.value }))} /></label>
