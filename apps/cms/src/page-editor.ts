@@ -1,6 +1,7 @@
 import type { Payload, PayloadRequest } from 'payload'
 import {
   BlockSchema,
+  AppearanceOptions,
   PageSchema,
   TemplateAllowedBlocks,
   type Block,
@@ -429,6 +430,19 @@ export async function pageEditorContext(
   const releasedPages =
     (snapshot?.manifest as { pages?: Record<string, unknown>[] } | undefined)
       ?.pages ?? []
+  const selectedTheme = (
+    snapshot?.manifest as
+      | {
+          settings?: { theme?: { id?: unknown; version?: unknown } }
+        }
+      | undefined
+  )?.settings?.theme
+  const activeTheme =
+    selectedTheme &&
+    typeof selectedTheme.id === 'string' &&
+    typeof selectedTheme.version === 'string'
+      ? { name: selectedTheme.id, version: selectedTheme.version }
+      : { name: 'starter', version: 'built-in' }
   const released = releasedPages.find((item) => item.id === pageID)
   const draft = pageEditorProjection(pageRecord)
   const template = pageRecord.template as ContractPage['template']
@@ -459,6 +473,8 @@ export async function pageEditorContext(
     blockCatalog: blockCatalog.filter((item) =>
       TemplateAllowedBlocks[template].includes(item.type),
     ),
+    appearanceCapabilities: AppearanceOptions,
+    activeTheme,
     references: {
       media: assets.docs.map((asset) => ({
         id: String(asset.id),
