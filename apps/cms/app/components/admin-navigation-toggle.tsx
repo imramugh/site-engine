@@ -71,7 +71,7 @@ export function AdminNavigationClientRuntime() { return null }
 
 export function AdminWorkspaceHeader() {
   const pathname = usePathname()
-  return <header className={styles.header} data-admin-header><h1 data-admin-page-title>{titleForPath(pathname)}</h1><a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></header>
+  return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></header>
 }
 
 export function AdminNavigationToggle({ primary, site, tools, collections, displayName, roles }: Props) {
