@@ -46,6 +46,18 @@ Owner journey also verifies collection navigation, the actual admin logout
 link, revoked-cookie rejection, and immediate disablement. These
 tests do not establish connectivity to a real Google or Microsoft registration.
 
+### AI provider pricing and caps
+
+Provider jobs use integer micro-USD (`1,000,000` = US $1) for every cap and
+usage value. An Owner must configure the exact model's reviewed input and output
+prices per million tokens, the source URL, and the date reviewed. These values
+are pinned with the provider configuration; the service does not fetch or infer
+current prices. A missing or invalid price prevents a provider request. Before a
+request, the service reserves the input's UTF-8 byte count plus the bounded
+maximum output tokens at those rates. It settles from normalized input/output
+token usage (never above the conservative reservation) and keeps the full reservation when usage is absent. OpenRouter's
+reported `cost` is intentionally never used.
+
 ## SQLite transaction compatibility pin
 
 Payload 3.90.2 pins `@libsql/client` 0.14.0. This workspace scopes its package-manager

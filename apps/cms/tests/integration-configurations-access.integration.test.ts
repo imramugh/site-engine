@@ -24,11 +24,12 @@ describe('ENG-023 integration configuration access', () => {
   })
 
   it('rolls back the route service when its required audit write fails', async () => {
-    await configureIntegration(payload, { provider: 'anthropic', model: 'stable-model', credential: 'stable-credential', fallbackProvider: null, monthlyCap: null }, async ({ payload, req, event, actor, provider }) => {
+    const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1_000_000, outputMicroUsdPerMillionTokens: 2_000_000, pricingSource: 'https://prices.example.test/review', pricingAsOf: '2026-10-04T00:00:00.000Z' }
+    await configureIntegration(payload, { provider: 'anthropic', model: 'stable-model', credential: 'stable-credential', fallbackProvider: null, pricing }, async ({ payload, req, event, actor, provider }) => {
       await payload.create({ collection: 'audit-events', data: { event, actor, detail: { provider } }, overrideAccess: true, req: req as never })
     })
     const before = (await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'anthropic' } }, overrideAccess: true })).docs[0]!
-    await expect(configureIntegration(payload, { provider: 'anthropic', model: 'changed-model', credential: 'changed-credential', fallbackProvider: null, monthlyCap: null }, async () => { throw new Error('injected audit write failure') })).rejects.toThrow('injected audit write failure')
+    await expect(configureIntegration(payload, { provider: 'anthropic', model: 'changed-model', credential: 'changed-credential', fallbackProvider: null, pricing }, async () => { throw new Error('injected audit write failure') })).rejects.toThrow('injected audit write failure')
     const after = (await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'anthropic' } }, overrideAccess: true })).docs[0]!
     expect(after.model).toBe('stable-model')
     expect(after.encryptedCredential).toBe(before.encryptedCredential)

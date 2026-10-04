@@ -37,9 +37,10 @@ export async function POST(request: Request) {
       const revoked = await revokeIntegration(payload, { provider: body.provider, actor: user.id })
       return revoked ? privateJSON({ integration: publicIntegration(revoked as unknown as Record<string, unknown>) }) : failure()
     }
-    if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider)) || (body.monthlyCap !== null && body.monthlyCap !== undefined && (!Number.isInteger(body.monthlyCap) || Number(body.monthlyCap) < 0 || Number(body.monthlyCap) > 1_000_000))) return failure()
-    const monthlyCap = typeof body.monthlyCap === 'number' ? body.monthlyCap : null
-    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, monthlyCap, actor: user.id })
+    const money = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
+    if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider)) || (body.monthlyCapMicroUsd !== null && body.monthlyCapMicroUsd !== undefined && !money(body.monthlyCapMicroUsd)) || !money(body.inputMicroUsdPerMillionTokens) || !money(body.outputMicroUsdPerMillionTokens) || typeof body.pricingSource !== 'string' || !body.pricingSource.trim() || body.pricingSource.length > 500 || typeof body.pricingAsOf !== 'string' || Number.isNaN(Date.parse(body.pricingAsOf))) return failure()
+    const monthlyCapMicroUsd = typeof body.monthlyCapMicroUsd === 'number' ? body.monthlyCapMicroUsd : null
+    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
     return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
   } catch { return failure() }
 }

@@ -598,13 +598,168 @@ export const IntegrationConfigurations: CollectionConfig = {
     { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
-    { name: 'monthlyCap', type: 'number', min: 0, max: 1_000_000 },
+    { name: 'monthlyCapMicroUsd', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'monthlyUsageMicroUsd', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
+    { name: 'usageMonth', type: 'text', maxLength: 7, admin: { readOnly: true } },
+    // Rates are manually reviewed and pinned to this configured provider/model.
+    // A job fails closed when this evidence is absent; it never fetches live prices.
+    { name: 'inputMicroUsdPerMillionTokens', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'outputMicroUsdPerMillionTokens', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
+    { name: 'pricingSource', type: 'text', maxLength: 500 },
+    { name: 'pricingAsOf', type: 'date' },
     { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
     { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
     { name: 'testedAt', type: 'date', admin: { readOnly: true } },
   ],
 }
+
+/** Immutable, private per-request provider cost reservations. */
+export const ProviderUsageReservations: CollectionConfig = {
+  slug: "provider-usage-reservations",
+  admin: { hidden: true },
+  access: {
+    create: () => false,
+    read: () => false,
+    update: () => false,
+    delete: () => false,
+  },
+  hooks: {
+    beforeChange: [
+      ({ data, originalDoc, operation, req }) => {
+        if (!req.context.providerUsageLifecycle)
+          throw new ValidationError({
+            collection: "provider-usage-reservations",
+            errors: [
+              {
+                path: "",
+                message: "Provider usage reservations are managed internally.",
+              },
+            ],
+            req,
+          });
+        if (operation === "update" && originalDoc)
+          return {
+            ...data,
+            configuration: originalDoc.configuration,
+            executionKey: originalDoc.executionKey,
+            usageMonth: originalDoc.usageMonth,
+            reservedMicroUsd: originalDoc.reservedMicroUsd,
+            configModel: originalDoc.configModel,
+            credentialFingerprint: originalDoc.credentialFingerprint,
+            inputMicroUsdPerMillionTokens:
+              originalDoc.inputMicroUsdPerMillionTokens,
+            outputMicroUsdPerMillionTokens:
+              originalDoc.outputMicroUsdPerMillionTokens,
+            pricingSource: originalDoc.pricingSource,
+            pricingAsOf: originalDoc.pricingAsOf,
+            requestInputTokens: originalDoc.requestInputTokens,
+            maxOutputTokens: originalDoc.maxOutputTokens,
+          };
+        return data;
+      },
+    ],
+  },
+  fields: [
+    {
+      name: "configuration",
+      type: "relationship",
+      relationTo: "integration-configurations",
+      required: true,
+      admin: { readOnly: true },
+    },
+    {
+      name: "executionKey",
+      type: "text",
+      required: true,
+      unique: true,
+      maxLength: 36,
+      admin: { readOnly: true },
+    },
+    {
+      name: "usageMonth",
+      type: "text",
+      required: true,
+      maxLength: 7,
+      admin: { readOnly: true },
+    },
+    {
+      name: "reservedMicroUsd",
+      type: "number",
+      required: true,
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      admin: { readOnly: true },
+    },
+    {
+      name: "settledMicroUsd",
+      type: "number",
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      admin: { readOnly: true },
+    },
+    {
+      name: "state",
+      type: "select",
+      required: true,
+      options: ["reserved", "settled", "released"],
+      admin: { readOnly: true },
+    },
+    {
+      name: "configModel",
+      type: "text",
+      required: true,
+      maxLength: 160,
+      admin: { readOnly: true },
+    },
+    { name: "credentialFingerprint", type: "text", admin: { readOnly: true } },
+    {
+      name: "inputMicroUsdPerMillionTokens",
+      type: "number",
+      required: true,
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      admin: { readOnly: true },
+    },
+    {
+      name: "outputMicroUsdPerMillionTokens",
+      type: "number",
+      required: true,
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      admin: { readOnly: true },
+    },
+    {
+      name: "pricingSource",
+      type: "text",
+      required: true,
+      maxLength: 500,
+      admin: { readOnly: true },
+    },
+    {
+      name: "pricingAsOf",
+      type: "date",
+      required: true,
+      admin: { readOnly: true },
+    },
+    {
+      name: "requestInputTokens",
+      type: "number",
+      required: true,
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      admin: { readOnly: true },
+    },
+    {
+      name: "maxOutputTokens",
+      type: "number",
+      required: true,
+      min: 1,
+      max: 8192,
+      admin: { readOnly: true },
+    },
+  ],
+};
 
 /** Owner-proposed site identity and default metadata. The frozen snapshot keeps
  * sections and operator contract version outside this editable singleton. */
