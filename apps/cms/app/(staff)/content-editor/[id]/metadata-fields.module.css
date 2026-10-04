@@ -3,6 +3,15 @@
   gap: 1rem;
 }
 
+.unavailable {
+  margin: 0;
+  padding: 0.75rem;
+  border-left: 3px solid #8b6508;
+  background: #fff8df;
+  color: #594000;
+  font-size: 0.875rem;
+}
+
 .fields fieldset {
   display: grid;
   gap: 0.875rem;

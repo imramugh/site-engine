@@ -27,6 +27,7 @@ type ChangeSet = {
   revision: number
   changes: number
   theme: { name: string; version: string } | null
+  contractVersion: string | null
 }
 type Reference = { id: string; label: string; mimeType?: string }
 type CatalogItem = {
@@ -53,6 +54,7 @@ type Context = {
     logoTones: string[]
   }
   activeTheme: { name: string; version: string } | null
+  activeContractVersion: string | null
   references: { media: Reference[]; pages: Reference[] }
 }
 type Preview = { id: string; status: string; path?: string }
@@ -873,6 +875,10 @@ export function PageEditor({ pageID }: { pageID: string }) {
     data?.changeSets.find((item) => item.id === changeSetID) ??
     data?.changeSets[0]
   const selectedTheme = selectedSet ? selectedSet.theme : data?.activeTheme
+  const selectedContractVersion = selectedSet
+    ? selectedSet.contractVersion
+    : data?.activeContractVersion
+  const supportsPageMetadata = selectedContractVersion === '1.4.0'
   const dirty = Boolean(
     draft && saved && JSON.stringify(draft) !== JSON.stringify(saved),
   )
@@ -1442,6 +1448,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 template={data.page.template}
                 value={draft}
                 disabled={busy}
+                supportsServiceMetadata={supportsPageMetadata}
                 onChange={(metadata) =>
                   edit((current) => ({ ...current, ...metadata }))
                 }

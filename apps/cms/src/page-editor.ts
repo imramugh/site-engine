@@ -230,6 +230,7 @@ export async function applyPageEditorSave(input: {
   req: PayloadRequest
   actor: PageEditorActor
   save: PageEditorSave
+  initialBaseline?: PreviewBaseline
 }): Promise<PageEditorSaveResult> {
   const { payload, req, actor, save } = input
   if (!hasRole(actor, ['owner', 'editor']))
@@ -272,6 +273,18 @@ export async function applyPageEditorSave(input: {
     req,
   })) as unknown as Record<string, unknown>
   editableSet(set, actor, save.changeSetID)
+  if (desired.kicker || desired.lede || desired.lastReviewed) {
+    const previewContext = await previewThemeContext({
+      payload,
+      changeSets: [set],
+      initialBaseline: input.initialBaseline,
+      req,
+    })
+    if (
+      previewContext.changeSetContractVersions[save.changeSetID] !== '1.4.0'
+    )
+      throw new Error('PAGE_METADATA_UNSUPPORTED')
+  }
   const current = pageEditorProjection(page)
   const currentHash = pageEditorHash(current)
   const desiredHash = pageEditorHash(desired)
@@ -340,6 +353,7 @@ export async function executePageEditorSave(input: {
   payload: Payload
   actor: PageEditorActor
   save: PageEditorSave
+  initialBaseline?: PreviewBaseline
 }): Promise<PageEditorSaveResult> {
   let tails = writeTails.get(input.payload)
   if (!tails) {
@@ -487,12 +501,19 @@ export async function pageEditorContext(
       )
         ? previewContext.changeSetThemes[String(set.id)]
         : previewContext.activeTheme,
+      contractVersion: Object.prototype.hasOwnProperty.call(
+        previewContext.changeSetContractVersions,
+        String(set.id),
+      )
+        ? previewContext.changeSetContractVersions[String(set.id)]
+        : previewContext.activeContractVersion,
     })),
     blockCatalog: blockCatalog.filter((item) =>
       TemplateAllowedBlocks[template].includes(item.type),
     ),
     appearanceCapabilities: AppearanceOptions,
     activeTheme: previewContext.activeTheme,
+    activeContractVersion: previewContext.activeContractVersion,
     references: {
       media: assets.docs.map((asset) => ({
         id: String(asset.id),

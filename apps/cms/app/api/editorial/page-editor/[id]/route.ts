@@ -91,6 +91,7 @@ export async function POST(
       { status: 403, headers: noStore },
     )
   try {
+    const initialBaseline = await loadInitialPreviewBaseline()
     const body = await boundedBody(request)
     if (
       !Object.keys(body).every((key) =>
@@ -129,6 +130,7 @@ export async function POST(
         payload,
         actor: authenticated.user as never,
         save,
+        initialBaseline,
       }),
       { headers: noStore },
     )
@@ -139,19 +141,23 @@ export async function POST(
       code === 'CHANGE_SET_NOT_EDITABLE' ||
       code === 'SECTION_NOT_ACCESSIBLE'
         ? 403
-        : code === 'STALE_PAGE_EDIT' || code === 'STALE_CHANGE_SET'
+        : code === 'STALE_PAGE_EDIT' ||
+            code === 'STALE_CHANGE_SET' ||
+            code === 'PAGE_METADATA_UNSUPPORTED'
           ? 409
           : code === 'BODY_TOO_LARGE'
             ? 413
             : 400
     const message =
-      status === 409
-        ? 'This draft or change set changed. Reload before saving.'
-        : status === 403
-          ? 'You cannot edit this page draft.'
-          : status === 413
-            ? 'This page draft is too large.'
-            : 'The page draft is invalid.'
+      code === 'PAGE_METADATA_UNSUPPORTED'
+        ? 'The selected theme does not support service introduction or last-reviewed metadata. Choose a theme compatible with content contract 1.4.0 before saving these fields.'
+        : status === 409
+          ? 'This draft or change set changed. Reload before saving.'
+          : status === 403
+            ? 'You cannot edit this page draft.'
+            : status === 413
+              ? 'This page draft is too large.'
+              : 'The page draft is invalid.'
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }

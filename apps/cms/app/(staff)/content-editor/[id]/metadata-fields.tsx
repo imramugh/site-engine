@@ -18,6 +18,7 @@ type Props = {
   template: Page['template']
   value: PageMetadataValue
   disabled?: boolean
+  supportsServiceMetadata: boolean
   onChange: (value: PageMetadataValue) => void
 }
 
@@ -41,14 +42,30 @@ const emptyJobPosting = (): NonNullable<Page['jobPosting']> => ({
   location: { addressLocality: '', addressCountry: '' },
 })
 
-export function MetadataFields({ template, value, disabled = false, onChange }: Props) {
+export function MetadataFields({
+  template,
+  value,
+  disabled = false,
+  supportsServiceMetadata,
+  onChange,
+}: Props) {
   const update = <Key extends keyof PageMetadataValue>(key: Key, next: PageMetadataValue[Key]) =>
     onChange({ ...value, [key]: next })
 
   return (
     <div className={styles.fields} data-page-editor-metadata>
+      {(template === 'service' || template === 'article') &&
+      !supportsServiceMetadata ? (
+          <p
+            className={styles.unavailable}
+            data-page-editor-metadata-unavailable
+          >
+            Service introduction and last-reviewed fields require a theme
+            compatible with content contract 1.4.0.
+          </p>
+        ) : null}
       {template === 'service' ? (
-        <fieldset disabled={disabled}>
+        <fieldset disabled={disabled || !supportsServiceMetadata}>
           <legend>Service introduction</legend>
           <label>
             Kicker
@@ -74,7 +91,14 @@ export function MetadataFields({ template, value, disabled = false, onChange }: 
       {template === 'service' || template === 'article' ? (
         <label>
           Last reviewed
-          <input disabled={disabled} type="date" value={isoDate(value.lastReviewed)} onChange={(event) => update('lastReviewed', dateFromInput(event.target.value))} />
+          <input
+            disabled={disabled || !supportsServiceMetadata}
+            type="date"
+            value={isoDate(value.lastReviewed)}
+            onChange={(event) =>
+              update('lastReviewed', dateFromInput(event.target.value))
+            }
+          />
         </label>
       ) : null}
 
