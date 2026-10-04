@@ -14,3 +14,13 @@ export function aiWorkerResponse(job: unknown): Response {
   if (typeof row.id !== 'string' || typeof row.state !== 'string') return Response.json({ error: 'unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } })
   return Response.json({ job: { id: row.id, state: row.state } }, { headers: { 'Cache-Control': 'no-store' } })
 }
+
+type AIWorkerRunDependencies = { payload: () => Promise<any>; run: (payload: any) => Promise<unknown> }
+/** Keeps the Next route module limited to supported route exports. */
+export function createAIWorkerRunHandler(dependencies: AIWorkerRunDependencies) {
+  return async (request: Request): Promise<Response> => {
+    if (!aiWorkerAuthorized(request)) return Response.json({ error: 'Unauthorized.' }, { status: 401, headers: { 'Cache-Control': 'no-store' } })
+    try { return aiWorkerResponse(await dependencies.run(await dependencies.payload())) }
+    catch { return Response.json({ error: 'unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } }) }
+  }
+}

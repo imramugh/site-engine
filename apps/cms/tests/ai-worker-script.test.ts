@@ -4,7 +4,7 @@ const { AIWorkerError, createAIWorkerAPI, normalizeCMSOrigin, runAIWorker } = aw
 describe('AI worker HTTP poller', () => {
   it('validates an HTTP(S) root CMS origin and returns only redacted job metadata', async () => {
     for (const origin of [undefined, 'ftp://cms.test', 'https://cms.test/path', 'https://user:pass@cms.test']) expect(() => normalizeCMSOrigin(origin)).toThrow('INVALID_WORKER_CONFIGURATION')
-    const api = createAIWorkerAPI({ cmsOrigin: 'https://cms.internal/', token: 't'.repeat(32), fetchImpl: async (url: URL | RequestInfo, init?: RequestInit) => { expect(String(url)).toBe('https://cms.internal/api/internal/ai-worker/run'); expect(init?.method).toBe('POST'); expect(init?.body).toBeUndefined(); return Response.json({ job: { id: 'job-1', state: 'completed' } }) } })
+    const api = createAIWorkerAPI({ cmsOrigin: 'https://cms.test/', token: 't'.repeat(32), fetchImpl: async (url: URL | RequestInfo, init?: RequestInit) => { expect(String(url)).toBe('https://cms.test/api/internal/ai-worker/run'); expect(init?.method).toBe('POST'); expect(init?.body).toBeUndefined(); return Response.json({ job: { id: 'job-1', state: 'completed' } }) } })
     await expect(api()).resolves.toEqual({ id: 'job-1', state: 'completed' })
   })
 

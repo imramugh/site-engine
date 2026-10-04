@@ -37,8 +37,40 @@ function completion(value: unknown): asserts value is ConfiguredAICompletion {
   if (!Object.keys(candidate).every(key => ['output', 'usageCostMicroUsd', 'reservedMicroUsd', 'costStatus', 'usedProvider', 'fallbackUsed'].includes(key)) || !['output', 'usageCostMicroUsd', 'reservedMicroUsd', 'costStatus'].every(key => Object.hasOwn(candidate, key)) || typeof output !== 'string' || output.length > 100_000 || !Number.isSafeInteger(reservedMicroUsd) || reservedMicroUsd === undefined || reservedMicroUsd < 0 || (usageCostMicroUsd !== null && (!Number.isSafeInteger(usageCostMicroUsd) || usageCostMicroUsd === undefined || usageCostMicroUsd < 0)) || (costStatus !== 'actual' && costStatus !== 'reserved') || (costStatus === 'actual' && usageCostMicroUsd === null) || (costStatus === 'reserved' && usageCostMicroUsd !== null) || (candidate.usedProvider !== undefined && !['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(candidate.usedProvider)) || (candidate.fallbackUsed !== undefined && typeof candidate.fallbackUsed !== 'boolean')) throw new Error('COMPLETION_INVALID')
 }
 
+const leaseRecovery = new WeakMap<object, Promise<void>>()
+
+async function scanInvalidLeaseTimestamps(payload: Payload) {
+  const client = (payload.db as unknown as { client: { execute: (query: { sql: string; args: unknown[] }) => Promise<{ rows: Array<{ id: string; lease_expires_at?: string | null }>; rowsAffected?: number }> } }).client
+  let page = 1; const invalid: Array<{ id: string; lease: string | null }> = []
+  while (true) {
+    const running = await client.execute({ sql: 'SELECT id, lease_expires_at FROM configured_ai_jobs WHERE state = ? ORDER BY created_at LIMIT ? OFFSET ?', args: ['running', 100, (page - 1) * 100] })
+    for (const raw of running.rows) if (!raw.lease_expires_at || !Number.isFinite(Date.parse(raw.lease_expires_at))) invalid.push({ id: raw.id, lease: raw.lease_expires_at ?? null })
+    if (running.rows.length < 100 || page >= 100_000) break
+    page += 1
+  }
+  for (const item of invalid) {
+    const updated = await client.execute({ sql: 'UPDATE configured_ai_jobs SET state = ?, failure_code = ?, lease_token = NULL, lease_expires_at = NULL WHERE id = ? AND state = ? AND lease_expires_at IS ?', args: ['manual-review', 'LEASE_INVALID_TIMESTAMP', item.id, 'running', item.lease] })
+    if ((updated.rowsAffected ?? 0) > 0) await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: item.id, reason: 'LEASE_INVALID_TIMESTAMP' } }, overrideAccess: true })
+  }
+}
+
+async function recoverInvalidLeaseTimestamps(payload: Payload) {
+  const previous = leaseRecovery.get(payload) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(() => scanInvalidLeaseTimestamps(payload))
+  leaseRecovery.set(payload, next)
+  try { await next } finally { if (leaseRecovery.get(payload) === next) leaseRecovery.delete(payload) }
+}
+
+const claimSerial = new WeakMap<object, Promise<unknown>>()
+
 export async function claimConfiguredAIJob(payload: Payload, actor = 'worker', now = Date.now()) {
-  return transition(payload, async req => {
+  const previous = claimSerial.get(payload) ?? Promise.resolve()
+  const claim = previous.catch(() => undefined).then(async () => {
+    await recoverInvalidLeaseTimestamps(payload)
+    return transition(payload, async req => {
+    // SQLite's lexical date comparison excludes malformed timestamps forever.
+    // Scan the bounded pages explicitly so a corrupt running lease is surfaced
+    // for review instead of becoming an unrecoverable queue head.
     const rows = await payload.find({ collection: 'configured-ai-jobs', where: { or: [{ state: { equals: 'queued' } }, { and: [{ state: { equals: 'running' } }, { leaseExpiresAt: { less_than_equal: new Date(now).toISOString() } }] }] }, sort: 'createdAt', limit: 100, depth: 0, overrideAccess: true, req })
     for (const raw of rows.docs as unknown as Job[]) {
       if (raw.dispatchStartedAt) {
@@ -52,8 +84,11 @@ export async function claimConfiguredAIJob(payload: Payload, actor = 'worker', n
       await payload.create({ collection: 'audit-events', data: { event: 'ai.job_claimed', detail: { job: raw.id, actor } }, overrideAccess: true, req })
       return { job, leaseToken: token, leaseExpiresAt }
     }
-    return undefined
+      return undefined
+    })
   })
+  claimSerial.set(payload, claim)
+  try { return await claim } finally { if (claimSerial.get(payload) === claim) claimSerial.delete(payload) }
 }
 
 export async function renewConfiguredAIJob(payload: Payload, id: string, token: string, now = Date.now()) {

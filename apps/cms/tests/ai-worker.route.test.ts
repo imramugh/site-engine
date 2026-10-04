@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 process.env.AI_WORKER_TOKEN = 'synthetic-ai-worker-token-long-enough-for-tests'
-const { aiWorkerAuthorized } = await import('../src/ai-worker.js')
-const { createAIWorkerRunHandler } = await import('../app/api/internal/ai-worker/run/route.js')
+const { aiWorkerAuthorized, createAIWorkerRunHandler } = await import('../src/ai-worker.js')
 
 describe('configured AI worker route', () => {
   afterEach(() => { process.env.AI_WORKER_TOKEN = 'synthetic-ai-worker-token-long-enough-for-tests' })
