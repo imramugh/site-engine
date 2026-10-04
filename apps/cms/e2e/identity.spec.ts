@@ -193,6 +193,19 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   expect(cleanup).toEqual({ listed: 200, matching: 1, discarded: 200 })
 })
 
+
+
+async function selectCapturedSet(page: import('@playwright/test').Page, pageID: string) {
+  const response = await page.request.get('/api/editorial/list')
+  expect(response.ok()).toBeTruthy()
+  const data = await response.json() as { sets: Array<{ id: string; state: string; changes?: Array<{ id: string; collection: string }> }> }
+  const set = data.sets.find(item => item.state === 'open' && item.changes?.some(change => change.collection === 'pages' && change.id === pageID))
+  expect(set, 'The created page must have its own captured open change set').toBeTruthy()
+  await page.locator(`[data-change-set-id="${set!.id}"]`).click()
+  return set!.id
+}
+
+
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
   await signIn(page, 'editor')
@@ -206,6 +219,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   })
   await page.goto('/admin/editorial')
   await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
+
+  const changeSetID = await selectCapturedSet(page, created)
+
   await expect(page.getByText('title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
@@ -224,7 +240,11 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await reviewer.addScriptTag({ path: axeSource })
   expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
-  await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
+  const submittedQueueItem = reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`)
+  await expect(submittedQueueItem).toContainText('revision')
+  await expect(submittedQueueItem.locator('[data-editorial-state="submitted"]')).toHaveText('submitted')
+  await submittedQueueItem.click()
+  await expect(reviewer.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toHaveText('submitted')
   await expect(reviewer.getByLabel(/Include pages/)).toBeChecked()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
   await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
@@ -243,6 +263,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
+  await expect(reviewer.getByRole('link', { name: 'Review on page' })).toHaveAttribute('href', /\/preview\/changes\/.+\/proposed/)
+  await expect(reviewer.locator('[data-editorial-change-rail]')).toContainText('Field diffs')
   await reviewer.setViewportSize({ width: 1440, height: 1000 })
   const desktopFrames = reviewer.locator('[data-editorial-frame]')
   const liveBox = (await desktopFrames.nth(0).boundingBox())!
@@ -284,12 +306,12 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.getByRole('status').filter({ hasText: 'Deterministic readiness checks completed' })).toContainText('completed')
   await expect(reviewer.getByText(/SEO_DESCRIPTION_MISSING/).first()).toBeVisible()
   await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
-  const displayed = await reviewer.evaluate(async () => {
+  const displayed = await reviewer.evaluate(async (id) => {
     const response = await fetch('/api/editorial/list', { cache: 'no-store' })
-    const body = await response.json() as { sets: Array<{ id: string; name: string; quality?: { proof?: Record<string, unknown> } }> }
-    const set = body.sets.find((item) => item.name === 'Unsubmitted edits')!
+    const body = await response.json() as { sets: Array<{ id: string; quality?: { proof?: Record<string, unknown> } }> }
+    const set = body.sets.find((item) => item.id === id)!
     return { id: set.id, proof: set.quality?.proof! }
-  })
+  }, changeSetID)
   const beforeApproval = await (await reviewer.request.get('/__e2e/publish-state')).json()
   const staleProof = await reviewer.evaluate(async ({ id, proof }) => (await fetch('/api/editorial/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, proof: { ...proof, previewJobID: '00000000-0000-4000-8000-000000000000' } }) })).status, displayed)
   expect(staleProof).toBe(400)
@@ -304,7 +326,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.getByRole('button', { name: 'Add comment' }).click()
   await expect(reviewer.getByText('Browser review comment')).toBeVisible()
   await reviewer.reload()
-  await reviewer.getByRole('button', { name: 'Unsubmitted edits — approved' }).click()
+  await reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`).click()
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible()
   expect((await reviewer.request.post('/__e2e/review-owner/disable')).status()).toBe(204)
   await reviewer.reload()
@@ -316,8 +338,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow refreshed' }) })
   }, created)
   await page.reload()
-  await expect(page.getByText('open', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Unsubmitted edits — approved' })).toBeVisible()
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="open"]')).toBeVisible()
+  await expect(page.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"] [data-editorial-state="approved"]`)).toBeVisible()
 })
 
 test('an owner schedules, reschedules, and cancels a reviewed future publication without queuing it immediately', async ({ browser, page }) => {
