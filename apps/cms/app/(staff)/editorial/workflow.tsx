@@ -47,6 +47,9 @@ export function EditorialWorkflow() {
   const set = data?.sets.find((item) => item.id === selected)
   useEffect(() => { setIncludedChangeKeys(new Set(set?.changes?.map((change) => `${change.collection}:${change.id}`) ?? [])) }, [set?.id, set?.revision])
   useEffect(() => {
+    if (set?.preview?.status === 'ready' && message.startsWith('Private comparison queued')) setMessage('Private comparison is ready for review.')
+  }, [set?.preview?.status, message])
+  useEffect(() => {
     if (!set?.preview?.jobID || set.preview.status === 'ready') return
     const timer = window.setInterval(() => void load(true), 4_000)
     return () => window.clearInterval(timer)
@@ -98,12 +101,12 @@ export function EditorialWorkflow() {
       setMessage(action === 'cancel' ? 'Scheduled publication cancelled.' : 'Scheduled publication rescheduled.'); await load()
     } catch { setMessage('Unable to update the scheduled publication.') } finally { setActing(false) }
   }
-  async function addComment() { if (!set || !comment.trim()) return; setActing(true); try { const response = await fetch('/api/editorial/comment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id, comment }) }); if (!response.ok) throw new Error(); setComment(''); await load() } finally { setActing(false) } }
+  async function addComment() { if (!set || !comment.trim()) return; setActing(true); setMessage(''); try { const response = await fetch('/api/editorial/comment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id, comment }) }); if (!response.ok) throw new Error(); setComment(''); await load() } catch { setMessage('Unable to add this comment. Your text is still available to retry.') } finally { setActing(false) } }
   return <main className={styles.workspace} data-editorial-workspace aria-busy={loading || acting}>
     <header className={styles.intro}><div><p className={styles.eyebrow}>Editorial review</p><h1>Pending changes</h1><p>Draft edits remain private. Approval queues an immutable snapshot; only the publish worker can activate a release.</p></div></header>
     {(message || loading) && <p className={styles.status} role="status" aria-live="polite">{message || 'Loading change sets…'}</p>}
     <div className={styles.reviewLayout}>
-      <nav className={styles.queue} data-editorial-queue aria-label="Change sets"><h2>Change sets</h2>{data?.sets.map((item) => <button className={styles.queueItem} data-editorial-queue-item key={item.id} onClick={() => setSelected(item.id)} aria-pressed={selected === item.id} style={{ display: 'block', width: '100%', textAlign: 'left', margin: '0.5rem 0', overflowWrap: 'anywhere' }}>{item.name} — {item.state}</button>)}{!loading && data?.sets.length === 0 && <p>No pending change sets.</p>}</nav>
+      <nav className={styles.queue} data-editorial-queue aria-label="Change sets"><h2>Change sets</h2>{data?.sets.map((item) => <button className={styles.queueItem} data-editorial-queue-item key={item.id} onClick={() => { setSelected(item.id); setMessage('') }} aria-pressed={selected === item.id} style={{ display: 'block', width: '100%', textAlign: 'left', margin: '0.5rem 0', overflowWrap: 'anywhere' }}>{item.name} — {item.state}</button>)}{!loading && data?.sets.length === 0 && <p>No pending change sets.</p>}</nav>
       {set && <section className={styles.detail} data-editorial-detail aria-label="Change set detail"><h2>{set.name}</h2><p>State: <strong>{set.state}</strong></p>
         {set.state === 'stale' && <p role="alert">This change set is stale. Refresh it before review.</p>}
         {hasActions && <div className={styles.actions} data-editorial-actions role="group" aria-label="Workflow actions">
