@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -352,10 +353,12 @@ function Scalar({
   onChange: (value: unknown) => void
   references: Context['references']
 }) {
+  const controlID = useId()
   if (typeof value === 'boolean')
     return (
-      <label className={styles.checkbox}>
+      <label className={styles.checkbox} htmlFor={controlID}>
         <input
+          id={controlID}
           type="checkbox"
           checked={value}
           onChange={(event) => onChange(event.target.checked)}
@@ -371,9 +374,10 @@ function Scalar({
       : undefined
   if (reference)
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <select
+          id={controlID}
           value={String(value)}
           onChange={(event) => onChange(event.target.value)}
         >
@@ -387,9 +391,10 @@ function Scalar({
     )
   if (typeof value === 'number')
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <input
+          id={controlID}
           type="number"
           value={value}
           onChange={(event) => onChange(Number(event.target.value))}
@@ -398,9 +403,10 @@ function Scalar({
     )
   if (enumOptions[field])
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <select
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         >
@@ -423,15 +429,17 @@ function Scalar({
     'outcome',
   ].includes(field)
   return (
-    <label>
+    <label htmlFor={controlID}>
       {title(field)}
       {long ? (
         <textarea
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
         <input
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
