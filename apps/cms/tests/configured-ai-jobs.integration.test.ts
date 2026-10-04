@@ -56,4 +56,62 @@ describe('configured AI job enqueue safety', () => {
   })
 })
 
-describe('configured AI job lease lifecycle', () => { it('claims once, marks begun expired work for manual review, and rejects stale completion', async () => { const job = await enqueueConfiguredAIJob(payload, ownerID, input); const first = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000); expect(first.job.id).toBe(job.job.id); expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_001)).toBeUndefined(); await lifecycle.beginConfiguredAIJob(payload, job.job.id, first.leaseToken, 1_002); expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 70_000)).toBeUndefined(); const stored = await payload.findByID({ collection: 'configured-ai-jobs', id: job.job.id, overrideAccess: true }); expect(stored.state).toBe('manual-review'); await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, first.leaseToken, { ok: true }, 70_001)).rejects.toThrow('LEASE_INVALID') }) })
+describe('configured AI job lease lifecycle', () => {
+  const reserved = { output: 'synthetic output', usageCostMicroUsd: null, reservedMicroUsd: 120, costStatus: 'reserved' } as const
+  const actual = { output: 'synthetic output', usageCostMicroUsd: 91, reservedMicroUsd: 120, costStatus: 'actual' } as const
+  const queued = () => enqueueConfiguredAIJob(payload, ownerID, { ...input, idempotencyKey: `lifecycle-${randomBytes(8).toString('hex')}` })
+
+  it('gives concurrent claims one winner', async () => {
+    const job = await queued()
+    const claims = await Promise.all(Array.from({ length: 4 }, (_, index) => lifecycle.claimConfiguredAIJob(payload, `worker-${index}`, 1_000)))
+    const winners = claims.filter(Boolean)
+    expect(winners).toHaveLength(1)
+    expect(winners[0]!.job.id).toBe(job.job.id)
+  })
+
+  it('denies a second parallel begin before a second transport intent can be sent', async () => {
+    const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    const starts = await Promise.allSettled([lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001), lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)])
+    expect(starts.filter((start) => start.status === 'fulfilled')).toHaveLength(1)
+    expect(starts.filter((start) => start.status === 'rejected')[0]).toMatchObject({ reason: expect.objectContaining({ message: 'ALREADY_DISPATCHED' }) })
+  })
+
+  it('rejects renewal by a stale token after an unbegun lease is reclaimed', async () => {
+    const job = await queued(); const first = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    const reclaimed = await lifecycle.claimConfiguredAIJob(payload, 'worker', 61_001)
+    expect(reclaimed.leaseToken).not.toBe(first.leaseToken)
+    await expect(lifecycle.renewConfiguredAIJob(payload, job.job.id, first.leaseToken, 61_002)).rejects.toThrow('LEASE_INVALID')
+    await expect(lifecycle.renewConfiguredAIJob(payload, job.job.id, reclaimed.leaseToken, 61_002)).resolves.toMatchObject({ id: job.job.id })
+  })
+
+  it('requires begin and the current token, accepts canonical result replay, and rejects a changed proof', async () => {
+    const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, reserved, 1_001)).rejects.toThrow('DISPATCH_NOT_BEGUN')
+    await lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, 'wrong-token', reserved, 1_002)).rejects.toThrow('LEASE_INVALID')
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, actual, 1_002)).resolves.toMatchObject({ state: 'completed', costStatus: 'actual' })
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, 'wrong-token', actual, 1_003)).rejects.toThrow('LEASE_INVALID')
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { costStatus: 'actual', reservedMicroUsd: 120, output: 'synthetic output', usageCostMicroUsd: 91 }, 1_003)).resolves.toMatchObject({ state: 'completed' })
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { ...actual, output: 'different synthetic output' }, 1_003)).rejects.toThrow('COMPLETION_CONFLICT')
+  })
+
+  it('accepts reserved money while rejecting invalid bounded completion values', async () => {
+    const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    await lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, reserved, 1_002)).resolves.toMatchObject({ costStatus: 'reserved' })
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { ...actual, usageCostMicroUsd: null }, 1_003)).rejects.toThrow('COMPLETION_INVALID')
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, { ...reserved, output: 'x'.repeat(100_001) }, 1_003)).rejects.toThrow('COMPLETION_INVALID')
+  })
+
+  it('moves expired begun work to manual review without exposing its input or output in audit metadata', async () => {
+    const job = await queued(); const claim = await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)
+    await lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)
+    expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 70_000)).toBeUndefined()
+    expect(await payload.findByID({ collection: 'configured-ai-jobs', id: job.job.id, overrideAccess: true })).toMatchObject({ state: 'manual-review', failureCode: 'LEASE_EXPIRED_AFTER_DISPATCH' })
+    await expect(lifecycle.completeConfiguredAIJob(payload, job.job.id, claim.leaseToken, reserved, 70_001)).rejects.toThrow('LEASE_INVALID')
+    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'ai.job_manual_review' } }, overrideAccess: true })
+    expect(audit.docs).toHaveLength(1)
+    expect(JSON.stringify(audit.docs[0])).not.toContain('bounded prompt')
+    expect(JSON.stringify(audit.docs[0])).not.toContain('synthetic output')
+  })
+})
