@@ -106,7 +106,7 @@ export async function prepareReviewPreview(input: { payload: Payload; req: Paylo
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, initialBaseline, draft = false } = input
   requireTransaction(req, 'Review preview preparation')
   const reviewer = await payload.findByID({ collection: 'users', id: actor.id, depth: 0, overrideAccess: true, req }) as { disabled?: boolean; roles?: string[] }
-  if (reviewer.disabled || !(draft ? reviewer.roles?.some((role) => role === 'owner' || role === 'editor') : reviewer.roles?.some((role) => role === 'owner' || role === 'approver'))) throw new Error(draft ? 'Editor role required.' : 'Reviewer role required.')
+  if (reviewer.disabled || !(draft ? reviewer.roles?.some((role) => role === 'owner' || role === 'editor' || role === 'approver') : reviewer.roles?.some((role) => role === 'owner' || role === 'approver'))) throw new Error(draft ? 'Page editor role required.' : 'Reviewer role required.')
   if (!includedChangeKeys.length || new Set(includedChangeKeys).size !== includedChangeKeys.length) throw new Error('Preview selection must contain unique captured changes.')
   let set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
   set = await markStaleIfNeeded(payload, set, req)

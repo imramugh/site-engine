@@ -10,7 +10,6 @@ import {
   executePageEditorSave,
   pageEditorContext,
   pageEditorHash,
-  pageEditorContext,
   pageEditorProjection,
   parsePageEditorDraft,
 } from '../src/page-editor'
