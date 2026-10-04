@@ -16,7 +16,7 @@ async function openMenu(page: Awaited<ReturnType<typeof signedIn>>['page']) {
 test('ENG-023 Owner rotates a masked credential and explicitly tests a connection', async ({ browser }) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/admin'); await openMenu(owner.page)
-  await owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Integrations' }).click(); await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
+  await owner.page.getByRole('navigation', { name: 'Site', exact: true }).getByRole('link', { name: 'Integrations' }).click(); await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
   await expect(owner.page.getByText('Provider jobs use encrypted credentials only at execution time')).toBeVisible()
   await owner.page.getByLabel('Model').fill('synthetic-model'); await owner.page.getByLabel('Credential').fill('synthetic-browser-credential'); await owner.page.getByLabel('Input micro-USD per million tokens').fill('1000000'); await owner.page.getByLabel('Output micro-USD per million tokens').fill('2000000'); await owner.page.getByLabel('Reviewed pricing source').fill('https://prices.example.test/review'); await owner.page.getByLabel('Pricing as of').fill('2026-10-04')
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')

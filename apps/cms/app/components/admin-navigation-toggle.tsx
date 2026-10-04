@@ -44,13 +44,19 @@ export function SkipNavigation() {
   return <a className={styles.skipLink} href="#admin-workspace" onClick={skip} onKeyDown={skipFromKeyboard}>Skip navigation</a>
 }
 
-/**
- * Payload resolves custom server components through its import map. Keeping this
- * client module in the route's direct component graph makes its client chunk
- * available before the custom navigation hydrates.
- */
+/** Ensures this client chunk is registered before Payload hydrates its import-map Nav. */
 export function AdminNavigationClientRuntime() {
   return null
+}
+
+const titleForPath = (pathname: string) => ({
+  '/admin': 'Dashboard', '/content-tree': 'Content', '/editorial': 'Reviews', '/leads': 'Leads',
+  '/applications': 'Careers', '/operations': 'Change log', '/integrations': 'Integrations',
+}[pathname] ?? 'Workspace')
+
+export function AdminWorkspaceHeader() {
+  const pathname = usePathname()
+  return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></header>
 }
 
 export function AdminNavigationToggle({ items, collections, displayName, roles }: Props) {
