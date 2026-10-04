@@ -3,13 +3,14 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import config from '../../../payload.config'
 import { hasRole } from '../../../src/access'
+import { checkForWorkingPage, publishedPageChecks, type PublishedPageCheck } from '../../../src/content-readiness'
 import { buildContentTree, canonicalContentPath, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
 import { serverSessionStrategy } from '../../../src/identity'
 import { StaffShell } from '../../components/staff-shell'
 import styles from './content-list.module.css'
 
 type Filter = 'all' | 'draft' | 'archived'
-type Row = { page: ContentTreePage; indent: number; path: string; cycle: boolean; group: string }
+type Row = { page: ContentTreePage; indent: number; path: string; cycle: boolean; group: string; check: PublishedPageCheck }
 const filters: Array<{ value: Filter; label: string }> = [{ value: 'all', label: 'All pages' }, { value: 'draft', label: 'Drafts' }, { value: 'archived', label: 'Archived' }]
 const stateOf = (page: ContentTreePage) => page.status ?? page._status ?? 'draft'
 
@@ -18,19 +19,19 @@ function Icon({ folder }: { folder: boolean }) {
     ? <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
     : <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6M8 13h8M8 17h8" /></svg>
 }
-function append(nodes: ContentTreeNode[], rows: Row[], pages: ContentTreePage[], sections: ContentTreeSection[], homepageID: string | undefined, depth = 0, group = '') {
+function append(nodes: ContentTreeNode[], rows: Row[], pages: ContentTreePage[], sections: ContentTreeSection[], homepageID: string | undefined, checks: Map<string, PublishedPageCheck> | undefined, depth = 0, group = '') {
   for (const node of nodes) {
-    rows.push({ page: node.page, indent: depth, path: canonicalContentPath(node.page, pages, sections, homepageID) ?? 'Route unavailable', cycle: node.cycle, group })
-    append(node.children, rows, pages, sections, homepageID, depth + 1, group)
+    rows.push({ page: node.page, indent: depth, path: canonicalContentPath(node.page, pages, sections, homepageID) ?? 'Route unavailable', cycle: node.cycle, group, check: checkForWorkingPage(node.page, checks) })
+    append(node.children, rows, pages, sections, homepageID, checks, depth + 1, group)
   }
 }
-function rowsFor(sections: ContentTreeSection[], pages: ContentTreePage[], homepageID: string | undefined, tree: ReturnType<typeof buildContentTree>) {
+function rowsFor(sections: ContentTreeSection[], pages: ContentTreePage[], homepageID: string | undefined, checks: Map<string, PublishedPageCheck> | undefined, tree: ReturnType<typeof buildContentTree>) {
   const rows: Row[] = []
   for (const group of tree.sections) {
-    append(group.roots, rows, pages, sections, homepageID, 0, group.section.name)
-    append(group.unplaced, rows, pages, sections, homepageID, 0, `${group.section.name} — hierarchy needs repair`)
+    append(group.roots, rows, pages, sections, homepageID, checks, 0, group.section.name)
+    append(group.unplaced, rows, pages, sections, homepageID, checks, 0, `${group.section.name} — hierarchy needs repair`)
   }
-  append(tree.unassigned, rows, pages, sections, homepageID, 0, 'Unassigned pages')
+  append(tree.unassigned, rows, pages, sections, homepageID, checks, 0, 'Unassigned pages')
   return rows
 }
 function formatDate(value: unknown) {
@@ -48,32 +49,34 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
   const filter: Filter = input.status === 'draft' || input.status === 'archived' ? input.status : 'all'
   const search = typeof input.q === 'string' ? input.q.trim().slice(0, 120) : ''
   try {
-    const [sections, pages, settings] = await Promise.all([
+    const [sections, pages, settings, releases] = await Promise.all([
       payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
       payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
       payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user, overrideAccess: false }),
+      payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, user, overrideAccess: false }),
     ])
     const allPages = pages.docs as unknown as ContentTreePage[]
     const contentSections = sections.docs as unknown as ContentTreeSection[]
     const homepage = settings.docs[0]?.homepageId
     const homepageID = typeof homepage === 'string' ? homepage : homepage?.id
-    const allRows = rowsFor(contentSections, allPages, homepageID, buildContentTree(contentSections, allPages))
+    const release = releases.docs[0]
+    const snapshotID = typeof release?.snapshot === 'string' ? release.snapshot : release?.snapshot?.id
+    const snapshot = snapshotID ? await payload.find({ collection: 'publish-snapshots', where: { id: { equals: snapshotID } }, limit: 1, depth: 0, user, overrideAccess: false }) : undefined
+    const checks = publishedPageChecks(snapshot?.docs[0]?.manifest)
+    const allRows = rowsFor(contentSections, allPages, homepageID, checks, buildContentTree(contentSections, allPages))
     const counts = { all: allRows.length, draft: allRows.filter((row) => stateOf(row.page) === 'draft').length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
     const visible = allRows.filter((row) => (filter === 'all' || stateOf(row.page) === filter) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
     const canCreate = hasRole(user as never, ['owner', 'editor'])
     return <StaffShell><main data-content-tree>
+      <h1 className={styles.visuallyHidden}>Content</h1>
       <section className={styles.contentList} aria-label="Content pages" data-content-list data-testid="content-list">
         <div className={styles.toolbar}>
           <nav className={styles.tabs} aria-label="Page status" data-content-tabs>{filters.map((item) => <a key={item.value} className={styles.tab} href={hrefFor(item.value, search)} aria-current={filter === item.value ? 'page' : undefined} data-content-tab={item.value}>{item.label} ({counts[item.value]})</a>)}</nav>
           {canCreate ? <a className={styles.newPage} href="/admin/collections/pages/create" data-content-new-page>+ New page</a> : null}
         </div>
-        <form className={styles.filters} action="/content-tree" method="get" role="search" data-content-search>
-          {filter !== 'all' ? <input type="hidden" name="status" value={filter} /> : null}
-          <label htmlFor="content-tree-search">Search pages</label><input id="content-tree-search" name="q" defaultValue={search} placeholder="Title or path" /><button type="submit">Search</button>
-        </form>
         <div className={styles.tableWrap} tabIndex={0} aria-label="Page list. Scroll horizontally for all columns on small screens." data-content-table-scroll data-testid="content-table-scroll">
           <table className={styles.table} data-content-table><caption className={styles.visuallyHidden}>Pages matching the selected status and search</caption><thead><tr><th scope="col">Page</th><th scope="col">Template</th><th scope="col">Status</th><th scope="col">Checks</th><th scope="col">Updated</th></tr></thead><tbody>
-            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Icon folder={row.indent === 0} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{stateOf(row.page)}</span></td><td><span className={styles.notChecked}>Not checked</span></td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
+            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Icon folder={row.indent === 0} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{stateOf(row.page)}</span></td><td>{row.check.state === 'checked' ? row.check.issues ? <a className={styles.checkIssue} href={`/admin/collections/pages/${row.page.id}`} data-content-check="issues">Published checks: {row.check.issues} issue{row.check.issues === 1 ? '' : 's'}</a> : <span className={styles.checkPassed} data-content-check="passed">Published checks passed</span> : <span className={styles.notChecked} data-content-check={row.check.state}>{row.check.state === 'not-published' ? 'Draft working copy — not checked' : 'Published checks unavailable'}</span>}</td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
           </tbody></table>
         </div>
         {!visible.length ? <p className={styles.notice} role="status" data-content-empty data-testid="content-empty">{allRows.length ? 'No pages match these filters.' : 'No pages have been created.'}</p> : null}

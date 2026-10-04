@@ -28,11 +28,8 @@ test('ENG-003 and ENG-006 give owner and editor a usable filtered content list',
     await expect(session.page.locator('[data-content-list]')).toBeVisible()
     await expect(session.page.locator('[data-content-table] tbody tr')).toHaveCount(1)
     await expect(session.page.getByRole('link', { name: /Drafts/ })).toBeVisible()
+    await expect(session.page.getByText('Draft working copy — not checked')).toBeVisible()
 
-    const search = session.page.getByRole('textbox', { name: 'Search pages' })
-    await search.fill('direct-edit-browser-page')
-    await search.press('Enter')
-    await expect(session.page).toHaveURL(/q=direct-edit-browser-page/)
     const rowLink = session.page.locator('[data-content-page-link]').first()
     await rowLink.focus()
     await expect(rowLink).toBeFocused()

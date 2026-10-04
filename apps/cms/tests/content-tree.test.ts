@@ -36,3 +36,17 @@ test('canonical content paths match engine routes for the homepage and section l
   expect(canonicalContentPath(snapshot.pages.find((item) => item.id === landingID)!, snapshot.pages, sections, snapshot.settings.homepageId)).toBe('/services')
   expect(canonicalContentPath(snapshot.pages.find((item) => item.id === detailID)!, snapshot.pages, sections, snapshot.settings.homepageId)).toBe('/services/respond')
 })
+
+test('published checks are current-only and reject an invalid image reference', async () => {
+  const { checkForWorkingPage, publishedPageChecks } = await import('../src/content-readiness')
+  const valid = structuredClone(neutralFixture)
+  const pageID = valid.pages[0]!.id
+  const checks = publishedPageChecks(valid)
+  expect(checkForWorkingPage({ id: pageID, status: 'published' }, checks)).toEqual({ state: 'checked', issues: 0 })
+  expect(checkForWorkingPage({ id: pageID, status: 'draft' }, checks)).toEqual({ state: 'not-published' })
+
+  const missingImage = structuredClone(neutralFixture)
+  missingImage.pages[0]!.blocks[0]!.appearance.backgroundImage = { mediaId: '99999999-9999-4999-8999-999999999999', overlay: 0.4 }
+  expect(publishedPageChecks(missingImage)).toBeUndefined()
+  expect(checkForWorkingPage({ id: pageID, status: 'published' }, publishedPageChecks(missingImage))).toEqual({ state: 'unavailable' })
+})
