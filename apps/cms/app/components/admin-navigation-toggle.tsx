@@ -24,7 +24,7 @@ function NavIcon({ label }: { label: string }) {
 }
 
 function focusWorkspace(): void {
-  const target = document.getElementById('admin-workspace') ?? document.querySelector<HTMLElement>('main, .template-default__wrap')
+  const target = document.getElementById('admin-workspace') ?? document.querySelector<HTMLElement>('main') ?? document.querySelector<HTMLElement>('.template-default__wrap')
   if (!target) return
   target.tabIndex = -1
   target.focus()
