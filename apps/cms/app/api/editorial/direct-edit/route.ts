@@ -28,7 +28,10 @@ async function body(request: Request): Promise<unknown> {
     const chunk = await reader.read()
     if (chunk.done) break
     size += chunk.value.byteLength
-    if (size > maxBodyBytes) throw new Error('BODY_TOO_LARGE')
+    if (size > maxBodyBytes) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error('BODY_TOO_LARGE')
+    }
     chunks.push(chunk.value)
   }
   const bytes = new Uint8Array(size); let offset = 0

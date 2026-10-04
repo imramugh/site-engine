@@ -17,6 +17,7 @@ writeFileSync(process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE, 'test-only-bootstrap-to
 const { default: config } = await import('../payload.config.js')
 const directRoute = await import('../app/api/editorial/direct-edit/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
+let releaseSequence = 10_000
 
 const heroID = '10000000-0000-4000-8000-000000000001'
 async function actor(role: 'owner' | 'editor' | 'approver' = 'editor') {
@@ -35,6 +36,13 @@ async function fixture(user: { id: string; roles?: string[] }) {
   return { section, page, set }
 }
 function edit(pageID: string, setID: string, value = 'Updated heading') { return { pageID, blockID: heroID, field: 'heading' as const, value, expectedValueHash: directEditValueHash('Original heading'), changeSetID: setID } }
+async function installPublishedPointer(user: { id: string }, setID: string, pageID: string) {
+  const sequence = releaseSequence++; const manifest = { pageID, heroHeading: 'Original heading' }
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: 'a'.repeat(64), changeSet: setID, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: 'test-theme', engineVersion: 'test-engine', contractVersion: '1.0.0', approvedBy: user.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `direct-edit-baseline:${snapshot.id}`, sequence, snapshot: snapshot.id, changeSet: setID, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  const release = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'b'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: 'test-theme', engineVersion: 'test-engine', contractVersion: '1.0.0', checks: [{ name: 'artifact-integrity', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+  return { snapshot, release, manifest }
+}
 
 beforeAll(async () => { payload = await getPayload({ config }) }, 30_000)
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
@@ -42,6 +50,7 @@ afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: 
 describe('ENG-026 draft-only direct hero edits', () => {
   it('uses the same working-draft path as ordinary editing, captures an allowed hero field, and replays safely', async () => {
     const editor = await actor(); const current = await fixture(editor)
+    const published = await installPublishedPointer(editor, current.set.id, current.page.id)
     await payload.update({ collection: 'pages', id: current.page.id, data: { title: 'Ordinary working draft change' }, draft: true, user: editor, overrideAccess: false })
     const ordinaryDraft = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
     expect(ordinaryDraft._status).toBe('draft')
@@ -54,7 +63,9 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect((page.blocks as { heading: string }[])[0]?.heading).toBe('Updated heading'); expect(page.status).toBe('draft')
     const set = await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })
     expect(set.state).toBe('open'); expect(set.changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'pages', id: current.page.id })]))
-    expect((await payload.count({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(0)
+    const release = await payload.findByID({ collection: 'published-releases', id: published.release.id, overrideAccess: true })
+    const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: published.snapshot.id, overrideAccess: true })
+    expect(release.snapshot).toMatchObject({ id: published.snapshot.id }); expect(snapshot.manifest).toEqual(published.manifest)
   })
 
   it('rejects stale writes and leaves the first valid update as the only saved value', async () => {
@@ -78,6 +89,19 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect((page.blocks as { heading: string }[])[0]?.heading).toBe('Concurrent winner')
   })
 
+  it('returns a stale conflict for competing values from one baseline without changing another Hero field', async () => {
+    const editor = await actor(); const current = await fixture(editor)
+    const outcomes = await Promise.allSettled([
+      executeDirectEdit({ payload, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Competing first') }),
+      executeDirectEdit({ payload, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Competing second') }),
+    ])
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({ reason: expect.objectContaining({ message: 'STALE_DIRECT_EDIT' }) })
+    const page = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    expect(['Competing first', 'Competing second']).toContain((page.blocks as { heading: string }[])[0]?.heading)
+    expect((page.blocks as { body: string }[])[0]?.body).toBe('Original hero body.')
+  })
+
   it('does not call an unrecorded same value a replay, and re-applies intent after a change away and back', async () => {
     const editor = await actor(); const current = await fixture(editor)
     const empty = await payload.create({ collection: 'change-sets', data: { name: 'Empty direct edit set', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
@@ -88,6 +112,8 @@ describe('ENG-026 draft-only direct hero edits', () => {
     await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Original heading'), expectedValueHash: directEditValueHash('Changed away') } }))
     const reapplied = await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Changed away') }))
     expect(reapplied).toMatchObject({ replayed: false, noOp: false })
+    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again'), expectedValueHash: directEditValueHash('Changed away') } }))
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again'), expectedValueHash: directEditValueHash('Changed away') } }))).rejects.toThrow('STALE_DIRECT_EDIT')
   })
 
   it('enforces roles, same-origin route auth, set ownership, editable state, field allowlist, and contract validation', async () => {
@@ -98,6 +124,10 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect(unauthenticated.status).toBe(401)
     const tooLarge = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify({ padding: 'x'.repeat(5_000) }) }))
     expect(tooLarge.status).toBe(413)
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ padding: 'x'.repeat(5_000) }))) }, cancel() { cancelled = true } })
+    const cancelledOverflow = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: stream, duplex: 'half' } as RequestInit))
+    expect(cancelledOverflow.status).toBe(413); expect(cancelled).toBe(true)
     const cookie = await session(approver)
     const deniedRole = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id)) }))
     expect(deniedRole.status).toBe(403)

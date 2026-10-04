@@ -4,4 +4,6 @@ This increment accepts draft-only edits to existing Hero `heading` and `body` fi
 
 The CMS validates the complete resulting page, including the existing Hero limits of 120 characters for `heading` and 1,000 for `body`, writes only the draft, and uses the existing editorial capture hook to maintain the normal change-set diff. A matching retry reports success without another write; a different stale value returns a conflict. The route neither prepares a preview nor approves or publishes content.
 
+Replay evidence is the selected change set's current captured before/after image. If later edits replace that evidence in the same set, a lost response whose prior value is no longer represented returns a conflict and the caller reloads the draft; this increment does not claim a broader durable request-idempotency guarantee.
+
 The on-page canvas, theme field markers, keyboard interaction, and broader block-field support remain separate work. This route is not a public edge endpoint.
