@@ -1,12 +1,22 @@
 import type { ReactNode } from 'react'
+import { getPayload } from 'payload'
+import { headers } from 'next/headers'
+import config from '../../payload.config'
+import { serverSessionStrategy } from '../../src/identity'
+import { WorkspaceNavigation } from './admin-navigation'
 import styles from './staff-shell.module.css'
 
-export function StaffShell({ children }: { children: ReactNode }) {
-  return <div className={styles.workspace}>
-    <header className={styles.header}>
-      <span>Site workspace</span>
-      <a href="/admin">Back to administration</a>
-    </header>
-    {children}
+export async function StaffShell({ children }: { children: ReactNode }) {
+  const payload = await getPayload({ config })
+  const authenticated = await serverSessionStrategy.authenticate({ headers: await headers(), payload })
+  return <div className={styles.workspace} data-admin-shell data-testid="admin-shell">
+    <WorkspaceNavigation user={authenticated.user as { name?: string | null; email?: string | null; roles?: string[] | null } | null} />
+    <div className={styles.adminWorkspace} data-admin-workspace id="admin-workspace">
+      <header className={styles.header} data-admin-header>
+        <a href="/admin">Workspace overview</a>
+        <a href="/">View site</a>
+      </header>
+      {children}
+    </div>
   </div>
 }

@@ -93,7 +93,7 @@ export function ThemeChooser() {
           <button type="submit" disabled={!selected?.compatibility.compatible || saving}>{saving ? 'Saving…' : 'Create draft selection'}</button>
         </fieldset>
       </form>
-      <p><a href="/admin/editorial">Open Editorial review</a></p>
+      <p><a href="/editorial">Open Editorial review</a></p>
     </>}
   </main>
 }

@@ -20,17 +20,8 @@ async function newPage(browser: Browser, role: 'owner' | 'editor' | 'sales'): Pr
 }
 
 async function openAdminNavigation(page: Page): Promise<void> {
-  const menus = page.locator('button.nav-toggler')
-  for (let index = 0; index < await menus.count(); index += 1) {
-    const menu = menus.nth(index)
-    if (!await menu.isVisible()) continue
-    if (await menu.getAttribute('aria-label') === 'Open Menu') {
-      await menu.click()
-      await expect(menu).toHaveAttribute('aria-label', 'Close Menu')
-    }
-    return
-  }
-  throw new Error('The admin navigation menu control is unavailable.')
+  const menu = page.getByTestId('mobile-menu')
+  if (await menu.isVisible() && await menu.getAttribute('aria-expanded') === 'false') await menu.click()
 }
 
 test('ENG-022 serves exact operational counts and server-side audit filters to an Owner', async ({ browser }) => {
@@ -113,21 +104,22 @@ test('ENG-022 exposes the role-aware Leads and Applications links through the ad
   const owner = await newPage(browser, 'owner')
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
-  await expect(owner.page.getByRole('link', { name: 'Operations' })).toBeVisible()
-  await expect(owner.page.getByRole('link', { name: 'Editorial review' })).toBeVisible()
-  await expect(owner.page.getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
-  await expect(owner.page.locator('a[href="/applications"]')).toBeVisible()
-  await owner.page.getByRole('link', { name: 'Lead pipeline' }).click()
+  const ownerNavigation = owner.page.getByRole('navigation', { name: 'Workspace' })
+  await expect(ownerNavigation.getByRole('link', { name: 'Operations' })).toBeVisible()
+  await expect(ownerNavigation.getByRole('link', { name: 'Editorial review' })).toBeVisible()
+  await expect(ownerNavigation.getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
+  await expect(ownerNavigation.getByRole('link', { name: 'Applications' })).toBeVisible()
+  await ownerNavigation.getByRole('link', { name: 'Lead pipeline' }).click()
   await expect(owner.page).toHaveURL(/\/leads$/)
   await expect(owner.page.getByRole('heading', { name: 'Lead pipeline' })).toBeVisible()
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
-  await owner.page.locator('a[href="/applications"]').click()
+  await owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Applications' }).click()
   await expect(owner.page).toHaveURL(/\/applications$/)
   await expect(owner.page.getByRole('heading', { name: 'Applications' })).toBeVisible()
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
-  const applications = owner.page.locator('a[href="/applications"]')
+  const applications = owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Applications' })
   await applications.focus()
   await expect(applications).toBeFocused()
   await owner.page.keyboard.press('Enter')
@@ -136,7 +128,7 @@ test('ENG-022 exposes the role-aware Leads and Applications links through the ad
   await owner.page.setViewportSize({ width: 390, height: 844 })
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
-  const mobileLeads = owner.page.getByRole('link', { name: 'Lead pipeline' })
+  const mobileLeads = owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Lead pipeline' })
   await mobileLeads.click()
   await expect(owner.page).toHaveURL(/\/leads$/)
   await owner.context.close()
@@ -144,8 +136,9 @@ test('ENG-022 exposes the role-aware Leads and Applications links through the ad
   const sales = await newPage(browser, 'sales')
   await sales.page.goto('/admin')
   await openAdminNavigation(sales.page)
-  await expect(sales.page.getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
-  await expect(sales.page.getByRole('link', { name: 'Operations' })).toHaveCount(0)
-  await expect(sales.page.locator('a[href="/applications"]')).toHaveCount(0)
+  const salesNavigation = sales.page.getByRole('navigation', { name: 'Workspace' })
+  await expect(salesNavigation.getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
+  await expect(salesNavigation.getByRole('link', { name: 'Operations' })).toHaveCount(0)
+  await expect(salesNavigation.getByRole('link', { name: 'Applications' })).toHaveCount(0)
   await sales.context.close()
 })

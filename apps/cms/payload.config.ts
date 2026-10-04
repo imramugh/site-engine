@@ -15,8 +15,13 @@ if (process.env.NODE_ENV === 'production' && !isProductionBuild && !secret) {
 
 export default buildConfig({
   admin: {
+    avatar: 'default',
     user: Users.slug,
-    components: { afterNavLinks: ['./app/(payload)/admin/editorial-nav-link#EditorialNavLink'] },
+    components: {
+      Nav: './app/components/admin-navigation#AdminNavigation',
+      graphics: { Icon: './app/components/admin-topbar#AdminBrandLogo', Logo: './app/components/admin-topbar#AdminBrandLogo' },
+      views: { dashboard: { Component: './app/components/admin-dashboard#AdminDashboard' } },
+    },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
   collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, ProviderUsageReservations, Inquiries, NotificationOutbox, MailDrafts, MailAuthorizations, Applications, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],

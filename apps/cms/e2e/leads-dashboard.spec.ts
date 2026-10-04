@@ -10,7 +10,7 @@ async function localOwner(page: import('@playwright/test').Page) {
 
 test('ENG-019 staff records, assigns, filters, updates, and exports a manual lead', async ({ page }) => {
   await localOwner(page)
-  await expect(page.getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Lead pipeline' })).toBeVisible()
   await page.goto('/leads')
   await page.getByLabel('Email').fill('manual-lead@example.test')
   await page.getByLabel('Name').fill('Manual Lead')
