@@ -95,10 +95,16 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(editor.page.locator('[data-admin-page-title]')).toHaveText(
     'Page editor',
   )
-  await expect(editor.page.locator('[data-page-editor]')).toHaveAttribute(
-    'data-page-editor-theme',
-    /\S+/,
-  )
+  expect(
+    await editor.page.locator('[data-page-editor]').getAttribute(
+      'data-page-editor-theme',
+    ),
+  ).toBeNull()
+  await expect(
+    editor.page.locator('[data-page-editor-preview]').getByText(
+      /Saved draft preview · Theme unavailable/,
+    ),
+  ).toBeVisible()
   await expect(
     editor.page.locator(
       '[data-admin-primary] [data-admin-nav-item][href="/content-tree"]',
