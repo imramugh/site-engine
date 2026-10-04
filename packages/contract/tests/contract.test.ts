@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BlockSchema, PageSchema, SiteSnapshotSchema, ThemeInstallSchema,
-  ThemeManifestSchema, compatibleContractVersion, formatSnapshotValidationError,
+  ThemeManifestSchema, SectionPresets, compatibleContractVersion, formatSnapshotValidationError,
 } from '../src/index.js';
 import { neutralFixture } from '../src/fixtures.js';
 
@@ -183,6 +183,17 @@ describe('ENG-002 versioned contract', () => {
 });
 
 describe('ENG-003 content tree validation', () => {
+  it('defines the root, services, insights, careers, and future section template presets', () => {
+    expect(SectionPresets).toEqual({
+      root: ['landing', 'standard'],
+      services: ['landing', 'pillar', 'service'],
+      insights: ['listing', 'article'],
+      careers: ['listing', 'job'],
+      future: ['landing', 'standard', 'article'],
+      landing: ['landing', 'standard', 'article'],
+    });
+  });
+
   it('rejects unknown section references and templates outside a section allowlist', () => {
     const snapshot = fixture();
     snapshot.pages[0].sectionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
