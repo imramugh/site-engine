@@ -5,6 +5,7 @@ import { serverSessionStrategy } from '../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
+const maxBodyBytes = 4_096
 
 function sameOrigin(request: Request): boolean {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
@@ -19,19 +20,35 @@ function input(value: unknown): DirectEditInput | undefined {
   return { pageID: source.pageID, blockID: source.blockID, field: source.field, value: source.value, expectedValueHash: source.expectedValueHash, changeSetID: source.changeSetID }
 }
 
+async function body(request: Request): Promise<unknown> {
+  const reader = request.body?.getReader()
+  if (!reader) throw new Error('INVALID_BODY')
+  const chunks: Uint8Array[] = []; let size = 0
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    size += chunk.value.byteLength
+    if (size > maxBodyBytes) throw new Error('BODY_TOO_LARGE')
+    chunks.push(chunk.value)
+  }
+  const bytes = new Uint8Array(size); let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  try { return JSON.parse(new TextDecoder().decode(bytes)) } catch { throw new Error('INVALID_BODY') }
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
-    const body = input(await request.json())
-    if (!body) return Response.json({ error: 'Invalid direct edit.' }, { status: 400, headers: noStore })
+    const edit = input(await body(request))
+    if (!edit) return Response.json({ error: 'Invalid direct edit.' }, { status: 400, headers: noStore })
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
-    const result = await executeDirectEdit({ payload, actor: authenticated.user as never, edit: body })
+    const result = await executeDirectEdit({ payload, actor: authenticated.user as never, edit })
     return Response.json(result, { headers: noStore })
   } catch (error) {
     const code = error instanceof Error ? error.message : ''
-    const status = code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : 400
+    const status = code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : code === 'BODY_TOO_LARGE' ? 413 : 400
     const message = status === 409 ? 'This field has changed. Reload before saving.' : status === 403 ? 'You cannot edit this draft.' : 'Unable to save this direct edit.'
     return Response.json({ error: message }, { status, headers: noStore })
   }
