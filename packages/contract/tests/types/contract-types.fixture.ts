@@ -1,4 +1,4 @@
-import type { Block, Page } from '../../src/index.js'
+import type { Block, Page } from '@site-engine/contract'
 
 const appearance = {
   background: 'default',

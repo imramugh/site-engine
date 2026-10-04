@@ -21,8 +21,6 @@ export const AppearanceOptions = Object.freeze({
   logoTones: LogoToneSchema.options,
 });
 export type AppearanceOptions = typeof AppearanceOptions;
-/** Metadata consumed by the existing CMS field factory; validation remains the
- * strict PageSchema/BlockSchema boundary so JSON storage does not drift. */
 export const AppearanceSchema = z.object({
   background: BackgroundSchema.default('default'), width: WidthSchema.default('content'),
   spacing: SpacingSchema.default('default'), motionIntent: MotionIntentSchema.default('none'),
