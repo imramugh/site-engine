@@ -990,7 +990,9 @@ export function PageEditor({ pageID }: { pageID: string }) {
         if (!block) return false
         const id = node.dataset.blockId
         const type = node.dataset.blockType ?? node.dataset.block
-        return id ? id === block.id : type === block.type
+        if (id !== undefined && id !== block.id) return false
+        if (type !== undefined && type !== block.type) return false
+        return id !== undefined || type !== undefined
       })
     if (!matches) {
       setPreviewInteractive(false)

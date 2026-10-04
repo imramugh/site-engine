@@ -26,6 +26,8 @@
   min-height: 0;
   cursor: pointer;
   color: var(--ink);
+  border: 1px solid var(--line);
+  background: #fff;
 }
 .editor button:disabled {
   cursor: not-allowed;
@@ -363,6 +365,10 @@
 .editor.editor .addBlock,
 .editor.editor .blockBody > button {
   color: #fff;
+}
+.editor.editor .addBlock {
+  border-color: #013a63;
+  background: #013a63;
 }
 .editor.editor .blockBody > button {
   min-height: 38px;
