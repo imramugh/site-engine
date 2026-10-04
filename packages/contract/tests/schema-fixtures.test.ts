@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { neutralFixture } from '../src/fixtures.js'
-import { AppearanceSchema, BackgroundSchema, BlockSchema, ChangeSetStateSchema, ContractVersionSchema, LinkSchema, LogoToneSchema, MotionIntentSchema, PhoneCtaSchema, SpacingSchema, TemplateSchema, WidthSchema, BusinessCaseSchema, ChangeSetSchema, MediaReferenceSchema, PageSchema, SectionSchema, SiteSettingsDraftSchema, SiteSettingsSchema, SiteSnapshotSchema, RedirectSchema, StyleGuideSchema, ThemeInstallSchema, ThemeManifestSchema, ThemeSelectionSchema } from '../src/index.js'
+import { AppearanceSchema, BackgroundSchema, BlockSchema, ChangeSetStateSchema, ContractVersionSchema, JobPostingSchema, LinkSchema, LogoToneSchema, MotionIntentSchema, PhoneCtaSchema, SpacingSchema, TemplateSchema, WidthSchema, BusinessCaseSchema, ChangeSetSchema, MediaReferenceSchema, PageSchema, SectionSchema, SiteSettingsDraftSchema, SiteSettingsSchema, SiteSnapshotSchema, RedirectSchema, StyleGuideSchema, ThemeInstallSchema, ThemeManifestSchema, ThemeSelectionSchema } from '../src/index.js'
 const id = '11111111-1111-4111-8111-111111111111'
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
 const block = { id, hidden: false, type: 'cta' as const, heading: 'Continue', body: 'Neutral content.', cta: { label: 'Read', href: '/read' }, appearance }
@@ -50,5 +50,23 @@ describe('ENG-002 site data semantic fixtures', () => {
   const snapshot = () => structuredClone(neutralFixture)
   it('validates pages and sections while rejecting template and hierarchy errors', () => { const page = snapshot().pages[0]; expect(PageSchema.safeParse(page).success).toBe(true); expect(PageSchema.safeParse({ ...page, template: 'job' }).success).toBe(false); const section = snapshot().settings.sections[0]; expect(SectionSchema.safeParse(section).success).toBe(true); expect(SectionSchema.safeParse({ ...section, allowedTemplates: [] }).success).toBe(false) })
   it('requires usable media metadata and exactly one business-case identity', () => { const media = { id, filename: 'neutral.webp', mimeType: 'image/webp', width: 10, height: 10, alt: 'Neutral image' }; expect(MediaReferenceSchema.safeParse(media).success).toBe(true); expect(MediaReferenceSchema.safeParse({ ...media, alt: undefined }).success).toBe(false); expect(MediaReferenceSchema.safeParse({ ...media, width: undefined }).success).toBe(false); const business = { client: 'Neutral client', industry: 'Services', challenge: 'Challenge', approach: 'Approach', outcome: 'Outcome', services: ['Service'], publicationDate: '2026-01-01T00:00:00.000Z' }; expect(BusinessCaseSchema.safeParse(business).success).toBe(true); expect(BusinessCaseSchema.safeParse({ ...business, anonymizedClient: 'Also client' }).success).toBe(false); expect(BusinessCaseSchema.safeParse({ ...business, client: undefined }).success).toBe(false) })
+  it('keeps type-specific page metadata on its supported templates', () => {
+    const page = snapshot().pages[0]
+    const reviewed = '2026-01-02T00:00:00.000Z'
+    expect(PageSchema.safeParse({ ...page, template: 'service', kicker: 'Advisory', lede: 'A focused introduction.', lastReviewed: reviewed }).success).toBe(true)
+    expect(PageSchema.safeParse({ ...page, kicker: 'Wrong template' }).success).toBe(false)
+    expect(PageSchema.safeParse({ ...page, lastReviewed: reviewed }).success).toBe(false)
+    const jobPosting = { datePosted: reviewed, employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2026-02-02T00:00:00.000Z' }
+    expect(JobPostingSchema.safeParse(jobPosting).success).toBe(true)
+    expect(PageSchema.safeParse({ ...page, template: 'job', blocks: [], jobPosting }).success).toBe(true)
+    expect(PageSchema.safeParse({ ...page, jobPosting }).success).toBe(false)
+    const versioned = snapshot()
+    versioned.settings = { ...versioned.settings, homepageId: undefined, sections: versioned.settings.sections.map((section) => ({ ...section, allowedTemplates: ['article' as const] })) }
+    versioned.pages[0] = { ...page, template: 'article', blocks: [], lastReviewed: reviewed }
+    versioned.settings.contractVersion = '1.3.0'
+    expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(false)
+    versioned.settings.contractVersion = '1.4.0'
+    expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(true)
+  })
   it('validates settings drafts and rejects unsupported snapshot contracts', () => { const value = snapshot(); expect(SiteSettingsSchema.safeParse(value.settings).success).toBe(true); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale }).success).toBe(true); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true); expect(SiteSettingsSchema.safeParse({ ...value.settings, contractVersion: '2.0.0' }).success).toBe(false); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale, rawCss: '#fff' }).success).toBe(false); value.settings.contractVersion = '2.0.0' as never; expect(SiteSnapshotSchema.safeParse(value).success).toBe(false) })
 })

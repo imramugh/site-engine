@@ -186,8 +186,13 @@ export const Pages: CollectionConfig = {
       template: data.template,
       status: archived ? 'archived' : 'draft',
       blocks: data.blocks ?? [],
+      kicker: typeof data.kicker === 'string' && data.kicker.trim() ? data.kicker : undefined,
+      lede: typeof data.lede === 'string' && data.lede.trim() ? data.lede : undefined,
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
       noindex: data.noindex === true,
+      publishedAt: data.publishedAt ?? undefined,
+      lastReviewed: data.lastReviewed ?? undefined,
+      jobPosting: data.jobPosting ?? undefined,
       businessCase: data.businessCase ?? undefined,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
@@ -225,8 +230,13 @@ export const Pages: CollectionConfig = {
     { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: CmsPageFieldConfig.templateOptions },
     { name: 'status', type: 'select', defaultValue: 'draft', options: ['draft', 'published', 'archived'], admin: { readOnly: true } },
     { name: 'blocks', type: 'json', defaultValue: [] },
+    { name: 'kicker', type: 'text', maxLength: 160, admin: { description: 'Short service-page context shown above the page title.' } },
+    { name: 'lede', type: 'textarea', maxLength: 500, admin: { description: 'Service-page introduction shown with the page title.' } },
     { name: 'seoDescription', type: 'text', maxLength: 160 },
     { name: 'noindex', type: 'checkbox', defaultValue: false, admin: { description: 'Keep this published page out of search engines and the public site search index.' } },
+    { name: 'publishedAt', type: 'date', admin: { description: 'Article publication date.' } },
+    { name: 'lastReviewed', type: 'date', admin: { description: 'Date this service or article was last reviewed.' } },
+    { name: 'jobPosting', type: 'json', admin: { description: 'Job posting date, employment type, location, and optional closing date.' } },
     { name: 'businessCase', type: 'json', admin: { description: 'Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.' } },
   ],
 }

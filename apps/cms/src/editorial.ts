@@ -19,7 +19,7 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex', 'businessCase'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'kicker', 'lede', 'seoDescription', 'noindex', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'],
   sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
@@ -51,10 +51,9 @@ function hash(value: Record<string, unknown> | null): string | null {
 function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!value) return value
   const normalized = { ...value }
-  if (normalized.seoDescription === null && !(prior && 'seoDescription' in prior)) delete normalized.seoDescription
-  // The portable contract represents an omitted business case as absence;
-  // removing it still remains visible because the prior snapshot has the key.
-  if (normalized.businessCase === null) delete normalized.businessCase
+  for (const field of ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) {
+    if (normalized[field] === null && !(prior && field in prior)) delete normalized[field]
+  }
   return normalized
 }
 
