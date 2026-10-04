@@ -280,7 +280,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible()
   expect((await reviewer.request.post('/__e2e/review-owner/disable')).status()).toBe(204)
   await reviewer.reload()
-  await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Sign in to view editorial change sets.')
+  await expect(reviewer).toHaveURL(/\/admin\/login/)
+  await expect(reviewer.getByRole('heading', { name: 'Staff sign in' })).toBeVisible()
   await reviewerContext.close()
 
   await page.evaluate(async (id) => {
