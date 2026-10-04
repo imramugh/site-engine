@@ -13,8 +13,7 @@ contains an origin. `versionPins` contains `{ engineVersion, themeVersion,
 contractVersion }` for the proposed candidate. It can additionally contain
 `liveThemeVersion` and `liveContractVersion` when a reviewed theme transition
 compares a retained live release with a newer candidate. Missing live pins in a
-legacy job mean the proposed pins. The worker verifies each snapshot against
-its own immutable theme and contract pins before rendering. The worker obtains its public
+legacy job mean the proposed pins. The configured environment supplies the worker default; it does not replace a frozen claim contract. The worker requires the exact installed engine pin and accepts only contracts supported by that installed engine, then renders and proves each frozen live/proposed pin. It rejects unsupported future contracts and any snapshot, theme, or candidate pin mismatch before rendering. The worker obtains its public
 origin only from trusted runtime configuration and performs rendering and all
 network work after claim, outside the CMS transaction.
 

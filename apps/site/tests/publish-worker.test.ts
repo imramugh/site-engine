@@ -35,6 +35,31 @@ describe('publish worker', () => {
     expect(renders[0]?.versionPins).toEqual(upgradedPins);
     expect(JSON.parse(await readFile(join(root, 'releases', 'current', 'snapshot-manifest.json'), 'utf8')).sourceVersions.themeVersion).toBe('1.0.1');
   }, 60_000);
+  it('publishes supported 1.1 and retained 1.0 claims in one worker configuration', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root)
+    const older = { ...themeManifest, version: '1.0.0', contract: '1.0.0' }; const newer = { ...themeManifest, version: '1.1.0', contract: '1.1.0' }
+    const registry = parseThemeRegistry({ themes: [{ manifest: older, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest: newer, installedAt: '2026-10-04T00:00:00.000Z' }] })
+    const selection = (manifest: typeof themeManifest) => ({ id: manifest.name, version: manifest.version, contract: manifest.contract, manifestDigest: getInstalledTheme(registry, manifest.name, manifest.version)!.manifestDigest })
+    const upgraded = structuredClone(neutralFixture); upgraded.settings.contractVersion = '1.1.0'; upgraded.settings.theme = selection(newer)
+    const legacy = structuredClone(neutralFixture); legacy.settings.theme = selection(older)
+    const claims = [{ job: { ...job, sequence: 1 }, snapshot: upgraded, contentHash: (await import('./../scripts/run-preview-worker.mjs')).hash(upgraded), versionPins: { ...pins, themeVersion: newer.version, contractVersion: '1.1.0' } }, { job: { ...job, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', sequence: 2 }, snapshot: legacy, contentHash: (await import('./../scripts/run-preview-worker.mjs')).hash(legacy), versionPins: { ...pins, themeVersion: older.version, contractVersion: '1.0.0' } }]
+    const rendered: Array<Record<string, unknown>> = []; let claimIndex = 0
+    const api = async (action: string) => action === 'claim' ? claims[claimIndex++] : action === 'renew' ? { job: claims[claimIndex - 1]!.job } : { job: {} }
+    const render = async (options: Parameters<typeof import('../scripts/build-snapshot.mjs').buildSnapshot>[0] & Record<string, unknown>) => { rendered.push(options); return (await import('../scripts/build-snapshot.mjs')).buildSnapshot(options) }
+    const worker = { api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, registry, render, healthProbe: async () => true }
+    await expect(runPublishOnce(worker)).resolves.toBe(true); await expect(runPublishOnce(worker)).resolves.toBe(true)
+    expect(rendered.map(item => item.versionPins)).toEqual([claims[0]!.versionPins, claims[1]!.versionPins])
+    expect(JSON.parse(await readFile(join(root, 'releases', 'current', 'snapshot-manifest.json'), 'utf8')).sourceVersions).toMatchObject({ contractVersion: '1.0.0', themeVersion: '1.0.0' })
+  }, 60_000)
+
+  it('rejects unsupported and snapshot-mismatched contract claims before rendering', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const render = vi.fn(async () => { throw new Error('render must not run') })
+    const worker = (versionPins: Record<string, string>, candidate = snapshot) => runPublishOnce({ api: async (action: string) => action === 'claim' ? { job, snapshot: candidate, contentHash, versionPins } : { job: {} }, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, render, healthProbe: async () => true })
+    await expect(worker({ ...pins, contractVersion: '9.0.0' })).rejects.toThrow('INVALID_CLAIM')
+    await expect(worker({ ...pins, contractVersion: '1.1.0' })).rejects.toThrow('INVALID_CLAIM')
+    expect(render).not.toHaveBeenCalled()
+  })
+
   it('fails closed when a custom renderer returns an artifact with a bad manifest proof', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
     const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = [];

@@ -11,7 +11,7 @@ Supply these values through restricted runtime configuration:
 - `PREVIEW_ARTIFACT_ROOT`: a dedicated writable artifact directory.
 - `SITE_PUBLIC_ORIGIN`: the external site origin used for canonical URLs.
 - `SITE_ENGINE_VERSION`, `SITE_THEME_VERSION`, `SITE_CONTRACT_VERSION`: the exact
-  versions served by this worker. A job with different pins is refused.
+  default engine/theme contract values used when no immutable job pin is supplied. The worker requires an exact engine pin, but accepts each immutable claim contract when it is in the installed engine's supported-contract set (currently 1.0.0 and 1.1.0). It renders and proves the claim pin; an unsupported contract, snapshot/pin mismatch, or substituted theme pin is refused.
 
 Run one worker with a read-only container filesystem, no published port, no
 Docker socket, and only its private CMS network. Mount the artifact directory
