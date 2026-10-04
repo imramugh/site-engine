@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, test } from 'vitest'
 import { getPayload } from 'payload'
+import { createAIWorkerAPI } from '../scripts/run-ai-worker.mjs'
 import { hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-oauth-proxy-http-'))
 const bridgeSecret = 'synthetic-proxy-bridge-secret'
+const aiWorkerToken = 'synthetic-ai-worker-token-for-proxy-http-tests'
 const port = await new Promise<number>((resolve) => {
   const server = createServer()
   server.listen(0, '127.0.0.1', () => {
@@ -24,6 +26,7 @@ Object.assign(process.env, {
   PAYLOAD_SECRET: 'synthetic-proxy-http-payload-secret-not-for-production',
   PAYLOAD_PUBLIC_SERVER_URL: origin,
   OAUTH_BRIDGE_SECRET: bridgeSecret,
+  AI_WORKER_TOKEN: aiWorkerToken,
 })
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
@@ -71,7 +74,7 @@ afterAll(async () => {
   }
   await payload?.destroy()
   rmSync(directory, { recursive: true, force: true })
-  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
+  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'AI_WORKER_TOKEN', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
 })
 
 test('actual Next proxy exempts only the secret-authenticated OAuth bridge from Origin CSRF', async () => {
@@ -88,4 +91,27 @@ test('actual Next proxy exempts only the secret-authenticated OAuth bridge from 
   assert.equal(normalCookieApi.status, 403)
   const otherInternalPath = await fetch(`${origin}/api/internal/oauth/other`, { method: 'POST' })
   assert.equal(otherInternalPath.status, 403)
+}, 45_000)
+
+test('actual Next proxy admits only the exact authenticated AI worker endpoint without Origin', async () => {
+  const worker = createAIWorkerAPI({ cmsOrigin: origin, token: aiWorkerToken })
+  assert.equal(await worker(), null)
+
+  for (const supplied of [undefined, 'wrong-ai-worker-token-for-proxy-http-tests']) {
+    const headers = new Headers()
+    if (supplied) headers.set('authorization', `Bearer ${supplied}`)
+    const denied = await fetch(`${origin}/api/internal/ai-worker/run`, { method: 'POST', headers })
+    assert.equal(denied.status, 401)
+  }
+
+  const browserMutation = await fetch(`${origin}/api/ai-jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+  assert.equal(browserMutation.status, 403)
+  for (const method of ['PUT', 'PATCH']) {
+    const denied = await fetch(`${origin}/api/internal/ai-worker/run`, { method })
+    assert.equal(denied.status, 403)
+  }
+  for (const path of ['/api/internal/ai-worker/other', '/api/internal/ai-worker/run/other']) {
+    const denied = await fetch(`${origin}${path}`, { method: 'POST' })
+    assert.equal(denied.status, 403)
+  }
 }, 45_000)
