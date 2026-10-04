@@ -1,0 +1,10 @@
+import { getPayload } from 'payload'
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
+import config from '../../../payload.config'
+import { hasRole } from '../../../src/access'
+import { serverSessionStrategy } from '../../../src/identity'
+import { mediaWorkspace } from '../../../src/media-workspace'
+import { StaffShell } from '../../components/staff-shell'
+import { MediaWorkspace } from './media-workspace'
+export default async function MediaPage() { const payload = await getPayload({ config }); const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user; if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login'); return <StaffShell><MediaWorkspace initial={await mediaWorkspace(payload, user as never)} /></StaffShell> }

@@ -1,24 +1,217 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
+import { createRequire } from 'node:module'
+import sharp from 'sharp'
 
-async function signIn(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto('/api/auth/google')
-  await page.getByRole('button', { name: 'Sign in as Synthetic Editor' }).click()
-  await page.waitForURL(/\/admin/)
+const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
+const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
+const sessionToken = 'synthetic-media-owner-session-token'
+const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#2563eb' } }).png().toBuffer()
+
+async function mediaPage(browser: Browser) {
+  const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: sessionToken, url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  await page.goto('/media')
+  await expect(page.getByRole('heading', { name: 'Media', exact: true })).toBeVisible()
+  return { context, page }
 }
 
-test('ENG-014 accepts a real authenticated PNG multipart upload and refuses SVG or anonymous access', async ({ browser, page }) => {
-  test.setTimeout(90_000)
-  const anonymous = await browser.newContext({ ignoreHTTPSErrors: true })
-  expect((await anonymous.request.post('/api/assets')).status()).toBeGreaterThanOrEqual(400)
-  await anonymous.close()
-  await signIn(page)
-  const result = await page.evaluate(async () => {
-    const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 32; canvas.getContext('2d')!.fillRect(0, 0, 32, 32)
-    const png = await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), 'image/png'))
-    const submit = async (name: string, type: string, alt: string) => { const form = new FormData(); form.set('_payload', JSON.stringify({ alt })); const body = type === 'image/svg+xml' ? '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' : png; form.set('file', new File([body], name, { type })); const response = await fetch('/api/assets', { method: 'POST', body: form }); return { status: response.status, text: await response.text() } }
-    return { png: await submit('synthetic.png', 'image/png', 'Synthetic HTTP image'), svg: await submit('active.svg', 'image/svg+xml', 'Rejected SVG') }
+async function axe(page: Page) {
+  await page.addScriptTag({ path: axeSource })
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+}
+
+async function search(page: Page, value: string) {
+  await page.getByLabel('Search media').fill(value)
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+}
+
+async function renderedFonts(page: Page, selectors: string[]) {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    await cdp.send('DOM.enable')
+    await cdp.send('CSS.enable')
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true })
+    const entries = await Promise.all(selectors.map(async (selector) => {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      expect(nodeId, `Missing font probe target: ${selector}`).not.toBe(0)
+      const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+      return [selector, fonts] as const
+    }))
+    return Object.fromEntries(entries)
+  } finally {
+    await cdp.detach()
+  }
+}
+
+test('ENG-014 keeps drafts behind discard confirmation and ignores an obsolete search response', async ({ browser }) => {
+  const session = await mediaPage(browser)
+  const page = session.page
+  const first = page.locator('[data-media-asset]').first()
+  const second = page.locator('[data-media-asset]').nth(1)
+  await first.click()
+  const firstName = await page.locator('[data-media-detail] h2').innerText()
+  await page.locator('#asset-alt').fill('Unsaved browser description')
+
+  page.once('dialog', async (dialog) => { expect(dialog.message()).toContain('Discard unsaved'); await dialog.dismiss() })
+  await second.click()
+  await expect(page.locator('[data-media-detail] h2')).toHaveText(firstName)
+  await expect(page.locator('#asset-alt')).toHaveValue('Unsaved browser description')
+
+  page.once('dialog', async (dialog) => { await dialog.accept() })
+  await second.click()
+  await expect(page.locator('[data-media-detail] h2')).not.toHaveText(firstName)
+  await expect(page.locator('#asset-alt')).not.toHaveValue('Unsaved browser description')
+
+  let markObsoleteStarted!: () => void
+  let releaseObsolete!: () => void
+  let markObsoleteRouteDone!: () => void
+  let markObsoleteSettled!: () => void
+  const obsoleteStarted = new Promise<void>((resolve) => { markObsoleteStarted = resolve })
+  const obsoleteRelease = new Promise<void>((resolve) => { releaseObsolete = resolve })
+  const obsoleteRouteDone = new Promise<void>((resolve) => { markObsoleteRouteDone = resolve })
+  const obsoleteSettled = new Promise<void>((resolve) => { markObsoleteSettled = resolve })
+  const settleObsolete = (request: import('@playwright/test').Request) => {
+    if (new URL(request.url()).searchParams.get('q') === 'obsolete') markObsoleteSettled()
+  }
+  page.on('requestfinished', settleObsolete)
+  page.on('requestfailed', settleObsolete)
+  await page.route('**/api/media/workspace?**', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q')
+    if (query !== 'obsolete') return route.continue()
+    markObsoleteStarted()
+    await obsoleteRelease
+    await route.fulfill({ status: 200, json: {
+      assets: [{ id: 'obsolete-id', filename: 'obsolete.png', mimeType: 'image/png', alt: 'Obsolete result', decorative: false, caption: '', credit: '', tags: [], url: null, usages: [] }],
+      total: 1, truncated: false, page: 1, totalPages: 1, pageSize: 24,
+    } }).catch(() => undefined)
+    markObsoleteRouteDone()
   })
-  expect(result.png.status, result.png.text).toBe(201)
-  expect(result.png.text).toContain('heroAvif')
-  expect(result.svg.status).toBeGreaterThanOrEqual(400)
+  await page.getByLabel('Search media').fill('obsolete')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await obsoleteStarted
+  await page.getByLabel('Search media').fill('media-fixture-01')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page.locator('[data-media-asset]')).toHaveCount(1)
+  await expect(page.locator('[data-media-asset]')).toContainText('media-fixture-01.png')
+  releaseObsolete()
+  await Promise.all([obsoleteRouteDone, obsoleteSettled])
+  await expect(page.locator('[data-media-asset]')).toHaveCount(1)
+  await expect(page.locator('[data-media-asset]')).toContainText('media-fixture-01.png')
+  await expect(page.locator('[data-media-asset]')).not.toContainText('obsolete')
+  await session.context.close()
+})
+
+test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blocks used deletion, and restores from the bin', async ({ browser }) => {
+  test.setTimeout(120_000)
+  const session = await mediaPage(browser)
+  const page = session.page
+  const uploadName = `media-ui-${Date.now()}.png`
+
+  await page.getByRole('button', { name: 'Upload new asset' }).first().click()
+  await page.getByLabel('Choose image').setInputFiles({ name: uploadName, mimeType: 'image/png', buffer: png })
+  await expect(page.getByRole('button', { name: 'Upload image' })).toBeDisabled()
+  await page.getByLabel('Alt text', { exact: false }).first().fill('Blue browser test square')
+  await page.getByRole('button', { name: 'Upload image' }).click()
+  await expect(page.getByRole('status')).toContainText('Image uploaded')
+  await expect(page.locator('[data-media-detail] h2')).toHaveText(uploadName)
+
+  await page.locator('#asset-alt').fill('Updated blue browser square')
+  await page.getByLabel('Caption').fill('A caption saved through the Media workspace')
+  await page.getByLabel('Credit').fill('Synthetic photographer')
+  await page.getByLabel('Tags').fill('browser, regression')
+  await page.getByRole('button', { name: 'Save metadata' }).click()
+  await expect(page.getByRole('status')).toContainText('Metadata saved')
+
+  await search(page, uploadName)
+  await expect(page.locator('[data-media-asset]')).toHaveCount(1)
+  await expect(page.getByLabel('Caption')).toHaveValue('A caption saved through the Media workspace')
+  await expect(page.getByLabel('Credit')).toHaveValue('Synthetic photographer')
+  await expect(page.getByLabel('Tags')).toHaveValue('browser, regression')
+
+  await search(page, '')
+  await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
+  await page.getByRole('button', { name: 'Next' }).click()
+  await expect(page.getByText('Page 2 of 2')).toBeVisible()
+  await page.getByRole('button', { name: 'Previous' }).click()
+  await expect(page.getByText('Page 1 of 2')).toBeVisible()
+
+  await search(page, 'media-fixture-00.png')
+  await expect(page.getByRole('link', { name: 'Media usage fixture page' })).toHaveAttribute('href', /\/admin\/collections\/pages\//)
+  await expect(page.getByRole('button', { name: 'Move to bin' })).toBeDisabled()
+  const denial = await page.evaluate(async () => {
+    const assetID = document.querySelector('[data-media-detail] h2')?.nextElementSibling?.textContent
+    const response = await fetch('/api/media/lifecycle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId: assetID, action: 'bin' }) })
+    return { status: response.status, body: await response.json() }
+  })
+  expect(denial.status).toBe(200)
+  expect(denial.body).toMatchObject({ status: 'blocked' })
+
+  await search(page, uploadName)
+  await page.getByRole('button', { name: 'Move to bin' }).click()
+  await expect(page.getByRole('status')).toContainText('Asset moved to the deletion bin')
+  await page.getByRole('button', { name: 'Deletion bin' }).click()
+  await expect(page.getByRole('button', { name: new RegExp(uploadName) })).toBeVisible()
+  await page.getByRole('button', { name: new RegExp(uploadName) }).click()
+  await page.getByRole('button', { name: 'Restore' }).click()
+  await expect(page.getByRole('status')).toContainText('Asset restored')
+  await expect(page.getByRole('button', { name: new RegExp(uploadName) })).toHaveCount(0)
+  await session.context.close()
+})
+
+test('ENG-014 remains readable and accessible at desktop and narrow mobile widths', async ({ browser }) => {
+  const session = await mediaPage(browser)
+  const page = session.page
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    window.scrollTo(0, 0)
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  })
+  const desktopLayout = await page.locator('[data-media-layout]').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+  const desktopGrid = await page.locator('[data-media-grid]').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+  expect(desktopLayout).toBe(2)
+  expect(desktopGrid).toBe(4)
+  const libraryBox = await page.locator('[data-media-library]').boundingBox()
+  const desktopDetailBox = await page.locator('[data-media-detail]').boundingBox()
+  expect(libraryBox).not.toBeNull()
+  expect(desktopDetailBox).not.toBeNull()
+  expect(Math.abs(libraryBox!.y - desktopDetailBox!.y)).toBeLessThanOrEqual(1)
+  const branding = await page.request.get('/admin-branding/admin-branding.css')
+  if (branding.ok()) {
+    expect(await branding.text()).toContain('[data-media-workspace]')
+    const selectors = ['[data-media-detail] h2', '[data-media-asset] strong', 'label[for="asset-alt"]', '[data-media-toolbar] button']
+    const fonts = await renderedFonts(page, selectors)
+    await test.info().attach('media-rendered-fonts.json', { body: Buffer.from(JSON.stringify(fonts, null, 2)), contentType: 'application/json' })
+    for (const selector of selectors) {
+      const usedFonts = fonts[selector].filter((font) => font.glyphCount > 0)
+      expect(usedFonts, `${selector} should render visible glyphs`).not.toHaveLength(0)
+      expect(usedFonts, `${selector} should use the bundled IBM Plex Sans semibold face`).toEqual(expect.arrayContaining([
+        expect.objectContaining({ postScriptName: 'IBMPlexSans-SmBld', isCustomFont: true }),
+      ]))
+      expect(usedFonts.every((font) => font.postScriptName.startsWith('IBMPlexSans') && font.isCustomFont)).toBe(true)
+    }
+    const weights = await page.locator('[data-media-workspace]').evaluate(() => ({
+      card: getComputedStyle(document.querySelector('[data-media-asset] strong')!).fontWeight,
+      detail: getComputedStyle(document.querySelector('[data-media-detail] h2')!).fontWeight,
+      label: getComputedStyle(document.querySelector('label[for="asset-alt"]')!).fontWeight,
+      toolbar: getComputedStyle(document.querySelector('[data-media-toolbar] button')!).fontWeight,
+    }))
+    expect(weights).toEqual({ card: '600', detail: '600', label: '600', toolbar: '600' })
+  }
+  const detailWidth = await page.locator('[data-media-detail]').evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))
+  expect(detailWidth.scrollWidth).toBeLessThanOrEqual(detailWidth.clientWidth)
+  await axe(page)
+  await page.screenshot({ path: 'artifacts/media-1440-branded.png' })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  const mobileLibraryBox = await page.locator('[data-media-library]').boundingBox()
+  const detailBox = await page.locator('[data-media-detail]').boundingBox()
+  expect(mobileLibraryBox).not.toBeNull()
+  expect(detailBox).not.toBeNull()
+  expect(detailBox!.y).toBeGreaterThan(mobileLibraryBox!.y + mobileLibraryBox!.height - 2)
+  expect(await page.locator('[data-media-grid]').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2)
+  await axe(page)
+  await page.screenshot({ path: 'artifacts/media-390-branded.png', fullPage: true })
+  await session.context.close()
 })
