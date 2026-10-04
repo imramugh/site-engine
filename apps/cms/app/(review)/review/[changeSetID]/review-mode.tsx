@@ -35,13 +35,16 @@ function ReviewFrame({ title, src, width, changed, active, variant, onReady }: {
       node.removeAttribute('data-review-active')
       node.removeAttribute('data-review-changed')
     })
-    const typed = [...doc.querySelectorAll<HTMLElement>('[data-block-type], [data-block]')]
+    const pageContent = doc.querySelector('main')
+    const typed = pageContent ? [...pageContent.querySelectorAll<HTMLElement>('[data-block-type], [data-block]')] : []
     for (const change of changed) {
-      let node = [...doc.querySelectorAll<HTMLElement>('[data-block-id]')].find((candidate) => candidate.dataset.blockId === change.id)
+      let node = pageContent ? [...pageContent.querySelectorAll<HTMLElement>('[data-block-id]')].find((candidate) => candidate.dataset.blockId === change.id) : undefined
       if (!node) {
         const type = variant === 'live' ? change.liveType : change.proposedType
         const occurrence = variant === 'live' ? change.liveOccurrence : change.proposedOccurrence
-        if (type && occurrence !== undefined) node = typed.filter((candidate) => (candidate.dataset.blockType ?? candidate.dataset.block) === type)[occurrence]
+        const expectedCount = variant === 'live' ? change.liveTypeCount : change.proposedTypeCount
+        const candidates = type ? typed.filter((candidate) => (candidate.dataset.blockType ?? candidate.dataset.block) === type) : []
+        if (type && occurrence !== undefined && expectedCount !== undefined && candidates.length === expectedCount) node = candidates[occurrence]
       }
       if (!node) continue
       node.dataset.reviewChanged = 'true'; found.add(change.id)

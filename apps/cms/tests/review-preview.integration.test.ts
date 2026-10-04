@@ -114,7 +114,7 @@ describe('ENG-030 immutable review preview jobs', () => {
     const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
     await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
 
-    await expect(loadReviewModeData(payload, String(current.set.id))).resolves.toMatchObject({ id: current.set.id, path: '/', changedBlocks: [{ id: blockID, label: 'A changed synthetic heading', fields: ['heading'], liveType: 'hero', proposedType: 'hero', liveOccurrence: 0, proposedOccurrence: 0, details: [{ field: 'heading', before: expect.any(String), after: 'A changed synthetic heading' }] }], otherChanges: [] })
+    await expect(loadReviewModeData(payload, String(current.set.id))).resolves.toMatchObject({ id: current.set.id, path: '/', changedBlocks: [{ id: blockID, label: 'A changed synthetic heading', fields: ['heading'], liveType: 'hero', proposedType: 'hero', liveOccurrence: 0, proposedOccurrence: 0, liveTypeCount: 1, proposedTypeCount: 1, details: [{ field: 'heading', before: expect.any(String), after: 'A changed synthetic heading' }] }], otherChanges: [] })
     const call = (headers: Headers) => reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
     expect((await call(current.headers)).status).toBe(200)
     expect((await call(await reviewHeaders('owner'))).status).toBe(200)

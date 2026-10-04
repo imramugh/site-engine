@@ -15,6 +15,8 @@ export type ReviewBlockChange = {
   proposedType?: string
   liveOccurrence?: number
   proposedOccurrence?: number
+  liveTypeCount?: number
+  proposedTypeCount?: number
   label: string
   summary: string
   fields: string[]
@@ -70,17 +72,19 @@ const humanValue = (value: unknown): string => {
   return `${count} structured field${count === 1 ? '' : 's'}`
 }
 
-function blockPositions(manifest: unknown, pageID?: string): Map<string, { type: string; occurrence: number }> {
+function blockPositions(manifest: unknown, pageID?: string): Map<string, { type: string; occurrence: number; count: number }> {
   if (!pageID) return new Map()
   const snapshot = SiteSnapshotSchema.parse(manifest)
   const page = snapshot.pages.find((candidate) => candidate.id === pageID)
   const counts = new Map<string, number>()
-  const positions = new Map<string, { type: string; occurrence: number }>()
-  for (const block of page?.blocks ?? []) {
-    if (block.hidden) continue
-    const occurrence = counts.get(block.type) ?? 0
-    positions.set(block.id, { type: block.type, occurrence })
-    counts.set(block.type, occurrence + 1)
+  const positions = new Map<string, { type: string; occurrence: number; count: number }>()
+  const visible = (page?.blocks ?? []).filter((block) => !block.hidden)
+  for (const block of visible) counts.set(block.type, (counts.get(block.type) ?? 0) + 1)
+  const occurrences = new Map<string, number>()
+  for (const block of visible) {
+    const occurrence = occurrences.get(block.type) ?? 0
+    positions.set(block.id, { type: block.type, occurrence, count: counts.get(block.type)! })
+    occurrences.set(block.type, occurrence + 1)
   }
   return positions
 }
@@ -132,7 +136,7 @@ export async function loadReviewModeData(payload: Payload, id: string): Promise<
   const proposedPositions = blockPositions(job.proposedManifest, route.pageID)
   described.changedBlocks = described.changedBlocks.map((change) => {
     const live = livePositions.get(change.id); const proposed = proposedPositions.get(change.id)
-    return { ...change, liveType: live?.type, proposedType: proposed?.type, liveOccurrence: live?.occurrence, proposedOccurrence: proposed?.occurrence }
+    return { ...change, liveType: live?.type, proposedType: proposed?.type, liveOccurrence: live?.occurrence, proposedOccurrence: proposed?.occurrence, liveTypeCount: live?.count, proposedTypeCount: proposed?.count }
   })
   const quality = set.quality as ReviewQuality | undefined
   const currentProof = typeof preview.contentHash === 'string' && Array.isArray(preview.includedChangeKeys) && preview.includedChangeKeys.every((value): value is string => typeof value === 'string') && Number.isInteger(preview.baselineSequence) && quality?.proof?.previewJobID === preview.jobID && exactQualityProof(quality, { revision: Number(set.revision), changeHash: String(job.changeHash), contentHash: preview.contentHash, includedChangeKeys: preview.includedChangeKeys, baselineSnapshotID: typeof preview.baselineSnapshotID === 'string' ? preview.baselineSnapshotID : undefined, baselineSequence: Number(preview.baselineSequence) })
