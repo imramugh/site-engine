@@ -137,7 +137,13 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   await expect(page.getByText('Page 1 of 2')).toBeVisible()
 
   await search(page, 'media-fixture-00.png')
-  await expect(page.getByRole('link', { name: 'Media usage fixture page' })).toHaveAttribute('href', /\/admin\/collections\/pages\//)
+  const usageLink = page.getByRole('link', { name: 'Media usage fixture page' })
+  await expect(usageLink).toHaveAttribute('href', /\/content-editor\/[0-9a-f-]+$/)
+  await usageLink.click()
+  await expect(page).toHaveURL(/\/content-editor\/[0-9a-f-]+$/)
+  await expect(page.getByRole('heading', { name: 'Media usage fixture page' })).toBeVisible()
+  await page.goto('/media')
+  await search(page, 'media-fixture-00.png')
   await expect(page.getByRole('button', { name: 'Move to bin' })).toBeDisabled()
   const denial = await page.evaluate(async () => {
     const assetID = document.querySelector('[data-media-detail] h2')?.nextElementSibling?.textContent
