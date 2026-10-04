@@ -36,7 +36,10 @@ export function EditorialWorkflow() {
         const schedules = await fetch(`/api/editorial/schedules/list?page=${schedulePage}`, { cache: 'no-store' })
         if (schedules.ok) { const body = await schedules.json() as { schedules: ScheduledPublication[]; totalDocs: number; page: number; totalPages: number }; next.schedules = body.schedules; next.totalDocs = body.totalDocs; next.schedulePage = body.page; next.scheduleTotalPages = body.totalPages }
       }
-      setData(next); setSelected((current) => current ?? next.sets[0]?.id ?? null)
+      setData(next); setSelected((current) => {
+        const requested = new URLSearchParams(window.location.search).get('changeSet')
+        return current ?? next.sets.find(item => item.id === requested)?.id ?? next.sets[0]?.id ?? null
+      })
     } catch {
       setMessage('Unable to load editorial change sets. Try again.')
     } finally { if (!background) setLoading(false) }
