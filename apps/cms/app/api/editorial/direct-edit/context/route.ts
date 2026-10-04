@@ -30,6 +30,7 @@ export async function GET(request: Request): Promise<Response> {
     ])
     return Response.json({
       pages: pages.docs.map((page) => ({ id: page.id, title: String(page.title), heroes: heroes(page.blocks) })).filter((page) => page.heroes.length),
+      truncated: pages.totalDocs > pages.docs.length || sets.totalDocs > sets.docs.length,
       changeSets: sets.docs.map((set) => ({ id: set.id, name: String(set.name), state: String(set.state), revision: Number(set.revision ?? 0) })),
     }, { headers: noStore })
   } catch {

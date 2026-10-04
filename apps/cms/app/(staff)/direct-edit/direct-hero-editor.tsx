@@ -7,7 +7,7 @@ type Hero = { id: string; heading: string; body: string }
 type Page = { id: string; title: string; heroes: Hero[] }
 type ChangeSet = { id: string; name: string; state: string }
 type Data = { pages: Page[]; changeSets: ChangeSet[] }
-type Preview = { id: string; status: string }
+type Preview = { id: string; status: string; path?: string }
 
 const digest = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map((part) => part.toString(16).padStart(2, '0')).join('')
 
@@ -38,11 +38,11 @@ export function DirectHeroEditor() {
   }, [])
 
   useEffect(() => { void load().then(() => setMessage('')).catch((error: Error) => setMessage(error.message)); return () => clearPreview() }, [clearPreview, load])
-  useEffect(() => { setHeading(hero?.heading ?? ''); setBody(hero?.body ?? '') }, [hero?.id, hero?.heading, hero?.body])
+  useEffect(() => { setHeading(hero?.heading ?? ''); setBody(hero?.body ?? '') }, [hero?.id])
 
   const poll = useCallback(async (id: string, version: number) => {
     try {
-      const response = await fetch(`/api/editorial/direct-edit/preview?jobID=${id}`, { cache: 'no-store' })
+      const response = await fetch(`/api/editorial/direct-edit/preview?jobID=${id}&pageID=${page?.id ?? ''}`, { cache: 'no-store' })
       const result = await response.json() as { job?: Preview; error?: string }
       if (version !== requestVersion.current) return
       if (!response.ok || !result.job) { setMessage(result.error || 'Preview is unavailable.'); return }
@@ -54,7 +54,7 @@ export function DirectHeroEditor() {
     } catch {
       if (version === requestVersion.current) setMessage('Preview is unavailable.')
     }
-  }, [])
+  }, [page?.id])
 
   const save = async (field: 'heading' | 'body') => {
     if (!page || !hero || !changeSet) return
@@ -95,14 +95,14 @@ export function DirectHeroEditor() {
   return <main className={styles.editor}>
     <h1>Hero draft editor</h1>
     <p>Edit a Hero heading or body. Use the standard editor for other fields.</p>
-    <p role="status" aria-live="polite">{message}</p>
+    <p role="status" aria-live="polite">{message}</p>{(data as Data & { truncated?: boolean }).truncated ? <p>Some older drafts are not shown. Use the standard editor to find them.</p> : null}
     <div className={styles.selectors}>
       <label>Page <select value={page?.id ?? ''} disabled={busy} onChange={(event) => { clearPreview(); setPageID(event.target.value) }}>{data.pages.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
       <label>Change set <select value={changeSet?.id ?? ''} disabled={busy} onChange={(event) => { clearPreview(); setChangeSetID(event.target.value) }}>{data.changeSets.map((item) => <option value={item.id} key={item.id}>{item.name} ({item.state})</option>)}</select></label>
     </div>
     <div className={styles.workspace}>
       <section>{hero ? <><h2>Hero</h2><label>Heading <input value={heading} disabled={busy} onChange={(event) => setHeading(event.target.value)} /></label><button disabled={!ready || busy} onClick={() => void save('heading')}>Save heading</button><label>Body <textarea value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /></label><button disabled={!ready || busy} onClick={() => void save('body')}>Save body</button></> : <p>No editable Hero is available for this page.</p>}</section>
-      <section aria-label="Preview"><h2>Preview</h2><p>See the saved draft as it will be rendered before submitting it for review.</p><button disabled={!changeSet || busy} onClick={() => void preparePreview()}>{preview?.status === 'pending' || preview?.status === 'processing' ? 'Preparing preview…' : 'Prepare preview'}</button>{preview?.status === 'completed' ? <iframe className={styles.previewFrame} title="Proposed draft preview" src={`/preview/changes/${preview.id}/proposed/`} /> : <p>Prepare a preview after saving your changes.</p>}</section>
+      <section aria-label="Preview"><h2>Preview</h2><p>See the saved draft as it will be rendered before submitting it for review.</p><button disabled={!changeSet || busy} onClick={() => void preparePreview()}>{preview?.status === 'pending' || preview?.status === 'processing' ? 'Preparing preview…' : 'Prepare preview'}</button>{preview?.status === 'completed' ? <iframe className={styles.previewFrame} title="Proposed draft preview" src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`} /> : <p>Prepare a preview after saving your changes.</p>}</section>
     </div>
     <button disabled={!changeSet || busy} onClick={() => void submit()}>Submit for review</button>
   </main>
