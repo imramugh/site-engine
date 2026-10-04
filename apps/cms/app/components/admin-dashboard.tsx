@@ -44,7 +44,7 @@ export async function AdminDashboard() {
         </section>
         <section data-dashboard-issues aria-labelledby="dashboard-issues-title">
           <header data-dashboard-panel-header><h3 id="dashboard-issues-title">Pages with issues</h3></header>
-          {pageIssues?.items.length ? pageIssues.items.map(page => <div data-dashboard-row key={page.id}><a href={`/admin/collections/pages/${encodeURIComponent(page.id)}`}>{page.title}</a><span data-dashboard-issue={page.severity}>{page.messages[0]}{page.messages.length > 1 ? ` (+${page.messages.length - 1})` : ''}</span></div>) : <p data-dashboard-empty>{pageIssues?.state === 'available' ? 'No issues found in the latest published content.' : pageIssues?.message ?? 'Page checks are not available for this role.'}</p>}
+          {pageIssues?.items.length ? pageIssues.items.map(page => <div data-dashboard-row key={page.id}><a href={`/admin/collections/pages/${encodeURIComponent(page.id)}`}>{page.title}</a><span data-dashboard-issue={page.severity} title={page.messages.join(" · ")}>{page.summary}{page.messages.length > 1 ? ` (+${page.messages.length - 1})` : ''}</span></div>) : <p data-dashboard-empty>{pageIssues?.state === 'available' ? 'No issues found in the latest published content.' : pageIssues?.message ?? 'Page checks are not available for this role.'}</p>}
         </section>
       </div>
       <div>
