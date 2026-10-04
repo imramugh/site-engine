@@ -17,12 +17,12 @@ export function IntegrationConfiguration() {
   useEffect(() => { void load() }, [])
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); if (saving) return; setSaving(true)
-    try { const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'configure', provider, model, credential, fallbackProvider: null, monthlyCap: null }) }); const body = await response.json() as { error?: string }; if (!response.ok) setMessage(body.error ?? 'Configuration could not be saved.'); else { setCredential(''); setMessage('Credential rotation saved. The credential is not shown after saving.'); await load() } }
+    try { const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'configure', provider, model, credential, fallbackProvider: null, monthlyCap: null }) }); const body = await response.json() as { error?: string }; if (!response.ok) setMessage(body.error ?? 'Configuration could not be saved.'); else { setCredential(''); setMessage('Credential rotation saved. The credential is not shown after saving.'); await load(true) } }
     catch { setMessage('Configuration could not be saved.') } finally { setSaving(false) }
   }
   const revoke = async (selected: Provider) => {
     if (saving) return; setSaving(true)
-    try { const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'revoke', provider: selected }) }); if (!response.ok) setMessage('Credential revocation could not be completed.'); else { setMessage('Credential revoked.'); await load() } }
+    try { const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'revoke', provider: selected }) }); if (!response.ok) setMessage('Credential revocation could not be completed.'); else { setMessage('Credential revoked.'); await load(true) } }
     catch { setMessage('Credential revocation could not be completed.') } finally { setSaving(false) }
   }
   return <main><h1>Integrations</h1><p>Manage provider metadata and rotate credentials. Provider connection tests are unavailable until a reviewed adapter is installed; saving never contacts an external provider.</p><p role="status" aria-live="polite">{loading ? 'Loading integration configuration…' : message}</p>
