@@ -11,9 +11,11 @@ const cta = { id: blockId, type: 'cta', heading: 'Next steps', body: 'Read more.
 const fixture = () => structuredClone(neutralFixture);
 
 describe('ENG-002 versioned contract', () => {
-  it('accepts the neutral snapshot and compatible contract versions', () => {
+  it('accepts the neutral legacy snapshot and only supported contract versions', () => {
     expect(SiteSnapshotSchema.safeParse(neutralFixture).success).toBe(true);
-    expect(compatibleContractVersion('1.2.0')).toBe(true);
+    expect(compatibleContractVersion('1.0.0')).toBe(true);
+    expect(compatibleContractVersion('1.1.0')).toBe(true);
+    expect(compatibleContractVersion('1.2.0')).toBe(false);
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
@@ -50,6 +52,41 @@ describe('ENG-002 versioned contract', () => {
 
   it.each(['//evil.example/path', '/\\evil.example', '/path\n', 'javascript:alert(1)'])('rejects unsafe link %s', (href) => {
     expect(BlockSchema.safeParse({ ...cta, cta: { label: 'Read', href } }).success).toBe(false);
+  });
+
+  it('requires contract 1.1.0 for optional hero supporting content while preserving legacy heroes', () => {
+    const legacy = { id: blockId, type: 'hero' as const, heading: 'A clear heading', body: 'A clear body.', appearance };
+    const enhanced = {
+      ...legacy,
+      secondaryCta: { label: 'Compare options', href: '/options' },
+      supportPanel: { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review the neutral supporting information.', cta: { label: 'Read details', href: '/details' }, phoneCta: { label: 'Call the team', number: '+15551234567' } },
+    };
+    expect(BlockSchema.safeParse(legacy).success).toBe(true);
+    expect(BlockSchema.safeParse(enhanced).success).toBe(true);
+    expect(BlockSchema.safeParse({ ...enhanced, secondaryCta: { label: 'Unsafe', href: 'javascript:alert(1)' } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, cta: { label: 'Unsafe', href: '//evil.example/path' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Unsafe', number: 'tel:+15551234567' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Unsafe', number: 'javascript:alert(1)' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, phoneCta: { label: 'Too short', number: '+1555' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { heading: '', body: 'Missing heading.' } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, extra: '<script>alert(1)</script>' } }).success).toBe(false);
+    const legacySnapshot = fixture();
+    const legacyHero = legacySnapshot.pages[0]!.blocks[0]!;
+    if (legacyHero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
+    legacyHero.secondaryCta = enhanced.secondaryCta;
+    expect(SiteSnapshotSchema.safeParse(legacySnapshot).success).toBe(false);
+    const currentSnapshot = structuredClone(legacySnapshot);
+    currentSnapshot.settings.contractVersion = '1.1.0';
+    expect(SiteSnapshotSchema.safeParse(currentSnapshot).success).toBe(true);
+  });
+
+  it('requires a selected theme to declare the exact snapshot contract', () => {
+    const snapshot = fixture();
+    snapshot.settings.contractVersion = '1.1.0';
+    snapshot.settings.theme = { id: 'neutral', version: '1.1.0', contract: '1.0.0', manifestDigest: 'a'.repeat(64) };
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.settings.theme.contract = '1.1.0';
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 
   it('requires testimonial permission to be recorded, while allowing unapproved drafts', () => {

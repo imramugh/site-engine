@@ -48,9 +48,10 @@ export function compatibilityReport(snapshot: unknown, manifest: InstalledTheme[
   const supported = new Set(manifest.standardBlocks);
   const fallback = manifest.motion?.intentFallbacks ?? {};
   const actions = [];
+  if (manifest.contract !== parsed.settings.contractVersion) actions.push({ action: 'contract-version', pageID: '', blockID: '', reason: 'theme-contract-mismatch' });
   for (const page of parsed.pages) for (const block of page.blocks) {
     if (!supported.has(block.type)) actions.push({ action: 'hide', pageID: page.id, blockID: block.id, reason: 'unsupported-standard-block' });
     else if (block.appearance.motionIntent !== 'none' && !block.appearance.motionPreset && !fallback[block.appearance.motionIntent]) actions.push({ action: 'intent-fallback', pageID: page.id, blockID: block.id, reason: 'no-declared-motion-fallback' });
   }
-  return { compatible: actions.every(item => item.action !== 'hide'), actions };
+  return { compatible: actions.every(item => item.action !== 'hide' && item.action !== 'contract-version'), actions };
 }

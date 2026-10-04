@@ -11,7 +11,7 @@ export const appearanceOptions = {
 } as const
 
 const fieldLimits: Record<Block['type'], string> = {
-  hero: 'Heading 120 characters; body 1,000 characters; optional CTA.', incidentBar: 'Message 240 characters; optional CTA.',
+  hero: 'Eyebrow 80 characters; heading 120 characters; body 1,000 characters; optional primary and secondary CTAs; optional supporting panel with the same text limits, internal CTA, and E.164 telephone CTA.', incidentBar: 'Message 240 characters; optional CTA.',
   pillarGrid: '1–12 linked items; item titles 100 characters and bodies 300 characters.', featureGrid: '1–12 items; item titles 100 characters and bodies 300 characters.',
   splitList: '1–10 items; item titles 100 characters and bodies 500 characters.', chipList: '1–24 chips of up to 48 characters.',
   testimonials: '1–8 permission-confirmed testimonials; quotes up to 500 characters.', faq: '1–16 questions; answers up to 2,000 characters.',

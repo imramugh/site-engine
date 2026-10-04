@@ -6,9 +6,9 @@ export type ThemeMotion = { supportedPresets: readonly string[]; intentFallbacks
 /** Stable, framework-neutral information supplied to theme chrome and block adapters. */
 export type ThemeRenderContext = { snapshot: SiteSnapshot; page: Page; pathname: string; navigation: readonly ThemeNavigationItem[] };
 export type ThemeComponents = { headerClass(context: ThemeRenderContext): string; footerClass(context: ThemeRenderContext): string; blockClass(block: Block, context: ThemeRenderContext): string };
-export type ThemeDescriptor = { name: string; contract: '1.0.0'; supportedTemplates: readonly string[]; supportedBlocks: readonly Block['type'][]; backgrounds: readonly string[]; motionIntents: readonly string[]; motion: ThemeMotion; tokens: ThemeTokens; classes: { page: string; block: string; header: string; footer: string }; components: ThemeComponents };
+export type ThemeDescriptor = { name: string; contract: '1.1.0'; supportedTemplates: readonly string[]; supportedBlocks: readonly Block['type'][]; backgrounds: readonly string[]; motionIntents: readonly string[]; motion: ThemeMotion; tokens: ThemeTokens; classes: { page: string; block: string; header: string; footer: string }; components: ThemeComponents };
 export const starterTheme: ThemeDescriptor = {
-  name: 'starter', contract: '1.0.0', supportedTemplates: TemplateSchema.options,
+  name: 'starter', contract: '1.1.0', supportedTemplates: TemplateSchema.options,
   supportedBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'],
   backgrounds: BackgroundSchema.options, motionIntents: MotionIntentSchema.options,
   motion: { supportedPresets: ['subtle', 'ambient', 'signature'], intentFallbacks: {} },
@@ -17,5 +17,6 @@ export const starterTheme: ThemeDescriptor = {
   components: { headerClass: () => 'starter-header', footerClass: () => 'starter-footer', blockClass: (block) => `starter-block starter-block--${block.type}` },
 };
 export function blockLabel(block: Block): string { return block.type; }
-export function themeCanRender(snapshot: SiteSnapshot): boolean { return snapshot.settings.contractVersion === starterTheme.contract; }
+/** The 1.1 starter renderer is source-compatible with frozen 1.0 snapshots. */
+export function themeCanRender(snapshot: SiteSnapshot): boolean { return snapshot.settings.contractVersion === '1.0.0' || snapshot.settings.contractVersion === starterTheme.contract; }
 export function validateStarterTheme(descriptor: ThemeDescriptor): string[] { const errors: string[] = []; for (const template of TemplateSchema.options) if (!descriptor.supportedTemplates.includes(template)) errors.push(`Missing template ${template}`); for (const block of starterTheme.supportedBlocks) if (!descriptor.supportedBlocks.includes(block)) errors.push(`Missing block ${block}`); for (const background of BackgroundSchema.options) if (!descriptor.backgrounds.includes(background)) errors.push(`Missing background ${background}`); if (!descriptor.motion.supportedPresets.length) errors.push('Missing motion presets'); return errors; }

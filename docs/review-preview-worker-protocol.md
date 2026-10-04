@@ -9,8 +9,12 @@ lease and returns `{ job, live, proposed, basePaths, versionPins }`, or
 `{ job: null }` when idle. `job` is `{ id, leaseToken, leaseExpiresAt }`; `id`
 is a UUID. `live` and `proposed` are complete `SiteSnapshot` values.
 `basePaths` is exactly `{ live: 'live', proposed: 'proposed' }`; it never
-contains an origin. `versionPins` is exactly `{ engineVersion, themeVersion,
-contractVersion }` taken from the prepared proof. The worker obtains its public
+contains an origin. `versionPins` contains `{ engineVersion, themeVersion,
+contractVersion }` for the proposed candidate. It can additionally contain
+`liveThemeVersion` and `liveContractVersion` when a reviewed theme transition
+compares a retained live release with a newer candidate. Missing live pins in a
+legacy job mean the proposed pins. The worker verifies each snapshot against
+its own immutable theme and contract pins before rendering. The worker obtains its public
 origin only from trusted runtime configuration and performs rendering and all
 network work after claim, outside the CMS transaction.
 
@@ -27,3 +31,9 @@ terminal after three attempts.
 The worker must not read drafts, change sets, sessions, or asset records. Review
 paths are `/preview/changes/{jobUUID}/{live|proposed}/`; the renderer must route
 all page and asset reads through the CMS review-session authorization endpoint.
+
+A contract upgrade is an explicit reviewed theme-selection change. It produces
+a proposed snapshot with the selected theme contract while leaving the live
+snapshot and its pins unchanged. Ordinary content changes do not advance a
+contract pin. Approval compares both live and proposed pins with the completed
+job so a stale or substituted comparison cannot be approved.

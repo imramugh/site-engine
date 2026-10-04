@@ -8,7 +8,9 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { transitionChangeSet } from '../src/editorial'
 import { canonicalHash, changeSetHash } from '../src/publishing'
-import { prepareReviewPreview } from '../src/review-preview'
+import { claimPreviewRenderJob, completePreviewRenderJob, prepareReviewPreview } from '../src/review-preview'
+import { runReviewQuality } from '../src/review-quality'
+import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-theme-selection-'))
 const registryFile = join(directory, 'theme-registry.json')
@@ -17,16 +19,18 @@ const oldManifest = {
   name: 'synthetic-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js',
   standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} },
 }
-const manifest = { ...oldManifest, version: '2.4.7' }
+const manifest = { ...oldManifest, version: '2.4.7', contract: '1.1.0' }
 const registry = { themes: [{ manifest: oldManifest, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest, installedAt: '2026-10-04T00:00:00.000Z' }] }
 
 process.env.DATABASE_URI = `file:${db}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-theme-selection'
 process.env.SITE_THEME_REGISTRY_JSON = registryFile
+process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 writeFileSync(registryFile, JSON.stringify(registry))
 
 const { default: config } = await import('../payload.config.js')
 const { getInstalledTheme, parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
+const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })
@@ -77,9 +81,31 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
 
     expect(settings.selection).toEqual(selection)
     expect(proposed.settings.theme).toEqual(selection)
-    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0' })
+    expect(proposed.settings.contractVersion).toBe('1.1.0')
+    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.1.0', liveContractVersion: '1.0.0' })
     expect(proposed.settings.themeSettings).toEqual({ 'retained-theme': { tone: 'preserved' }, [manifest.name]: { tone: 'warm' } })
     expect((await payload.findByID({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })).manifest).toEqual(published)
     expect((await payload.find({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(1)
+
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease?.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'b'.repeat(64) }))
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: set.id }))
+    const token = newOpaqueToken(); const now = new Date().toISOString()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const quality = await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })
+    const proof = (quality.quality as { proof: Record<string, unknown> }).proof
+    const request = (value: unknown) => editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `site_engine_session=${token}` }, body: JSON.stringify({ id: set.id, proof: value }) }), { params: Promise.resolve({ action: 'approve' }) })
+    const tampered = structuredClone(proof) as { versionPins: Record<string, unknown> }
+    tampered.versionPins.liveContractVersion = '1.1.0'
+    expect((await request(tampered)).status).toBe(400)
+    const omitted = structuredClone(proof) as { versionPins: Record<string, unknown> }
+    delete omitted.versionPins.liveContractVersion
+    expect((await request(omitted)).status).toBe(400)
+    const response = await request(proof)
+    expect(response.status).toBe(200)
+    const approved = await response.json() as { snapshotID: string }
+    const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID, overrideAccess: true })
+    expect(approvedSnapshot).toMatchObject({ contractVersion: '1.1.0', themeVersion: manifest.version })
+    expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.1.0')
   })
 })

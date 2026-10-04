@@ -15,8 +15,10 @@ const directory = mkdtempSync(join(tmpdir(), 'site-engine-review-preview-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-review-preview'
 process.env.PREVIEW_WORKER_TOKEN = 'worker-token-long-enough-to-be-a-real-test-secret'
+process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 const { default: config } = await import('../payload.config.js')
 const reviewSessionRoute = await import('../app/api/auth/preview/review-session/route.js')
+const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -96,6 +98,12 @@ describe('ENG-030 immutable review preview jobs', () => {
     const second = await prepare(current, { manifest: current.live, sequence: 0, versions: { ...versions, themeVersion: 'theme-test-2' } })
     expect(second.id).not.toBe(first.id)
     expect(second.versionPins).toMatchObject({ themeVersion: 'theme-test-2' })
+  })
+
+  it('retains a legacy baseline contract for ordinary content even when the server default advances', async () => {
+    const current = await fixture('retain-contract', { installed: false })
+    const candidate = buildCandidate(current.live, current.changes, [`pages:${current.changes[0]!.id}`], { ...versions, contractVersion: '1.1.0' })
+    expect(candidate.settings.contractVersion).toBe('1.0.0')
   })
 
   it('leases with bounded retries, renewal, proof validation, atomic completion, idempotence, and protects a newer selection', async () => {
@@ -193,5 +201,19 @@ describe('ENG-030 immutable review preview jobs', () => {
     await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
     const approved = await withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], previewContentHash: canonicalHash(job.proposedManifest), versions, initialBaseline: current.live }) })
     expect(approved.outboxID).toBeTruthy()
+  })
+
+  it('accepts a legacy same-contract approval proof without live variant pins', async () => {
+    const current = await fixture('legacy-api-proof')
+    const job = await prepare(current)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
+    const set = await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })
+    const proof = structuredClone((set.quality as { proof: { versionPins: Record<string, unknown> } }).proof)
+    delete proof.versionPins.liveThemeVersion
+    delete proof.versionPins.liveContractVersion
+    const response = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof }) }), { params: Promise.resolve({ action: 'approve' }) })
+    expect(response.status).toBe(200)
   })
 })

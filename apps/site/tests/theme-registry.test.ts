@@ -19,4 +19,10 @@ describe('operator theme registry', () => {
   it('reports unsupported blocks and missing motion fallbacks using synthetic content', () => {
     const report = compatibilityReport(neutralFixture, manifest); expect(report.compatible).toBe(false); expect(report.actions.some(item => item.action === 'hide')).toBe(true);
   });
+  it('requires the selected renderer contract to match the frozen snapshot', () => {
+    const snapshot = structuredClone(neutralFixture); snapshot.settings.contractVersion = '1.1.0';
+    const report = compatibilityReport(snapshot, manifest);
+    expect(report.compatible).toBe(false);
+    expect(report.actions).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'contract-version', reason: 'theme-contract-mismatch' })]));
+  });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@site-engine/contract",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Versioned, client-neutral publishing contract.",
   "license": "Apache-2.0",
   "type": "module",

@@ -6,7 +6,7 @@ import { buildCandidate, canonicalHash, changeSetHash } from './publishing'
 import { markStaleIfNeeded } from './editorial'
 
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
-type PreviewVersions = Versions & { liveThemeVersion?: string }
+type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
 type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings' | 'site-settings'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
 type Baseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
@@ -14,7 +14,7 @@ const MAX_BODY_BYTES = 16 * 1024
 
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
-const versionsEqual = (left: unknown, right: PreviewVersions) => Boolean(left && typeof left === 'object' && (left as PreviewVersions).themeVersion === right.themeVersion && (left as PreviewVersions).engineVersion === right.engineVersion && (left as PreviewVersions).contractVersion === right.contractVersion && (left as PreviewVersions).liveThemeVersion === right.liveThemeVersion)
+const versionsEqual = (left: unknown, right: PreviewVersions) => Boolean(left && typeof left === 'object' && (left as PreviewVersions).themeVersion === right.themeVersion && (left as PreviewVersions).engineVersion === right.engineVersion && (left as PreviewVersions).contractVersion === right.contractVersion && ((left as PreviewVersions).liveThemeVersion ?? (left as PreviewVersions).themeVersion) === (right.liveThemeVersion ?? right.themeVersion) && ((left as PreviewVersions).liveContractVersion ?? (left as PreviewVersions).contractVersion) === (right.liveContractVersion ?? right.contractVersion))
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 
 function selectionFromJob(job: Record<string, unknown>) {
@@ -52,15 +52,16 @@ async function queueHead(payload: Payload, req: PayloadRequest): Promise<Baselin
 }
 
 /** The candidate's selection is authoritative for approval and publication.
- * Keep a distinct live pin only while the comparison renders an older theme. */
+ * Legacy jobs omit the live pins; new jobs preserve both rendered variants. */
 function previewVersions(live: Baseline, proposed: SiteSnapshot, base: Baseline): PreviewVersions {
   const themeVersion = proposed.settings.theme?.version ?? base.versions.themeVersion
   const liveThemeVersion = live.manifest.settings.theme?.version ?? live.versions.themeVersion
   return {
     themeVersion,
     engineVersion: base.versions.engineVersion,
-    contractVersion: base.versions.contractVersion,
+    contractVersion: proposed.settings.contractVersion,
     ...(liveThemeVersion === themeVersion ? {} : { liveThemeVersion }),
+    ...(live.manifest.settings.contractVersion === proposed.settings.contractVersion ? {} : { liveContractVersion: live.manifest.settings.contractVersion }),
   }
 }
 

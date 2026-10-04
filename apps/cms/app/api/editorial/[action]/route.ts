@@ -37,7 +37,7 @@ function routeForPreview(manifest: unknown, includedChangeKeys: unknown): string
   return `/${[section.slug, ...ancestors, page.slug].filter(Boolean).join('/')}`
 }
 
-type ApprovalProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string } }
+type ApprovalProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string; liveThemeVersion?: string; liveContractVersion?: string } }
 
 function approvalProof(value: unknown): ApprovalProof | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -46,7 +46,8 @@ function approvalProof(value: unknown): ApprovalProof | undefined {
   if (!Number.isInteger(proof.revision) || typeof proof.changeHash !== 'string' || typeof proof.contentHash !== 'string' || !Array.isArray(proof.includedChangeKeys) || !proof.includedChangeKeys.every((key): key is string => typeof key === 'string') || (proof.baselineSnapshotID !== undefined && typeof proof.baselineSnapshotID !== 'string') || !Number.isInteger(proof.baselineSequence) || typeof proof.previewJobID !== 'string' || !pins || typeof pins !== 'object') return undefined
   const versions = pins as Record<string, unknown>
   if (typeof versions.themeVersion !== 'string' || typeof versions.engineVersion !== 'string' || typeof versions.contractVersion !== 'string') return undefined
-  return { revision: proof.revision as number, changeHash: proof.changeHash, contentHash: proof.contentHash, includedChangeKeys: proof.includedChangeKeys, baselineSnapshotID: proof.baselineSnapshotID as string | undefined, baselineSequence: proof.baselineSequence as number, previewJobID: proof.previewJobID, versionPins: { themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion } }
+  if ((versions.liveThemeVersion !== undefined && typeof versions.liveThemeVersion !== 'string') || (versions.liveContractVersion !== undefined && typeof versions.liveContractVersion !== 'string')) return undefined
+  return { revision: proof.revision as number, changeHash: proof.changeHash, contentHash: proof.contentHash, includedChangeKeys: proof.includedChangeKeys, baselineSnapshotID: proof.baselineSnapshotID as string | undefined, baselineSequence: proof.baselineSequence as number, previewJobID: proof.previewJobID, versionPins: { themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, ...(typeof versions.liveThemeVersion === 'string' ? { liveThemeVersion: versions.liveThemeVersion } : {}), ...(typeof versions.liveContractVersion === 'string' ? { liveContractVersion: versions.liveContractVersion } : {}) } }
 }
 
 const sameKeys = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
@@ -99,9 +100,13 @@ export async function POST(request: Request, context: { params: Promise<{ action
         const currentHash = changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])
         if (proof.revision !== Number(set.revision) || proof.changeHash !== currentHash || proof.contentHash !== preview.contentHash || !sameKeys(proof.includedChangeKeys, preview.includedChangeKeys) || proof.previewJobID !== preview.jobID) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
         const job = await payload.findByID({ collection: 'preview-render-jobs', id: preview.jobID, depth: 0, overrideAccess: true, req }) as unknown as { versionPins?: unknown }
-        const pins = job.versionPins as { themeVersion?: unknown; engineVersion?: unknown; contractVersion?: unknown } | undefined
+        const pins = job.versionPins as { themeVersion?: unknown; engineVersion?: unknown; contractVersion?: unknown; liveThemeVersion?: unknown; liveContractVersion?: unknown } | undefined
         if (!pins || typeof pins.themeVersion !== 'string' || typeof pins.engineVersion !== 'string' || typeof pins.contractVersion !== 'string') throw new Error('The preview version pins are invalid.')
-        if (proof.baselineSnapshotID !== (preview as { baselineSnapshotID?: unknown }).baselineSnapshotID || proof.baselineSequence !== (preview as { baselineSequence?: unknown }).baselineSequence || proof.versionPins.themeVersion !== pins.themeVersion || proof.versionPins.engineVersion !== pins.engineVersion || proof.versionPins.contractVersion !== pins.contractVersion) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
+        const proofLiveTheme = proof.versionPins.liveThemeVersion ?? proof.versionPins.themeVersion
+        const proofLiveContract = proof.versionPins.liveContractVersion ?? proof.versionPins.contractVersion
+        const jobLiveTheme = typeof pins.liveThemeVersion === 'string' ? pins.liveThemeVersion : pins.themeVersion
+        const jobLiveContract = typeof pins.liveContractVersion === 'string' ? pins.liveContractVersion : pins.contractVersion
+        if (proof.baselineSnapshotID !== (preview as { baselineSnapshotID?: unknown }).baselineSnapshotID || proof.baselineSequence !== (preview as { baselineSequence?: unknown }).baselineSequence || proof.versionPins.themeVersion !== pins.themeVersion || proof.versionPins.engineVersion !== pins.engineVersion || proof.versionPins.contractVersion !== pins.contractVersion || proofLiveTheme !== jobLiveTheme || proofLiveContract !== jobLiveContract) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
         const scheduledFor = scheduledPublicationTime(body.scheduledFor)
         return approveChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest, scheduledFor })
       }
