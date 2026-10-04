@@ -1,7 +1,7 @@
 import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { ChangeSetSchema, CmsPageFieldConfig, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
@@ -23,7 +23,16 @@ const editorialAccess = {
   delete: () => false,
 }
 
-const title = { name: 'title', type: 'text' as const, required: true, maxLength: 180 }
+// Page titles follow the shared PageSchema. Other CMS collections define their
+// own title fields and do not inherit this page-specific contract boundary.
+const pageTitle = {
+  name: 'title', type: 'text' as const, required: true,
+  minLength: CmsPageFieldConfig.title.minLength,
+  maxLength: CmsPageFieldConfig.title.maxLength,
+}
+// Listings need enough context to be useful. This UI policy is deliberately
+// stricter than PageSchema's storage minimum of one non-whitespace character.
+const editorialPageSummaryMinLength = 24
 
 function contractError(result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }, req?: PayloadRequest, collection?: string): void {
   if (result.success) return
@@ -204,7 +213,7 @@ export const Pages: CollectionConfig = {
     }],
   },
   fields: [
-    title,
+    pageTitle,
     {
       name: 'slug', type: 'text', required: true,
       validate: (value: unknown) => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
@@ -212,8 +221,8 @@ export const Pages: CollectionConfig = {
     },
     { name: 'sectionId', type: 'relationship', relationTo: 'sections', required: true, admin: { description: 'Required content section.' } },
     { name: 'parentId', type: 'relationship', relationTo: 'pages', admin: { description: 'Parent page for tree-oriented navigation.' } },
-    { name: 'summary', type: 'textarea', required: true, minLength: 24, maxLength: 300, admin: { description: 'Write one or two sentences for listings and editorial context.' } },
-    { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job'] },
+    { name: 'summary', type: 'textarea', required: true, minLength: editorialPageSummaryMinLength, maxLength: CmsPageFieldConfig.summary.maxLength, admin: { description: 'Write one or two sentences for listings and editorial context.' } },
+    { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: CmsPageFieldConfig.templateOptions },
     { name: 'status', type: 'select', defaultValue: 'draft', options: ['draft', 'published', 'archived'], admin: { readOnly: true } },
     { name: 'blocks', type: 'json', defaultValue: [] },
     { name: 'seoDescription', type: 'text', maxLength: 160 },

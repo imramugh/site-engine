@@ -12,6 +12,15 @@ export const WidthSchema = z.enum(['content', 'wide', 'full']);
 export const SpacingSchema = z.enum(['compact', 'default', 'spacious']);
 export const MotionIntentSchema = z.enum(['none', 'subtle', 'ambient', 'signature']);
 export const LogoToneSchema = z.enum(['default', 'inverse']);
+/** Shared generated option metadata for CMS configuration and theme tooling. */
+export const AppearanceOptions = Object.freeze({
+  backgrounds: BackgroundSchema.options,
+  widths: WidthSchema.options,
+  spacings: SpacingSchema.options,
+  motionIntents: MotionIntentSchema.options,
+  logoTones: LogoToneSchema.options,
+});
+export type AppearanceOptions = typeof AppearanceOptions;
 export const AppearanceSchema = z.object({
   background: BackgroundSchema.default('default'), width: WidthSchema.default('content'),
   spacing: SpacingSchema.default('default'), motionIntent: MotionIntentSchema.default('none'),
@@ -84,6 +93,20 @@ export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(),
   if (page.template !== 'job' && page.jobPosting) ctx.addIssue({ code: 'custom', path: ['jobPosting'], message: 'Job metadata is only allowed on job pages.' });
   if (page.businessCase && page.template !== 'article') ctx.addIssue({ code: 'custom', path: ['businessCase'], message: 'Business-case metadata is only allowed on article pages.' });
   const allowed = TemplateAllowedBlocks[page.template]; page.blocks.forEach((block, index) => { if (!allowed.includes(block.type)) ctx.addIssue({ code: 'custom', path: ['blocks', index, 'type'], message: `${block.type} is not allowed by ${page.template}` }); });
+});
+/**
+ * Field limits consumed by the CMS Pages field factory. These values are read
+ * from the same Zod strings that validate persisted page content, so a shared
+ * contract change cannot leave the CMS form advertising a different boundary.
+ */
+function requiredStringLength(length: number | null, field: string): number {
+  if (length === null) throw new Error(`PageSchema.${field} must declare a string length bound for CMS configuration`);
+  return length;
+}
+export const CmsPageFieldConfig = Object.freeze({
+  title: Object.freeze({ minLength: requiredStringLength(PageSchema.shape.title.minLength, 'title.min'), maxLength: requiredStringLength(PageSchema.shape.title.maxLength, 'title.max') }),
+  summary: Object.freeze({ minLength: requiredStringLength(PageSchema.shape.summary.minLength, 'summary.min'), maxLength: requiredStringLength(PageSchema.shape.summary.maxLength, 'summary.max') }),
+  templateOptions: TemplateSchema.options,
 });
 export const SectionSchema = z.object({ id, landingPageId: id.optional(), name: safeText(80), summary: safeText(300).optional(), slug: z.string().regex(/^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$/), allowedTemplates: z.array(TemplateSchema).min(1), pageIds: z.array(id).max(100) }).strict();
 const MediaFilenameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/);

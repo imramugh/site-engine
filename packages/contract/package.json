@@ -9,6 +9,6 @@
     "./fixtures": { "types": "./dist/fixtures.d.ts", "import": "./dist/fixtures.js" }
   },
   "files": ["dist"],
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit && tsc -p tests/types/tsconfig.json", "lint": "tsc --noEmit" },
   "dependencies": { "zod": "4.6.5" }
 }
