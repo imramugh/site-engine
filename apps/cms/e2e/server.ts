@@ -2,6 +2,7 @@ import { createServer as createHTTPServer, request as requestUpstream, type Inco
 import { createServer } from 'node:https'
 import { once } from 'node:events'
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
@@ -14,6 +15,7 @@ import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
 import { canonicalHash } from '../src/publishing.js'
 import { deriveRoutes } from '@site-engine/engine'
+import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 
@@ -59,6 +61,7 @@ const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
+const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
@@ -250,20 +253,26 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
       if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
       const jobID = (request.url ?? '').split('/')[3]!
-      return payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }).then((job) => {
-        const manifest = job.proposedManifest as { pages?: Array<{ id?: string; blocks?: Array<{ type?: string; heading?: string }> }> }
-        const requestedPath = '/' + (request.url ?? '').split('/').slice(5).join('/'); const pageID = manifest.pages && deriveRoutes(manifest as never).routes.find((route) => route.path === requestedPath)?.page.id; const heading = manifest.pages?.find((page) => page.id === pageID)?.blocks?.find((block) => block.type === 'hero')?.heading ?? 'Preview unavailable'
-        html(response, `<!doctype html><title>Preview</title><main><h1>${String(heading).replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character]!))}</h1></main>`)
-      }).catch(() => { response.writeHead(404); response.end() })
+      const relativePath = (request.url ?? '').split('/').slice(5).join('/') || 'index.html'
+      const artifact = join(previewArtifacts, jobID, 'proposed', relativePath)
+      if (!artifact.startsWith(join(previewArtifacts, jobID, 'proposed'))) { response.writeHead(403); response.end(); return }
+      return readFile(artifact).then((bytes) => { response.writeHead(200, { 'content-type': artifact.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/octet-stream' }); response.end(bytes) }).catch(() => { response.writeHead(404); response.end() })
     }).catch(() => { response.writeHead(403); response.end() })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/direct-preview-worker') {
     void withPayloadTransaction(payload, async req => {
-      const before = await payload.find({ collection: 'preview-render-jobs', where: { status: { in: ['pending', 'processing'] } }, sort: '-createdAt', limit: 5, depth: 0, overrideAccess: true, req })
       const job = await claimPreviewRenderJob(payload, req)
-      if (!job) throw new Error(`No claimable preview job: ${before.docs.map((item) => `${item.id}:${item.status}:${item.leaseToken ?? ''}`).join(',')}`)
-      return completePreviewRenderJob(payload, req, String(job.id), String(job.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'f'.repeat(64) })
+      if (!job) throw new Error('No claimable preview job.')
+      const api = async (action: string, body: Record<string, unknown> = {}) => {
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, versionPins: job.versionPins }
+        if (action === 'renew') return { ok: true }
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        throw new Error('Unsupported preview worker action.')
+      }
+      const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
+      return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true, req })
     }).then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
