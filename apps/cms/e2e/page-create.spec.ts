@@ -52,7 +52,7 @@ test('ENG-006/ENG-026 creates a validated private page and reopens its saved dra
   const hero = owner.page.locator('[data-page-editor-block]').first()
   await hero.locator('summary').click()
   await expect(hero.getByLabel('Heading', { exact: true })).toHaveValue('Created browser landing')
-  await expect(hero.getByLabel('Body', { exact: true })).toHaveValue(summary)
+  await expect(hero.getByRole('textbox', { name: 'Body', exact: true })).toHaveValue(summary)
 
   await owner.page.getByText('Page fields', { exact: false }).first().click()
   await owner.page.getByLabel('Title', { exact: true }).fill('Created browser landing revised')
