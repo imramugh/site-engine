@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+import { snapshot } from './editorial'
 import { checkSiteSnapshot } from '@site-engine/checks'
 
 export type PublishedPageCheck =
@@ -5,8 +7,8 @@ export type PublishedPageCheck =
   | { state: 'not-published' }
   | { state: 'unavailable' }
 
-/** A release snapshot is immutable. Its checks are useful only for pages that
- * are still published in the working copy; drafts must never inherit them. */
+/** Readiness results describe only the immutable published version. The UI
+ * labels their scope explicitly; they never certify the working draft. */
 export function publishedPageChecks(manifest: unknown): Map<string, PublishedPageCheck> | undefined {
   if (!manifest || typeof manifest !== 'object') return undefined
   const report = checkSiteSnapshot(manifest, { asOf: new Date() })
@@ -22,6 +24,19 @@ export function publishedPageChecks(manifest: unknown): Map<string, PublishedPag
 }
 
 export function checkForWorkingPage(page: { id: string; status?: string | null; _status?: string | null }, checks: Map<string, PublishedPageCheck> | undefined): PublishedPageCheck {
-  if ((page.status ?? page._status ?? 'draft') !== 'published') return { state: 'not-published' }
   return checks?.get(page.id) ?? (checks ? { state: 'not-published' } : { state: 'unavailable' })
+}
+
+/** Published state comes from the immutable release, never Payload's draft flag. */
+export function workingPageState(page: Record<string, unknown>, released?: Record<string, unknown>): 'published' | 'draft-changes' | 'draft' | 'archived' {
+  if (page.status === 'archived') return 'archived'
+  if (!released || released.status !== 'published') return 'draft'
+  const comparable = (document: Record<string, unknown>) => {
+    const value = snapshot('pages', document)!
+    if (value.seoDescription == null) delete value.seoDescription
+    if (value.businessCase == null) delete value.businessCase
+    value.noindex = value.noindex === true
+    return value
+  }
+  return isDeepStrictEqual(comparable(page), comparable(released)) ? 'published' : 'draft-changes'
 }

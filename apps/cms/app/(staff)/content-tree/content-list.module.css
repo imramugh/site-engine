@@ -23,7 +23,7 @@
 .glyph { width:18px; height:18px; color:#9aa7b2; flex:0 0 18px; }
 .status { font-size:.8125rem; font-weight:700; text-transform:capitalize; }
 .status[data-status="archived"] { color:#5f6b76; }
-.status[data-status="draft"] { color:#8a5a00; }
+.status[data-status="draft"], .status[data-status="draft-changes"] { color:#8a5a00; }
 .status[data-status="published"] { color:#126b4f; }
 .notChecked, .checkPassed, .checkIssue { color:#5f6b76; font-size:.8125rem; }
 .checkPassed { color:#126b4f; }

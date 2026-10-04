@@ -3,7 +3,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import config from '../../../payload.config'
 import { hasRole } from '../../../src/access'
-import { checkForWorkingPage, publishedPageChecks, type PublishedPageCheck } from '../../../src/content-readiness'
+import { checkForWorkingPage, publishedPageChecks, workingPageState, type PublishedPageCheck } from '../../../src/content-readiness'
 import { buildContentTree, canonicalContentPath, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
 import { serverSessionStrategy } from '../../../src/identity'
 import { StaffShell } from '../../components/staff-shell'
@@ -12,12 +12,12 @@ import styles from './content-list.module.css'
 type Filter = 'all' | 'draft' | 'archived'
 type Row = { page: ContentTreePage; indent: number; path: string; cycle: boolean; hasChildren: boolean; group: string; check: PublishedPageCheck }
 const filters: Array<{ value: Filter; label: string }> = [{ value: 'all', label: 'All pages' }, { value: 'draft', label: 'Drafts' }, { value: 'archived', label: 'Archived' }]
-const stateOf = (page: ContentTreePage) => page.status ?? page._status ?? 'draft'
+const statusLabel = (status: string) => ({ published: 'Published', 'draft-changes': 'Draft changes', draft: 'Draft', archived: 'Archived' })[status] ?? status
 
 function Glyph({ hasChildren, depth }: { hasChildren: boolean; depth: number }) {
-  if (hasChildren) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-  if (depth > 0) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="2" /></svg>
-  return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="4" /></svg>
+  if (hasChildren) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m7 9 5 7 5-7Z" fill="currentColor" stroke="none" /></svg>
+  if (depth > 0) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="1.25" /></svg>
+  return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="6" /></svg>
 }
 function append(nodes: ContentTreeNode[], rows: Row[], pages: ContentTreePage[], sections: ContentTreeSection[], homepageID: string | undefined, checks: Map<string, PublishedPageCheck> | undefined, depth = 0, group = '') {
   for (const node of nodes) {
@@ -62,10 +62,14 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
     const release = releases.docs[0]
     const snapshotID = typeof release?.snapshot === 'string' ? release.snapshot : release?.snapshot?.id
     const snapshot = snapshotID ? await payload.find({ collection: 'publish-snapshots', where: { id: { equals: snapshotID } }, limit: 1, depth: 0, user, overrideAccess: false }) : undefined
-    const checks = publishedPageChecks(snapshot?.docs[0]?.manifest)
+    const manifest = snapshot?.docs[0]?.manifest as { pages?: Record<string, unknown>[] } | undefined
+    const checks = publishedPageChecks(manifest)
+    const releasedPages = new Map((Array.isArray(manifest?.pages) ? manifest.pages : []).map((item) => [item.id, item]))
+    const stateOf = (page: ContentTreePage) => workingPageState(page as unknown as Record<string, unknown>, releasedPages.get(page.id))
+    const matchesDraft = (page: ContentTreePage) => ['draft', 'draft-changes'].includes(stateOf(page))
     const allRows = rowsFor(contentSections, allPages, homepageID, checks, buildContentTree(contentSections, allPages))
-    const counts = { all: allRows.length, draft: allRows.filter((row) => stateOf(row.page) === 'draft').length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
-    const visible = allRows.filter((row) => (filter === 'all' || stateOf(row.page) === filter) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
+    const counts = { all: allRows.length, draft: allRows.filter((row) => matchesDraft(row.page)).length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
+    const visible = allRows.filter((row) => (filter === 'all' || (filter === 'draft' ? matchesDraft(row.page) : stateOf(row.page) === filter)) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
     const canCreate = hasRole(user as never, ['owner', 'editor'])
     return <StaffShell><main data-content-tree>
       <h1 className={styles.visuallyHidden}>Content</h1>
@@ -76,7 +80,7 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
         </div>
         <div className={styles.tableWrap} tabIndex={0} aria-label="Page list. Scroll horizontally for all columns on small screens." data-content-table-scroll data-testid="content-table-scroll">
           <table className={styles.table} data-content-table><caption className={styles.visuallyHidden}>Pages matching the selected status and search</caption><thead><tr><th scope="col">Page</th><th scope="col">Template</th><th scope="col">Status</th><th scope="col">Checks</th><th scope="col">Updated</th></tr></thead><tbody>
-            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Glyph hasChildren={row.hasChildren} depth={row.indent} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{stateOf(row.page)}</span></td><td>{row.check.state === 'checked' ? row.check.issues ? <a className={styles.checkIssue} href={`/admin/collections/pages/${row.page.id}`} data-content-check="issues">Published checks: {row.check.issues} issue{row.check.issues === 1 ? '' : 's'}</a> : <span className={styles.checkPassed} data-content-check="passed">Published checks passed</span> : <span className={styles.notChecked} data-content-check={row.check.state}>{row.check.state === 'not-published' ? 'Draft working copy — not checked' : 'Published checks unavailable'}</span>}</td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
+            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Glyph hasChildren={row.hasChildren} depth={row.indent} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{statusLabel(stateOf(row.page))}</span></td><td>{row.check.state === 'checked' ? row.check.issues ? <a className={styles.checkIssue} href={`/admin/collections/pages/${row.page.id}`} data-content-check="issues" title="These checks describe the latest published version. Draft changes require a new readiness check.">Published: {row.check.issues} issue{row.check.issues === 1 ? '' : 's'}</a> : <span className={styles.checkPassed} data-content-check="passed" title="These checks describe the latest published version. Draft changes require a new readiness check.">Published: passed</span> : <span className={styles.notChecked} data-content-check={row.check.state}>{row.check.state === 'not-published' ? 'Draft: not checked' : 'Checks unavailable'}</span>}</td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
           </tbody></table>
         </div>
         {!visible.length ? <p className={styles.notice} role="status" data-content-empty data-testid="content-empty">{allRows.length ? 'No pages match these filters.' : 'No pages have been created.'}</p> : null}

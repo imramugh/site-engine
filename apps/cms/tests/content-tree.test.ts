@@ -43,7 +43,8 @@ test('published checks are current-only and reject an invalid image reference', 
   const pageID = valid.pages[0]!.id
   const checks = publishedPageChecks(valid)
   expect(checkForWorkingPage({ id: pageID, status: 'published' }, checks)).toEqual({ state: 'checked', issues: 0 })
-  expect(checkForWorkingPage({ id: pageID, status: 'draft' }, checks)).toEqual({ state: 'not-published' })
+  expect(checkForWorkingPage({ id: pageID, status: 'draft' }, checks)).toEqual({ state: 'checked', issues: 0 })
+  expect(checkForWorkingPage({ id: 'new-unpublished-page', status: 'draft' }, checks)).toEqual({ state: 'not-published' })
 
   const missingImage = structuredClone(neutralFixture)
   missingImage.pages[0]!.blocks[0]!.appearance.backgroundImage = { mediaId: '99999999-9999-4999-8999-999999999999', overlay: 0.4 }
@@ -60,4 +61,15 @@ test('malformed imported relationships remain visible without a false canonical 
   expect(canonicalContentPath(crossSectionChild, [landing, crossSectionParent, crossSectionChild], [section], undefined)).toBeUndefined()
   expect(canonicalContentPath(badHomepage, [landing, badHomepage], [section], badHomepage.id)).toBeUndefined()
   expect(canonicalContentPath({ ...landing, parentId: 'anything' }, [landing], [section], undefined)).toBeUndefined()
+})
+
+
+test('working page status compares released content rather than Payload draft metadata', async () => {
+  const { workingPageState } = await import('../src/content-readiness')
+  const released = structuredClone(neutralFixture.pages[0]!)
+  const working = { ...released, status: 'draft', _status: 'draft', updatedAt: '2026-10-04', seoDescription: released.seoDescription ?? null, businessCase: released.businessCase ?? null }
+  expect(workingPageState(working, released)).toBe('published')
+  expect(workingPageState({ ...working, title: 'Edited heading' }, released)).toBe('draft-changes')
+  expect(workingPageState(working)).toBe('draft')
+  expect(workingPageState({ ...working, status: 'archived' }, released)).toBe('archived')
 })

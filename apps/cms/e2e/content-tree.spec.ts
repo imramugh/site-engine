@@ -24,11 +24,12 @@ async function assertNoAxeViolations(page: Page) {
 test('ENG-003 and ENG-006 give owner and editor a usable filtered content list', async ({ browser }) => {
   for (const role of ['owner', 'editor'] as const) {
     const session = await pageFor(browser, role)
-    await session.page.goto('/content-tree')
+    await session.page.goto('/content-tree?q=Direct%20edit%20browser%20page')
     await expect(session.page.locator('[data-content-list]')).toBeVisible()
     await expect(session.page.locator('[data-content-table] tbody tr')).toHaveCount(1)
     await expect(session.page.getByRole('link', { name: /Drafts/ })).toBeVisible()
-    await expect(session.page.getByText('Draft working copy — not checked')).toBeVisible()
+    await expect(session.page.locator('[data-content-status=published]')).toHaveCount(1)
+    await expect(session.page.locator('[data-content-check=issues]')).toContainText('Published:')
 
     const rowLink = session.page.locator('[data-content-page-link]').first()
     await rowLink.focus()
@@ -41,7 +42,7 @@ test('ENG-003 and ENG-006 give owner and editor a usable filtered content list',
     await assertNoAxeViolations(session.page)
 
     await session.page.setViewportSize({ width: 390, height: 844 })
-    await session.page.goto('/content-tree')
+    await session.page.goto('/content-tree?q=Direct%20edit%20browser%20page')
     const scroll = session.page.getByTestId('content-table-scroll')
     await scroll.focus()
     await expect(scroll).toBeFocused()
@@ -53,7 +54,7 @@ test('ENG-003 and ENG-006 give owner and editor a usable filtered content list',
 
 test('ENG-006 denies a Hiring session access to content pages', async ({ browser }) => {
   const session = await pageFor(browser, 'hiring')
-  await session.page.goto('/content-tree')
+  await session.page.goto('/content-tree?q=Direct%20edit%20browser%20page')
   await expect(session.page).toHaveURL(/\/admin\/login/)
   await session.context.close()
 })
