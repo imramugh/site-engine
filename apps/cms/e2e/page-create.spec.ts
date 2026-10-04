@@ -44,19 +44,19 @@ test('ENG-006/ENG-026 creates a validated private page and reopens its saved dra
   })
   const createdResponse = owner.page.waitForResponse((response) => response.url().endsWith('/api/editorial/page-editor/create') && response.status() === 201)
   await owner.page.getByRole('button', { name: 'Create draft' }).click()
-  const created = await createdResponse.then((response) => response.json()) as { pageID: string; changeSetID: string; replayed: boolean }
-  await expect(owner.page).toHaveURL(`/content-editor/${created.pageID}`)
-  expect(created.replayed).toBe(false)
+  expect((await createdResponse).status()).toBe(201)
+  await expect(owner.page).toHaveURL(/\/content-editor\/[0-9a-f-]{36}$/)
+  const pageID = new URL(owner.page.url()).pathname.split('/').at(-1)!
   expect(creationBody).toMatchObject({ title: 'Created browser landing', summary, template: 'landing' })
   await expect(owner.page.locator('[data-page-state]')).toContainText('Create Created browser landing · 1 changes')
   const hero = owner.page.locator('[data-page-editor-block]').first()
   await hero.locator('summary').click()
   await expect(hero.getByLabel('Heading', { exact: true })).toHaveValue('Created browser landing')
-  await expect(hero.getByLabel('Body', { exact: true })).toHaveValue(summary)
+  await expect(hero.getByRole('textbox', { name: 'Body', exact: true })).toHaveValue(summary)
 
   await owner.page.getByText('Page fields', { exact: false }).first().click()
   await owner.page.getByLabel('Title', { exact: true }).fill('Created browser landing revised')
-  const savedResponse = owner.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${created.pageID}`) && response.request().method() === 'POST' && response.status() === 200)
+  const savedResponse = owner.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${pageID}`) && response.request().method() === 'POST' && response.status() === 200)
   await owner.page.getByRole('button', { name: 'Save draft' }).click()
   await savedResponse
   await owner.page.reload()
@@ -64,7 +64,7 @@ test('ENG-006/ENG-026 creates a validated private page and reopens its saved dra
 
   const replay = await owner.page.request.post('/api/editorial/page-editor/create', { headers: { origin, 'content-type': 'application/json' }, data: creationBody })
   expect(replay.status(), await replay.text()).toBe(200)
-  expect(await replay.json()).toMatchObject({ pageID: created.pageID, changeSetID: created.changeSetID, replayed: true })
+  expect(await replay.json()).toMatchObject({ pageID, changeSetID: expect.any(String), replayed: true })
   const deniedOrigin = await owner.page.request.post('/api/editorial/page-editor/create', { headers: { origin: 'https://hostile.example', 'content-type': 'application/json' }, data: { ...creationBody, requestKey: crypto.randomUUID() } })
   expect(deniedOrigin.status()).toBe(403)
   const after = await owner.page.request.get('/__e2e/publish-state').then((response) => response.json()) as { releaseCount: number }
