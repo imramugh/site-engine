@@ -48,6 +48,9 @@ const expiredApplicationJobID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const directEditPageID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const directEditBlockID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const directEditSetID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const onPageReviewPageID = '12345678-1234-4234-8234-1234567890ab'
+const onPageReviewBlockID = '12345678-1234-4234-8234-1234567890ac'
+const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
@@ -77,6 +80,9 @@ initialBaseline.pages.push({ id: expiredApplicationJobID, sectionId: application
 const directEditSectionID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 initialBaseline.settings.sections.push({ id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'], pageIds: [directEditPageID] })
 initialBaseline.pages.push({ id: directEditPageID, sectionId: directEditSectionID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', template: 'landing', status: 'published', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
+const onPageReviewSectionID = '12345678-1234-4234-8234-1234567890aa'
+initialBaseline.settings.sections.push({ id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'], pageIds: [onPageReviewPageID] })
+initialBaseline.pages.push({ id: onPageReviewPageID, sectionId: onPageReviewSectionID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', template: 'landing', status: 'published', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
 const inquiryPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc'
 initialBaseline.settings.sections[0]!.allowedTemplates.push('standard')
 initialBaseline.settings.sections[0]!.pageIds.push(inquiryPageID)
@@ -238,6 +244,9 @@ async function seed(): Promise<void> {
   const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  const onPageSection = await payload.create({ collection: 'sections', data: { id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: onPageReviewPageID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', sectionId: onPageSection.id, template: 'landing', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'change-sets', data: { id: onPageReviewSetID, name: 'Review the rendered Hero change', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
@@ -262,9 +271,10 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
       if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
       const jobID = (request.url ?? '').split('/')[3]!
+      const variant = (request.url ?? '').split('/')[4]!
       const relativePath = (request.url ?? '').split('/').slice(5).join('/') || 'index.html'
-      const artifact = join(previewArtifacts, jobID, 'proposed', relativePath)
-      if (!artifact.startsWith(join(previewArtifacts, jobID, 'proposed'))) { response.writeHead(403); response.end(); return }
+      const artifact = join(previewArtifacts, jobID, variant, relativePath)
+      if (!artifact.startsWith(join(previewArtifacts, jobID, variant))) { response.writeHead(403); response.end(); return }
       return readFile(artifact)
         .catch(() => readFile(join(artifact, 'index.html')))
         .then((bytes) => {

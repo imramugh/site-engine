@@ -1,0 +1,101 @@
+import { expect, test, type Browser } from '@playwright/test'
+import { createRequire } from 'node:module'
+
+const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
+const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
+const pageID = '12345678-1234-4234-8234-1234567890ab'
+const blockID = '12345678-1234-4234-8234-1234567890ac'
+const setID = '12345678-1234-4234-8234-1234567890ad'
+
+async function signedIn(browser: Browser, token: string) {
+  const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: token, url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  return { context, page: await context.newPage() }
+}
+
+test('reviewers inspect and act on the actual rendered page while access and immutable proof stay protected', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
+  const saved = await editor.page.request.patch(`/api/pages/${pageID}?draft=true`, { headers: { origin, 'content-type': 'application/json', 'x-site-engine-change-set': setID }, data: { blocks: [{ id: blockID, type: 'hero', heading: 'Proposed review heading', body: 'This is the proposed rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] } })
+  expect(saved.ok(), await saved.text()).toBeTruthy()
+  const submitted = await editor.page.request.post('/api/editorial/submit', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID } })
+  expect(submitted.ok(), await submitted.text()).toBeTruthy()
+  await editor.page.goto(`/review/${setID}`)
+  await expect(editor.page).toHaveURL(/\/admin\/login/)
+  await editor.context.close()
+
+  const anonymous = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+  const anonymousResponse = await anonymous.request.get(`/api/editorial/review/${setID}`)
+  expect(anonymousResponse.status()).toBe(401)
+  await anonymous.close()
+
+  const sales = await signedIn(browser, 'synthetic-application-sales-session-token')
+  expect((await sales.page.request.get(`/api/editorial/review/${setID}`)).status()).toBe(403)
+  await sales.context.close()
+
+  const reviewer = await signedIn(browser, 'synthetic-application-owner-session-token')
+  const prepared = await reviewer.page.request.post('/api/editorial/prepare-preview', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID, includedChangeKeys: [`pages:${pageID}`] } })
+  expect(prepared.ok(), await prepared.text()).toBeTruthy()
+  const rendered = await reviewer.page.request.post('/__e2e/direct-preview-worker')
+  expect(rendered.ok(), await rendered.text()).toBeTruthy()
+
+  await reviewer.page.setViewportSize({ width: 1440, height: 960 })
+  await reviewer.page.goto(`/review/${setID}`)
+  await expect(reviewer.page.getByText('This page has a pending change')).toBeVisible()
+  await expect(reviewer.page.getByRole('heading', { name: 'Review the rendered Hero change' })).toBeVisible()
+  const live = reviewer.page.frameLocator('iframe[title="Live page"]')
+  const proposed = reviewer.page.frameLocator('iframe[title="Proposed page"]')
+  await expect(live.getByRole('heading', { name: 'Original review heading' })).toBeVisible({ timeout: 20_000 })
+  await expect(proposed.getByRole('heading', { name: 'Proposed review heading' })).toBeVisible()
+  await expect(live.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-changed', 'true')
+  await expect(proposed.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-changed', 'true')
+
+  const change = reviewer.page.getByRole('button', { name: /Proposed review heading/ })
+  await change.focus(); await reviewer.page.keyboard.press('Enter')
+  await expect(change).toHaveAttribute('aria-pressed', 'true')
+  await expect(proposed.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-active', 'true')
+  await reviewer.page.getByRole('button', { name: 'Live', exact: true }).click()
+  await expect(reviewer.page.getByTitle('Proposed page')).toHaveCount(0)
+  await reviewer.page.getByRole('button', { name: 'Proposed', exact: true }).click()
+  await expect(reviewer.page.getByTitle('Live page')).toHaveCount(0)
+  await reviewer.page.getByRole('button', { name: 'Side by side' }).click()
+  await reviewer.page.getByRole('button', { name: 'Hide details' }).click()
+  await expect(reviewer.page.getByRole('complementary', { name: 'Review details' })).toHaveCount(0)
+  await reviewer.page.getByRole('button', { name: 'Details and actions' }).click()
+
+  await reviewer.page.addScriptTag({ path: axeSource })
+  expect(await reviewer.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await reviewer.page.evaluate(() => { scrollTo(0, 0); return new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))) })
+  await reviewer.page.screenshot({ path: 'artifacts/on-page-review-1440.png', fullPage: true })
+
+  let attempts = 0
+  await reviewer.page.route('**/api/editorial/comment', async (route) => { attempts += 1; if (attempts === 1) return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' }); return route.continue() })
+  const comment = reviewer.page.getByLabel('Add a comment')
+  await comment.fill('Keep this review comment through a failed request.')
+  await reviewer.page.getByRole('button', { name: 'Add comment' }).click()
+  await expect(comment).toHaveValue('Keep this review comment through a failed request.')
+  await expect(reviewer.page.getByRole('status')).toContainText('still available')
+  await reviewer.page.getByRole('button', { name: 'Add comment' }).click()
+  await expect(comment).toHaveValue('')
+  await reviewer.page.getByRole('button', { name: 'Run readiness checks' }).click()
+  await expect(reviewer.page.getByRole('status')).toContainText('Readiness checks completed')
+  await expect(reviewer.page.getByRole('button', { name: 'Approve and queue publish' })).toBeEnabled()
+  await expect(reviewer.page.getByRole('button', { name: 'Request changes' })).toBeVisible()
+  await expect(reviewer.page.getByRole('button', { name: 'Reject' })).toBeVisible()
+
+  await reviewer.page.emulateMedia({ reducedMotion: 'reduce' })
+  await reviewer.page.setViewportSize({ width: 390, height: 844 })
+  await expect(reviewer.page.getByRole('button', { name: 'Side by side' })).toBeVisible()
+  expect(await reviewer.page.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  expect(await reviewer.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await reviewer.page.evaluate(() => { scrollTo(0, 0); return new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))) })
+  await reviewer.page.screenshot({ path: 'artifacts/on-page-review-390.png', fullPage: true })
+
+  await reviewer.page.setViewportSize({ width: 1440, height: 960 })
+  await reviewer.page.getByRole('button', { name: 'Approve and queue publish' }).click()
+  await expect(reviewer.page.getByRole('status')).toContainText('immutable snapshot is queued')
+  await expect(reviewer.page.getByRole('button', { name: 'Approve and queue publish' })).toHaveCount(0)
+  const state = await reviewer.page.request.get('/__e2e/publish-state').then((response) => response.json()) as { outbox?: { status?: string } }
+  expect(state.outbox?.status).toBe('pending')
+  await reviewer.context.close()
+})

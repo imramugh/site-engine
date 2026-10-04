@@ -8,7 +8,8 @@ import { changeSetHash, scheduledPublicationTime } from '../../../../src/publish
 import { approveChangeSet } from '../../../../src/publishing'
 import { runReviewQuality } from '../../../../src/review-quality'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
-import { SiteSnapshotSchema } from '@site-engine/contract'
+import { freshStaff } from '../../../../src/access'
+import { routeForReviewPreview } from '../../../../src/review-mode'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,21 +21,6 @@ function sameOrigin(request: Request): boolean {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Editorial workflow request failed.'
-}
-
-function routeForPreview(manifest: unknown, includedChangeKeys: unknown): string {
-  const snapshot = SiteSnapshotSchema.parse(manifest)
-  const pageID = Array.isArray(includedChangeKeys) ? includedChangeKeys.find((key): key is string => typeof key === 'string' && key.startsWith('pages:'))?.slice('pages:'.length) : undefined
-  const page = snapshot.pages.find((candidate) => candidate.id === pageID)
-  if (!page) return '/'
-  if (page.id === snapshot.settings.homepageId) return '/'
-  const section = snapshot.settings.sections.find((candidate) => candidate.id === page.sectionId)
-  if (!section) return '/'
-  const pages = new Map(snapshot.pages.map((candidate) => [candidate.id, candidate]))
-  const ancestors: string[] = []
-  let parent = page.parentId ? pages.get(page.parentId) : undefined
-  while (parent && parent.id !== section.landingPageId) { ancestors.unshift(parent.slug); parent = parent.parentId ? pages.get(parent.parentId) : undefined }
-  return `/${[section.slug, ...ancestors, page.slug].filter(Boolean).join('/')}`
 }
 
 type ApprovalProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string; liveThemeVersion?: string; liveContractVersion?: string } }
@@ -92,6 +78,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
         return runReviewQuality({ payload, req, id: body.id })
       }
       if (action === 'approve' && typeof body.id === 'string') {
+        if (!(await freshStaff(['owner', 'approver'])({ req }))) throw new Error('Fresh reviewer authentication is required before approval.')
         const proof = approvalProof(body.proof)
         if (!proof) throw new Error('The exact readiness proof displayed to the reviewer is required before approval.')
         const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }
@@ -137,7 +124,7 @@ export async function GET(request: Request, context: { params: Promise<{ action:
       const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
       const preview = set.preview as { status?: string; jobID?: string; revision?: number; changeHash?: string } | undefined
       if (job.status !== 'completed' || preview?.status !== 'ready' || preview.jobID !== job.id || preview.revision !== job.reviewRevision || preview.changeHash !== job.changeHash || Number(set.revision) !== job.reviewRevision || changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) !== job.changeHash) return Response.json({ error: 'Preview is not current.' }, { status: 403 })
-      return Response.json({ path: routeForPreview(job.proposedManifest, job.includedChangeKeys) }, { headers: { 'Cache-Control': 'no-store' } })
+      return Response.json({ path: routeForReviewPreview(job.proposedManifest, job.includedChangeKeys).path }, { headers: { 'Cache-Control': 'no-store' } })
     }
     const result = await payload.find({ collection: 'change-sets', limit: 100, depth: 0, user: authenticated.user, overrideAccess: false })
     return Response.json({ sets: result.docs, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
