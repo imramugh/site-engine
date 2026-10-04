@@ -367,15 +367,15 @@ describe('static snapshot renderer', () => {
     expect(await readFile(join(previewBuild.output, 'index.html'), 'utf8')).not.toContain('data-analytics-consent');
   }, 120_000);
 
-  it('ENG-004 renders bounded header services, complete footer services, and accessible unknown or archived targets', async () => {
+  it('ENG-004 renders bounded header sections, complete footer navigation, and accessible unknown or archived targets', async () => {
     const snapshot = fixture('Routing navigation');
-    const parent = snapshot.pages.find((page) => page.slug === 'guide')!;
-    const service = snapshot.pages.find((page) => page.slug === 'install')!;
+    const listing = snapshot.pages.find((page) => page.slug === 'docs')!;
     const names = ['Zeta', 'Alpha', 'Gamma', 'Beta', 'Epsilon', 'Delta', 'Eta'];
     for (const [index, title] of names.entries()) {
       const id = `90000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      snapshot.pages.push({ ...service, id, title: `${title} service`, slug: `${title.toLowerCase()}-service`, parentId: parent.id });
-      snapshot.settings.sections[0]!.pageIds.push(id);
+      const sectionID = `91000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      snapshot.pages.push({ ...listing, id, sectionId: sectionID, parentId: undefined, title, slug: title.toLowerCase() });
+      snapshot.settings.sections.push({ id: sectionID, name: title, slug: title.toLowerCase(), allowedTemplates: ['listing'], landingPageId: id, pageIds: [id] });
     }
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'routing-navigation.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
     const served = await staticServer(built.output, '/');
@@ -383,14 +383,21 @@ describe('static snapshot renderer', () => {
     try {
       const page = await browser.newPage();
       await page.goto(`${served.origin}/docs/guide/install/`, { waitUntil: 'domcontentloaded' });
-      expect(await page.getByRole('navigation', { name: 'Primary' }).getByRole('link').count()).toBe(8);
-      expect(await page.getByRole('navigation', { name: 'Footer services' }).getByRole('link').count()).toBe(8);
+      const primary = page.getByRole('navigation', { name: 'Primary' });
+      expect(await primary.getByRole('link').count()).toBe(6);
+      expect(await primary.getByRole('link', { name: 'Routing navigation section', exact: true }).getAttribute('href')).toBe('/docs');
+      expect(await primary.getByRole('link', { name: 'Epsilon', exact: true }).count()).toBe(0);
+      expect(await page.getByRole('navigation', { name: 'Footer sections' }).getByRole('link').count()).toBe(8);
+      expect(await page.getByRole('navigation', { name: 'Footer services' }).getByRole('link').count()).toBe(1);
+      expect(await page.getByRole('navigation', { name: 'Breadcrumb' }).textContent()).toContain('Routing navigation guide');
+      expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(`${PUBLIC_ORIGIN}/docs/guide/install`);
       await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
       expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('nav', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
-      for (const path of ['/unknown-target/', '/docs/archive-marker/']) {
+      for (const path of ['/unknown-target/', '/docs/draft-marker/', '/docs/archive-marker/']) {
         const response = await page.goto(`${served.origin}${path}`, { waitUntil: 'domcontentloaded' });
         expect(response?.status()).toBe(404);
         expect(await page.getByRole('heading', { name: 'Page not found' }).isVisible()).toBe(true);
+        await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
         expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
       }
     } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }

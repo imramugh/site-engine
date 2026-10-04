@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { chromium } from '@playwright/test'
 import { nginxRedirectInclude } from '../scripts/redirect-artifact.mjs'
 
 const exec = promisify(execFile)
@@ -35,5 +36,19 @@ describe('ENG-013 Nginx redirect artifact', () => {
     const response = await fetch('http://127.0.0.1:4600/legacy', { redirect: 'manual' })
     expect(response.status).toBe(301)
     expect(response.headers.get('location')).toBe('/general')
+  })
+
+  it('follows the configured permanent redirect in a browser', async () => {
+    const browser = await chromium.launch()
+    try {
+      const page = await browser.newPage()
+      const response = await page.goto('http://127.0.0.1:4600/legacy')
+      expect(response?.status()).toBe(200)
+      const redirect = response?.request().redirectedFrom()
+      expect(redirect?.url()).toBe('http://127.0.0.1:4600/legacy')
+      expect((await redirect?.response())?.status()).toBe(301)
+    } finally {
+      await browser.close()
+    }
   })
 })

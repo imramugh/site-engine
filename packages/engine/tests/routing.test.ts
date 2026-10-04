@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SiteSnapshotSchema } from '@site-engine/contract';
-import { HEADER_SERVICE_LIMIT, deriveRoutes, headerServiceNavigation, serviceNavigation } from '../src/index.js';
+import { HEADER_SECTION_LIMIT, deriveRoutes, headerSectionNavigation, sectionNavigation, serviceNavigation } from '../src/index.js';
 
 const ids = { section: '10000000-0000-4000-8000-000000000000', root: '20000000-0000-4000-8000-000000000000', pillar: '30000000-0000-4000-8000-000000000000', service: '40000000-0000-4000-8000-000000000000' };
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const;
@@ -20,19 +20,22 @@ describe('ENG-004 generic routing', () => {
     expect(model.byPath.get('/services/detail')?.page.id).toBe(ids.service);
   });
 
-  it('keeps all published services in the footer model while bounding alphabetical header services with a warning', () => {
-    const manyServices = structuredClone(snapshot);
+  it('keeps every published section available to the footer while bounding desktop header sections', () => {
+    const manySections = structuredClone(snapshot);
+    manySections.settings.sections[0]!.landingPageId = ids.pillar;
     const names = ['Zeta', 'Alpha', 'Gamma', 'Beta', 'Epsilon', 'Delta', 'Eta'];
     for (const [index, title] of names.entries()) {
       const id = `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      manyServices.pages.push({ ...manyServices.pages[2]!, id, title, slug: title.toLowerCase(), parentId: ids.pillar });
-      manyServices.settings.sections[0]!.pageIds.push(id);
+      const sectionId = `71000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      manySections.pages.push({ ...manySections.pages[1]!, id, sectionId, title, slug: title.toLowerCase(), parentId: undefined });
+      manySections.settings.sections.push({ id: sectionId, name: title, slug: title.toLowerCase(), allowedTemplates: ['pillar'], landingPageId: id, pageIds: [id] });
     }
-    const model = deriveRoutes(manyServices, ids.root);
-    expect(serviceNavigation(model).map((route) => route.page.title)).toEqual(['Alpha', 'Beta', 'Delta', 'Detail', 'Epsilon', 'Eta', 'Gamma', 'Zeta']);
-    expect(headerServiceNavigation(model).map((route) => route.page.title)).toEqual(['Alpha', 'Beta', 'Delta', 'Detail', 'Epsilon', 'Eta']);
-    expect(headerServiceNavigation(model)).toHaveLength(HEADER_SERVICE_LIMIT);
-    expect(model.warnings).toContain('Header has more than 6 service pages; excess services are footer-only.');
+    const model = deriveRoutes(manySections, ids.root);
+    expect(sectionNavigation(model).map((route) => route.section.name)).toEqual(['Services', ...names]);
+    expect(headerSectionNavigation(model).map((route) => route.section.name)).toEqual(['Services', 'Zeta', 'Alpha', 'Gamma', 'Beta']);
+    expect(headerSectionNavigation(model)).toHaveLength(HEADER_SECTION_LIMIT);
+    expect(serviceNavigation(model).map((route) => route.page.title)).toEqual(['Detail']);
+    expect(model.warnings).toContain('Header has more than 5 published sections; excess sections are footer-only.');
   });
 
   it('rejects a homepage hidden beneath an unpublished ancestor', () => {

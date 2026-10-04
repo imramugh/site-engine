@@ -1,7 +1,8 @@
 import { SiteSnapshotSchema, ThemeInstallSchema, type Page, type Section, type SiteSnapshot, type Block, type PublicRoute, type RouteModel } from '@site-engine/contract';
 export type { PublicRoute, RouteModel } from '@site-engine/contract';
 
-export const HEADER_SERVICE_LIMIT = 6;
+/** Desktop navigation has room for five content sections beside the site CTA. */
+export const HEADER_SECTION_LIMIT = 5;
 
 export function validateThemeInstall(input: unknown) { return ThemeInstallSchema.safeParse(input); }
 export function visibleBlocks(snapshot: SiteSnapshot): Block[] { return snapshot.pages.filter((page) => page.status === 'published').flatMap((page) => page.blocks).filter((block) => !block.hidden); }
@@ -47,18 +48,31 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
     routes.push(route); byPath.set(path, route);
   }
   if (!byPath.has('/')) throw new Error('Homepage cannot be hidden by an unpublished ancestor');
-  const services = routes.filter((route) => route.page.template === 'service');
-  if (services.length > HEADER_SERVICE_LIMIT) warnings.push(`Header has more than ${HEADER_SERVICE_LIMIT} service pages; excess services are footer-only.`);
+  const modelSections = snapshot.settings.sections.filter((section) => section.pageIds.some((id) => routes.some((route) => route.page.id === id)));
+  if (modelSections.length > HEADER_SECTION_LIMIT) warnings.push(`Header has more than ${HEADER_SECTION_LIMIT} published sections; excess sections are footer-only.`);
   const redirects = new Map<string, string>();
   for (const redirect of snapshot.redirects) { if (byPath.has(redirect.from)) throw new Error(`Redirect ${redirect.from} conflicts with a published route`); if (!byPath.has(redirect.to)) warnings.push(`Redirect ${redirect.from} points to an unavailable route ${redirect.to}`); else redirects.set(redirect.from, redirect.to); }
-  return { routes, byPath, redirects, warnings };
+  return { sections: modelSections, routes, byPath, redirects, warnings };
 }
 
 export function childrenOf(route: PublicRoute, model: RouteModel): PublicRoute[] { return model.routes.filter((candidate) => candidate.page.parentId === route.page.id); }
 export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title)); }
 
-/** Header exposes a bounded service list; the footer retains every published service. */
-export function headerServiceNavigation(model: RouteModel): PublicRoute[] { return serviceNavigation(model).slice(0, HEADER_SERVICE_LIMIT); }
+/**
+ * A section links to its configured landing page when public, otherwise its
+ * first public page in the configured relationship order. This keeps the
+ * navigation data-driven even while a section is being assembled.
+ */
+export function sectionNavigation(model: RouteModel): PublicRoute[] {
+  return model.sections.flatMap((section) => {
+    const pageIDs = section.landingPageId ? [section.landingPageId, ...section.pageIds.filter((id) => id !== section.landingPageId)] : section.pageIds;
+    const route = pageIDs.map((id) => model.routes.find((candidate) => candidate.page.id === id)).find((candidate): candidate is PublicRoute => Boolean(candidate));
+    return route ? [route] : [];
+  });
+}
+
+/** Header exposes up to five published sections; the footer retains every one. */
+export function headerSectionNavigation(model: RouteModel): PublicRoute[] { return sectionNavigation(model).slice(0, HEADER_SECTION_LIMIT); }
 export {
   effectiveMotion,
   motionPreferenceKey,
