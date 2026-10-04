@@ -25,6 +25,7 @@ const titleForPath = (pathname: string) => {
   const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events', 'site-settings': 'Site' }
   const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]
   if (collection && collectionTitles[collection]) return collectionTitles[collection]
+  if (/^\/content-editor\/[0-9a-f-]+$/i.test(pathname)) return 'Page editor'
   return titles[pathname] ?? 'Workspace'
 }
 
@@ -149,7 +150,8 @@ export function AdminNavigationToggle({ primary, site, tools, collections, displ
   }, [open])
   const link = (item: AdminNavigationItem) => {
     const badge = badges[item.label as keyof AdminNavigationBadges]
-    return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
+    const current = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) || (item.href === '/content-tree' && pathname.startsWith('/content-editor/'))
+    return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={current ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
   }
 
   return <>
