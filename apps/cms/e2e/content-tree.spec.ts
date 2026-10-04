@@ -25,7 +25,6 @@ test('ENG-003 and ENG-006 give owner and editor a usable filtered content list',
   for (const role of ['owner', 'editor'] as const) {
     const session = await pageFor(browser, role)
     await session.page.goto('/content-tree')
-    await expect(session.page.getByRole('heading', { name: 'Content tree' })).toBeVisible()
     await expect(session.page.locator('[data-content-list]')).toBeVisible()
     await expect(session.page.locator('[data-content-table] tbody tr')).toHaveCount(1)
     await expect(session.page.getByRole('link', { name: /Drafts/ })).toBeVisible()

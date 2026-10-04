@@ -10,7 +10,7 @@ export type ContentTreePage = {
   sectionId?: string | { id?: string } | null
 }
 
-export type ContentTreeSection = { id: string; name: string; slug?: string }
+export type ContentTreeSection = { id: string; name: string; slug?: string; landingPageId?: string | { id?: string } | null }
 export type ContentTreeNode = { page: ContentTreePage; children: ContentTreeNode[]; cycle: boolean }
 export type ContentTreeGroup = { section: ContentTreeSection; roots: ContentTreeNode[]; unplaced: ContentTreeNode[] }
 export type ContentTree = { sections: ContentTreeGroup[]; unassigned: ContentTreeNode[] }
@@ -54,4 +54,28 @@ export function buildContentTree(sections: ContentTreeSection[], pages: ContentT
   const groups = sections.map((section) => ({ section, ...nodesFor(pages.filter((page) => idOf(page.sectionId) === section.id)) }))
   const unassignedGroup = nodesFor(pages.filter((page) => !sectionIDs.has(idOf(page.sectionId) ?? '')))
   return { sections: groups, unassigned: [...unassignedGroup.roots, ...unassignedGroup.unplaced] }
+}
+
+/** Matches the public route semantics while keeping drafts and malformed imported
+ * pages visible in staff tooling. Undefined means this working copy has no
+ * canonical route until its section or ancestry is repaired. */
+export function canonicalContentPath(page: ContentTreePage, pages: ContentTreePage[], sections: ContentTreeSection[], homepageID?: string): string | undefined {
+  if (homepageID && page.id === homepageID) return '/'
+  const section = sections.find((item) => item.id === idOf(page.sectionId))
+  if (!section?.slug) return undefined
+  const landingID = idOf(section.landingPageId)
+  if (landingID && page.id === landingID) return `/${section.slug}`
+  const byID = new Map(pages.map((item) => [item.id, item]))
+  const ancestors: ContentTreePage[] = []
+  const seen = new Set<string>([page.id])
+  let parentID = idOf(page.parentId)
+  while (parentID) {
+    if (seen.has(parentID)) return undefined
+    const parent = byID.get(parentID)
+    if (!parent) return undefined
+    seen.add(parentID)
+    ancestors.unshift(parent)
+    parentID = idOf(parent.parentId)
+  }
+  return `/${[section.slug, ...ancestors.filter((item) => item.id !== landingID).map((item) => item.slug), page.slug].filter(Boolean).join('/')}`
 }
