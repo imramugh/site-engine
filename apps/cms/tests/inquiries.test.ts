@@ -11,6 +11,15 @@ describe('ENG-019 inquiry validation and lead transitions', () => {
     expect(invalid.errors).toMatchObject({ email: expect.any(String), consent: expect.any(String), sourcePage: expect.any(String), message: expect.any(String) })
   })
 
+  it('accepts omitted legacy names but rejects a provided blank or unsafe name', () => {
+    expect(validateInquiry(valid).input?.name).toBeUndefined()
+    expect(validateInquiry({ ...valid, name: null }).input?.name).toBeUndefined()
+    expect(validateInquiry({ ...valid, name: '' }).input?.name).toBeUndefined()
+    expect(validateInquiry({ ...valid, name: '  ' }).errors.name).toMatch(/name/i)
+    expect(validateInquiry({ ...valid, name: 'Visitor\u0000' }).errors.name).toMatch(/name/i)
+    expect(validateInquiry({ ...valid, name: '  Synthetic visitor  ', telephone: '  +1 555 0123 ', company: '  Example Company  ' }).input).toMatchObject({ name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
+  })
+
   it('allows only the lead lifecycle transitions', () => {
     expect(canTransitionLead('new', 'qualified')).toBe(true)
     expect(canTransitionLead('proposal', 'won')).toBe(true)

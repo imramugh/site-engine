@@ -14,7 +14,7 @@ let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
-const fixture = (key: string, topic: 'project' | 'active-incident' = 'project') => ({ email: 'visitor@example.test', message: '<img src=x onerror=alert(1)> Please help with a project.', topic, sourcePage: '/contact', consent: true, idempotencyKey: key })
+const fixture = (key: string, topic: 'project' | 'active-incident' = 'project') => ({ email: 'visitor@example.test', message: '<img src=x onerror=alert(1)> Please help with a project.', topic, sourcePage: '/contact', consent: true, idempotencyKey: key, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
 
 describe('ENG-019 real SQLite intake and outbox', () => {
   it('rejects malformed submissions before persistence', async () => {
@@ -31,7 +31,7 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     expect('suppressed' in again ? false : again.duplicate).toBe(true)
     const leads = await payload.find({ collection: 'inquiries', where: { email: { equals: input.email } }, overrideAccess: true })
     expect(leads.docs).toHaveLength(1)
-    expect(leads.docs[0]).toMatchObject({ topic: 'active-incident', urgent: true, stage: 'new', message: input.message })
+    expect(leads.docs[0]).toMatchObject({ topic: 'active-incident', urgent: true, stage: 'new', message: input.message, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
     const queued = await payload.find({ collection: 'notification-outbox', where: { inquiry: { equals: leads.docs[0].id } }, overrideAccess: true })
     expect(queued.docs.map((event) => event.kind).sort()).toEqual(['lead-received', 'urgent-lead-alert'])
     expect(queued.docs.every((event) => event.state === 'queued')).toBe(true)

@@ -96,6 +96,13 @@ function pageText(page: Page): string[] {
       if (typeof item === 'string') values.push(item);
       else if (item && typeof item === 'object') for (const field of ['title', 'body', 'question', 'answer', 'quote', 'attribution']) { const value = (item as Record<string, unknown>)[field]; if (typeof value === 'string') values.push(value); }
     }
+    if (block.type === 'contact' && block.contactDetails) {
+      const details = block.contactDetails;
+      if (details.incidentCallout) values.push(details.incidentCallout.label, details.incidentCallout.body, details.incidentCallout.phoneLabel ?? '');
+      for (const channel of details.channels ?? []) values.push(channel.label, channel.value);
+      values.push(details.nextStepsHeading ?? '');
+      for (const step of details.nextSteps ?? []) values.push(step.title, step.body);
+    }
   }
   return values;
 }

@@ -320,6 +320,12 @@ describe('static snapshot renderer', () => {
         expect(violations).toEqual([]);
       }
       expect(await publicPage.locator('[data-inquiry-form]').count()).toBe(1);
+      expect(await publicPage.locator('[data-inquiry-heading]').count()).toBe(0);
+      expect(await publicPage.locator('[data-custom-theme-block="contact"], [data-inquiry-form]').evaluateAll((nodes) => nodes.map((node) => node.matches('[data-custom-theme-block="contact"]') ? 'contact' : 'form'))).toEqual(['contact', 'form']);
+      await publicPage.getByLabel('Name').fill('Custom theme visitor');
+      await publicPage.getByLabel('Work email').fill('custom-theme@example.test');
+      await publicPage.getByLabel('Message').fill('A synthetic inquiry for the custom theme.');
+      await publicPage.getByLabel(/I consent/).check();
       await publicPage.getByRole('button', { name: 'Send inquiry' }).click();
       await publicPage.getByRole('status').filter({ hasText: 'received' }).waitFor();
       expect(publicSubmissions).toBe(1);
@@ -546,7 +552,8 @@ describe('static snapshot renderer', () => {
     const inquiryPage = { ...snapshot.pages[0]!, id: '12345678-1234-4234-8234-123456789abf', template: 'standard' as const, slug: 'inquiry', blocks: [] as typeof snapshot.pages[0]['blocks'] };
     snapshot.pages.push(inquiryPage);
     snapshot.settings.sections[0]!.pageIds.push(inquiryPage.id);
-    inquiryPage.blocks.push({ id: '12345678-1234-4234-8234-123456789abe', type: 'contact', heading: 'Send a message', body: 'Synthetic inquiry form.', inquiryForm: true, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } });
+    snapshot.settings.contractVersion = '1.3.0';
+    inquiryPage.blocks.push({ id: '12345678-1234-4234-8234-123456789abe', type: 'contact', heading: 'Send a message', body: 'Synthetic inquiry form.', inquiryForm: true, contactDetails: { incidentCallout: { label: 'Urgent information', body: 'Use a listed contact method.' }, channels: [{ kind: 'link', label: 'Profile', value: 'Neutral profile', href: 'https://example.test/profile' }], nextStepsHeading: 'Next steps', nextSteps: [{ title: 'Review', body: 'We review each inquiry.' }] }, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } });
     const input = await writeSnapshot(root, snapshot, 'inquiry.json');
     const browser = await chromium.launch();
     try {
@@ -554,7 +561,7 @@ describe('static snapshot renderer', () => {
         const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
         const served = await staticServer(built.output, basePath);
         const context = await browser.newContext(); const page = await context.newPage();
-        const submitted: { idempotencyKey: string }[] = [];
+        const submitted: Array<{ idempotencyKey: string; name: string; email: string; telephone: string; company: string }> = [];
         await page.route('**/api/inquiries', async route => {
           submitted.push(route.request().postDataJSON());
           if (submitted.length === 1) await route.abort('failed');
@@ -562,8 +569,27 @@ describe('static snapshot renderer', () => {
         });
         try {
           await page.goto(`${served.origin}${basePath}docs/inquiry/`, { waitUntil: 'networkidle' });
-          const button = page.getByRole('button', { name: 'Send inquiry' });
+          const form = page.locator('[data-inquiry-form]'); const button = form.getByRole('button', { name: 'Send inquiry' });
+          const headingId = '12345678-1234-4234-8234-123456789abe-inquiry-title';
+          expect(await page.locator('[data-inquiry-form]').getAttribute('aria-labelledby')).toBe(headingId);
+          expect(await page.locator(`[data-inquiry-heading][id="${headingId}"]`).count()).toBe(1);
+          expect(await page.locator(`[data-inquiry-heading][id="${headingId}"]`).textContent()).toBe('Send a message');
+          expect(await page.locator(`[id="${headingId}"]`).count()).toBe(1);
+          expect(await page.locator('[data-inquiry-form], section[data-block="contact"]').evaluateAll((nodes) => nodes.map((node) => node.matches('[data-inquiry-form]') ? 'form' : 'details'))).toEqual(['form', 'details']);
           if (basePath === '/') {
+            expect(await page.getByText('Urgent information', { exact: true }).isVisible()).toBe(true);
+            expect(await page.getByRole('link', { name: 'Neutral profile' }).getAttribute('href')).toBe('https://example.test/profile');
+            expect(await form.locator('[name="name"]').getAttribute('maxlength')).toBe('160');
+            expect(await form.locator('[name="telephone"]').getAttribute('maxlength')).toBe('48');
+            expect(await form.locator('[name="company"]').getAttribute('maxlength')).toBe('160');
+            expect(await form.locator('[name="message"]').getAttribute('maxlength')).toBe('5000');
+            expect(await form.locator('[name="message"]').getAttribute('rows')).toBe('5');
+            await form.locator('[name="name"]').fill('Retry visitor');
+            await form.locator('[name="email"]').fill('retry@example.test');
+            await form.locator('[name="telephone"]').fill('+1 555 0123');
+            await form.locator('[name="company"]').fill('Example Company');
+            await form.locator('[name="message"]').fill('Please help with this inquiry.');
+            await form.locator('[name="consent"]').check();
             expect(await button.isEnabled()).toBe(true);
             await button.click();
             await page.getByRole('alert').filter({ hasText: 'check your connection' }).waitFor();
@@ -572,6 +598,7 @@ describe('static snapshot renderer', () => {
             await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
             expect(submitted).toHaveLength(2);
             expect(submitted[0]!.idempotencyKey).toBe(submitted[1]!.idempotencyKey);
+            expect(submitted[0]).toMatchObject({ name: 'Retry visitor', email: 'retry@example.test', telephone: '+1 555 0123', company: 'Example Company' });
             expect(await button.isDisabled()).toBe(true);
           } else {
             expect(await button.isDisabled()).toBe(true);
@@ -584,20 +611,36 @@ describe('static snapshot renderer', () => {
     } finally { await browser.close(); }
   }, 120_000);
 
+  it('gives multiple inquiry forms unique field-error IDs', async () => {
+    const snapshot = fixture('Multiple inquiry forms'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
+    const page = { ...snapshot.pages[0]!, id: '23232323-2323-4232-8232-232323232323', slug: 'multiple-inquiries', template: 'standard' as const, blocks: [
+      { id: '24242424-2424-4242-8242-242424242424', type: 'contact' as const, heading: 'First inquiry', body: 'First neutral contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } },
+      { id: '25252525-2525-4252-8252-252525252525', type: 'contact' as const, heading: 'Second inquiry', body: 'Second neutral contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } },
+    ] };
+    snapshot.pages.push(page); snapshot.settings.sections[0]!.pageIds.push(page.id);
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'multiple-inquiries.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const html = await readFile(join(built.output, 'docs/multiple-inquiries/index.html'), 'utf8');
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]!);
+    expect(ids).toHaveLength(new Set(ids).size);
+    expect(html).toContain('24242424-2424-4242-8242-242424242424-inquiry-name-error');
+    expect(html).toContain('25252525-2525-4252-8252-252525252525-inquiry-name-error');
+  });
+
   it('keeps analytics disabled until consent, sends allowlisted CTA, navigation, phone and form outcomes, and stops after revocation', async () => {
     const snapshot = fixture('Analytics'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
     const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
     snapshot.pages.push(inquiry); snapshot.settings.sections[0]!.pageIds.push(inquiry.id);
     const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events' } }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
     let inquiries = 0;
-    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => { inquiries += 1; await route.fulfill(inquiries === 1 ? { status: 400, contentType: 'application/json', body: JSON.stringify({ errors: { form: 'Try again.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => { inquiries += 1; await route.fulfill(inquiries === 1 ? { status: 422, contentType: 'application/json', body: JSON.stringify({ errors: { name: 'Enter a valid name.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
     try {
       await page.goto(`${served.origin}/`); await page.locator('[data-primary-cta]').click(); expect(events).toEqual([]);
       await page.getByRole('button', { name: 'Allow optional measurement' }).click(); await expect.poll(() => events.some((item: any) => item.event === 'page_view')).toBe(true);
       await page.goto(`${served.origin}/docs/analytics-inquiry/?utm_source=search-test`);
-      await page.getByLabel('Email').fill('analytics@example.test'); await page.getByLabel('Message').fill('This must never be sent to analytics.'); await page.getByLabel(/I consent/).check();
+      await page.getByLabel('Name').fill('Analytics visitor'); await page.getByLabel('Work email').fill('analytics@example.test'); await page.getByLabel('Message').fill('This must never be sent to analytics.'); await page.getByLabel(/I consent/).check();
       const submit = page.locator('[data-inquiry-form] button');
-      await submit.click(); await page.getByRole('alert').filter({ hasText: 'Try again.' }).waitFor();
+      await submit.click(); await page.getByRole('alert').filter({ hasText: 'Enter a valid name.' }).waitFor();
+      expect(await page.getByLabel('Name').getAttribute('aria-invalid')).toBe('true'); expect(await page.locator('[data-inquiry-field-error="name"]').textContent()).toBe('Enter a valid name.');
       await submit.click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
       await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Home', exact: true }).click();
       await page.locator('[data-primary-cta]').click();

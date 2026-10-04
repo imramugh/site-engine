@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.2.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.3.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -47,6 +47,24 @@ export const LinkSchema = z.object({ label: safeText(80), href: VisitorInternalL
 export const PhoneCtaSchema = z.object({ label: safeText(80), number: z.string().regex(/^\+[1-9]\d{6,14}$/, 'Expected an E.164 telephone number') }).strict();
 // Plain text is escaped by renderers. Structured rich text is a separate editor format.
 const RichTextSchema = z.string().trim().min(1).max(10_000).refine((v) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(v), 'Control characters are not allowed');
+const isSafeContactHref = (value: string): boolean => {
+  if (/[#?%\s\p{Cc}]/u.test(value)) return false;
+  if (/^tel:\+[1-9]\d{6,14}$/.test(value)) return true;
+  if (/^mailto:[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value)) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && /^\/[A-Za-z0-9._~/-]*$/.test(url.pathname);
+  } catch { return false; }
+};
+const ContactHrefSchema = z.string().max(300).refine(isSafeContactHref, 'Expected a safe contact href');
+const ContactChannelSchema = z.object({ kind: z.enum(['phone', 'email', 'address', 'link']), label: safeText(80), value: safeText(240), href: ContactHrefSchema.optional() }).strict().superRefine((channel, ctx) => {
+  if (channel.kind === 'phone' && channel.href && !/^tel:\+[1-9]\d{6,14}$/.test(channel.href)) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Phone channels require a tel E.164 href.' });
+  if (channel.kind === 'email' && channel.href && !/^mailto:[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(channel.href)) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Email channels require a mailto href.' });
+  if (channel.kind === 'address' && channel.href) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Address channels cannot have an href.' });
+  if (channel.kind === 'link' && !channel.href) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Link channels require an https href.' });
+  if (channel.kind === 'link' && channel.href && !/^https:\/\//i.test(channel.href)) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Link channels require an https href.' });
+});
+const ContactDetailsSchema = z.object({ incidentCallout: z.object({ label: safeText(80), body: RichTextSchema.max(500), phoneLabel: safeText(80).optional() }).strict().optional(), channels: z.array(ContactChannelSchema).max(4).optional(), nextStepsHeading: safeText(120).optional(), nextSteps: z.array(z.object({ title: safeText(120), body: RichTextSchema.max(500) }).strict()).max(6).optional() }).strict();
 const BaseBlockSchema = z.object({ id, hidden: z.boolean().default(false), anchorId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), appearance: AppearanceSchema });
 export const BlockSchemas = {
   hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), secondaryCta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional(), supportPanel: z.object({ eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional() }).strict().optional() }).strict(),
@@ -61,7 +79,7 @@ export const BlockSchemas = {
   relatedServices: BaseBlockSchema.extend({ type: z.literal('relatedServices'), heading: safeText(120), pageIds: z.array(id).max(3), links: z.array(LinkSchema).max(3).optional() }).strict().superRefine((block, ctx) => { if (!block.pageIds.length && !block.links?.length) ctx.addIssue({ code: 'custom', path: ['pageIds'], message: 'Related services require at least one page or link.' }); if (block.pageIds.length + (block.links?.length ?? 0) > 3) ctx.addIssue({ code: 'custom', path: ['links'], message: 'Related services allow at most three combined pages and links.' }); }),
   cta: BaseBlockSchema.extend({ type: z.literal('cta'), heading: safeText(120), body: RichTextSchema.max(500), cta: LinkSchema }).strict(),
   richText: BaseBlockSchema.extend({ type: z.literal('richText'), body: RichTextSchema }).strict(),
-  contact: BaseBlockSchema.extend({ type: z.literal('contact'), heading: safeText(120), body: RichTextSchema.max(500), inquiryForm: z.boolean().optional() }).strict(),
+  contact: BaseBlockSchema.extend({ type: z.literal('contact'), heading: safeText(120), body: RichTextSchema.max(500), inquiryForm: z.boolean().optional(), contactDetails: ContactDetailsSchema.optional() }).strict(),
   media: BaseBlockSchema.extend({ type: z.literal('media'), mediaId: id, caption: safeText(300).optional() }).strict(),
   imageText: BaseBlockSchema.extend({ type: z.literal('imageText'), heading: safeText(120), body: RichTextSchema.max(1_000), mediaId: id }).strict(),
   gallery: BaseBlockSchema.extend({ type: z.literal('gallery'), mediaIds: z.array(id).min(1).max(12) }).strict(),
@@ -76,6 +94,8 @@ export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, Bloc
 export type Block = z.infer<typeof BlockSchema>;
 const hrefUsesFragment = (href: string | undefined) => Boolean(href?.includes('#'));
 const linkUsesFragment = (link: z.infer<typeof LinkSchema> | undefined) => hrefUsesFragment(link?.href);
+function requiresContract13(block: Block): boolean { return block.type === 'contact' && block.contactDetails !== undefined; }
+
 function requiresContract12(block: Block): boolean {
   switch (block.type) {
     case 'hero': return Boolean(block.phoneCta || linkUsesFragment(block.cta) || linkUsesFragment(block.secondaryCta) || linkUsesFragment(block.supportPanel?.cta));
@@ -223,7 +243,8 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
-      if (snapshot.settings.contractVersion !== '1.2.0' && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (!['1.2.0', '1.3.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (snapshot.settings.contractVersion !== '1.3.0' && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

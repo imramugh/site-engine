@@ -16,6 +16,7 @@ describe('ENG-002 versioned contract', () => {
     expect(compatibleContractVersion('1.0.0')).toBe(true);
     expect(compatibleContractVersion('1.1.0')).toBe(true);
     expect(compatibleContractVersion('1.2.0')).toBe(true);
+    expect(compatibleContractVersion('1.3.0')).toBe(true);
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
@@ -64,6 +65,26 @@ describe('ENG-002 versioned contract', () => {
     const legacyWithEmptyLinks = fixture();
     legacyWithEmptyLinks.pages[0]!.blocks.push({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'pillarGrid', heading: 'Options', items: [{ title: 'One', body: 'One neutral option.', href: '/', links: [] }], hidden: false, appearance } as never);
     expect(SiteSnapshotSchema.safeParse(legacyWithEmptyLinks).success).toBe(false);
+  });
+
+  it('gates bounded contact details to contract 1.3 with safe channel hrefs', () => {
+    const snapshot = fixture();
+    const contactPage = structuredClone(snapshot.pages[0]!);
+    contactPage.id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    contactPage.slug = 'contact';
+    contactPage.template = 'standard';
+    contactPage.blocks = [{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', type: 'contact', heading: 'Contact', body: 'Neutral contact information.', inquiryForm: true, contactDetails: { incidentCallout: { label: 'Urgent contact', body: 'Use the listed contact method for urgent matters.', phoneLabel: 'Call now' }, channels: [{ kind: 'phone', label: 'Phone', value: '+1 555 0123', href: 'tel:+15550123' }, { kind: 'email', label: 'Email', value: 'contact@example.test', href: 'mailto:contact@example.test' }, { kind: 'address', label: 'Address', value: 'Example address' }, { kind: 'link', label: 'Profile', value: 'Example profile', href: 'https://example.test/profile' }], nextStepsHeading: 'Next steps', nextSteps: [{ title: 'Review', body: 'We review the inquiry.' }] }, hidden: false, appearance } as never];
+    snapshot.settings.sections[0]!.allowedTemplates.push('standard');
+    snapshot.settings.sections[0]!.pageIds.push(contactPage.id);
+    snapshot.pages.push(contactPage);
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.settings.contractVersion = '1.3.0';
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    const contact = contactPage.blocks[0]!;
+    expect(BlockSchema.safeParse({ ...contact, contactDetails: { ...contact.contactDetails!, channels: [{ kind: 'link', label: 'Unsafe', value: 'Unsafe link', href: 'https://user@example.test/' }] } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, contactDetails: { ...contact.contactDetails!, channels: [{ kind: 'address', label: 'Address', value: 'Address', href: 'https://example.test/' }] } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, contactDetails: { ...contact.contactDetails!, channels: [{ kind: 'email', label: 'Email', value: 'Contact', href: 'mailto:contact@example.test?bcc=other@example.test' }] } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, contactDetails: { ...contact.contactDetails!, channels: [{ kind: 'link', label: 'Link', value: 'Contact', href: 'https://example.test/%0d%0aheader' }] } }).success).toBe(false);
   });
 
   it('accepts bounded structured service links and rejects unsafe fragments', () => {
