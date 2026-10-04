@@ -43,10 +43,19 @@ type Context = {
   breadcrumb: Array<{ label: string; href?: string }>
   changeSets: ChangeSet[]
   blockCatalog: CatalogItem[]
+  appearanceCapabilities: {
+    backgrounds: string[]
+    widths: string[]
+    spacings: string[]
+    motionIntents: string[]
+    logoTones: string[]
+  }
+  activeTheme: { name: string; version: string }
   references: { media: Reference[]; pages: Reference[] }
 }
 type Preview = { id: string; status: string; path?: string }
 type Path = Array<string | number>
+type Appearance = Block['appearance']
 
 const labels: Record<string, string> = {
   seoDescription: 'SEO description',
@@ -613,6 +622,91 @@ function ValueEditor({
   return null
 }
 
+function AppearanceEditor({
+  value,
+  capabilities,
+  onSet,
+  onPatch,
+  onRemove,
+  references,
+}: {
+  value: Appearance
+  capabilities: Context['appearanceCapabilities']
+  onSet: (field: keyof Appearance, value: unknown) => void
+  onPatch: (path: Path, value: unknown) => void
+  onRemove: (path: Path) => void
+  references: Context['references']
+}) {
+  const compact = [
+    ['motionIntent', 'Motion', capabilities.motionIntents],
+    ['spacing', 'Spacing', capabilities.spacings],
+    ['width', 'Width', capabilities.widths],
+    ['logoTone', 'Logo tone', capabilities.logoTones],
+  ] as const
+  const base = new Set([
+    'background',
+    'motionIntent',
+    'spacing',
+    'width',
+    'logoTone',
+  ])
+  return (
+    <fieldset className={styles.appearancePanel} data-page-editor-appearance>
+      <legend>Appearance</legend>
+      <div className={styles.backgrounds} data-page-editor-backgrounds>
+        <span>Background</span>
+        <div>
+          {capabilities.backgrounds.map((background) => (
+            <button
+              type="button"
+              key={background}
+              title={title(background)}
+              aria-label={`${title(background)} background`}
+              aria-pressed={value.background === background}
+              data-page-editor-background={background}
+              onClick={() => onSet('background', background)}
+            >
+              <i aria-hidden="true" />
+              <span>{title(background)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={styles.appearanceCompact}>
+        {compact.map(([field, label, options]) => (
+          <label key={field}>
+            {label}
+            <select
+              aria-label={label}
+              value={String(value[field])}
+              onChange={(event) => onSet(field, event.target.value)}
+            >
+              {options.map((option) => (
+                <option key={option} value={option}>
+                  {title(option)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      {Object.entries(value)
+        .filter(([field]) => !base.has(field))
+        .map(([field, nested]) => (
+          <ValueEditor
+            key={field}
+            field={field}
+            value={nested}
+            path={[field]}
+            onSet={onPatch}
+            onRemove={onRemove}
+            references={references}
+          />
+        ))}
+    </fieldset>
+  )
+}
+
 function BlockEditor({
   block,
   index,
@@ -621,6 +715,9 @@ function BlockEditor({
   onChange,
   onMove,
   onRemove,
+  active,
+  capabilities,
+  onSelect,
 }: {
   block: Block
   index: number
@@ -629,14 +726,29 @@ function BlockEditor({
   onChange: (update: (current: Block) => Block) => void
   onMove: (direction: -1 | 1) => void
   onRemove: () => void
+  active: boolean
+  capabilities: Context['appearanceCapabilities']
+  onSelect: () => void
 }) {
   const record = block as unknown as Record<string, unknown>
   const set = (path: Path, value: unknown) =>
     onChange((current) => updateAt(current, path, value))
   const remove = (path: Path) => onChange((current) => removeAt(current, path))
   return (
-    <details className={styles.block} data-page-editor-block open={index === 0}>
-      <summary>
+    <details
+      className={styles.block}
+      data-page-editor-block
+      data-page-editor-block-id={block.id}
+      data-page-editor-block-active={active ? 'true' : 'false'}
+      open={active}
+      onFocus={onSelect}
+    >
+      <summary
+        onClick={(event) => {
+          event.preventDefault()
+          onSelect()
+        }}
+      >
         <span className={styles.grip} aria-hidden="true">
           ⠿
         </span>
@@ -711,11 +823,12 @@ function BlockEditor({
               references={references}
             />
           ))}
-        <ValueEditor
-          field="appearance"
+        <AppearanceEditor
           value={block.appearance}
-          path={['appearance']}
-          onSet={set}
+          capabilities={capabilities}
+          onSet={(field, value) => set(['appearance', field], value)}
+          onPatch={(path, value) => set(['appearance', ...path], value)}
+          onRemove={(path) => remove(['appearance', ...path])}
           references={references}
         />
         {optionalFields(record).length ? (
@@ -743,12 +856,16 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const [preview, setPreview] = useState<Preview>()
   const [mobile, setMobile] = useState(false)
   const [previewWidth, setPreviewWidth] = useState(1280)
+  const [activeBlockID, setActiveBlockID] = useState<string>()
+  const [previewInteractive, setPreviewInteractive] = useState<boolean>()
   const [newSetName, setNewSetName] = useState('Page edits')
   const timer = useRef<number | undefined>(undefined)
   const requestVersion = useRef(0)
   const pickerTrigger = useRef<HTMLButtonElement>(null)
   const pickerDialog = useRef<HTMLElement>(null)
   const previewCanvas = useRef<HTMLDivElement>(null)
+  const previewFrame = useRef<HTMLIFrameElement>(null)
+  const previewBlockCleanup = useRef<() => void>(() => undefined)
   const saved = data?.page.draft
   const selectedSet =
     data?.changeSets.find((item) => item.id === changeSetID) ??
@@ -765,6 +882,23 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const closePicker = useCallback(() => {
     setPicker(false)
     window.setTimeout(() => pickerTrigger.current?.focus(), 0)
+  }, [])
+  const selectBlock = useCallback((id: string, focusEditor = false) => {
+    setActiveBlockID(id)
+    if (!focusEditor) return
+    window.requestAnimationFrame(() => {
+      const block = document.querySelector<HTMLElement>(
+        `[data-page-editor-block-id="${id}"]`,
+      )
+      const summary = block?.querySelector<HTMLElement>('summary')
+      summary?.focus()
+      block?.scrollIntoView({
+        block: 'center',
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'auto'
+          : 'smooth',
+      })
+    })
   }, [])
   useEffect(() => {
     if (!picker) return
@@ -814,6 +948,115 @@ export function PageEditor({ pageID }: { pageID: string }) {
     observer.observe(canvas)
     return () => observer.disconnect()
   }, [data])
+  useEffect(() => {
+    if (picker) return
+    const collapse = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !activeBlockID) return
+      event.preventDefault()
+      const summary = document.querySelector<HTMLElement>(
+        `[data-page-editor-block-id="${activeBlockID}"] summary`,
+      )
+      setActiveBlockID(undefined)
+      window.requestAnimationFrame(() => summary?.focus())
+    }
+    window.addEventListener('keydown', collapse)
+    return () => window.removeEventListener('keydown', collapse)
+  }, [activeBlockID, picker])
+  const wirePreviewBlocks = useCallback(() => {
+    previewBlockCleanup.current()
+    const document = previewFrame.current?.contentDocument
+    if (!document || !draft) {
+      setPreviewInteractive(undefined)
+      return
+    }
+    const visible = draft.blocks.filter((block) => !block.hidden)
+    const identified = [
+      ...document.querySelectorAll<HTMLElement>('[data-block-id]'),
+    ]
+    const typed = [
+      ...document.querySelectorAll<HTMLElement>('[data-block-type]'),
+    ]
+    const generic = [...document.querySelectorAll<HTMLElement>('[data-block]')]
+    const nodes = identified.length
+      ? identified
+      : typed.length
+        ? typed
+        : generic
+    const matches =
+      nodes.length === visible.length &&
+      nodes.every((node, index) => {
+        const block = visible[index]
+        if (!block) return false
+        const id = node.dataset.blockId
+        const type = node.dataset.blockType ?? node.dataset.block
+        return id ? id === block.id : type === block.type
+      })
+    if (!matches) {
+      setPreviewInteractive(false)
+      return
+    }
+    const style = document.createElement('style')
+    style.dataset.pageEditorSelectionStyle = 'true'
+    style.textContent = `[data-page-editor-preview-block-id]{cursor:pointer}[data-page-editor-preview-block-id]:focus-visible{outline:2px dashed Highlight;outline-offset:-2px}[data-page-editor-preview-block-id][data-page-editor-selected="true"]{outline:3px solid Highlight;outline-offset:-3px}`
+    document.head.append(style)
+    const cleanups: Array<() => void> = []
+    nodes.forEach((node, index) => {
+      const block = visible[index]!
+      const previousTabIndex = node.getAttribute('tabindex')
+      const previousLabel = node.getAttribute('aria-label')
+      node.dataset.pageEditorPreviewBlockId = block.id
+      node.dataset.pageEditorSelected = String(activeBlockID === block.id)
+      node.tabIndex = 0
+      node.setAttribute('aria-label', `Edit ${title(block.type)} block`)
+      const activate = (event: Event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        selectBlock(block.id, true)
+      }
+      const keydown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          setActiveBlockID(undefined)
+        } else if (
+          event.target === node &&
+          (event.key === 'Enter' || event.key === ' ')
+        ) {
+          event.preventDefault()
+          event.stopPropagation()
+          selectBlock(block.id, true)
+        }
+      }
+      node.addEventListener('click', activate)
+      node.addEventListener('keydown', keydown)
+      cleanups.push(() => {
+        node.removeEventListener('click', activate)
+        node.removeEventListener('keydown', keydown)
+        delete node.dataset.pageEditorPreviewBlockId
+        delete node.dataset.pageEditorSelected
+        if (previousLabel === null) node.removeAttribute('aria-label')
+        else node.setAttribute('aria-label', previousLabel)
+        if (previousTabIndex === null) node.removeAttribute('tabindex')
+        else node.setAttribute('tabindex', previousTabIndex)
+      })
+      if (activeBlockID === block.id)
+        node.scrollIntoView({
+          block: 'center',
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)')
+            .matches
+            ? 'auto'
+            : 'smooth',
+        })
+    })
+    setPreviewInteractive(true)
+    previewBlockCleanup.current = () => {
+      cleanups.forEach((cleanup) => cleanup())
+      style.remove()
+    }
+  }, [activeBlockID, draft, selectBlock])
+  useEffect(() => {
+    if (preview?.status === 'completed') wirePreviewBlocks()
+    return () => previewBlockCleanup.current()
+  }, [preview?.status, wirePreviewBlocks])
   const load = useCallback(async () => {
     const response = await fetch(
       `/api/editorial/page-editor/${encodeURIComponent(pageID)}`,
@@ -824,6 +1067,11 @@ export function PageEditor({ pageID }: { pageID: string }) {
       throw new Error(next.error || 'Unable to load this page draft.')
     setData(next)
     setDraft(clone(next.page.draft))
+    setActiveBlockID((current) =>
+      next.page.draft.blocks.some((block) => block.id === current)
+        ? current
+        : next.page.draft.blocks[0]?.id,
+    )
     setChangeSetID((current) =>
       next.changeSets.some((item) => item.id === current)
         ? current
@@ -1011,6 +1259,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       ...current,
       blocks: [...current.blocks, block as unknown as Block],
     }))
+    setActiveBlockID(String(block.id))
     closePicker()
   }
   if (!data || !draft)
@@ -1020,7 +1269,12 @@ export function PageEditor({ pageID }: { pageID: string }) {
       </main>
     )
   return (
-    <main className={styles.editor} data-page-editor>
+    <main
+      className={styles.editor}
+      data-page-editor
+      data-page-editor-theme={data.activeTheme.name}
+      data-page-editor-theme-version={data.activeTheme.version}
+    >
       <header className={styles.editorHeader}>
         <div>
           <nav aria-label="Breadcrumb" data-page-editor-breadcrumb>
@@ -1192,6 +1446,9 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 index={index}
                 total={draft.blocks.length}
                 references={data.references}
+                active={activeBlockID === block.id}
+                capabilities={data.appearanceCapabilities}
+                onSelect={() => selectBlock(block.id)}
                 onChange={(update) =>
                   edit((current) => ({
                     ...current,
@@ -1202,12 +1459,13 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 }
                 onMove={(direction) => moveBlock(index, direction)}
                 onRemove={() =>
-                  edit((current) => ({
-                    ...current,
-                    blocks: current.blocks.filter(
+                  edit((current) => {
+                    const blocks = current.blocks.filter(
                       (_, itemIndex) => itemIndex !== index,
-                    ),
-                  }))
+                    )
+                    setActiveBlockID(blocks[index]?.id ?? blocks[index - 1]?.id)
+                    return { ...current, blocks }
+                  })
                 }
               />
             ))}
@@ -1247,6 +1505,13 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 Mobile
               </button>
             </div>
+            {preview?.status === 'completed' ? (
+              <small data-page-editor-preview-selection>
+                {previewInteractive === false
+                  ? 'Block selection unavailable for this renderer.'
+                  : 'Select a rendered block to edit it.'}
+              </small>
+            ) : null}
           </header>
           <div
             ref={previewCanvas}
@@ -1263,12 +1528,14 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 }}
               >
                 <iframe
+                  ref={previewFrame}
                   title="Saved page draft preview"
                   style={{
                     width: mobile ? 390 : 1280,
                     transform: `scale(${Math.min(1, previewWidth / (mobile ? 390 : 1280))})`,
                   }}
                   src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`}
+                  onLoad={wirePreviewBlocks}
                 />
               </div>
             ) : (

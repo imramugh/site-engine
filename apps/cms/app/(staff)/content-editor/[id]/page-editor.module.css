@@ -201,6 +201,10 @@
 .block {
   border-bottom: 1px solid #eef2f5;
 }
+.block[data-page-editor-block-active='true'] {
+  border-left: 3px solid var(--page-editor-active, #006485);
+  background: var(--page-editor-active-surface, #f4f8fb);
+}
 .block > summary {
   display: flex;
   align-items: center;
@@ -250,6 +254,82 @@
   padding: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 0.375rem;
+}
+.appearancePanel {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: #fff;
+}
+.editor.editor .nested,
+.editor.editor .appearancePanel {
+  padding: 0.75rem;
+}
+.appearancePanel > legend {
+  padding: 0 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.backgrounds {
+  display: grid;
+  gap: 0.5rem;
+}
+.backgrounds > span {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.backgrounds > div {
+  display: flex;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+.backgrounds button {
+  width: 3.5rem;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+  justify-items: center;
+  border: 0;
+  background: transparent;
+  font-size: 0.6875rem;
+}
+.backgrounds button i {
+  width: 2.75rem;
+  height: 2rem;
+  border: 1px solid #9aa7b2;
+  border-radius: 0.375rem;
+  background: var(
+    --page-editor-swatch,
+    var(--page-editor-swatch-default, #fff)
+  );
+}
+.backgrounds button[data-page-editor-background='subtle'] i {
+  --page-editor-swatch: var(--page-editor-swatch-subtle, #eef2f5);
+}
+.backgrounds button[data-page-editor-background='brand'] i {
+  --page-editor-swatch: var(--page-editor-swatch-brand, #36566f);
+}
+.backgrounds button[data-page-editor-background='accent'] i {
+  --page-editor-swatch: var(--page-editor-swatch-accent, #7a8791);
+}
+.backgrounds button[data-page-editor-background='highlight'] i {
+  --page-editor-swatch: var(--page-editor-swatch-highlight, #dce3e9);
+}
+.backgrounds button[data-page-editor-background='inverse'] i {
+  --page-editor-swatch: var(--page-editor-swatch-inverse, #14212b);
+}
+.backgrounds button[aria-pressed='true'] i {
+  outline: 3px solid var(--page-editor-active, #006485);
+  outline-offset: 2px;
+}
+.appearanceCompact {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+.appearanceCompact label {
+  min-width: 0;
 }
 .nested legend {
   padding: 0 0.25rem;
@@ -306,6 +386,11 @@
   gap: 0.5rem;
   color: #4a5866;
   font-size: 0.8125rem;
+}
+.preview > header small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.6875rem;
 }
 .preview > header i {
   width: 8px;
@@ -474,5 +559,8 @@
   .previewCanvas {
     min-height: 420px;
     padding: 0.5rem;
+  }
+  .appearanceCompact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

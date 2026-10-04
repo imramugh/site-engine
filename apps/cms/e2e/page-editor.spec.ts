@@ -43,6 +43,10 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(editor.page.locator('[data-admin-page-title]')).toHaveText(
     'Page editor',
   )
+  await expect(editor.page.locator('[data-page-editor]')).toHaveAttribute(
+    'data-page-editor-theme',
+    /\S+/,
+  )
   await expect(
     editor.page.locator(
       '[data-admin-primary] [data-admin-nav-item][href="/content-tree"]',
@@ -69,7 +73,9 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   let dialog = editor.page.getByRole('dialog', { name: 'Add a block' })
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused()
   await expect(dialog.locator('[data-page-block-type]')).toHaveCount(18)
-  await expect(dialog.locator('[data-page-block-type]:enabled')).toHaveCount(12)
+  // Media-dependent recipes become available after earlier upload scenarios.
+  // The required FAQ flow must remain available independently of those assets.
+  await expect(dialog.locator('[data-page-block-type="faq"]')).toBeEnabled()
   await editor.page.keyboard.press('Shift+Tab')
   await expect(
     dialog.locator('[data-page-block-type]:enabled').last(),
@@ -97,6 +103,14 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     .locator('textarea')
     .first()
     .fill('Yes, the real Astro preview renders this saved ordered block.')
+  await expect(
+    editor.page.locator('[data-page-editor-block][open]'),
+  ).toHaveCount(1)
+  await expect(faq.locator('[data-page-editor-background]')).toHaveCount(6)
+  await faq.getByRole('button', { name: 'Highlight background' }).click()
+  await expect(
+    faq.getByRole('button', { name: 'Highlight background' }),
+  ).toHaveAttribute('aria-pressed', 'true')
   await faq.getByRole('button', { name: 'Move up' }).click()
   faq = editor.page.locator('[data-page-editor-block]').nth(1)
   await expect(faq.getByLabel('Heading', { exact: true })).toHaveValue(
@@ -146,6 +160,49 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     preview.getByText('Does the complete editor render?'),
   ).toBeVisible()
   await expect(preview.getByText('Original contact block')).toHaveCount(0)
+  await expect(
+    editor.page.locator('[data-page-editor-preview-selection]'),
+  ).toContainText('Select a rendered block')
+  const renderedBlocks = preview.locator('[data-page-editor-preview-block-id]')
+  await expect(renderedBlocks).toHaveCount(2)
+  await editor.page.emulateMedia({ reducedMotion: 'reduce' })
+  await renderedBlocks.first().click({ position: { x: 5, y: 5 } })
+  await expect(
+    editor.page.locator('[data-page-editor-block]').first(),
+  ).toHaveAttribute('data-page-editor-block-active', 'true')
+  await renderedBlocks.nth(1).focus()
+  await renderedBlocks.nth(1).press('Enter')
+  await expect(
+    editor.page.locator('[data-page-editor-block]').nth(1),
+  ).toHaveAttribute('data-page-editor-block-active', 'true')
+  await editor.page.keyboard.press('Escape')
+  await expect(
+    editor.page.locator('[data-page-editor-block][open]'),
+  ).toHaveCount(0)
+  const previewTypeAttribute = await renderedBlocks.first().evaluate((node) => {
+    const name = node.hasAttribute('data-block-type')
+      ? 'data-block-type'
+      : 'data-block'
+    const value = node.getAttribute(name)!
+    node.setAttribute(name, 'unmatched-block')
+    return { name, value }
+  })
+  await editor.page.getByTitle('Saved page draft preview').dispatchEvent('load')
+  await expect(
+    editor.page.locator('[data-page-editor-preview-selection]'),
+  ).toContainText('unavailable')
+  await expect(renderedBlocks).toHaveCount(0)
+  await preview
+    .locator(`[${previewTypeAttribute.name}]`)
+    .first()
+    .evaluate(
+      (node, attribute) => node.setAttribute(attribute.name, attribute.value),
+      previewTypeAttribute,
+    )
+  await editor.page.getByTitle('Saved page draft preview').dispatchEvent('load')
+  await expect(
+    editor.page.locator('[data-page-editor-preview-selection]'),
+  ).toContainText('Select a rendered block')
   expect(
     await editor.page
       .getByTitle('Saved page draft preview')
