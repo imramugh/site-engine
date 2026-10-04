@@ -33,7 +33,7 @@ test('ENG-014 media workspace provides an accessible grid, metadata detail, and 
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
   await expect(page.getByRole('button', { name: /synthetic\.png/ })).toBeVisible()
   await page.getByRole('button', { name: /synthetic\.png/ }).click()
-  await page.getByLabel('Alt text').fill('Synthetic workspace image')
+  await page.locator('textarea').fill('Synthetic workspace image')
   await page.getByRole('button', { name: 'Save metadata' }).click()
   await expect(page.getByRole('status')).toContainText('Metadata saved')
   await page.setViewportSize({ width: 390, height: 844 })
