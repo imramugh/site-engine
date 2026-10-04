@@ -37,22 +37,68 @@ describe('ENG-023 provider monetary accounting', () => {
     expect(contacted).toBe(false)
   })
 
-  it('reserves conservatively and serializes real SQLite cap decisions', async () => {
-    const record = await configured('openai', 'concurrent', 'secret', { monthlyCapMicroUsd: 25, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+  it('reserves request framing and serializes real SQLite cap decisions', async () => {
+    const record = await configured('openai', 'concurrent', 'secret', { monthlyCapMicroUsd: 200, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
     let contacted = 0
     const transport = async () => { contacted += 1; return Response.json({ output: [{ content: [{ type: 'output_text', text: 'reserved' }] }], usage: { input_tokens: 5, output_tokens: 10 } }) }
     const jobs = await Promise.allSettled([executeConfiguredAIJob(payload, job('openai'), { now, transport }), executeConfiguredAIJob(payload, job('openai'), { now, transport })])
     expect(jobs.filter((result) => result.status === 'fulfilled')).toHaveLength(1); expect(contacted).toBe(1)
-    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 25, monthlyCapMicroUsd: 25 })
+    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 25, monthlyCapMicroUsd: 200 })
   })
 
-  it('keeps the reservation when a success omits normalized usage, and releases it on timeout', async () => {
-    const record = await configured('openai', 'bounded', 'secret', { monthlyCapMicroUsd: 100, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
-    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport: async () => Response.json({ output: [{ content: [{ type: 'output_text', text: 'unmetered' }] }], usage: { total_tokens: 1 } }) })).resolves.toMatchObject({ usageCostMicroUsd: 25 })
-    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 25 })
+  it('keeps reservations for unknown usage and timeouts so a retry cannot reuse the cap', async () => {
+    const record = await configured('openai', 'bounded', 'secret', { monthlyCapMicroUsd: 500, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport: async () => Response.json({ output: [{ content: [{ type: 'output_text', text: 'unmetered' }] }], usage: { total_tokens: 1 } }) })).resolves.toMatchObject({ usageCostMicroUsd: expect.any(Number) })
+    const afterUnknown = await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })
+    expect(afterUnknown.monthlyUsageMicroUsd).toBeGreaterThan(25)
     let aborted = false
     await expect(executeConfiguredAIJob(payload, job('openai'), { now, timeoutMs: 5, transport: async request => new Promise((_, reject) => request.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')) })) })).rejects.toThrow('AI_JOB_UNAVAILABLE')
-    expect(aborted).toBe(true); expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 25, health: 'unavailable' })
+    const afterTimeout = await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })
+    expect(aborted).toBe(true); expect(afterTimeout).toMatchObject({ health: 'unavailable' }); expect(afterTimeout.monthlyUsageMicroUsd).toBeGreaterThan(afterUnknown.monthlyUsageMicroUsd!)
+  })
+
+  it('bounds a response body that never finishes decoding', async () => {
+    const started = Date.now()
+    await expect(invokeProvider('openai', 'secret', 'model', 'prompt', 10, async () => new Response(new ReadableStream({ start() {} })), 5)).resolves.toEqual({ outcome: 'unavailable' })
+    expect(Date.now() - started).toBeLessThan(500)
+  })
+
+  it('records actual usage above its reservation and closes the cap to later work', async () => {
+    const record = await configured('openai', 'overrun', 'secret', { monthlyCapMicroUsd: 250, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    let contacted = 0
+    const transport = async () => { contacted += 1; return Response.json({ output: [{ content: [{ type: 'output_text', text: 'expensive' }] }], usage: { input_tokens: 100, output_tokens: 100 } }) }
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport })).resolves.toMatchObject({ usageCostMicroUsd: 300 })
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(contacted).toBe(1)
+    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 300 })
+  })
+
+  it('retains malformed and 5xx reservations and never contacts providers for image jobs', async () => {
+    const malformed = await configured('openai', 'malformed', 'secret', { monthlyCapMicroUsd: 200, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    let malformedCalls = 0
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport: async () => { malformedCalls += 1; return Response.json({ output: [] }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport: async () => { malformedCalls += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(malformedCalls).toBe(1)
+    expect((await payload.findByID({ collection: 'integration-configurations', id: malformed.id, overrideAccess: true })).monthlyUsageMicroUsd).toBeGreaterThan(0)
+    await configured('anthropic', 'server-error', 'secret', { monthlyCapMicroUsd: 200, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    let serverErrorCalls = 0
+    await expect(executeConfiguredAIJob(payload, job('anthropic'), { now, transport: async () => { serverErrorCalls += 1; return new Response('{}', { status: 503 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    await expect(executeConfiguredAIJob(payload, job('anthropic'), { now, transport: async () => { serverErrorCalls += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(serverErrorCalls).toBe(1)
+    let imageCalls = 0
+    await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true }, { now, transport: async () => { imageCalls += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(imageCalls).toBe(0)
+  })
+
+  it('does not settle a rotated configuration with an old credential snapshot', async () => {
+    const record = await configured('openai', 'old-model', 'old-secret', { monthlyCapMicroUsd: 500, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    await expect(executeConfiguredAIJob(payload, job('openai'), { now, transport: async () => {
+      await payload.update({ collection: 'integration-configurations', id: record.id, data: { model: 'new-model', encryptedCredential: encryptCredential('new-secret', 'openai'), credentialFingerprint: 'new-fingerprint' } as never, overrideAccess: true })
+      return Response.json({ output: [{ content: [{ type: 'output_text', text: 'old response' }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+    } })).resolves.toMatchObject({ output: 'old response' })
+    const saved = await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })
+    expect(saved).toMatchObject({ model: 'new-model', credentialFingerprint: 'new-fingerprint' })
+    expect(saved.monthlyUsageMicroUsd).toBeGreaterThan(25)
   })
 
   it('does not retry rejected credentials or disclose them from direct invocation', async () => {
