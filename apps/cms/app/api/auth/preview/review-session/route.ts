@@ -30,7 +30,8 @@ export async function GET(request: Request): Promise<Response> {
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     const user = authenticated.user as { id?: string; roles?: string[] } | undefined
     if (!user) return response(401)
-    const reviewer = user.roles?.some((role) => role === 'owner' || role === 'approver')
+    const owner = user.roles?.includes('owner') === true
+    const reviewer = owner || user.roles?.includes('approver') === true
     const editor = user.roles?.includes('editor') === true
     if (!reviewer && !editor) return response(403)
     const job = await payload.findByID({ collection: 'preview-render-jobs', id: match[1]!, depth: 0, overrideAccess: true })
@@ -42,7 +43,7 @@ export async function GET(request: Request): Promise<Response> {
     // Draft-preview jobs intentionally never populate changeSets.preview: that
     // field is reserved for submitted reviewer approval. An Editor may view
     // only their own still-editable, hash-current immutable draft artifact.
-    const ownsDraft = editor && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id && ['open', 'changes-requested'].includes(String(set.state))
+    const ownsDraft = ['open', 'changes-requested'].includes(String(set.state)) && (owner || (editor && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id))
     if (!ownsDraft || job.status !== 'completed' || !job.artifactDigest) return response(403)
     return response(204)
   } catch {
