@@ -20,8 +20,9 @@ const titleForPath = (pathname: string) => {
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Changelog', '/integrations': 'Integrations',
     '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
   }
-  if (pathname.startsWith('/admin/collections/assets')) return 'Media'
-  if (pathname.startsWith('/admin/collections/users')) return 'Users'
+  const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events' }
+  const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]
+  if (collection && collectionTitles[collection]) return collectionTitles[collection]
   return titles[pathname] ?? 'Workspace'
 }
 
