@@ -848,6 +848,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'leaseToken', type: 'text', admin: { hidden: true } }, { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
     { name: 'dispatchStartedAt', type: 'date', admin: { readOnly: true } }, { name: 'result', type: 'textarea', access: { read: () => false }, admin: { hidden: true } },
     { name: 'resultDigest', type: 'text', maxLength: 64, admin: { readOnly: true } }, { name: 'costStatus', type: 'select', options: ['actual', 'reserved'], admin: { readOnly: true } },
+    { name: 'usedProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } }, { name: 'fallbackUsed', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
     { name: 'failureCode', type: 'text', maxLength: 64, admin: { readOnly: true } },
   ],
 }

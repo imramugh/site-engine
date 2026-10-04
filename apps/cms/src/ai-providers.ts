@@ -6,6 +6,7 @@ import { withPayloadTransaction } from './auth-transaction'
 /** Money is always an integer count of one-millionths of a US dollar. */
 export type MicroUsd = number
 export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; maxOutputTokens: number }
+export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string }
 export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' }
 export const providerCapabilities: Record<IntegrationProvider, ProviderCapability> = {
   // Image request serialization has not been implemented in this adapter yet.
@@ -32,6 +33,10 @@ const sumSafe = (values: unknown[]): number | undefined => { let total = 0; for 
 function pricingFor(config: StoredConfiguration): Pricing | undefined {
   const input = integer(config.inputMicroUsdPerMillionTokens); const output = integer(config.outputMicroUsdPerMillionTokens); const source = text(config.pricingSource); const asOf = text(config.pricingAsOf)
   return input !== undefined && output !== undefined && source && asOf ? { inputMicroUsdPerMillionTokens: input, outputMicroUsdPerMillionTokens: output, source, asOf } : undefined
+}
+function sameSnapshot(config: StoredConfiguration, snapshot: AIConfigurationSnapshot): boolean {
+  const pricing = pricingFor(config)
+  return config.id === snapshot.id && config.provider === snapshot.provider && config.model === snapshot.model && config.credentialFingerprint === snapshot.credentialFingerprint && (config.monthlyCapMicroUsd ?? null) === snapshot.monthlyCapMicroUsd && Boolean(config.encryptedCredential) && config.health !== 'revoked' && pricing?.inputMicroUsdPerMillionTokens === snapshot.inputMicroUsdPerMillionTokens && pricing.outputMicroUsdPerMillionTokens === snapshot.outputMicroUsdPerMillionTokens && pricing.source === snapshot.pricingSource && pricing.asOf === snapshot.pricingAsOf
 }
 function costPartMicroUsd(tokens: number, rate: MicroUsd): MicroUsd | undefined {
   if (!Number.isSafeInteger(tokens) || tokens < 0) return undefined
@@ -166,6 +171,8 @@ async function reserve(
   provider: IntegrationProvider,
   job: AIJob,
   now: Date,
+  snapshot?: AIConfigurationSnapshot,
+  executionKey?: string,
 ): Promise<Reservation | undefined> {
   const usageMonth = monthAt(now);
   try {
@@ -180,7 +187,8 @@ async function reserve(
       if (
         current.provider !== provider ||
         !current.encryptedCredential ||
-        current.health === "revoked"
+        current.health === "revoked" ||
+        (snapshot && !sameSnapshot(current, snapshot))
       )
         return undefined;
       const pricing = pricingFor(current);
@@ -218,11 +226,18 @@ async function reserve(
         (cap !== undefined && used + reservedMicroUsd > cap)
       )
         return undefined;
+      const key = executionKey ?? randomUUID();
+      const prior = await payload.find({ collection: 'provider-usage-reservations', where: { executionKey: { equals: key } }, limit: 1, depth: 0, overrideAccess: true, req })
+      if (prior.docs[0]) {
+        const row = prior.docs[0] as unknown as UsageReservation
+        if (row.configuration !== current.id || row.state !== 'reserved') return undefined
+        return { id: row.id, config: current, pricing, reservedMicroUsd: row.reservedMicroUsd, usageMonth: row.usageMonth }
+      }
       const row = (await payload.create({
         collection: "provider-usage-reservations",
         data: {
           configuration: current.id,
-          executionKey: randomUUID(),
+          executionKey: key,
           usageMonth,
           reservedMicroUsd,
           state: "reserved",
@@ -328,15 +343,17 @@ async function settle(
   });
 }
 /** Executes an in-product job from encrypted persisted configuration without exposing credentials or provider diagnostics. */
-export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number } = {}): Promise<AIJobResult> {
+export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number; configurationSnapshot?: AIConfigurationSnapshot[]; executionKey?: (provider: IntegrationProvider) => string } = {}): Promise<AIJobResult> {
   if (!job.input || job.input.length > 100_000 || !Number.isSafeInteger(job.maxOutputTokens) || job.maxOutputTokens < 1 || job.maxOutputTokens > MAX_OUTPUT_TOKENS) throw new Error('AI_JOB_UNAVAILABLE')
   const now = options.now ?? new Date()
   const attempt = async (provider: IntegrationProvider): Promise<Attempt & { usageCostMicroUsd?: MicroUsd | null; reservedMicroUsd?: MicroUsd; usageCostStatus?: 'actual' | 'reserved' }> => {
     // AIJob has no image bytes or media reference. Sending text would silently downgrade an image job.
     if (job.requiresImage && !providerCapabilities[provider].imageInput) return { outcome: 'unavailable' }
-    const config = await configuration(payload, provider)
-    if (!config || !config.encryptedCredential || config.health === 'revoked') return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
-    const reservation = await reserve(payload, config.id, provider, job, now)
+    const snapshot = options.configurationSnapshot?.find(candidate => candidate.provider === provider)
+    if (options.configurationSnapshot && !snapshot) return { outcome: 'rejected' }
+    const config = snapshot ? await payload.findByID({ collection: 'integration-configurations', id: snapshot.id, depth: 0, overrideAccess: true }) as unknown as StoredConfiguration : await configuration(payload, provider)
+    if (!config || !config.encryptedCredential || config.health === 'revoked' || (snapshot && !sameSnapshot(config, snapshot))) return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
+    const reservation = await reserve(payload, config.id, provider, job, now, snapshot, options.executionKey?.(provider))
     if (!reservation) return { outcome: 'unavailable' }
     let credential: string
     try { credential = decryptCredential(reservation.config.encryptedCredential!, provider) } catch { await settle(payload, reservation, undefined, 'rejected', now); return { outcome: 'rejected' } }

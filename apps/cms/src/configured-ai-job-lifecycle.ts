@@ -1,13 +1,14 @@
 import { randomUUID, createHash } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
+import type { IntegrationProvider } from './integrations'
 
 const leaseMs = 60_000
 const retries = 8
 const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}` : JSON.stringify(value)
 const proof = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
 type Job = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; resultDigest?: string | null }
-export type ConfiguredAICompletion = { output: string; usageCostMicroUsd: number | null; reservedMicroUsd: number; costStatus: 'actual' | 'reserved' }
+export type ConfiguredAICompletion = { output: string; usageCostMicroUsd: number | null; reservedMicroUsd: number; costStatus: 'actual' | 'reserved'; usedProvider?: IntegrationProvider; fallbackUsed?: boolean }
 const expired = (job: Job, now: number) => {
   const leaseUntil = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN
   return !Number.isFinite(leaseUntil) || leaseUntil <= now
@@ -33,7 +34,7 @@ function completion(value: unknown): asserts value is ConfiguredAICompletion {
   if (!value || typeof value !== 'object') throw new Error('COMPLETION_INVALID')
   const candidate = value as Partial<ConfiguredAICompletion>
   const { output, usageCostMicroUsd, reservedMicroUsd, costStatus } = candidate
-  if (Object.keys(candidate).length !== 4 || !['output', 'usageCostMicroUsd', 'reservedMicroUsd', 'costStatus'].every(key => Object.hasOwn(candidate, key)) || typeof output !== 'string' || output.length > 100_000 || !Number.isSafeInteger(reservedMicroUsd) || reservedMicroUsd === undefined || reservedMicroUsd < 0 || (usageCostMicroUsd !== null && (!Number.isSafeInteger(usageCostMicroUsd) || usageCostMicroUsd === undefined || usageCostMicroUsd < 0)) || (costStatus !== 'actual' && costStatus !== 'reserved') || (costStatus === 'actual' && usageCostMicroUsd === null) || (costStatus === 'reserved' && usageCostMicroUsd !== null)) throw new Error('COMPLETION_INVALID')
+  if (!Object.keys(candidate).every(key => ['output', 'usageCostMicroUsd', 'reservedMicroUsd', 'costStatus', 'usedProvider', 'fallbackUsed'].includes(key)) || !['output', 'usageCostMicroUsd', 'reservedMicroUsd', 'costStatus'].every(key => Object.hasOwn(candidate, key)) || typeof output !== 'string' || output.length > 100_000 || !Number.isSafeInteger(reservedMicroUsd) || reservedMicroUsd === undefined || reservedMicroUsd < 0 || (usageCostMicroUsd !== null && (!Number.isSafeInteger(usageCostMicroUsd) || usageCostMicroUsd === undefined || usageCostMicroUsd < 0)) || (costStatus !== 'actual' && costStatus !== 'reserved') || (costStatus === 'actual' && usageCostMicroUsd === null) || (costStatus === 'reserved' && usageCostMicroUsd !== null) || (candidate.usedProvider !== undefined && !['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(candidate.usedProvider)) || (candidate.fallbackUsed !== undefined && typeof candidate.fallbackUsed !== 'boolean')) throw new Error('COMPLETION_INVALID')
 }
 
 export async function claimConfiguredAIJob(payload: Payload, actor = 'worker', now = Date.now()) {
@@ -85,8 +86,30 @@ export async function completeConfiguredAIJob(payload: Payload, id: string, toke
     if (expired(job, now)) throw new Error('LEASE_INVALID')
     if (!job.dispatchStartedAt) throw new Error('DISPATCH_NOT_BEGUN')
     if (job.state !== 'running' || expired(job, now)) throw new Error('LEASE_INVALID')
-    const completed = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'completed', result: canonical(result), resultDigest, costStatus: result.costStatus }, overrideAccess: true, req })
+    const completed = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'completed', result: canonical(result), resultDigest, costStatus: result.costStatus, usedProvider: result.usedProvider ?? null, fallbackUsed: result.fallbackUsed ?? false }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'ai.job_completed', detail: { job: id, resultDigest, costStatus: result.costStatus } }, overrideAccess: true, req })
     return completed
+  })
+}
+
+/** A begun job may have reached a provider. It is never returned to the queue. */
+export async function manualReviewConfiguredAIJob(payload: Payload, id: string, reason: string) {
+  return transition(payload, async req => {
+    const job = await leaseJob(payload, id, req)
+    if (job.state === 'completed') return job
+    const updated = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'manual-review', failureCode: reason, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: id, reason } }, overrideAccess: true, req })
+    return updated
+  })
+}
+
+/** A pre-dispatch validation failure is safe to close because no provider request was sent. */
+export async function failUnbegunConfiguredAIJob(payload: Payload, id: string, token: string, reason: string, now = Date.now()) {
+  return transition(payload, async req => {
+    const job = await leaseJob(payload, id, req)
+    if (job.state !== 'running' || job.leaseToken !== token || expired(job, now) || job.dispatchStartedAt) throw new Error('LEASE_INVALID')
+    const updated = await payload.update({ collection: 'configured-ai-jobs', id, data: { state: 'failed', failureCode: reason, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'ai.job_failed', detail: { job: id, reason } }, overrideAccess: true, req })
+    return updated
   })
 }

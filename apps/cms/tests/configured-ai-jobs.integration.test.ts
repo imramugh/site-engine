@@ -9,9 +9,9 @@ process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'synthetic-configured-ai-job-payload-secret-that-is-long-enough'
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
-let payload: any; let enqueueConfiguredAIJob: any; let lifecycle: any; let route: any; let ownerID: string
-beforeAll(async () => { const [{ getPayload }, config, service] = await Promise.all([import('payload'), import('../payload.config.js'), import('../src/configured-ai-jobs.js')]); payload = await getPayload({ config: config.default }); enqueueConfiguredAIJob = service.enqueueConfiguredAIJob; route = await import('../app/api/ai-jobs/route.js'); lifecycle = await import('../src/configured-ai-job-lifecycle.js') })
-beforeEach(async () => { await payload.db.client.execute('DELETE FROM configured_ai_jobs'); await payload.db.client.execute('DELETE FROM auth_sessions'); await payload.db.client.execute('DELETE FROM integration_configurations'); await payload.db.client.execute('DELETE FROM audit_events'); await payload.db.client.execute('DELETE FROM users'); const owner = await payload.create({ collection: 'users', data: { email: 'owner@example.test', name: 'Owner', roles: ['owner'] }, overrideAccess: true }); ownerID = owner.id; await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: 'v1.synthetic', credentialFingerprint: 'fingerprint', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-04T00:00:00.000Z' }, overrideAccess: true }) })
+let payload: any; let enqueueConfiguredAIJob: any; let lifecycle: any; let executor: any; let route: any; let encryptCredential: any; let ownerID: string
+beforeAll(async () => { const [{ getPayload }, config, service, integration] = await Promise.all([import('payload'), import('../payload.config.js'), import('../src/configured-ai-jobs.js'), import('../src/integrations.js')]); payload = await getPayload({ config: config.default }); enqueueConfiguredAIJob = service.enqueueConfiguredAIJob; route = await import('../app/api/ai-jobs/route.js'); lifecycle = await import('../src/configured-ai-job-lifecycle.js'); executor = await import('../src/configured-ai-job-execution.js'); encryptCredential = integration.encryptCredential })
+beforeEach(async () => { await payload.db.client.execute('DELETE FROM provider_usage_reservations'); await payload.db.client.execute('DELETE FROM configured_ai_jobs'); await payload.db.client.execute('DELETE FROM auth_sessions'); await payload.db.client.execute('DELETE FROM integration_configurations'); await payload.db.client.execute('DELETE FROM audit_events'); await payload.db.client.execute('DELETE FROM users'); const owner = await payload.create({ collection: 'users', data: { email: 'owner@example.test', name: 'Owner', roles: ['owner'] }, overrideAccess: true }); ownerID = owner.id; await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'fingerprint', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-04T00:00:00.000Z' }, overrideAccess: true }) })
 async function session(user: any, fresh = true) { const { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } = await import('../src/identity.js'); const token = newOpaqueToken(); const now = Date.now(); await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: new Date(now - (fresh ? 0 : 16 * 60_000)).toISOString(), lastSeenAt: new Date(now).toISOString(), expiresAt: new Date(now + 60 * 60_000).toISOString() }, overrideAccess: true }); return `${cookieName(SESSION_COOKIE)}=${token}` }
 const input = { provider: 'openai', input: 'bounded prompt', maxOutputTokens: 12, idempotencyKey: 'same-request-key-1234' } as const
 
@@ -137,5 +137,48 @@ describe('configured AI job lease lifecycle', () => {
     await expect(lifecycle.renewConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)).rejects.toThrow('LEASE_INVALID')
     await expect(lifecycle.beginConfiguredAIJob(payload, job.job.id, claim.leaseToken, 1_001)).rejects.toThrow('LEASE_INVALID')
     expect(await lifecycle.claimConfiguredAIJob(payload, 'worker', 1_001)).toBeUndefined()
+  })
+})
+
+describe('configured AI job CMS execution', () => {
+  const now = new Date('2026-10-04T12:00:00.000Z')
+  const queued = () => enqueueConfiguredAIJob(payload, ownerID, { ...input, idempotencyKey: `execution-${randomBytes(8).toString('hex')}` })
+  async function claim() { return lifecycle.claimConfiguredAIJob(payload, 'cms-executor', now.getTime()) }
+  async function usableConfiguration() {
+    const configuration = (await payload.find({ collection: 'integration-configurations', limit: 1, overrideAccess: true })).docs[0]
+    return configuration
+  }
+  const answer = () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'safe result' }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+
+  it('claims, begins, executes and completes through SQLite with immutable provider metadata', async () => {
+    await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async () => { calls += 1; return answer() } })).resolves.toMatchObject({ id: queuedJob.job.id, state: 'completed', usedProvider: 'openai', fallbackUsed: false, costStatus: 'actual' })
+    expect(calls).toBe(1)
+    const reservations = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
+    expect(reservations.docs).toHaveLength(1)
+    expect(reservations.docs[0]).toMatchObject({ executionKey: executor.configuredAIReservationKey(queuedJob.job.id, 'openai'), state: 'settled', settledMicroUsd: 2 })
+    const audit = await payload.find({ collection: 'audit-events', overrideAccess: true })
+    expect(JSON.stringify(audit.docs)).not.toContain('bounded prompt')
+    expect(JSON.stringify(audit.docs)).not.toContain('safe result')
+  })
+
+  it('fails closed before dispatch when the snapshotted configuration rotates', async () => {
+    const configuration = await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { model: 'rotated-model' }, overrideAccess: true })
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async () => { calls += 1; return answer() } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(0)
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'failed', failureCode: 'CONFIGURATION_SNAPSHOT_STALE', dispatchStartedAt: null })
+  })
+
+  it('retains an ambiguous reservation and never dispatches or reserves twice on retry', async () => {
+    await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0
+    const ambiguous = async () => { calls += 1; throw new Error('connection dropped after provider acceptance') }
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: ambiguous })).rejects.toThrow()
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: ambiguous })).rejects.toThrow()
+    expect(calls).toBe(1)
+    const reservations = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
+    expect(reservations.docs).toHaveLength(1)
+    expect(reservations.docs[0]).toMatchObject({ executionKey: executor.configuredAIReservationKey(queuedJob.job.id, 'openai'), state: 'reserved', settledMicroUsd: null })
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN' })
   })
 })

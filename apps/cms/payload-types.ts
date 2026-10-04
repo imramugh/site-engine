@@ -761,6 +761,8 @@ export interface ConfiguredAiJob {
   result?: string | null;
   resultDigest?: string | null;
   costStatus?: ('actual' | 'reserved') | null;
+  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  fallbackUsed?: boolean | null;
   failureCode?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -1553,6 +1555,8 @@ export interface ConfiguredAiJobsSelect<T extends boolean = true> {
   result?: T;
   resultDigest?: T;
   costStatus?: T;
+  usedProvider?: T;
+  fallbackUsed?: T;
   failureCode?: T;
   updatedAt?: T;
   createdAt?: T;
