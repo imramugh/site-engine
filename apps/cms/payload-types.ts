@@ -80,6 +80,7 @@ export interface Config {
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
+    'provider-usage-reservations': ProviderUsageReservation;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     'mail-drafts': MailDraft;
@@ -111,6 +112,7 @@ export interface Config {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
+    'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
@@ -544,6 +546,29 @@ export interface IntegrationConfiguration {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "provider-usage-reservations".
+ */
+export interface ProviderUsageReservation {
+  id: string;
+  configuration: string | IntegrationConfiguration;
+  executionKey: string;
+  usageMonth: string;
+  reservedMicroUsd: number;
+  settledMicroUsd?: number | null;
+  state: 'reserved' | 'settled' | 'released';
+  configModel: string;
+  credentialFingerprint?: string | null;
+  inputMicroUsdPerMillionTokens: number;
+  outputMicroUsdPerMillionTokens: number;
+  pricingSource: string;
+  pricingAsOf: string;
+  requestInputTokens: number;
+  maxOutputTokens: number;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -972,6 +997,10 @@ export interface PayloadLockedDocument {
         value: string | IntegrationConfiguration;
       } | null)
     | ({
+        relationTo: 'provider-usage-reservations';
+        value: string | ProviderUsageReservation;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -1335,6 +1364,28 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
   credentialFingerprint?: T;
   health?: T;
   testedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "provider-usage-reservations_select".
+ */
+export interface ProviderUsageReservationsSelect<T extends boolean = true> {
+  configuration?: T;
+  executionKey?: T;
+  usageMonth?: T;
+  reservedMicroUsd?: T;
+  settledMicroUsd?: T;
+  state?: T;
+  configModel?: T;
+  credentialFingerprint?: T;
+  inputMicroUsdPerMillionTokens?: T;
+  outputMicroUsdPerMillionTokens?: T;
+  pricingSource?: T;
+  pricingAsOf?: T;
+  requestInputTokens?: T;
+  maxOutputTokens?: T;
   updatedAt?: T;
   createdAt?: T;
 }

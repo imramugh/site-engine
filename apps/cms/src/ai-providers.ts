@@ -1,4 +1,5 @@
-import type { Payload } from 'payload'
+import { randomUUID } from 'node:crypto'
+import type { Payload, PayloadRequest } from 'payload'
 import { decryptCredential, type IntegrationProvider } from './integrations'
 import { withPayloadTransaction } from './auth-transaction'
 
@@ -14,17 +15,19 @@ export const providerCapabilities: Record<IntegrationProvider, ProviderCapabilit
   openrouter: { imageInput: false, endpoint: 'https://openrouter.ai/api/v1/chat/completions', auth: 'bearer' },
 }
 export type ProviderFetch = (request: Request) => Promise<Response>
-export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd }
+export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd | null; reservedMicroUsd: MicroUsd; usageCostStatus: 'actual' | 'reserved' }
 type TokenUsage = { inputTokens: number; outputTokens: number }
 type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' }
 type StoredConfiguration = Record<string, unknown> & { id: string; provider: IntegrationProvider; model: string; encryptedCredential?: string | null; credentialFingerprint?: string | null; monthlyCapMicroUsd?: number | null; monthlyUsageMicroUsd?: number | null; usageMonth?: string | null; health?: string | null; inputMicroUsdPerMillionTokens?: number | null; outputMicroUsdPerMillionTokens?: number | null; pricingSource?: string | null; pricingAsOf?: string | null }
 type Pricing = { inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; source: string; asOf: string }
-type Reservation = { config: StoredConfiguration; pricing: Pricing; reservedMicroUsd: MicroUsd }
+type UsageReservation = Record<string, unknown> & { id: string; configuration: string | { id: string }; executionKey: string; usageMonth: string; reservedMicroUsd: number; settledMicroUsd?: number | null; state: 'reserved' | 'settled' | 'released' }
+type Reservation = { id: string; config: StoredConfiguration; pricing: Pricing; reservedMicroUsd: MicroUsd; usageMonth: string }
 const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const text = (value: unknown) => typeof value === 'string' ? value : undefined
+const sumSafe = (values: unknown[]): number | undefined => { let total = 0; for (const value of values) { const amount = integer(value); if (amount === undefined || !Number.isSafeInteger(total + amount)) return undefined; total += amount } return total }
 
 function pricingFor(config: StoredConfiguration): Pricing | undefined {
   const input = integer(config.inputMicroUsdPerMillionTokens); const output = integer(config.outputMicroUsdPerMillionTokens); const source = text(config.pricingSource); const asOf = text(config.pricingAsOf)
@@ -67,7 +70,7 @@ function geminiUsage(details: Record<string, unknown> | undefined): TokenUsage |
   return { inputTokens, outputTokens: candidates + thoughts }
 }
 function parsed(provider: IntegrationProvider, body: Record<string, unknown>): { output: string; usage?: TokenUsage } | undefined {
-  if (provider === 'openai') { const output = Array.isArray(body.output) ? body.output.flatMap((item) => Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content : []).filter((part) => (part as Record<string, unknown>).type === 'output_text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
+  if (provider === 'openai') { const output = Array.isArray(body.output) ? body.output.filter((item) => (item as Record<string, unknown>).type === 'message').flatMap((item) => Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content : []).filter((part) => (part as Record<string, unknown>).type === 'output_text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
   if (provider === 'anthropic') { const output = Array.isArray(body.content) ? body.content.filter((part) => (part as Record<string, unknown>).type === 'text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
   if (provider === 'google-gemini') { const candidate = Array.isArray(body.candidates) ? body.candidates[0] as Record<string, unknown> | undefined : undefined; const content = candidate?.content as Record<string, unknown> | undefined; const output = Array.isArray(content?.parts) ? content.parts.filter((part) => (part as Record<string, unknown>).thought !== true).map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usageMetadata as Record<string, unknown> | undefined; return output ? { output, usage: geminiUsage(details) } : undefined }
   const choice = Array.isArray(body.choices) ? body.choices[0] as Record<string, unknown> | undefined : undefined; const message = choice?.message as Record<string, unknown> | undefined; const output = text(message?.content); const details = body.usage as Record<string, unknown> | undefined
@@ -85,41 +88,250 @@ export async function invokeProvider(provider: IntegrationProvider, credential: 
     return result ? { outcome: 'success', ...result } : { outcome: 'unavailable' }
   } catch { return { outcome: 'unavailable' } } finally { if (timer) clearTimeout(timer) }
 }
-async function configuration(payload: Payload, provider: IntegrationProvider): Promise<StoredConfiguration | undefined> { const result = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: provider } }, limit: 1, depth: 0, overrideAccess: true }); return result.docs[0] as unknown as StoredConfiguration | undefined }
-async function reserve(payload: Payload, configID: string, provider: IntegrationProvider, job: AIJob, now: Date): Promise<Reservation | undefined> {
-  const month = monthAt(now)
+async function configuration(
+  payload: Payload,
+  provider: IntegrationProvider,
+): Promise<StoredConfiguration | undefined> {
+  const result = await payload.find({
+    collection: "integration-configurations",
+    where: { provider: { equals: provider } },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  });
+  return result.docs[0] as unknown as StoredConfiguration | undefined;
+}
+async function periodReservations(
+  payload: Payload,
+  req: PayloadRequest,
+  configuration: string,
+  usageMonth: string,
+): Promise<UsageReservation[] | undefined> {
+  const rows: UsageReservation[] = [];
+  let page = 1;
+  while (true) {
+    const result = await payload.find({
+      collection: "provider-usage-reservations",
+      where: {
+        and: [
+          { configuration: { equals: configuration } },
+          { usageMonth: { equals: usageMonth } },
+        ],
+      },
+      depth: 0,
+      limit: 100,
+      page,
+      overrideAccess: true,
+      req,
+    });
+    rows.push(...(result.docs as unknown as UsageReservation[]));
+    if (!result.hasNextPage) return rows;
+    page += 1;
+    if (page > 100_000) return undefined;
+  }
+}
+function periodTotal(rows: UsageReservation[]): MicroUsd | undefined {
+  return sumSafe(
+    rows.map((row) =>
+      row.state === "reserved"
+        ? row.reservedMicroUsd
+        : row.state === "settled"
+          ? row.settledMicroUsd
+          : 0,
+    ),
+  );
+}
+async function projectPeriod(
+  payload: Payload,
+  req: PayloadRequest,
+  config: StoredConfiguration,
+  usageMonth: string,
+): Promise<void> {
+  if (config.usageMonth !== usageMonth) return;
+  const rows = await periodReservations(payload, req, config.id, usageMonth);
+  const total = rows && periodTotal(rows);
+  if (total === undefined) throw new Error("AI_JOB_ACCOUNTING_UNAVAILABLE");
+  await payload.update({
+    collection: "integration-configurations",
+    id: config.id,
+    data: { monthlyUsageMicroUsd: total, usageMonth } as never,
+    overrideAccess: true,
+    req,
+    context: { providerUsageLifecycle: true },
+  });
+}
+async function reserve(
+  payload: Payload,
+  configID: string,
+  provider: IntegrationProvider,
+  job: AIJob,
+  now: Date,
+): Promise<Reservation | undefined> {
+  const usageMonth = monthAt(now);
   try {
     return await withPayloadTransaction(payload, async (req) => {
-      const current = await payload.findByID({ collection: 'integration-configurations', id: configID, depth: 0, overrideAccess: true, req }) as unknown as StoredConfiguration
-      if (current.provider !== provider || !current.encryptedCredential || current.health === 'revoked') return undefined
-      const pricing = pricingFor(current); if (!pricing) return undefined
-      const reservedMicroUsd = costMicroUsd(reservedInputTokens(provider, current.model, job.input, job.maxOutputTokens), job.maxOutputTokens, pricing)
-      if (reservedMicroUsd === undefined) return undefined
-      const used = current.usageMonth === month ? integer(current.monthlyUsageMicroUsd) ?? 0 : 0; const cap = current.monthlyCapMicroUsd === null || current.monthlyCapMicroUsd === undefined ? undefined : integer(current.monthlyCapMicroUsd)
-      if ((current.monthlyCapMicroUsd !== null && current.monthlyCapMicroUsd !== undefined && cap === undefined) || !Number.isSafeInteger(used + reservedMicroUsd) || (cap !== undefined && used + reservedMicroUsd > cap)) return undefined
-      await payload.update({ collection: 'integration-configurations', id: current.id, data: { monthlyUsageMicroUsd: used + reservedMicroUsd, usageMonth: month } as never, overrideAccess: true, req })
-      return { config: current, pricing, reservedMicroUsd }
-    })
-  } catch { return undefined }
+      const current = (await payload.findByID({
+        collection: "integration-configurations",
+        id: configID,
+        depth: 0,
+        overrideAccess: true,
+        req,
+      })) as unknown as StoredConfiguration;
+      if (
+        current.provider !== provider ||
+        !current.encryptedCredential ||
+        current.health === "revoked"
+      )
+        return undefined;
+      const pricing = pricingFor(current);
+      if (!pricing) return undefined;
+      const requestInputTokens = reservedInputTokens(
+        provider,
+        current.model,
+        job.input,
+        job.maxOutputTokens,
+      );
+      const reservedMicroUsd = costMicroUsd(
+        requestInputTokens,
+        job.maxOutputTokens,
+        pricing,
+      );
+      const cap =
+        current.monthlyCapMicroUsd === null ||
+        current.monthlyCapMicroUsd === undefined
+          ? undefined
+          : integer(current.monthlyCapMicroUsd);
+      const rows = await periodReservations(
+        payload,
+        req,
+        current.id,
+        usageMonth,
+      );
+      const used = rows && periodTotal(rows);
+      if (
+        reservedMicroUsd === undefined ||
+        used === undefined ||
+        (current.monthlyCapMicroUsd !== null &&
+          current.monthlyCapMicroUsd !== undefined &&
+          cap === undefined) ||
+        !Number.isSafeInteger(used + reservedMicroUsd) ||
+        (cap !== undefined && used + reservedMicroUsd > cap)
+      )
+        return undefined;
+      const row = (await payload.create({
+        collection: "provider-usage-reservations",
+        data: {
+          configuration: current.id,
+          executionKey: randomUUID(),
+          usageMonth,
+          reservedMicroUsd,
+          state: "reserved",
+          configModel: current.model,
+          credentialFingerprint: current.credentialFingerprint ?? null,
+          inputMicroUsdPerMillionTokens: pricing.inputMicroUsdPerMillionTokens,
+          outputMicroUsdPerMillionTokens:
+            pricing.outputMicroUsdPerMillionTokens,
+          pricingSource: pricing.source,
+          pricingAsOf: pricing.asOf,
+          requestInputTokens,
+          maxOutputTokens: job.maxOutputTokens,
+        } as never,
+        overrideAccess: true,
+        req,
+        context: { providerUsageLifecycle: true },
+      })) as unknown as UsageReservation;
+      await payload.update({
+        collection: "integration-configurations",
+        id: current.id,
+        data: {
+          monthlyUsageMicroUsd: used + reservedMicroUsd,
+          usageMonth,
+        } as never,
+        overrideAccess: true,
+        req,
+        context: { providerUsageLifecycle: true },
+      });
+      return {
+        id: row.id,
+        config: current,
+        pricing,
+        reservedMicroUsd,
+        usageMonth,
+      };
+    });
+  } catch {
+    return undefined;
+  }
 }
-async function settle(payload: Payload, reservation: Reservation, actualMicroUsd: MicroUsd | undefined, health: 'connected' | 'unavailable' | 'rejected', now: Date): Promise<void> {
-  const month = monthAt(now)
+async function settle(
+  payload: Payload,
+  reservation: Reservation,
+  actualMicroUsd: MicroUsd | undefined,
+  health: "connected" | "unavailable" | "rejected",
+  now: Date,
+): Promise<void> {
   await withPayloadTransaction(payload, async (req) => {
-    const current = await payload.findByID({ collection: 'integration-configurations', id: reservation.config.id, depth: 0, overrideAccess: true, req }) as unknown as StoredConfiguration
-    if (!current.encryptedCredential || current.health === 'revoked' || current.encryptedCredential !== reservation.config.encryptedCredential || current.credentialFingerprint !== reservation.config.credentialFingerprint) return
-    const used = current.usageMonth === month ? integer(current.monthlyUsageMicroUsd) ?? 0 : 0
-    // Only rejected credentials are known not to have been billable. Ambiguous outcomes retain their reservation.
-    const charge = health === 'rejected' ? 0 : actualMicroUsd ?? reservation.reservedMicroUsd
-    const next = used - reservation.reservedMicroUsd + charge
-    if (!Number.isSafeInteger(next) || next < 0) throw new Error('AI_JOB_ACCOUNTING_UNAVAILABLE')
-    await payload.update({ collection: 'integration-configurations', id: current.id, data: { monthlyUsageMicroUsd: next, usageMonth: month, health, testedAt: now.toISOString() } as never, overrideAccess: true, req })
-  })
+    const row = (await payload.findByID({
+      collection: "provider-usage-reservations",
+      id: reservation.id,
+      depth: 0,
+      overrideAccess: true,
+      req,
+    })) as unknown as UsageReservation;
+    if (
+      row.state !== "reserved" ||
+      row.usageMonth !== reservation.usageMonth ||
+      row.executionKey.length < 1
+    )
+      return;
+    // A rejected credential is the only outcome known not to be billable. A
+    // timeout, malformed body, or missing usage stays reserved rather than being
+    // recorded as an observed charge.
+    if (health === "rejected" || actualMicroUsd !== undefined) {
+      const charge = health === "rejected" ? 0 : actualMicroUsd;
+      if (integer(charge) === undefined)
+        throw new Error("AI_JOB_ACCOUNTING_UNAVAILABLE");
+      await payload.update({
+        collection: "provider-usage-reservations",
+        id: row.id,
+        data: {
+          state: health === "rejected" ? "released" : "settled",
+          settledMicroUsd: charge,
+        } as never,
+        overrideAccess: true,
+        req,
+        context: { providerUsageLifecycle: true },
+      });
+    }
+    const current = (await payload.findByID({
+      collection: "integration-configurations",
+      id: reservation.config.id,
+      depth: 0,
+      overrideAccess: true,
+      req,
+    })) as unknown as StoredConfiguration;
+    await projectPeriod(payload, req, current, reservation.usageMonth);
+    if (
+      current.encryptedCredential === reservation.config.encryptedCredential &&
+      current.credentialFingerprint ===
+        reservation.config.credentialFingerprint &&
+      current.health !== "revoked"
+    )
+      await payload.update({
+        collection: "integration-configurations",
+        id: current.id,
+        data: { health, testedAt: now.toISOString() } as never,
+        overrideAccess: true,
+        req,
+        context: { providerUsageLifecycle: true },
+      });
+  });
 }
 /** Executes an in-product job from encrypted persisted configuration without exposing credentials or provider diagnostics. */
 export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number } = {}): Promise<AIJobResult> {
   if (!job.input || job.input.length > 100_000 || !Number.isSafeInteger(job.maxOutputTokens) || job.maxOutputTokens < 1 || job.maxOutputTokens > MAX_OUTPUT_TOKENS) throw new Error('AI_JOB_UNAVAILABLE')
   const now = options.now ?? new Date()
-  const attempt = async (provider: IntegrationProvider): Promise<Attempt & { usageCostMicroUsd?: MicroUsd }> => {
+  const attempt = async (provider: IntegrationProvider): Promise<Attempt & { usageCostMicroUsd?: MicroUsd | null; reservedMicroUsd?: MicroUsd; usageCostStatus?: 'actual' | 'reserved' }> => {
     // AIJob has no image bytes or media reference. Sending text would silently downgrade an image job.
     if (job.requiresImage && !providerCapabilities[provider].imageInput) return { outcome: 'unavailable' }
     const config = await configuration(payload, provider)
@@ -131,10 +343,10 @@ export async function executeConfiguredAIJob(payload: Payload, job: AIJob, optio
     const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
     await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome, now)
-    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? reservation.reservedMicroUsd } : result
+    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : result
   }
   const primary = await attempt(job.provider)
-  if (primary.outcome === 'success') return { provider: job.provider, fallbackUsed: false, output: primary.output, usageCostMicroUsd: primary.usageCostMicroUsd! }
-  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) { const fallback = await attempt(job.fallbackProvider); if (fallback.outcome === 'success') return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: fallback.usageCostMicroUsd! } }
+  if (primary.outcome === 'success') return { provider: job.provider, fallbackUsed: false, output: primary.output, usageCostMicroUsd: primary.usageCostMicroUsd!, reservedMicroUsd: primary.reservedMicroUsd!, usageCostStatus: primary.usageCostStatus! }
+  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) { const fallback = await attempt(job.fallbackProvider); if (fallback.outcome === 'success') return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: fallback.usageCostMicroUsd!, reservedMicroUsd: fallback.reservedMicroUsd!, usageCostStatus: fallback.usageCostStatus! } }
   throw new Error('AI_JOB_UNAVAILABLE')
 }
