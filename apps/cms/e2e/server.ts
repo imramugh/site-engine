@@ -18,8 +18,10 @@ import { deriveRoutes } from '@site-engine/engine'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
+import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
@@ -108,6 +110,7 @@ process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
 process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
+const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -267,6 +270,11 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && request.url === '/__e2e/axe.js') {
+    response.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
+    response.end(readFileSync(axeSourcePath))
+    return
+  }
   if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
     void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
       if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
@@ -359,9 +367,25 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     ? join(process.cwd(), '..', 'site', 'dist', 'general', 'gallery', 'index.html')
     : pathname === '/careers/synthetic-application-engineer' || pathname === '/careers/synthetic-application-engineer/'
       ? join(process.cwd(), '..', 'site', 'dist', 'careers', 'synthetic-application-engineer', 'index.html')
+      : pathname === '/on-page-review/review-target' || pathname === '/on-page-review/review-target/'
+        ? join(process.cwd(), '..', 'site', 'dist', 'on-page-review', 'review-target', 'index.html')
       : pathname === '/application-form.js' ? join(process.cwd(), '..', 'site', 'dist', 'application-form.js')
     : pathname.startsWith('/_astro/') ? join(process.cwd(), '..', 'site', 'dist', pathname) : undefined
   if (request.method === 'GET' && staticPath && existsSync(staticPath)) {
+    if (staticPath.endsWith('.html') && (pathname === '/on-page-review/review-target' || pathname === '/on-page-review/review-target/')) {
+      void pageReviewEntry(new Request(`${cmsOrigin}/api/editorial/page-review-entry`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? pathname } })).then((guard) => {
+        const setID = guard.headers.get('x-page-review-set')
+        const source = readFileSync(staticPath, 'utf8')
+        const body = guard.status === 200 && setID ? source.replace('</body>', `<script defer src="/api/editorial/page-review-bootstrap" data-page-review-set="${setID}"></script></body>`) : source
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': guard.status === 200 ? 'private, no-store' : 'no-cache',
+          'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self'; frame-ancestors 'self'; object-src 'none'",
+        })
+        response.end(body)
+      }).catch(() => { response.writeHead(502, { 'cache-control': 'no-store' }); response.end() })
+      return
+    }
     response.writeHead(200, { 'content-type': staticPath.endsWith('.html') ? 'text/html; charset=utf-8' : staticPath.endsWith('.css') ? 'text/css' : 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
     response.end(readFileSync(staticPath))
     return

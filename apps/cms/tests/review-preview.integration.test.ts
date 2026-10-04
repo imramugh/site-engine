@@ -21,6 +21,7 @@ const { default: config } = await import('../payload.config.js')
 const reviewSessionRoute = await import('../app/api/auth/preview/review-session/route.js')
 const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 const reviewModeRoute = await import('../app/api/editorial/review/[id]/route.js')
+const pageReviewEntryRoute = await import('../app/api/editorial/page-review-entry/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -121,8 +122,19 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect((await call(await reviewHeaders('editor'))).status).toBe(403)
     expect((await call(new Headers())).status).toBe(401)
 
+    const entry = (headers: Headers, path: string, internal = false) => pageReviewEntryRoute.GET(new Request(`http://cms.test/api/editorial/page-review-entry${internal ? '' : `?path=${encodeURIComponent(path)}`}`, { headers: { cookie: headers.get('cookie') ?? '', ...(internal ? { 'x-original-uri': path } : {}) } }))
+    const internalEntry = await entry(current.headers, '/', true)
+    expect(internalEntry.status).toBe(200)
+    expect(internalEntry.headers.get('x-page-review-set')).toBe(String(current.set.id))
+    expect(internalEntry.headers.get('cache-control')).toBe('private, no-store')
+    await expect((await entry(current.headers, '/')).json()).resolves.toMatchObject({ entries: [{ id: current.set.id, path: '/', name: 'on-page-review' }] })
+    expect((await entry(current.headers, '/unaffected', true)).status).toBe(403)
+    expect((await entry(await reviewHeaders('editor'), '/', true)).status).toBe(403)
+    expect((await entry(new Headers(), '/', true)).status).toBe(401)
+
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
     expect((await call(current.headers)).status).toBe(409)
+    expect((await entry(current.headers, '/', true)).status).toBe(403)
   })
 
   it('requires a freshly authenticated reviewer for approval', async () => {
