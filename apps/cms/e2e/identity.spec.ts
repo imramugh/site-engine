@@ -239,7 +239,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   }, value)
   const completed = await reviewer.request.post('/api/internal/preview-jobs/complete', { headers: workerHeaders, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'b'.repeat(64) } })
   expect(completed.ok(), await completed.text()).toBeTruthy()
-  await expect(reviewer.getByRole('status')).toContainText('Private comparison is ready for review.')
+  await expect(reviewer.getByRole('status').filter({ hasText: 'Private comparison is ready for review.' })).toContainText('ready for review')
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
