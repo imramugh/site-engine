@@ -7,7 +7,7 @@ type Integration = { id: string; provider: Provider; model: string | null; fallb
 const providers: Provider[] = ['openai', 'anthropic', 'google-gemini', 'openrouter']
 const formatTestedAt = (value: string | null | undefined) => {
   if (!value || !Number.isFinite(new Date(value).getTime())) return value ? 'recorded time unavailable' : ''
-  return new Intl.DateTimeFormat('en-CA', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Toronto', timeZoneName: 'short' }).format(new Date(value))
+  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Toronto', timeZoneName: 'short' }).format(new Date(value))
 }
 
 export function IntegrationConfiguration() {
