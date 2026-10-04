@@ -58,6 +58,10 @@ maximum output tokens at those rates. It settles from normalized input/output
 token usage (never above the conservative reservation) and keeps the full reservation when usage is absent. OpenRouter's
 reported `cost` is intentionally never used.
 
+### Internal AI worker
+
+Run the HTTP-only poller with `node apps/cms/scripts/run-ai-worker.mjs` from the repository root. It requires `AI_WORKER_CMS_ORIGIN` (an internal HTTP(S) CMS origin with no path), `AI_WORKER_TOKEN` (at least 32 bytes, independent from other worker tokens), and optionally `AI_WORKER_TIMEOUT_MS`, `AI_WORKER_IDLE_MS`, and `AI_WORKER_ERROR_MS`. The CMS route is `POST /api/internal/ai-worker/run`; keep it unavailable through every public edge or proxy. The poller has no Payload, SQLite, credential, or provider configuration access.
+
 ## SQLite transaction compatibility pin
 
 Payload 3.90.2 pins `@libsql/client` 0.14.0. This workspace scopes its package-manager
