@@ -554,8 +554,10 @@ export const ThemeSettings: CollectionConfig = {
 
 /** Credential envelopes are private operational state, never editorial content. */
 export const IntegrationConfigurations: CollectionConfig = {
-  slug: 'integration-configurations', admin: { useAsTitle: 'provider', group: 'Administration' },
-  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: freshStaff(['owner']) },
+  slug: 'integration-configurations', admin: { hidden: true },
+  // Credentials and their operational metadata move only through the audited
+  // integration route. Payload's generic REST and Admin CRUD must not bypass it.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
