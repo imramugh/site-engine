@@ -58,10 +58,18 @@ function requestFor(provider: IntegrationProvider, credential: string, model: st
   return new Request(providerCapabilities.openrouter.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
 }
 function usage(input: unknown, output: unknown): TokenUsage | undefined { const inputTokens = integer(input); const outputTokens = integer(output); return inputTokens !== undefined && outputTokens !== undefined ? { inputTokens, outputTokens } : undefined }
+function geminiUsage(details: Record<string, unknown> | undefined): TokenUsage | undefined {
+  const inputTokens = integer(details?.promptTokenCount); const candidates = integer(details?.candidatesTokenCount)
+  if (inputTokens === undefined || candidates === undefined) return undefined
+  if (details?.thoughtsTokenCount === undefined) return { inputTokens, outputTokens: candidates }
+  const thoughts = integer(details.thoughtsTokenCount)
+  if (thoughts === undefined || !Number.isSafeInteger(candidates + thoughts)) return undefined
+  return { inputTokens, outputTokens: candidates + thoughts }
+}
 function parsed(provider: IntegrationProvider, body: Record<string, unknown>): { output: string; usage?: TokenUsage } | undefined {
   if (provider === 'openai') { const output = Array.isArray(body.output) ? body.output.flatMap((item) => Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content : []).map((part) => text((part as Record<string, unknown>).text)).find(Boolean) : undefined; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
   if (provider === 'anthropic') { const output = Array.isArray(body.content) ? body.content.map((part) => text((part as Record<string, unknown>).text)).find(Boolean) : undefined; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
-  if (provider === 'google-gemini') { const candidate = Array.isArray(body.candidates) ? body.candidates[0] as Record<string, unknown> | undefined : undefined; const content = candidate?.content as Record<string, unknown> | undefined; const output = Array.isArray(content?.parts) ? content.parts.map((part) => text((part as Record<string, unknown>).text)).find(Boolean) : undefined; const details = body.usageMetadata as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.promptTokenCount, details?.candidatesTokenCount) } : undefined }
+  if (provider === 'google-gemini') { const candidate = Array.isArray(body.candidates) ? body.candidates[0] as Record<string, unknown> | undefined : undefined; const content = candidate?.content as Record<string, unknown> | undefined; const output = Array.isArray(content?.parts) ? content.parts.map((part) => text((part as Record<string, unknown>).text)).find(Boolean) : undefined; const details = body.usageMetadata as Record<string, unknown> | undefined; return output ? { output, usage: geminiUsage(details) } : undefined }
   const choice = Array.isArray(body.choices) ? body.choices[0] as Record<string, unknown> | undefined : undefined; const message = choice?.message as Record<string, unknown> | undefined; const output = text(message?.content); const details = body.usage as Record<string, unknown> | undefined
   return output ? { output, usage: usage(details?.prompt_tokens, details?.completion_tokens) } : undefined
 }

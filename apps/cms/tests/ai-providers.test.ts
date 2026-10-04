@@ -73,6 +73,15 @@ describe('ENG-023 provider monetary accounting', () => {
     expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 300 })
   })
 
+  it('charges Gemini thought tokens with candidate output and retains malformed thinking usage', async () => {
+    const record = await configured('google-gemini', 'thinking', 'secret', { monthlyCapMicroUsd: 500, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    await expect(executeConfiguredAIJob(payload, job('google-gemini'), { now, transport: async () => Response.json({ candidates: [{ content: { parts: [{ text: 'answer' }] } }], usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 3, thoughtsTokenCount: 4 } }) })).resolves.toMatchObject({ usageCostMicroUsd: 16 })
+    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsageMicroUsd: 16 })
+    await payload.update({ collection: 'integration-configurations', id: record.id, data: { model: 'thinking-malformed', monthlyCapMicroUsd: 200, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' } as never, overrideAccess: true })
+    await expect(executeConfiguredAIJob(payload, job('google-gemini'), { now, transport: async () => Response.json({ candidates: [{ content: { parts: [{ text: 'answer' }] } }], usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 3, thoughtsTokenCount: 'unknown' } }) })).resolves.toMatchObject({ output: 'answer' })
+    expect((await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).monthlyUsageMicroUsd).toBeGreaterThan(16)
+  })
+
   it('retains malformed and 5xx reservations and never contacts providers for image jobs', async () => {
     const malformed = await configured('openai', 'malformed', 'secret', { monthlyCapMicroUsd: 200, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
     let malformedCalls = 0
