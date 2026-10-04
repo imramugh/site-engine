@@ -87,6 +87,7 @@ describe('ENG-011 deterministic readiness report', () => {
 
   it('checks optional hero action and supporting-panel links', () => {
     const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.1.0'
     const hero = snapshot.pages[0]!.blocks[0]!
     if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.')
     hero.secondaryCta = { label: 'Missing option', href: '/missing-option' }

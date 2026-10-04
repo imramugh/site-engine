@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.0.0' as const;
-export const compatibleContractVersion = (candidate: string) => z.string().regex(/^1\.\d+\.\d+$/).safeParse(candidate).success;
-export const ContractVersionSchema = z.literal(CONTRACT_VERSION);
+export const CONTRACT_VERSION = '1.1.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', CONTRACT_VERSION] as const;
+export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
+export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
 const safeText = (max: number) => z.string().trim().min(1).max(max).refine((value) => !/[\u0000-\u001f]/.test(value), 'Control characters are not allowed');
 
@@ -143,6 +144,7 @@ export const SiteSnapshotSchema = z.object({
   const sections = new Map(snapshot.settings.sections.map((section) => [section.id, section]));
   const pages = new Map(snapshot.pages.map((page) => [page.id, page]));
   const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });
+  if (snapshot.settings.theme && snapshot.settings.theme.contract !== snapshot.settings.contractVersion) issue(['settings', 'theme', 'contract'], 'Theme contract must exactly match the snapshot contract version.');
   if (sections.size !== snapshot.settings.sections.length) issue(['settings', 'sections'], 'Section IDs must be unique');
   if (pages.size !== snapshot.pages.length) issue(['pages'], 'Page IDs must be unique');
   if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
@@ -172,6 +174,7 @@ export const SiteSnapshotSchema = z.object({
       current = parent;
     }
     page.blocks.forEach((block, blockIndex) => {
+      if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

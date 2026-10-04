@@ -238,6 +238,7 @@ describe('static snapshot renderer', () => {
     const snapshot = fixture('Hero supporting content');
     const hero = snapshot.pages[0]!.blocks[0]!;
     if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
+    snapshot.settings.contractVersion = '1.1.0';
     hero.secondaryCta = { label: 'Compare options', href: '/docs' };
     hero.supportPanel = { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review this neutral supporting information before continuing. <img id="hero-injected" src=x onerror=alert(1)>', cta: { label: 'Read details', href: '/docs' } };
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'hero-supporting-content.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
