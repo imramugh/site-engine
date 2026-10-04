@@ -44,6 +44,15 @@ export function SkipNavigation() {
   return <a className={styles.skipLink} href="#admin-workspace" onClick={skip} onKeyDown={skipFromKeyboard}>Skip navigation</a>
 }
 
+/**
+ * Payload resolves custom server components through its import map. Keeping this
+ * client module in the route's direct component graph makes its client chunk
+ * available before the custom navigation hydrates.
+ */
+export function AdminNavigationClientRuntime() {
+  return null
+}
+
 export function AdminNavigationToggle({ items, collections, displayName, roles }: Props) {
   const [open, setOpen] = useState(false)
   const id = useId()

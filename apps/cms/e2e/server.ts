@@ -358,7 +358,9 @@ async function main(): Promise<void> {
   await once(cmsProxy, 'listening')
   await seed()
   await runAstroBuild()
-  await runNext(['build'])
+  // Production deployments use Webpack. Keep the default fast, but let the
+  // browser suite exercise the same standalone artifact before release.
+  await runNext(process.env.CMS_E2E_WEBPACK === '1' ? ['build', '--webpack'] : ['build'])
   const appDirectory = process.cwd()
   const standaloneDirectory = join(appDirectory, '.next', 'standalone', 'apps', 'cms')
   // Next's standalone output deliberately omits static/public files; production
