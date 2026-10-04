@@ -26,3 +26,7 @@ test('preserves empty collection and changed value type differences', () => {
   expect(fieldDiffs({}, { items: [], config: {} })).toEqual([['items', undefined, []], ['config', undefined, {}]])
   expect(fieldDiffs({ value: 'Old' }, { value: { text: 'New' } })).toEqual([['value', 'Old', { text: 'New' }]])
 })
+
+test('expands a newly captured document whose previous snapshot is null', () => {
+  expect(fieldDiffs(null, { title: 'New page' })).toEqual([['title', undefined, 'New page']])
+})

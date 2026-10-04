@@ -15,7 +15,7 @@ export function fieldDiffs(before: unknown, after: unknown, limit = 200): FieldD
   const visit = (path: string, left: unknown, right: unknown): void => {
     if (JSON.stringify(left) === JSON.stringify(right)) return
     if (result.length >= limit) { omitted = true; return }
-    if ((left !== undefined && right !== undefined) && (Array.isArray(left) !== Array.isArray(right) || object(left) !== object(right))) { add(path, left, right); return }
+    if ((left != null && right != null) && (Array.isArray(left) !== Array.isArray(right) || object(left) !== object(right))) { add(path, left, right); return }
     if (Array.isArray(left) || Array.isArray(right)) {
       const previous = Array.isArray(left) ? left : [], next = Array.isArray(right) ? right : []
       if (!previous.length && !next.length) { add(path, left, right); return }
