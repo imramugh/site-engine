@@ -6,6 +6,7 @@ import { withPayloadTransaction } from './auth-transaction'
 /** Money is always an integer count of one-millionths of a US dollar. */
 export type MicroUsd = number
 export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; maxOutputTokens: number }
+export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string }
 export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' }
 export const providerCapabilities: Record<IntegrationProvider, ProviderCapability> = {
   // Image request serialization has not been implemented in this adapter yet.
@@ -17,11 +18,12 @@ export const providerCapabilities: Record<IntegrationProvider, ProviderCapabilit
 export type ProviderFetch = (request: Request) => Promise<Response>
 export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd | null; reservedMicroUsd: MicroUsd; usageCostStatus: 'actual' | 'reserved' }
 type TokenUsage = { inputTokens: number; outputTokens: number }
-type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' }
+type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' | 'snapshot-stale' }
 type StoredConfiguration = Record<string, unknown> & { id: string; provider: IntegrationProvider; model: string; encryptedCredential?: string | null; credentialFingerprint?: string | null; monthlyCapMicroUsd?: number | null; monthlyUsageMicroUsd?: number | null; usageMonth?: string | null; health?: string | null; inputMicroUsdPerMillionTokens?: number | null; outputMicroUsdPerMillionTokens?: number | null; pricingSource?: string | null; pricingAsOf?: string | null }
 type Pricing = { inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; source: string; asOf: string }
 type UsageReservation = Record<string, unknown> & { id: string; configuration: string | { id: string }; executionKey: string; usageMonth: string; reservedMicroUsd: number; settledMicroUsd?: number | null; state: 'reserved' | 'settled' | 'released' }
 type Reservation = { id: string; config: StoredConfiguration; pricing: Pricing; reservedMicroUsd: MicroUsd; usageMonth: string }
+const SNAPSHOT_STALE = 'AI_JOB_SNAPSHOT_STALE'
 const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
@@ -32,6 +34,10 @@ const sumSafe = (values: unknown[]): number | undefined => { let total = 0; for 
 function pricingFor(config: StoredConfiguration): Pricing | undefined {
   const input = integer(config.inputMicroUsdPerMillionTokens); const output = integer(config.outputMicroUsdPerMillionTokens); const source = text(config.pricingSource); const asOf = text(config.pricingAsOf)
   return input !== undefined && output !== undefined && source && asOf ? { inputMicroUsdPerMillionTokens: input, outputMicroUsdPerMillionTokens: output, source, asOf } : undefined
+}
+function sameSnapshot(config: StoredConfiguration, snapshot: AIConfigurationSnapshot): boolean {
+  const pricing = pricingFor(config)
+  return config.id === snapshot.id && config.provider === snapshot.provider && config.model === snapshot.model && config.credentialFingerprint === snapshot.credentialFingerprint && (config.monthlyCapMicroUsd ?? null) === snapshot.monthlyCapMicroUsd && Boolean(config.encryptedCredential) && config.health !== 'revoked' && pricing?.inputMicroUsdPerMillionTokens === snapshot.inputMicroUsdPerMillionTokens && pricing.outputMicroUsdPerMillionTokens === snapshot.outputMicroUsdPerMillionTokens && pricing.source === snapshot.pricingSource && pricing.asOf === snapshot.pricingAsOf
 }
 function costPartMicroUsd(tokens: number, rate: MicroUsd): MicroUsd | undefined {
   if (!Number.isSafeInteger(tokens) || tokens < 0) return undefined
@@ -166,7 +172,9 @@ async function reserve(
   provider: IntegrationProvider,
   job: AIJob,
   now: Date,
-): Promise<Reservation | undefined> {
+  snapshot?: AIConfigurationSnapshot,
+  executionKey?: string,
+): Promise<Reservation | 'snapshot-stale' | undefined> {
   const usageMonth = monthAt(now);
   try {
     return await withPayloadTransaction(payload, async (req) => {
@@ -177,6 +185,7 @@ async function reserve(
         overrideAccess: true,
         req,
       })) as unknown as StoredConfiguration;
+      if (snapshot && !sameSnapshot(current, snapshot)) throw new Error(SNAPSHOT_STALE)
       if (
         current.provider !== provider ||
         !current.encryptedCredential ||
@@ -218,11 +227,18 @@ async function reserve(
         (cap !== undefined && used + reservedMicroUsd > cap)
       )
         return undefined;
+      const key = executionKey ?? randomUUID();
+      const prior = await payload.find({ collection: 'provider-usage-reservations', where: { executionKey: { equals: key } }, limit: 1, depth: 0, overrideAccess: true, req })
+      if (prior.docs[0]) {
+        const row = prior.docs[0] as unknown as UsageReservation
+        if (row.configuration !== current.id || row.state !== 'reserved') return undefined
+        return { id: row.id, config: current, pricing, reservedMicroUsd: row.reservedMicroUsd, usageMonth: row.usageMonth }
+      }
       const row = (await payload.create({
         collection: "provider-usage-reservations",
         data: {
           configuration: current.id,
-          executionKey: randomUUID(),
+          executionKey: key,
           usageMonth,
           reservedMicroUsd,
           state: "reserved",
@@ -259,7 +275,8 @@ async function reserve(
         usageMonth,
       };
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === SNAPSHOT_STALE) return 'snapshot-stale'
     return undefined;
   }
 }
@@ -328,25 +345,38 @@ async function settle(
   });
 }
 /** Executes an in-product job from encrypted persisted configuration without exposing credentials or provider diagnostics. */
-export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number } = {}): Promise<AIJobResult> {
+export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number; configurationSnapshot?: AIConfigurationSnapshot[]; executionKey?: (provider: IntegrationProvider) => string } = {}): Promise<AIJobResult> {
   if (!job.input || job.input.length > 100_000 || !Number.isSafeInteger(job.maxOutputTokens) || job.maxOutputTokens < 1 || job.maxOutputTokens > MAX_OUTPUT_TOKENS) throw new Error('AI_JOB_UNAVAILABLE')
   const now = options.now ?? new Date()
   const attempt = async (provider: IntegrationProvider): Promise<Attempt & { usageCostMicroUsd?: MicroUsd | null; reservedMicroUsd?: MicroUsd; usageCostStatus?: 'actual' | 'reserved' }> => {
     // AIJob has no image bytes or media reference. Sending text would silently downgrade an image job.
     if (job.requiresImage && !providerCapabilities[provider].imageInput) return { outcome: 'unavailable' }
-    const config = await configuration(payload, provider)
+    const snapshot = options.configurationSnapshot?.find(candidate => candidate.provider === provider)
+    if (options.configurationSnapshot && !snapshot) return { outcome: 'rejected' }
+    const config = snapshot ? await payload.findByID({ collection: 'integration-configurations', id: snapshot.id, depth: 0, overrideAccess: true }) as unknown as StoredConfiguration : await configuration(payload, provider)
+    if (snapshot && (!config || !sameSnapshot(config, snapshot))) return { outcome: 'snapshot-stale' }
     if (!config || !config.encryptedCredential || config.health === 'revoked') return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
-    const reservation = await reserve(payload, config.id, provider, job, now)
+    const reservation = await reserve(payload, config.id, provider, job, now, snapshot, options.executionKey?.(provider))
+    if (reservation === 'snapshot-stale') return { outcome: 'snapshot-stale' }
     if (!reservation) return { outcome: 'unavailable' }
     let credential: string
     try { credential = decryptCredential(reservation.config.encryptedCredential!, provider) } catch { await settle(payload, reservation, undefined, 'rejected', now); return { outcome: 'rejected' } }
     const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
-    await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome, now)
-    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : result
+    await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome === 'rejected' ? 'rejected' : 'unavailable', now)
+    return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : { ...result, reservedMicroUsd: result.outcome === 'unavailable' ? reservation.reservedMicroUsd : 0, usageCostMicroUsd: null, usageCostStatus: result.outcome === 'unavailable' ? 'reserved' : 'actual' }
   }
   const primary = await attempt(job.provider)
   if (primary.outcome === 'success') return { provider: job.provider, fallbackUsed: false, output: primary.output, usageCostMicroUsd: primary.usageCostMicroUsd!, reservedMicroUsd: primary.reservedMicroUsd!, usageCostStatus: primary.usageCostStatus! }
-  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) { const fallback = await attempt(job.fallbackProvider); if (fallback.outcome === 'success') return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: fallback.usageCostMicroUsd!, reservedMicroUsd: fallback.reservedMicroUsd!, usageCostStatus: fallback.usageCostStatus! } }
+  if (primary.outcome === 'unavailable' && job.fallbackProvider && job.fallbackProvider !== job.provider) {
+    const fallback = await attempt(job.fallbackProvider)
+    if (fallback.outcome === 'success') {
+      const reservedMicroUsd = sumSafe([primary.reservedMicroUsd ?? 0, fallback.reservedMicroUsd])
+      if (reservedMicroUsd === undefined) throw new Error('AI_JOB_UNAVAILABLE')
+      // The primary timeout remains billable until reconciled, so the job total
+      // is reserved even when the fallback reported exact usage.
+      return { provider: job.fallbackProvider, fallbackUsed: true, output: fallback.output, usageCostMicroUsd: primary.reservedMicroUsd ? null : fallback.usageCostMicroUsd!, reservedMicroUsd, usageCostStatus: primary.reservedMicroUsd ? 'reserved' : fallback.usageCostStatus! }
+    }
+  }
   throw new Error('AI_JOB_UNAVAILABLE')
 }
