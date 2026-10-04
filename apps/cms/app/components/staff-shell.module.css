@@ -16,7 +16,7 @@
 .workspace *, .adminSidebar *, .header * { box-sizing: border-box; }
 .adminWorkspace { min-width: 0; margin-left: var(--admin-sidebar-width, 240px); padding-top: 60px; }
 .header { height: 60px; padding: 0 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fff; border-bottom: 1px solid var(--admin-border); color: var(--admin-text); position: fixed; top: 0; left: var(--admin-sidebar-width, 240px); right: 0; z-index: 25; }
-.header [data-admin-page-title] { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 650; }
+.header h1[data-admin-page-title] { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 650; }
 .header a { display: inline-flex; align-items: center; gap: .35rem; min-height: 36px; padding: 0 .75rem; color: var(--admin-text); border: 1px solid var(--admin-border); border-radius: .375rem; font-size: .875rem; font-weight: 600; text-decoration: none; }
 .header a:hover, .header a:focus-visible { border-color: var(--admin-accent); color: var(--admin-accent); }
 .adminSidebar { width: var(--admin-sidebar-width, 240px); min-height: 100vh; padding: 0; display: flex; flex-direction: column; background: var(--admin-sidebar); color: var(--admin-sidebar-foreground); position: fixed; inset: 0 auto 0 0; z-index: 30; overflow: hidden auto; }
@@ -43,7 +43,7 @@
 .adminAccount summary > span:nth-child(2) { display: grid; min-width: 0; flex: 1; }
 .adminAccount strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; }
 .adminAccount small { color: color-mix(in srgb, var(--admin-sidebar-foreground) 65%, transparent); font-size: .75rem; text-transform: capitalize; }
-.accountChevron { color: color-mix(in srgb, var(--admin-sidebar-foreground) 65%, transparent); font-size: 1.15rem; }
+.accountChevron { width: 16px; height: 16px; color: color-mix(in srgb, var(--admin-sidebar-foreground) 65%, transparent); }
 .adminAccount[open] .accountChevron { transform: rotate(180deg); }
 .accountMenu { position: absolute; inset: auto .625rem calc(100% + .375rem); padding: .375rem; display: grid; background: #fff; border: 1px solid var(--admin-border); border-radius: .5rem; box-shadow: 0 10px 30px rgb(0 0 0 / .22); }
 .accountMenu a { min-height: 36px; padding: .5rem .625rem; border-radius: .25rem; color: var(--admin-text); font-size: .875rem; }

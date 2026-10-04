@@ -43,7 +43,7 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' })
   await expect(workspaceNavigation.getByRole('link', { name: 'Content', exact: true })).toBeVisible()
   await expect(workspaceNavigation.getByRole('link', { name: 'Reviews', exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await expect(page.locator('[data-admin-page-title]')).toHaveText('Dashboard')
   expect(await page.locator('html').evaluate((element) => getComputedStyle(element).getPropertyValue('--theme-elevation-0').trim())).not.toBe('')
   const session = (await page.context().cookies()).find((cookie) => cookie.name === '__Host-site_engine_session')
   expect(session).toMatchObject({ secure: true, httpOnly: true, path: '/', sameSite: 'Lax' })

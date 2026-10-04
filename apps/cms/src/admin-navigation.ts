@@ -21,10 +21,11 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/leads', label: 'Leads', roles: ['owner', 'sales'] },
   { href: '/applications', label: 'Careers', roles: ['owner', 'hiring'] },
   { href: '/editorial', label: 'Reviews', roles: ['owner', 'editor', 'approver'] },
-  { href: '/operations', label: 'Changelog', roles: ['owner'] },
+  { href: '/operations', label: 'Change log', roles: ['owner'] },
 ]
 
 export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [
+  { href: '/admin/collections/site-settings', label: 'Site', roles: ['owner'] },
   { href: '/integrations', label: 'Integrations', roles: ['owner'] },
   { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
 ]
