@@ -26,6 +26,24 @@ async function search(page: Page, value: string) {
   await page.getByRole('button', { name: 'Search', exact: true }).click()
 }
 
+async function renderedFonts(page: Page, selectors: string[]) {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    await cdp.send('DOM.enable')
+    await cdp.send('CSS.enable')
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true })
+    const entries = await Promise.all(selectors.map(async (selector) => {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      expect(nodeId, `Missing font probe target: ${selector}`).not.toBe(0)
+      const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+      return [selector, fonts] as const
+    }))
+    return Object.fromEntries(entries)
+  } finally {
+    await cdp.detach()
+  }
+}
+
 test('ENG-014 keeps drafts behind discard confirmation and ignores an obsolete search response', async ({ browser }) => {
   const session = await mediaPage(browser)
   const page = session.page
@@ -161,17 +179,24 @@ test('ENG-014 remains readable and accessible at desktop and narrow mobile width
   const branding = await page.request.get('/admin-branding/admin-branding.css')
   if (branding.ok()) {
     expect(await branding.text()).toContain('[data-media-workspace]')
-    const type = await page.locator('[data-media-workspace]').evaluate(() => ({
-      loaded: document.fonts.check('14px "IBM Plex Sans"'),
-      families: [
-        document.querySelector('[data-media-detail] h2'),
-        document.querySelector('[data-media-asset] strong'),
-        document.querySelector('#asset-alt'),
-        document.querySelector('[data-media-toolbar] button'),
-      ].map((element) => element ? getComputedStyle(element).fontFamily : 'missing'),
+    const selectors = ['[data-media-detail] h2', '[data-media-asset] strong', 'label[for="asset-alt"]', '[data-media-toolbar] button']
+    const fonts = await renderedFonts(page, selectors)
+    await test.info().attach('media-rendered-fonts.json', { body: Buffer.from(JSON.stringify(fonts, null, 2)), contentType: 'application/json' })
+    for (const selector of selectors) {
+      const usedFonts = fonts[selector].filter((font) => font.glyphCount > 0)
+      expect(usedFonts, `${selector} should render visible glyphs`).not.toHaveLength(0)
+      expect(usedFonts, `${selector} should use the bundled IBM Plex Sans semibold face`).toEqual(expect.arrayContaining([
+        expect.objectContaining({ postScriptName: 'IBMPlexSans-SmBld', isCustomFont: true }),
+      ]))
+      expect(usedFonts.every((font) => font.postScriptName.startsWith('IBMPlexSans') && font.isCustomFont)).toBe(true)
+    }
+    const weights = await page.locator('[data-media-workspace]').evaluate(() => ({
+      card: getComputedStyle(document.querySelector('[data-media-asset] strong')!).fontWeight,
+      detail: getComputedStyle(document.querySelector('[data-media-detail] h2')!).fontWeight,
+      label: getComputedStyle(document.querySelector('label[for="asset-alt"]')!).fontWeight,
+      toolbar: getComputedStyle(document.querySelector('[data-media-toolbar] button')!).fontWeight,
     }))
-    expect(type.loaded).toBe(true)
-    for (const family of type.families) expect(family).toContain('IBM Plex Sans')
+    expect(weights).toEqual({ card: '600', detail: '600', label: '600', toolbar: '600' })
   }
   const detailWidth = await page.locator('[data-media-detail]').evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))
   expect(detailWidth.scrollWidth).toBeLessThanOrEqual(detailWidth.clientWidth)
