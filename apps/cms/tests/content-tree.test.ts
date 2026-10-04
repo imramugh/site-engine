@@ -50,3 +50,14 @@ test('published checks are current-only and reject an invalid image reference', 
   expect(publishedPageChecks(missingImage)).toBeUndefined()
   expect(checkForWorkingPage({ id: pageID, status: 'published' }, publishedPageChecks(missingImage))).toEqual({ state: 'unavailable' })
 })
+
+test('malformed imported relationships remain visible without a false canonical path', () => {
+  const section = { id: 'section', name: 'Services', slug: 'services', landingPageId: 'landing' }
+  const landing = { ...page('landing', 'Services', undefined, section.id), slug: 'services' }
+  const crossSectionParent = { ...page('parent', 'Other section', undefined, 'other'), slug: 'other' }
+  const crossSectionChild = { ...page('child', 'Broken child', crossSectionParent.id, section.id), slug: 'child' }
+  const badHomepage = { ...page('home', 'Home', landing.id, section.id), slug: 'home' }
+  expect(canonicalContentPath(crossSectionChild, [landing, crossSectionParent, crossSectionChild], [section], undefined)).toBeUndefined()
+  expect(canonicalContentPath(badHomepage, [landing, badHomepage], [section], badHomepage.id)).toBeUndefined()
+  expect(canonicalContentPath({ ...landing, parentId: 'anything' }, [landing], [section], undefined)).toBeUndefined()
+})

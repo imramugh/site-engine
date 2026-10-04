@@ -10,18 +10,18 @@ import { StaffShell } from '../../components/staff-shell'
 import styles from './content-list.module.css'
 
 type Filter = 'all' | 'draft' | 'archived'
-type Row = { page: ContentTreePage; indent: number; path: string; cycle: boolean; group: string; check: PublishedPageCheck }
+type Row = { page: ContentTreePage; indent: number; path: string; cycle: boolean; hasChildren: boolean; group: string; check: PublishedPageCheck }
 const filters: Array<{ value: Filter; label: string }> = [{ value: 'all', label: 'All pages' }, { value: 'draft', label: 'Drafts' }, { value: 'archived', label: 'Archived' }]
 const stateOf = (page: ContentTreePage) => page.status ?? page._status ?? 'draft'
 
-function Icon({ folder }: { folder: boolean }) {
-  return folder
-    ? <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
-    : <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6M8 13h8M8 17h8" /></svg>
+function Glyph({ hasChildren, depth }: { hasChildren: boolean; depth: number }) {
+  if (hasChildren) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+  if (depth > 0) return <svg className={styles.glyph} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="2" /></svg>
+  return <svg className={styles.glyph} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="4" /></svg>
 }
 function append(nodes: ContentTreeNode[], rows: Row[], pages: ContentTreePage[], sections: ContentTreeSection[], homepageID: string | undefined, checks: Map<string, PublishedPageCheck> | undefined, depth = 0, group = '') {
   for (const node of nodes) {
-    rows.push({ page: node.page, indent: depth, path: canonicalContentPath(node.page, pages, sections, homepageID) ?? 'Route unavailable', cycle: node.cycle, group, check: checkForWorkingPage(node.page, checks) })
+    rows.push({ page: node.page, indent: depth, path: canonicalContentPath(node.page, pages, sections, homepageID) ?? 'Route unavailable', cycle: node.cycle, hasChildren: node.children.length > 0, group, check: checkForWorkingPage(node.page, checks) })
     append(node.children, rows, pages, sections, homepageID, checks, depth + 1, group)
   }
 }
@@ -76,7 +76,7 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
         </div>
         <div className={styles.tableWrap} tabIndex={0} aria-label="Page list. Scroll horizontally for all columns on small screens." data-content-table-scroll data-testid="content-table-scroll">
           <table className={styles.table} data-content-table><caption className={styles.visuallyHidden}>Pages matching the selected status and search</caption><thead><tr><th scope="col">Page</th><th scope="col">Template</th><th scope="col">Status</th><th scope="col">Checks</th><th scope="col">Updated</th></tr></thead><tbody>
-            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Icon folder={row.indent === 0} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{stateOf(row.page)}</span></td><td>{row.check.state === 'checked' ? row.check.issues ? <a className={styles.checkIssue} href={`/admin/collections/pages/${row.page.id}`} data-content-check="issues">Published checks: {row.check.issues} issue{row.check.issues === 1 ? '' : 's'}</a> : <span className={styles.checkPassed} data-content-check="passed">Published checks passed</span> : <span className={styles.notChecked} data-content-check={row.check.state}>{row.check.state === 'not-published' ? 'Draft working copy — not checked' : 'Published checks unavailable'}</span>}</td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
+            {visible.map((row) => <tr className={styles.tableRow} key={`${row.group}:${row.page.id}`} data-content-row data-content-status={stateOf(row.page)}><td><a className={styles.pageLink} href={`/admin/collections/pages/${row.page.id}`} style={{ paddingLeft: `${row.indent * 1.25}rem` }} data-content-page-link><Glyph hasChildren={row.hasChildren} depth={row.indent} /><span className={styles.title}>{row.page.title || 'Untitled page'}</span><span className={styles.path}>{row.path}</span>{row.cycle ? <span role="note">Hierarchy cycle</span> : null}</a></td><td className={styles.template}>{row.page.template}</td><td><span className={styles.status} data-status={stateOf(row.page)}>{stateOf(row.page)}</span></td><td>{row.check.state === 'checked' ? row.check.issues ? <a className={styles.checkIssue} href={`/admin/collections/pages/${row.page.id}`} data-content-check="issues">Published checks: {row.check.issues} issue{row.check.issues === 1 ? '' : 's'}</a> : <span className={styles.checkPassed} data-content-check="passed">Published checks passed</span> : <span className={styles.notChecked} data-content-check={row.check.state}>{row.check.state === 'not-published' ? 'Draft working copy — not checked' : 'Published checks unavailable'}</span>}</td><td className={styles.updated}>{formatDate(row.page.updatedAt)}</td></tr>)}
           </tbody></table>
         </div>
         {!visible.length ? <p className={styles.notice} role="status" data-content-empty data-testid="content-empty">{allRows.length ? 'No pages match these filters.' : 'No pages have been created.'}</p> : null}
