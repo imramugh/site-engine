@@ -89,6 +89,19 @@ describe('configured AI job lease lifecycle', () => {
     await expect(lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)).resolves.toMatchObject({ job: { id: eligible.job.id } })
   })
 
+  it('quarantines invalid leases without scanning healthy running jobs and claims eligible work', async () => {
+    for (let index = 0; index < 101; index += 1) {
+      const active = await queued()
+      await payload.update({ collection: 'configured-ai-jobs', id: active.job.id, data: { state: 'running', leaseToken: `healthy-${index}`, leaseExpiresAt: new Date(61_000).toISOString() }, overrideAccess: true })
+    }
+    const malformed = await queued()
+    await payload.update({ collection: 'configured-ai-jobs', id: malformed.job.id, data: { state: 'running', leaseToken: 'malformed', leaseExpiresAt: new Date(61_000).toISOString() }, overrideAccess: true })
+    await payload.db.client.execute({ sql: 'UPDATE configured_ai_jobs SET lease_expires_at = ? WHERE id = ?', args: ['not-a-date', malformed.job.id] })
+    const eligible = await queued()
+    await expect(lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)).resolves.toMatchObject({ job: { id: eligible.job.id } })
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: malformed.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'LEASE_INVALID_TIMESTAMP' })
+  })
+
   it('moves a queued job with recorded dispatch to manual review instead of reclaiming it', async () => {
     const job = await queued()
     await payload.update({ collection: 'configured-ai-jobs', id: job.job.id, data: { dispatchStartedAt: new Date(1_000).toISOString() }, overrideAccess: true })

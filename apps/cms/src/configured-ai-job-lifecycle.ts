@@ -41,19 +41,15 @@ const leaseRecovery = new WeakMap<object, Promise<void>>()
 
 async function scanInvalidLeaseTimestamps(payload: Payload) {
   const client = (payload.db as unknown as { client: { execute: (query: { sql: string; args: unknown[] }) => Promise<{ rows: Array<{ id: string; lease_expires_at?: string | null }>; rowsAffected?: number }> } }).client
-  let page = 1; const invalid: Array<{ id: string; lease: string | null }> = []
-  while (true) {
-    const running = await client.execute({ sql: 'SELECT id, lease_expires_at FROM configured_ai_jobs WHERE state = ? ORDER BY created_at LIMIT ? OFFSET ?', args: ['running', 100, (page - 1) * 100] })
-    for (const raw of running.rows) if (!raw.lease_expires_at || !Number.isFinite(Date.parse(raw.lease_expires_at))) invalid.push({ id: raw.id, lease: raw.lease_expires_at ?? null })
-    if (running.rows.length < 100 || page >= 100_000) break
-    page += 1
-  }
-  for (const item of invalid) {
-    const updated = await client.execute({ sql: 'UPDATE configured_ai_jobs SET state = ?, failure_code = ?, lease_token = NULL, lease_expires_at = NULL WHERE id = ? AND state = ? AND lease_expires_at IS ?', args: ['manual-review', 'LEASE_INVALID_TIMESTAMP', item.id, 'running', item.lease] })
+  const invalid = await client.execute({ sql: 'SELECT id, lease_expires_at FROM configured_ai_jobs WHERE state = ? AND julianday(lease_expires_at) IS NULL ORDER BY created_at LIMIT 100', args: ['running'] })
+  for (const item of invalid.rows) {
+    const updated = await client.execute({ sql: 'UPDATE configured_ai_jobs SET state = ?, failure_code = ?, lease_token = NULL, lease_expires_at = NULL WHERE id = ? AND state = ? AND lease_expires_at IS ?', args: ['manual-review', 'LEASE_INVALID_TIMESTAMP', item.id, 'running', item.lease_expires_at ?? null] })
+    // Payload cannot open a malformed date inside its transaction. The state CAS
+    // commits before its metadata-only audit event; a crash can leave this safe
+    // terminal state without an audit row, never a claimable malformed lease.
     if ((updated.rowsAffected ?? 0) > 0) await payload.create({ collection: 'audit-events', data: { event: 'ai.job_manual_review', detail: { job: item.id, reason: 'LEASE_INVALID_TIMESTAMP' } }, overrideAccess: true })
   }
 }
-
 async function recoverInvalidLeaseTimestamps(payload: Payload) {
   const previous = leaseRecovery.get(payload) ?? Promise.resolve()
   const next = previous.catch(() => undefined).then(() => scanInvalidLeaseTimestamps(payload))

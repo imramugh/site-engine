@@ -19,9 +19,10 @@ export function createAIWorkerAPI({ cmsOrigin, token, fetchImpl = fetch, timeout
     return body.job;
   };
 }
-const pause = (milliseconds, signal) => new Promise(resolve => { const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); }; const timer = setTimeout(finish, milliseconds); signal?.addEventListener('abort', finish, { once: true }); });
+const pause = (milliseconds, signal) => { if (signal?.aborted) return Promise.resolve(); return new Promise(resolve => { const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); }; const timer = setTimeout(finish, milliseconds); signal?.addEventListener('abort', finish, { once: true }); }); };
 /** Runs sequentially: a following poll starts only after the previous request has settled. */
 export async function runAIWorker({ api, signal, idleMs = 2_000, errorMs = 5_000, log = console.error }) {
+  if (![idleMs, errorMs].every(value => Number.isSafeInteger(value) && value >= 100 && value <= 60_000)) throw new AIWorkerError('INVALID_WORKER_CONFIGURATION');
   while (!signal?.aborted) {
     try { await api(signal); await pause(idleMs, signal); }
     catch (error) { if (!signal?.aborted) log(`AI worker: ${error?.code ?? 'WORKER_FAILED'}`); await pause(errorMs, signal); }

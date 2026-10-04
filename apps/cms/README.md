@@ -60,7 +60,7 @@ reported `cost` is intentionally never used.
 
 ### Internal AI worker
 
-Run the HTTP-only poller with `node apps/cms/scripts/run-ai-worker.mjs` from the repository root. It requires `AI_WORKER_CMS_ORIGIN` (an internal HTTP(S) CMS origin with no path), `AI_WORKER_TOKEN` (at least 32 bytes, independent from other worker tokens), and optionally `AI_WORKER_TIMEOUT_MS` (45,000 ms default; maximum 55,000), `AI_WORKER_IDLE_MS`, and `AI_WORKER_ERROR_MS`. The CMS route is `POST /api/internal/ai-worker/run`; keep it unavailable through every public edge or proxy. The poller has no Payload, SQLite, credential, or provider configuration access.
+Run the HTTP-only poller with `node apps/cms/scripts/run-ai-worker.mjs` from the repository root. It requires `AI_WORKER_CMS_ORIGIN` (an internal HTTP(S) CMS origin with no path), `AI_WORKER_TOKEN` (at least 32 bytes, independent from other worker tokens), and optionally `AI_WORKER_TIMEOUT_MS` (45,000 ms default; maximum 55,000), `AI_WORKER_IDLE_MS`, and `AI_WORKER_ERROR_MS` (each 100–60,000 ms). The CMS route is `POST /api/internal/ai-worker/run`; keep it unavailable through every public edge or proxy. The poller has no Payload, SQLite, credential, or provider configuration access.
 
 ## SQLite transaction compatibility pin
 
