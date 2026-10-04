@@ -69,6 +69,12 @@ async function reviewSession(headers: Headers, path: string) {
   return reviewSessionRoute.GET(new Request('http://localhost/api/auth/preview/review-session', { headers: { cookie: headers.get('cookie')!, 'x-original-uri': path } }))
 }
 
+async function headersFor(user: { id: string }) {
+  const token = newOpaqueToken(); const now = new Date().toISOString()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+  return new Headers({ cookie: `site_engine_session=${token}` })
+}
+
 async function reviewHeaders(role: 'owner' | 'editor') {
   const user = await payload.create({ collection: 'users', data: { email: `${role}-${randomUUID()}@example.test`, name: role, roles: [role] }, overrideAccess: true })
   const token = newOpaqueToken(); const now = new Date().toISOString()
@@ -154,6 +160,23 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(workerAuthorized(new Request('http://test', { headers: { authorization: 'Bearer short' } }))).toBe(false)
     await expect(boundedJSON(new Request('http://test', { method: 'POST', body: 'x'.repeat(16 * 1024 + 1) }))).rejects.toThrow('too large')
     await expect(boundedJSON(new Request('http://test', { method: 'POST', body: '{' }))).rejects.toThrow()
+  })
+
+  it('scopes completed draft previews to the owning Editor or an Owner without populating reviewer proof', async () => {
+    const current = await fixture('draft-session')
+    const editorHeaders = await headersFor(current.editor)
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { state: 'open', preview: null }, overrideAccess: true, context: { editorialInternal: true } })
+    const job = await withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor: current.editor, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], draft: true }))
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    const path = `/preview/changes/${job.id}/proposed/`
+    expect((await reviewSession(editorHeaders, path)).status).toBe(204)
+    expect((await reviewSession(await reviewHeaders('editor'), path)).status).toBe(403)
+    expect((await reviewSession(await reviewHeaders('owner'), path)).status).toBe(204)
+    expect((await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).preview).toBeNull()
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await reviewSession(editorHeaders, path)).status).toBe(403)
+    expect((await reviewSession(new Headers(), path)).status).toBe(401)
   })
 
   it('authorizes only the current completed comparison and its safe nested artifacts', async () => {
