@@ -399,7 +399,7 @@ export const NotificationOutbox: CollectionConfig = {
 
 /** Local-only reply intent. No provider configuration or send worker exists. */
 export const MailDrafts: CollectionConfig = {
-  slug: 'mail-drafts', admin: { useAsTitle: 'subject', group: 'Private' },
+  slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
   access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
   fields: [
     { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true },

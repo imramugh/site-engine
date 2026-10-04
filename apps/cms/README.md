@@ -35,6 +35,10 @@ verified local Owner can use the authenticator path before external providers
 are registered. Real provider integration, approval workflows, preview,
 publishing, and MCP remain unfinished. There is no `/mcp` placeholder route.
 
+Mail drafts and their one-time authorization records are local foundation data
+for a future reviewed mail workflow. They have no admin collection entry, REST
+send endpoint, or compose/send UI; the edge does not expose a mail-drafts API.
+
 `pnpm test:e2e:cms` builds and runs the actual CMS against an isolated SQLite
 database and a synthetic TLS OIDC issuer. It exercises browser navigation,
 session cookies, profile permissions, logout, callback replay, and CSRF. A local
