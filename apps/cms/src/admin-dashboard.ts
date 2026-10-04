@@ -51,7 +51,7 @@ function shortcuts(actor: Actor): DashboardShortcut[] {
 function pageIssues(manifest: any): NonNullable<AdminDashboardData['pages']>['withIssues'] {
   if (!manifest) return { state: 'unavailable', items: [], message: 'No published content to check yet.' }
   const report = checkSiteSnapshot(manifest, { asOf: new Date() })
-  const pages = new Map<string, any>((manifest.pages ?? []).map((page: any) => [page.id, page]))
+  const pages = new Map<string, any>((Array.isArray(manifest.pages) ? manifest.pages : []).map((page: any) => [page.id, page]))
   const grouped = new Map<string, DashboardIssue>()
   for (const issue of report.issues) {
     const page = issue.pageId ? pages.get(issue.pageId) : undefined
