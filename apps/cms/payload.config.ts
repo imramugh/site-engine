@@ -18,7 +18,6 @@ export default buildConfig({
     user: Users.slug,
     components: {
       Nav: './app/components/admin-navigation#AdminNavigation',
-      header: ['./app/components/admin-topbar#AdminTopbar'],
       graphics: { Icon: './app/components/admin-topbar#AdminBrandLogo', Logo: './app/components/admin-topbar#AdminBrandLogo' },
       views: { dashboard: { Component: './app/components/admin-dashboard#AdminDashboard' } },
     },
