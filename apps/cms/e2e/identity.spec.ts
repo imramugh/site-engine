@@ -113,6 +113,74 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
   expect(adminHTML).not.toContain('synthetic-recovery-hash-sentinel')
 })
 
+test('ENG-002 rejects an editor draft block with an undeclared appearance value without changing the draft', async ({ page }) => {
+  await signIn(page, 'editor')
+  await page.goto('/block-gallery')
+  await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
+  await page.addScriptTag({ path: axeSource })
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+
+  const isolatedSet = await page.evaluate(async () => {
+    const response = await fetch('/api/editorial/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `ENG-002 appearance validation ${crypto.randomUUID()}` }) })
+    return { status: response.status, set: await response.json() as { id?: string } }
+  })
+  expect(isolatedSet.status).toBe(200)
+  expect(isolatedSet.set.id).toMatch(/^[a-f0-9-]{36}$/)
+
+  const result = await page.evaluate(async (changeSetID) => {
+    const headers = { 'content-type': 'application/json', 'x-site-engine-change-set': changeSetID }
+    const sectionResponse = await fetch('/api/sections', {
+      method: 'POST', headers, body: JSON.stringify({
+        name: 'Appearance browser validation',
+        summary: 'A synthetic section for browser-level contract validation.',
+        slug: 'appearance-browser-validation',
+        allowedTemplates: ['standard'],
+      }),
+    })
+    const section = await sectionResponse.json() as { doc?: { id: string } }
+    if (!section.doc) return { sectionStatus: sectionResponse.status, section }
+    const validBlock = {
+      id: crypto.randomUUID(), type: 'hero', heading: 'Valid browser appearance', body: 'This neutral block is the unchanged draft baseline.', hidden: false,
+      appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' },
+    }
+    const createdResponse = await fetch('/api/pages', {
+      method: 'POST', headers, body: JSON.stringify({
+        title: 'Appearance validation draft', summary: 'A synthetic page for browser-level appearance validation.', slug: 'appearance-validation-draft', sectionId: section.doc.id, template: 'standard', blocks: [validBlock],
+      }),
+    })
+    const created = await createdResponse.json() as { doc?: { id: string; blocks: unknown[] } }
+    if (!created.doc) return { sectionStatus: sectionResponse.status, createdStatus: createdResponse.status, section, created }
+    const rejectedResponse = await fetch(`/api/pages/${created.doc.id}?draft=true`, {
+      method: 'PATCH', headers, body: JSON.stringify({
+        blocks: [{ ...validBlock, appearance: { ...validBlock.appearance, background: 'rawCSS' } }],
+      }),
+    })
+    const rejected = await rejectedResponse.json() as { errors?: Array<{ data?: { errors?: Array<{ path?: string; message?: string }> } }> }
+    const afterResponse = await fetch(`/api/pages/${created.doc.id}?draft=true`)
+    const after = await afterResponse.json() as { blocks?: unknown[] }
+    return { sectionStatus: sectionResponse.status, createdStatus: createdResponse.status, rejectedStatus: rejectedResponse.status, afterStatus: afterResponse.status, rejected, beforeBlocks: created.doc.blocks, afterBlocks: after.blocks, sectionID: section.doc.id, pageID: created.doc.id }
+  }, isolatedSet.set.id!)
+
+  expect(result.sectionStatus).toBe(201)
+  expect(result.createdStatus).toBe(201)
+  expect(result.rejectedStatus).toBe(400)
+  expect(result.rejected?.errors?.flatMap((error) => error.data?.errors ?? [])).toEqual(expect.arrayContaining([
+    expect.objectContaining({ path: 'blocks.0.appearance.background' }),
+  ]))
+  expect(result.afterStatus).toBe(200)
+  expect(result.afterBlocks).toEqual(result.beforeBlocks)
+
+  const cleanup = await page.evaluate(async ({ changeSetID, pageID, sectionID }) => {
+    const listed = await fetch('/api/editorial/list', { cache: 'no-store' })
+    const list = await listed.json() as { sets?: Array<{ id: string; state: string; changes?: Array<{ collection: string; id: string }> }> }
+    const matching = list.sets?.filter((set) => set.id === changeSetID && set.state === 'open' && set.changes?.some((change) => change.collection === 'pages' && change.id === pageID) && set.changes?.some((change) => change.collection === 'sections' && change.id === sectionID)) ?? []
+    if (matching.length !== 1) return { listed: listed.status, matching: matching.length }
+    const discarded = await fetch('/api/editorial/discard', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: matching[0].id }) })
+    return { listed: listed.status, matching: matching.length, discarded: discarded.status }
+  }, { changeSetID: isolatedSet.set.id!, pageID: result.pageID, sectionID: result.sectionID })
+  expect(cleanup).toEqual({ listed: 200, matching: 1, discarded: 200 })
+})
+
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
   await signIn(page, 'editor')
