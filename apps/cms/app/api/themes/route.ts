@@ -73,6 +73,7 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>) {
       id: installed.manifest.name,
       version: installed.manifest.version,
       contract: installed.manifest.contract,
+      manifestDigest: installed.manifestDigest,
       standardBlocks: installed.manifest.standardBlocks,
       settingKeys: installed.manifest.settingKeys,
       compatibility: compatibilityFor(state.manifest, installed),
