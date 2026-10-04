@@ -1,6 +1,6 @@
 'use client'
 
-import type { AdminNavigationItem, AdminRole } from '../../src/admin-navigation'
+import type { AdminNavigationBadges, AdminNavigationItem, AdminRole } from '../../src/admin-navigation'
 import type { ReactNode } from 'react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
@@ -13,11 +13,12 @@ type Props = {
   collections: readonly AdminNavigationItem[]
   displayName: string
   roles: readonly AdminRole[]
+  badges: AdminNavigationBadges
 }
 
 const titleForPath = (pathname: string) => {
   const titles: Record<string, string> = {
-    '/admin': 'Dashboard', '/content-tree': 'Content', '/block-gallery': 'Block gallery', '/leads': 'Leads',
+    '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/leads': 'Leads',
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Change log', '/integrations': 'Integrations',
     '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
   }
@@ -69,12 +70,73 @@ export function SkipNavigation() {
 /** Ensures this client chunk is registered before Payload hydrates its import-map Nav. */
 export function AdminNavigationClientRuntime() { return null }
 
-export function AdminWorkspaceHeader() {
-  const pathname = usePathname()
-  return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></header>
+type SearchResult = { title: string; url: string; category: 'Pages' | 'Media' | 'Leads' }
+type SearchResponse = { results: Record<SearchResult['category'], SearchResult[]> }
+
+function AdminGlobalSearch() {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [state, setState] = useState<'idle' | 'loading' | 'empty' | 'error' | 'ready'>('idle')
+  const [active, setActive] = useState(-1)
+  const input = useRef<HTMLInputElement>(null)
+  const listID = useId()
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey)) return
+      event.preventDefault()
+      input.current?.focus()
+    }
+    window.addEventListener('keydown', focusSearch)
+    return () => window.removeEventListener('keydown', focusSearch)
+  }, [])
+  useEffect(() => {
+    const value = query.trim()
+    setActive(-1)
+    setResults([])
+    if (!value) { setResults([]); setState('idle'); return }
+    if (value.length < 2) { setResults([]); setState('idle'); return }
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setState('loading')
+      try {
+        const response = await fetch(`/api/admin/search?q=${encodeURIComponent(value)}`, { cache: 'no-store', signal: controller.signal })
+        if (!response.ok) throw new Error('Search is unavailable.')
+        const body = await response.json() as SearchResponse
+        if (controller.signal.aborted) return
+        const found = (['Pages', 'Media', 'Leads'] as const).flatMap(category => body.results[category] ?? [])
+        setResults(found); setState(found.length ? 'ready' : 'empty')
+      } catch (error) { if (!controller.signal.aborted) { setResults([]); setState('error') } }
+    }, 180)
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [query])
+  const choose = (result: SearchResult) => { window.location.assign(result.url) }
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') { setQuery(''); setResults([]); setState('idle'); return }
+    if (!results.length) return
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive(current => (current + 1) % results.length) }
+    if (event.key === 'ArrowUp') { event.preventDefault(); setActive(current => (current - 1 + results.length) % results.length) }
+    if (event.key === 'Enter' && active >= 0) { event.preventDefault(); choose(results[active]!) }
+  }
+  return <div className={styles.adminSearch} data-admin-search>
+    <label className={styles.srOnly} htmlFor="admin-global-search">Search pages, leads, media</label>
+    <svg className={styles.adminSearchIcon} data-admin-search-icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+    <input ref={input} id="admin-global-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} role="combobox" aria-autocomplete="list" aria-expanded={state !== 'idle'} aria-controls={listID} aria-activedescendant={active >= 0 ? `admin-search-result-${active}` : undefined} placeholder="Search pages, leads, media…" maxLength={80} />
+    <kbd className={styles.adminSearchShortcut} data-admin-search-shortcut aria-hidden="true">⌘K</kbd>
+    {state !== 'idle' && <div id={listID} className={styles.searchResults} {...(state === 'ready' ? { role: 'listbox', 'aria-label': 'Search results' } : {})}>
+      {state === 'loading' && <p role="status">Searching…</p>}
+      {state === 'empty' && <p role="status">No matching records.</p>}
+      {state === 'error' && <p role="alert">Search is unavailable. Try again.</p>}
+      {state === 'ready' && results.map((result, index) => <button id={`admin-search-result-${index}`} key={`${result.category}:${result.url}`} type="button" role="option" aria-selected={index === active} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(result)}><span>{result.title}</span><small>{result.category}</small></button>)}
+    </div>}
+  </div>
 }
 
-export function AdminNavigationToggle({ primary, site, tools, collections, displayName, roles }: Props) {
+export function AdminWorkspaceHeader() {
+  const pathname = usePathname()
+  return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<div className={styles.headerActions}><AdminGlobalSearch /><a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></div></header>
+}
+
+export function AdminNavigationToggle({ primary, site, tools, collections, displayName, roles, badges }: Props) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const button = useRef<HTMLButtonElement>(null)
@@ -85,7 +147,10 @@ export function AdminNavigationToggle({ primary, site, tools, collections, displ
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
   }, [open])
-  const link = (item: AdminNavigationItem) => <a data-admin-nav-item key={item.href} href={item.href} aria-current={pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span></a>
+  const link = (item: AdminNavigationItem) => {
+    const badge = badges[item.label as keyof AdminNavigationBadges]
+    return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
+  }
 
   return <>
     <button ref={button} className={styles.mobileMenu} data-testid="mobile-menu" type="button" aria-label={open ? 'Close navigation' : 'Open navigation'} aria-expanded={open} aria-controls={id} onClick={() => setOpen((current) => !current)}>

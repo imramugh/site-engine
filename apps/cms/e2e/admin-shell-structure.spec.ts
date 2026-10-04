@@ -27,8 +27,8 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await expect(owner.page.locator('[data-admin-header]')).toBeVisible()
   await expect(owner.page.locator('[data-admin-page-title]')).toHaveText('Dashboard')
   await expect(owner.page.locator('[data-admin-view-site]')).toHaveAttribute('href', '/')
-  await expect(owner.page.locator('[data-admin-primary] [data-admin-nav-item]')).toHaveText(['Dashboard', 'Content', 'Block gallery', 'Media', 'Leads', 'Careers', 'Reviews', 'Change log'])
-  await expect(owner.page.locator('[data-admin-secondary] [data-admin-nav-item]')).toHaveText(['Site', 'Integrations', 'Users'])
+  await expect(owner.page.locator('[data-admin-primary] [data-admin-nav-item] > span:not([data-admin-nav-badge])')).toHaveText(['Dashboard', 'Content', 'Block gallery', 'Media', 'Leads', 'Careers', 'Reviews', 'Change log'])
+  await expect(owner.page.locator('[data-admin-secondary] [data-admin-nav-item] > span:not([data-admin-nav-badge])')).toHaveText(['Site', 'Integrations', 'Users'])
   await expect(owner.page.locator('[data-admin-nav-separator]')).toHaveCount(1)
   await owner.page.locator('[data-admin-account-button]').click()
   await expect(owner.page.getByRole('menuitem', { name: 'Log out' })).toHaveAttribute('href', '/admin/logout')
@@ -54,7 +54,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
 
   const sales = await pageFor(browser, 'sales')
   await sales.page.goto('/admin')
-  await expect(sales.page.locator('[data-admin-primary] [data-admin-nav-item]')).toHaveText(['Dashboard', 'Leads'])
+  await expect(sales.page.locator('[data-admin-primary] [data-admin-nav-item] > span:not([data-admin-nav-badge])')).toHaveText(['Dashboard', 'Leads'])
   await expect(sales.page.locator('[data-admin-secondary]')).toHaveCount(0)
   await sales.page.goto('/content-tree')
   await expect(sales.page).toHaveURL(/\/admin\/login/)
@@ -62,6 +62,6 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
 
   const hiring = await pageFor(browser, 'hiring')
   await hiring.page.goto('/admin')
-  await expect(hiring.page.locator('[data-admin-primary] [data-admin-nav-item]')).toHaveText(['Dashboard', 'Careers'])
+  await expect(hiring.page.locator('[data-admin-primary] [data-admin-nav-item] > span:not([data-admin-nav-badge])')).toHaveText(['Dashboard', 'Careers'])
   await hiring.context.close()
 })

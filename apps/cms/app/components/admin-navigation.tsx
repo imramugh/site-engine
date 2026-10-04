@@ -1,12 +1,14 @@
 import type { CSSProperties } from 'react'
-import { adminSiteNavigationItems, adminToolNavigationItems, navigationForRoles, payloadCollectionItems, type AdminRole } from '../../src/admin-navigation'
+import { adminSiteNavigationItems, adminToolNavigationItems, navigationBadges, navigationForRoles, payloadCollectionItems, type AdminRole } from '../../src/admin-navigation'
+import { getPayload } from 'payload'
+import config from '../../payload.config'
 import { loadAdminBranding } from '../../src/admin-branding'
 import { AdminNavigationToggle, AdminWorkspaceHeader, SkipNavigation } from './admin-navigation-toggle'
 import styles from './staff-shell.module.css'
 
 type AdminNavProps = { user?: WorkspaceUser | null }
 
-export type WorkspaceUser = { name?: string | null; email?: string | null; roles?: string[] | null }
+export type WorkspaceUser = { id?: string | number | null; name?: string | null; email?: string | null; roles?: string[] | null; disabled?: boolean | null }
 
 export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | null }) {
   const roles = user?.roles ?? []
@@ -17,6 +19,8 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
   const collections = navigationForRoles(roles, payloadCollectionItems)
   const displayName = user?.name || user?.email || 'Staff account'
   const acceptedRoles = roles.filter((role): role is AdminRole => ['owner', 'editor', 'approver', 'sales', 'hiring'].includes(role))
+  const payload = await getPayload({ config })
+  const badges = await navigationBadges(payload, { id: user?.id, roles: acceptedRoles, disabled: user?.disabled })
 
   return <>
     {branding.stylesheetUrl ? <link rel="stylesheet" href={branding.stylesheetUrl} /> : null}
@@ -26,7 +30,7 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
         {branding.logoUrl ? <img src={branding.logoUrl} alt={branding.name} /> : <span aria-hidden="true">{branding.initials}</span>}
         <strong>{branding.name}</strong>
       </a>
-      <AdminNavigationToggle primary={primary} site={site} tools={tools} collections={collections} displayName={displayName} roles={acceptedRoles} />
+      <AdminNavigationToggle primary={primary} site={site} tools={tools} collections={collections} displayName={displayName} roles={acceptedRoles} badges={badges} />
     </aside>
     <AdminWorkspaceHeader />
   </>
