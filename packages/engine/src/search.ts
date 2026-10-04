@@ -15,7 +15,7 @@ function text(block: Block): { headings: string[]; body: string[] } {
     case 'faq': return { headings: [block.heading, ...block.items.map((item) => item.question)], body: block.items.map((item) => item.answer) }
     case 'callout': case 'cta': case 'imageText': return { headings: [block.heading], body: [block.body] }
     case 'richText': return { headings: [], body: [block.body] }
-    case 'contact': return { headings: [block.heading], body: [block.body] }
+    case 'contact': return { headings: [block.heading, block.contactDetails?.incidentCallout?.label ?? '', block.contactDetails?.nextStepsHeading ?? '', ...(block.contactDetails?.nextSteps?.map((step) => step.title) ?? [])], body: [block.body, block.contactDetails?.incidentCallout?.body ?? '', ...(block.contactDetails?.channels?.flatMap((channel) => [channel.label, channel.value]) ?? []), ...(block.contactDetails?.nextSteps?.map((step) => step.body) ?? [])] }
     case 'relatedServices': return { headings: [block.heading], body: [] }
     case 'video': return { headings: [], body: block.transcript ? [block.transcript] : [] }
     default: return { headings: [], body: [] }

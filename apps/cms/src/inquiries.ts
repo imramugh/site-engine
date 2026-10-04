@@ -51,7 +51,11 @@ export function validateInquiry(value: unknown): { input?: InquiryInput; errors:
   if (!inquiryTopics.includes(topic as InquiryTopic)) errors.topic = 'Choose an inquiry topic.'
   if (record.consent !== true) errors.consent = 'Consent is required before sending an inquiry.'
   if (!idempotency.test(key)) errors.idempotencyKey = 'This form request cannot be accepted. Refresh and try again.'
-  const name = optionalText(record.name, 160, 'name', errors)
+  let name: string | undefined
+  if (record.name !== undefined && record.name !== null && record.name !== '') {
+    if (typeof record.name !== 'string' || !record.name.trim() || record.name.trim().length > 160 || controlCharacters.test(record.name)) errors.name = 'Enter a name of up to 160 characters without control characters.'
+    else name = record.name.trim()
+  }
   const telephone = optionalText(record.telephone, 48, 'telephone', errors)
   const company = optionalText(record.company, 160, 'company', errors)
   if (Object.keys(errors).length) return { errors }

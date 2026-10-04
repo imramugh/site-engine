@@ -344,10 +344,16 @@ test('logout revokes the session, replays are denied, and cross-origin POST is b
 
 test('ENG-019 exposes accessible public validation and queues an urgent inquiry', async ({ page }) => {
   await page.goto('/general/gallery')
+  let inquiryPosts = 0
+  page.on('request', (request) => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/inquiries') inquiryPosts += 1 })
   await page.getByRole('button', { name: 'Send inquiry' }).click()
-  await expect(page.getByText('Enter a valid email address.')).toBeVisible()
-  await expect(page.getByText('Consent is required before sending an inquiry.')).toBeVisible()
+  await expect(page.locator('[data-inquiry-field-error="email"]')).toHaveText('Enter a valid email address.')
+  await expect(page.locator('[data-inquiry-field-error="consent"]')).toHaveText('Consent is required before sending an inquiry.')
+  expect(inquiryPosts).toBe(0)
+  await page.locator('[name="name"]').fill('Incident visitor')
   await page.locator('[name="email"]').fill('incident.visitor@example.test')
+  await page.locator('[name="telephone"]').fill('+1 555 0199')
+  await page.locator('[name="company"]').fill('Example Company')
   await page.locator('[name="topic"]').selectOption('active-incident')
   await page.locator('[name="message"]').fill('Synthetic active incident test message.')
   await page.getByRole('checkbox').check()
@@ -356,7 +362,11 @@ test('ENG-019 exposes accessible public validation and queues an urgent inquiry'
   await signInLocalOwner(page, 'synthetic-intake-owner-code-06', 'content-owner.synthetic@example.test')
   const leads = await page.request.get('/api/leads?urgent=true')
   expect(leads.ok()).toBeTruthy()
-  expect(await leads.text()).toContain('Synthetic active incident test message.')
+  const leadText = await leads.text()
+  expect(leadText).toContain('Synthetic active incident test message.')
+  expect(leadText).toContain('Incident visitor')
+  expect(leadText).toContain('+1 555 0199')
+  expect(leadText).toContain('Example Company')
 })
 
 test('the login page truthfully reports a disabled provider', async ({ page }) => {

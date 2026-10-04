@@ -118,6 +118,14 @@ describe('ENG-011 deterministic readiness report', () => {
     expect(checkSiteSnapshot(snapshot, { asOf, style: { bannedPhrases: ['restricted phrase'] } }).warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE' })]))
   })
 
+  it('checks contact detail prose without treating channel hrefs as content', () => {
+    const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.3.0'
+    snapshot.settings.sections[0]!.allowedTemplates.push('standard')
+    const page = structuredClone(snapshot.pages[0]!); page.id = 'efefefef-efef-4efe-8efe-efefefefefef'; page.slug = 'contact'; page.template = 'standard'; page.blocks = [{ id: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd', type: 'contact', heading: 'Contact', body: 'Neutral contact information.', contactDetails: { incidentCallout: { label: 'Urgent information', body: 'restricted phrase' }, channels: [{ kind: 'link', label: 'Profile', value: 'Neutral profile', href: 'https://example.test/profile' }], nextStepsHeading: 'Next steps', nextSteps: [{ title: 'Review', body: 'We review the inquiry.' }] }, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } } as never]; snapshot.pages.push(page); snapshot.settings.sections[0]!.pageIds.push(page.id)
+    expect(checkSiteSnapshot(snapshot, { asOf, style: { bannedPhrases: ['restricted phrase'] } }).warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE' })]))
+  })
+
   it('keeps style, freshness, FAQ, lengths, and orphan checks as visible warnings', () => {
     const snapshot = structuredClone(neutralFixture)
     const page = snapshot.pages[0]!

@@ -6,7 +6,7 @@ test('public inquiry survives retries and enters the protected staff workflow', 
   const origin = baseURL!
   const headers = { origin }
   const visitor = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
-  const input = { name: 'Synthetic visitor', email: 'http-visitor@example.test', message: '<script>literal inquiry text</script> Please help.', topic: 'active-incident', sourcePage: '/contact', consent: true, idempotencyKey: randomUUID() }
+  const input = { name: 'Synthetic visitor', email: 'http-visitor@example.test', message: '<script>literal inquiry text</script> Please help.', topic: 'active-incident', sourcePage: '/contact', consent: true, telephone: '+1 555 0123', company: 'Example Company', idempotencyKey: randomUUID() }
   try {
     expect((await visitor.request.post('/api/inquiries', { headers, data: { ...input, consent: false } })).status()).toBe(422)
     const accepted = await visitor.request.post('/api/inquiries', { headers, data: input })
@@ -15,6 +15,8 @@ test('public inquiry survives retries and enters the protected staff workflow', 
     const replay = await visitor.request.post('/api/inquiries', { headers, data: input })
     expect(replay.status()).toBe(200)
     expect((await replay.json()).id).toBe(id)
+    const legacy = await visitor.request.post('/api/inquiries', { headers, data: { email: 'legacy-http-visitor@example.test', message: 'A compatible legacy inquiry.', topic: 'general', sourcePage: '/contact', consent: true, idempotencyKey: randomUUID() } })
+    expect(legacy.status()).toBe(201)
     expect((await visitor.request.post('/api/inquiries', { headers, data: { ...input, message: 'Conflicting content' } })).status()).toBe(409)
     expect((await visitor.request.get('/api/leads')).status()).toBe(401)
     expect((await visitor.request.get('/api/inquiries')).status()).toBeGreaterThanOrEqual(400)
@@ -27,7 +29,9 @@ test('public inquiry survives retries and enters the protected staff workflow', 
     expect(listed.status()).toBe(200)
     expect((await listed.json()).docs).toEqual(expect.arrayContaining([expect.objectContaining({ id, urgent: true, stage: 'new' })]))
     await page.goto('/leads')
+    await page.getByRole('button', { name: 'Urgent: http-visitor@example.test — active-incident (new)' }).click()
     await expect(page.getByText(input.message, { exact: true })).toBeVisible()
+    await expect(page.getByText('Phone: +1 555 0123 · Company: Example Company', { exact: true })).toBeVisible()
     expect(await page.locator('script').filter({ hasText: 'literal inquiry text' }).count()).toBe(0)
     expect((await page.request.patch(`/api/leads/${id}`, { headers, data: { stage: 'qualified', notes: 'Synthetic review completed.' } })).status()).toBe(200)
     expect((await page.request.patch(`/api/inquiries/${id}`, { headers, data: { stage: 'won' } })).status()).toBeGreaterThanOrEqual(400)
