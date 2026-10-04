@@ -87,11 +87,12 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   const deletion = await page.evaluate(async (sectionID) => (await fetch(`/api/sections/${sectionID}`, { method: 'DELETE' })).status, section.body.doc.id)
   expect(deletion).toBeGreaterThanOrEqual(400)
   const configured = await page.evaluate(async () => {
-    const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'configure', provider: 'openai', model: 'synthetic-browser-model', credential: 'synthetic-browser-provider-credential', fallbackProvider: null, monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/browser', pricingAsOf: '2026-10-04' }) })
+    const response = await fetch('/api/integrations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'configure', provider: 'google-gemini', model: 'synthetic-browser-model', credential: 'synthetic-browser-provider-credential', fallbackProvider: null, monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/browser', pricingAsOf: '2026-10-04' }) })
     return response.status
   })
-  expect(configured).toBe(200)
+  expect(configured).toBe(201)
   await page.goto('/ai-jobs')
+  await page.locator('#ai-provider').selectOption('google-gemini')
   await expect(page.getByRole('heading', { name: 'AI generation' })).toBeVisible()
   await page.locator('#ai-prompt').fill('Synthetic browser prompt that must not be shown in the job listing.')
   await page.locator('#ai-max-output').fill('32')
