@@ -8,7 +8,7 @@ type DashboardPayload = {
 }
 export type DashboardShortcut = { href: string; label: string }
 export type DashboardReview = { id: string; name: string; state: string; updatedAt?: string; readiness: 'passed' | 'blocked' | 'not-run'; issues: number; changes: number }
-export type DashboardIssue = { id: string; title: string; messages: string[]; severity: 'warning' | 'blocker' }
+export type DashboardIssue = { id: string; title: string; summary: string; messages: string[]; severity: 'warning' | 'blocker' }
 export type DashboardLead = { id: string; name: string; company?: string; note: string; tag: 'Urgent' | 'New' | 'Follow up' }
 export type AdminDashboardData = {
   state: 'ready' | 'unconfigured' | 'error'
@@ -53,12 +53,22 @@ function pageIssues(manifest: any): NonNullable<AdminDashboardData['pages']>['wi
   const report = checkSiteSnapshot(manifest, { asOf: new Date() })
   const pages = new Map<string, any>((Array.isArray(manifest.pages) ? manifest.pages : []).map((page: any) => [page.id, page]))
   const grouped = new Map<string, DashboardIssue>()
+  const labels: Record<string, string> = {
+    ORPHAN_PAGE: 'Needs an inbound link', REVIEW_STALE: 'Content review overdue',
+    SEO_DESCRIPTION_LENGTH: 'SEO description length', SEO_DESCRIPTION_MISSING: 'SEO description missing',
+    INTERNAL_LINK_BROKEN: 'Broken internal link', INTERNAL_LINK_ANCHOR_BROKEN: 'Broken page anchor',
+    SUMMARY_LENGTH: 'Summary needs review', TITLE_LENGTH: 'Title length needs review',
+    HEADING_ORDER: 'Heading order', FAQ_SELF_CONTAINED: 'FAQ answer needs context',
+    STRUCTURED_DATA_INVALID: 'Structured data needs review', STYLE_BANNED_PHRASE: 'Unapproved phrase',
+    STYLE_CANADIAN_SPELLING: 'Spelling needs review', STYLE_PREFERRED_TERM: 'Preferred terminology',
+    STYLE_READING_LEVEL: 'Reading level', STYLE_SENTENCE_LENGTH: 'Long sentence',
+  }
   for (const issue of report.issues) {
     const page = issue.pageId ? pages.get(issue.pageId) : undefined
     if (!page) continue
-    const entry: DashboardIssue = grouped.get(page.id) ?? { id: page.id, title: page.title, messages: [], severity: issue.severity }
+    const entry: DashboardIssue = grouped.get(page.id) ?? { id: page.id, title: page.title, summary: labels[issue.code] ?? issue.message, messages: [], severity: issue.severity }
     if (!entry.messages.includes(issue.message)) entry.messages.push(issue.message)
-    if (issue.severity === 'blocker') entry.severity = 'blocker'
+    if (issue.severity === 'blocker' && entry.severity !== 'blocker') { entry.severity = 'blocker'; entry.summary = labels[issue.code] ?? issue.message }
     grouped.set(page.id, entry)
   }
   // Invalid global configuration must never be represented as an all-clear page count.
