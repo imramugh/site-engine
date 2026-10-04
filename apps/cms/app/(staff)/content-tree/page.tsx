@@ -1,11 +1,11 @@
 import { getPayload } from 'payload'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import config from '../../payload.config'
-import { hasRole } from '../../src/access'
-import { buildContentTree, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../src/content-tree'
-import { serverSessionStrategy } from '../../src/identity'
-import { StaffShell } from '../components/staff-shell'
+import config from '../../../payload.config'
+import { hasRole } from '../../../src/access'
+import { buildContentTree, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
+import { serverSessionStrategy } from '../../../src/identity'
+import { StaffShell } from '../../components/staff-shell'
 
 function PageNode({ node }: { node: ContentTreeNode }) {
   const { page } = node
