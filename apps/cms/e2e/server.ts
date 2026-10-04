@@ -13,6 +13,7 @@ import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
 import { canonicalHash } from '../src/publishing.js'
+import { deriveRoutes } from '@site-engine/engine'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 
@@ -251,7 +252,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const jobID = (request.url ?? '').split('/')[3]!
       return payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }).then((job) => {
         const manifest = job.proposedManifest as { pages?: Array<{ id?: string; blocks?: Array<{ type?: string; heading?: string }> }> }
-        const heading = manifest.pages?.flatMap((page) => page.blocks ?? []).find((block) => block.type === 'hero')?.heading ?? 'Preview unavailable'
+        const requestedPath = '/' + (request.url ?? '').split('/').slice(5).join('/'); const pageID = manifest.pages && deriveRoutes(manifest as never).routes.find((route) => route.path === requestedPath)?.page.id; const heading = manifest.pages?.find((page) => page.id === pageID)?.blocks?.find((block) => block.type === 'hero')?.heading ?? 'Preview unavailable'
         html(response, `<!doctype html><title>Preview</title><main><h1>${String(heading).replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character]!))}</h1></main>`)
       }).catch(() => { response.writeHead(404); response.end() })
     }).catch(() => { response.writeHead(403); response.end() })
