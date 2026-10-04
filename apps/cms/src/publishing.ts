@@ -178,7 +178,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   })
   // Contract upgrades are only caused by the reviewed theme selection itself.
   // Ordinary content edits keep the immutable baseline pin intact.
-  const contractVersion = selectedThemeTransition ? selectedTheme?.contract : versions.contractVersion
+  const contractVersion = selectedThemeTransition ? selectedTheme?.contract : base.settings.contractVersion
   const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes

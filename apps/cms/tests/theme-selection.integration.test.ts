@@ -7,7 +7,7 @@ import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { transitionChangeSet } from '../src/editorial'
-import { approveChangeSet, canonicalHash, changeSetHash } from '../src/publishing'
+import { canonicalHash, changeSetHash } from '../src/publishing'
 import { claimPreviewRenderJob, completePreviewRenderJob, prepareReviewPreview } from '../src/review-preview'
 import { runReviewQuality } from '../src/review-quality'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
@@ -25,10 +25,12 @@ const registry = { themes: [{ manifest: oldManifest, installedAt: '2026-10-03T00
 process.env.DATABASE_URI = `file:${db}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-theme-selection'
 process.env.SITE_THEME_REGISTRY_JSON = registryFile
+process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 writeFileSync(registryFile, JSON.stringify(registry))
 
 const { default: config } = await import('../payload.config.js')
 const { getInstalledTheme, parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
+const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })
@@ -90,11 +92,19 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: set.id }))
     const token = newOpaqueToken(); const now = new Date().toISOString()
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    const approved = await withPayloadTransaction(payload, req => {
-      req.headers = new Headers({ cookie: `site_engine_session=${token}` })
-      return approveChangeSet({ payload, req, actor: owner, id: set.id, expectedRevision: Number(submitted.revision), expectedChangeHash: changeSetHash(submitted.changes), includedChangeKeys: [`theme-settings:${change.id}`], previewContentHash: canonicalHash(proposed), versions: job.versionPins as { themeVersion: string; engineVersion: string; contractVersion: string }, initialBaseline: published })
-    })
-    const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: String(approved.snapshotID), overrideAccess: true })
+    const quality = await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })
+    const proof = (quality.quality as { proof: Record<string, unknown> }).proof
+    const request = (value: unknown) => editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `site_engine_session=${token}` }, body: JSON.stringify({ id: set.id, proof: value }) }), { params: Promise.resolve({ action: 'approve' }) })
+    const tampered = structuredClone(proof) as { versionPins: Record<string, unknown> }
+    tampered.versionPins.liveContractVersion = '1.1.0'
+    expect((await request(tampered)).status).toBe(400)
+    const omitted = structuredClone(proof) as { versionPins: Record<string, unknown> }
+    delete omitted.versionPins.liveContractVersion
+    expect((await request(omitted)).status).toBe(400)
+    const response = await request(proof)
+    expect(response.status).toBe(200)
+    const approved = await response.json() as { snapshotID: string }
+    const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID, overrideAccess: true })
     expect(approvedSnapshot).toMatchObject({ contractVersion: '1.1.0', themeVersion: manifest.version })
     expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.1.0')
   })
