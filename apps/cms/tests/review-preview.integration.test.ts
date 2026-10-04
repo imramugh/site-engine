@@ -294,8 +294,14 @@ describe('ENG-030 immutable review preview jobs', () => {
 
     const otherApprover = await payload.create({ collection: 'users', data: { email: `other-approver-${randomUUID()}@example.test`, name: 'Other approver', roles: ['approver'] }, overrideAccess: true })
     expect((await get(await headersFor(otherApprover))).status).toBe(403)
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    const path = `/preview/changes/${job.id}/proposed/`
+    expect((await reviewSession(current.headers, path)).status).toBe(204)
+    expect((await reviewSession(await headersFor(otherApprover), path)).status).toBe(403)
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
     expect((await get(current.headers)).status).toBe(403)
+    expect((await reviewSession(current.headers, path)).status).toBe(403)
   })
 
   it('authorizes only the current completed comparison and its safe nested artifacts', async () => {
