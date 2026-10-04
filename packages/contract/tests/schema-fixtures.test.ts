@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { neutralFixture } from '../src/fixtures.js'
-import { AppearanceSchema, BlockSchema, BusinessCaseSchema, ChangeSetSchema, MediaReferenceSchema, PageSchema, SectionSchema, SiteSettingsDraftSchema, SiteSettingsSchema, SiteSnapshotSchema, RedirectSchema, StyleGuideSchema, ThemeInstallSchema, ThemeManifestSchema, ThemeSelectionSchema } from '../src/index.js'
+import { AppearanceSchema, BackgroundSchema, BlockSchema, ChangeSetStateSchema, ContractVersionSchema, LinkSchema, LogoToneSchema, MotionIntentSchema, PhoneCtaSchema, SpacingSchema, TemplateSchema, WidthSchema, BusinessCaseSchema, ChangeSetSchema, MediaReferenceSchema, PageSchema, SectionSchema, SiteSettingsDraftSchema, SiteSettingsSchema, SiteSnapshotSchema, RedirectSchema, StyleGuideSchema, ThemeInstallSchema, ThemeManifestSchema, ThemeSelectionSchema } from '../src/index.js'
 const id = '11111111-1111-4111-8111-111111111111'
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
 const block = { id, hidden: false, type: 'cta' as const, heading: 'Continue', body: 'Neutral content.', cta: { label: 'Read', href: '/read' }, appearance }
 
 describe('ENG-002 exported schema fixtures', () => {
+  it.each([
+    ['contract version', ContractVersionSchema, '1.1.0', '2.0.0'],
+    ...['default', 'subtle', 'brand', 'accent', 'highlight', 'inverse'].map(value => [`background ${value}`, BackgroundSchema, value, 'raw-css']),
+    ['width', WidthSchema, 'wide', 'raw'], ['spacing', SpacingSchema, 'spacious', 'raw'], ['motion', MotionIntentSchema, 'ambient', 'raw'], ['logo tone', LogoToneSchema, 'inverse', 'raw'],
+    ['template', TemplateSchema, 'service', 'raw'], ['change state', ChangeSetStateSchema, 'published', 'raw'],
+    ['link', LinkSchema, { label: 'Neutral', href: '/neutral' }, { label: 'Neutral', href: 'https://example.test' }],
+    ['phone', PhoneCtaSchema, { label: 'Call', number: '+14165550123' }, { label: 'Call', number: '4165550123' }],
+  ])('%s accepts valid and rejects invalid fixture', (_name, schema, valid, invalid) => { expect(schema.safeParse(valid).success).toBe(true); expect(schema.safeParse(invalid).success).toBe(false) })
   it.each([
     ['appearance', AppearanceSchema, appearance, { ...appearance, background: '#fff' }],
     ['theme selection', ThemeSelectionSchema, { id: 'neutral', version: '1.0.0', contract: '1.0.0', manifestDigest: 'a'.repeat(64) }, { id: 'neutral', version: 'latest', contract: '1.0.0', manifestDigest: 'a'.repeat(64) }],
