@@ -429,6 +429,7 @@ test('ENG-006 persists service, article, business-case, and job metadata through
     const saved = editor.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${id}`) && response.request().method() === 'POST')
     await editor.page.getByRole('button', { name: 'Save draft' }).click()
     expect((await saved).status()).toBe(200)
+    await expect(editor.page.getByRole('status')).toContainText(/Rendering saved draft preview|Draft saved/, { timeout: 15_000 })
     await expect(editor.page.getByRole('button', { name: 'Save draft' })).toBeDisabled()
     await editor.page.reload()
     await editor.page.getByText('Page fields', { exact: false }).first().click()
