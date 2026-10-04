@@ -26,6 +26,7 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
   it('reports real submitted-review and lead queue counts to an owner', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'dashboard-owner@example.test', name: 'Dashboard Owner', roles: ['owner'] }, overrideAccess: true })
     await payload.create({ collection: 'change-sets', data: { name: 'Ready for review', state: 'submitted', revision: 1, changes: [] }, context: { editorialInternal: true }, overrideAccess: true })
+    await payload.create({ collection: 'change-sets', data: { name: 'Blocked review', state: 'submitted', revision: 1, changes: [], quality: { checks: [{ name: 'contract-and-tree', status: 'failed' }] } }, context: { editorialInternal: true }, overrideAccess: true })
     await createAcceptedInquiry(payload, validateInquiry({ email: 'urgent-dashboard@example.test', message: 'An active incident needs attention.', topic: 'active-incident', sourcePage: '/contact', consent: true, idempotencyKey: 'urgent-dashboard-idempotency-key' }).input!)
     await createAcceptedInquiry(payload, validateInquiry({ email: 'standard-dashboard@example.test', message: 'A new project inquiry needs attention.', topic: 'project', sourcePage: '/contact', consent: true, idempotencyKey: 'standard-dashboard-idempotency-key' }).input!)
 
@@ -36,7 +37,9 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
     await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt, healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', checks: [] } }, overrideAccess: true, context: { editorialInternal: true } })
 
     const result = await getAdminDashboardData(observedPayload([]), owner)
-    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 1, items: [{ name: 'Ready for review', readiness: 'not-run', issues: 0 }] }, pages: { total: 0, draft: 0, readiness: { state: 'not-run', issues: 0 }, withIssues: { state: 'unavailable' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt } })
+    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 2 }, pages: { total: 0, draft: 0, readiness: { state: 'available', issues: 0 }, withIssues: { state: 'unavailable' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt } })
+    expect(result.pendingReviews?.items.find((item) => item.name === 'Ready for review')).toMatchObject({ readiness: 'not-run', issues: 0 })
+    expect(result.pendingReviews?.items.find((item) => item.name === 'Blocked review')).toMatchObject({ readiness: 'blocked', issues: 0 })
     expect(result.shortcuts.map((item) => item.href)).toContain('/leads')
   })
 
