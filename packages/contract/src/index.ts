@@ -310,4 +310,4 @@ export function parseSiteSnapshot(input: unknown): SiteSnapshot {
   error.name = 'SnapshotValidationError';
   throw error;
 }
-export type { PublicRoute, RouteModel } from './render-types.js';
+export type { PublicRoute, RouteModel, RouteNavigation } from './render-types.js';
