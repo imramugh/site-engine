@@ -28,7 +28,7 @@
 .adminLinks a { padding: .55rem .65rem; border-radius: .35rem; }
 .adminLinks a[aria-current="page"] { background: var(--admin-accent); color: var(--admin-accent-contrast); font-weight: 700; }
 .adminLinks a:hover, .adminLinks a:focus-visible { background: color-mix(in srgb, var(--admin-sidebar-foreground) 16%, transparent); }
-.navIcon { display: inline-block; width: 1rem; height: 1rem; margin-right: .35rem; fill: currentColor; vertical-align: -.15em; }
+.navIcon { display: inline-block; width: 1rem; height: 1rem; margin-right: .35rem; vertical-align: -.15em; }
 .collectionLinks summary { cursor: pointer; padding: .5rem .65rem; font-weight: 700; }
 .collectionLinks[open] summary { margin-bottom: .25rem; }
 .navHeading, .roleList { color: color-mix(in srgb, var(--admin-sidebar-foreground) 72%, transparent); font-size: .82rem; }
