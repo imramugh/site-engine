@@ -134,3 +134,8 @@
   .deviceControls { margin-left: 3px; padding-left: 4px; }
   .frames { gap: 10px; }
 }
+
+/* Keep long field histories scrollable without pushing decisions off-screen. */
+.visuallyHidden { position:absolute; width:1px; height:1px; padding:0!important; margin:-1px!important; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.changes { max-height:460px; overflow-y:auto; overscroll-behavior:contain; }
+@media(max-width:700px){.changes{max-height:360px}}

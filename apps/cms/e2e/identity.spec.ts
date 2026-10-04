@@ -218,7 +218,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     return pageBody.doc.id
   })
   await page.goto('/admin/editorial')
-  await expect(page.getByRole('heading', { name: 'Reviews', exact: true })).toBeVisible()
+  await expect(page.locator('[data-admin-page-title]')).toHaveText('Reviews')
 
   const changeSetID = await selectCapturedSet(page, created)
 
@@ -279,6 +279,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   }
   await assertReviewAccessibility()
+  await reviewer.evaluate(() => window.scrollTo(0, 0))
+  await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await reviewer.screenshot({ path: 'artifacts/editorial-comparison-1440.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Live', exact: true }).click()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveCount(0)
@@ -295,6 +297,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   expect((await mobileFrames.nth(0).boundingBox())!.y).not.toBe((await mobileFrames.nth(1).boundingBox())!.y)
   expect(await reviewer.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
   await assertReviewAccessibility()
+  await reviewer.evaluate(() => window.scrollTo(0, 0))
+  await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await reviewer.screenshot({ path: 'artifacts/editorial-comparison-390.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Desktop', exact: true }).click()
   await expect.poll(() => previewViewport('Proposed comparison')).toEqual({ width: 760, height: 640 })
