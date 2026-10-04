@@ -2,12 +2,15 @@ export type ContentTreePage = {
   id: string
   title: string
   template: string
+  slug?: string
+  status?: string | null
+  updatedAt?: string | null
   _status?: string | null
   parentId?: string | { id?: string } | null
   sectionId?: string | { id?: string } | null
 }
 
-export type ContentTreeSection = { id: string; name: string }
+export type ContentTreeSection = { id: string; name: string; slug?: string }
 export type ContentTreeNode = { page: ContentTreePage; children: ContentTreeNode[]; cycle: boolean }
 export type ContentTreeGroup = { section: ContentTreeSection; roots: ContentTreeNode[]; unplaced: ContentTreeNode[] }
 export type ContentTree = { sections: ContentTreeGroup[]; unassigned: ContentTreeNode[] }
