@@ -9,7 +9,7 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
 import { runReviewQuality } from '../src/review-quality'
-import { loadReviewModeData } from '../src/review-mode'
+import { loadReviewModeData, routeForReviewPreview } from '../src/review-mode'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-review-preview-'))
@@ -85,6 +85,21 @@ async function reviewHeaders(role: 'owner' | 'editor') {
 }
 
 describe('ENG-030 immutable review preview jobs', () => {
+  it('uses canonical engine routes for section landings and rejects cyclic ancestry', () => {
+    const snapshot = baseline()
+    const section = snapshot.settings.sections[0]!
+    const landingID = randomUUID()
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: landingID, title: 'Section landing', slug: 'section-start', parentId: undefined, sectionId: section.id })
+    section.pageIds.push(landingID); section.landingPageId = landingID
+    expect(routeForReviewPreview(snapshot, [`pages:${landingID}`])).toEqual({ path: `/${section.slug}`, pageID: landingID })
+
+    const firstID = randomUUID(); const secondID = randomUUID()
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: firstID, title: 'Cycle one', slug: 'cycle-one', parentId: secondID, sectionId: section.id })
+    snapshot.pages.push({ ...structuredClone(snapshot.pages[0]!), id: secondID, title: 'Cycle two', slug: 'cycle-two', parentId: firstID, sectionId: section.id })
+    section.pageIds.push(firstID, secondID)
+    expect(() => routeForReviewPreview(snapshot, [`pages:${firstID}`])).toThrow(/cycle|cyclic/i)
+  })
+
   it('serves exact review-mode data only to current reviewers and describes stable rendered blocks', async () => {
     const current = await fixture('on-page-review')
     const blockID = String((current.changes[0]!.before.blocks as Array<{ id: string }>)[0]!.id)
@@ -92,12 +107,14 @@ describe('ENG-030 immutable review preview jobs', () => {
     const blocks = structuredClone(after.blocks) as Array<Record<string, unknown>>
     blocks[0] = { ...blocks[0], heading: 'A changed synthetic heading' }
     current.changes[0]!.after = { ...after, blocks }
+    const sectionBefore = structuredClone(current.live.settings.sections[0]!) as unknown as Record<string, unknown>
+    ;(current.changes as unknown as Array<Record<string, unknown>>).push({ collection: 'sections', id: String(sectionBefore.id), before: sectionBefore, after: { ...sectionBefore, name: 'Excluded section change' }, beforeHash: canonicalHash(sectionBefore), afterHash: null })
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: current.changes }, overrideAccess: true, context: { editorialInternal: true } })
     const job = await prepare(current)
     const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
     await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
 
-    await expect(loadReviewModeData(payload, String(current.set.id))).resolves.toMatchObject({ id: current.set.id, path: '/', changedBlocks: [{ id: blockID, label: 'A changed synthetic heading', fields: ['heading'] }] })
+    await expect(loadReviewModeData(payload, String(current.set.id))).resolves.toMatchObject({ id: current.set.id, path: '/', changedBlocks: [{ id: blockID, label: 'A changed synthetic heading', fields: ['heading'], liveType: 'hero', proposedType: 'hero', liveOccurrence: 0, proposedOccurrence: 0, details: [{ field: 'heading', before: expect.any(String), after: 'A changed synthetic heading' }] }], otherChanges: [] })
     const call = (headers: Headers) => reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
     expect((await call(current.headers)).status).toBe(200)
     expect((await call(await reviewHeaders('owner'))).status).toBe(200)

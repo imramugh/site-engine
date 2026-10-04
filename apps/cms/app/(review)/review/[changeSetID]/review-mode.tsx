@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReviewModeData } from '../../../../src/review-mode'
 import styles from './review-mode.module.css'
 
@@ -8,7 +8,7 @@ type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
 type Data = { review: ReviewModeData; fresh: boolean }
 
-function ReviewFrame({ title, src, width, changed, active, onReady }: { title: string; src: string; width: 1440 | 390; changed: string[]; active?: string; onReady: (available: Set<string>) => void }) {
+function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
   const [availableWidth, setAvailableWidth] = useState(width)
@@ -27,22 +27,31 @@ function ReviewFrame({ title, src, width, changed, active, onReady }: { title: s
     let style = doc.getElementById('site-engine-review-highlights')
     if (!style) {
       style = doc.createElement('style'); style.id = 'site-engine-review-highlights'
-      style.textContent = '[data-block-id][data-review-changed="true"]{outline:3px solid #f4ba16!important;outline-offset:-3px;position:relative}[data-block-id][data-review-active="true"]{outline:5px solid #007ea8!important;outline-offset:-5px}'
+      style.textContent = '[data-review-changed="true"]{outline:3px solid #f4ba16!important;outline-offset:-3px;position:relative}[data-review-active="true"]{outline:5px solid #007ea8!important;outline-offset:-5px}'
       doc.head.append(style)
     }
-    const wanted = new Set(changed)
     const found = new Set<string>()
-    doc.querySelectorAll<HTMLElement>('[data-block-id]').forEach((node) => {
-      const id = node.dataset.blockId
+    doc.querySelectorAll<HTMLElement>('[data-review-changed], [data-review-active]').forEach((node) => {
       node.removeAttribute('data-review-active')
-      if (id && wanted.has(id)) { node.dataset.reviewChanged = 'true'; found.add(id) } else node.removeAttribute('data-review-changed')
-      if (id && id === active) {
+      node.removeAttribute('data-review-changed')
+    })
+    const typed = [...doc.querySelectorAll<HTMLElement>('[data-block-type], [data-block]')]
+    for (const change of changed) {
+      let node = [...doc.querySelectorAll<HTMLElement>('[data-block-id]')].find((candidate) => candidate.dataset.blockId === change.id)
+      if (!node) {
+        const type = variant === 'live' ? change.liveType : change.proposedType
+        const occurrence = variant === 'live' ? change.liveOccurrence : change.proposedOccurrence
+        if (type && occurrence !== undefined) node = typed.filter((candidate) => (candidate.dataset.blockType ?? candidate.dataset.block) === type)[occurrence]
+      }
+      if (!node) continue
+      node.dataset.reviewChanged = 'true'; found.add(change.id)
+      if (change.id === active) {
         node.dataset.reviewActive = 'true'
         if (scroll) node.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
       }
-    })
+    }
     onReady(found)
-  }, [active, changed, onReady])
+  }, [active, changed, onReady, variant])
   useEffect(() => { decorate(Boolean(active)) }, [active, decorate])
   const scale = Math.min(1, availableWidth / width)
   return <div ref={shell} className={styles.frameViewport} style={{ height: 760 * scale }}>
@@ -56,7 +65,7 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   const [device, setDevice] = useState<Device>('desktop')
   const [panel, setPanel] = useState(true)
   const [active, setActive] = useState<string>()
-  const [available, setAvailable] = useState<Set<string>>(new Set())
+  const [availableByPane, setAvailableByPane] = useState<{ live: Set<string>; proposed: Set<string> }>({ live: new Set(), proposed: new Set() })
   const [comment, setComment] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
@@ -71,11 +80,13 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   }, [changeSetID])
   useEffect(() => { void load() }, [load])
   const review = data?.review
-  const changedIDs = useMemo(() => review?.changedBlocks.map((item) => item.id) ?? [], [review?.changedBlocks])
-  const rememberAvailable = useCallback((found: Set<string>) => setAvailable((current) => {
-    if ([...found].every((id) => current.has(id))) return current
-    return new Set([...current, ...found])
+  const rememberAvailable = useCallback((pane: 'live' | 'proposed', found: Set<string>) => setAvailableByPane((current) => {
+    const previous = current[pane]
+    if (previous.size === found.size && [...found].every((id) => previous.has(id))) return current
+    return { ...current, [pane]: found }
   }), [])
+  const rememberLive = useCallback((found: Set<string>) => rememberAvailable('live', found), [rememberAvailable])
+  const rememberProposed = useCallback((found: Set<string>) => rememberAvailable('proposed', found), [rememberAvailable])
   async function action(name: 'run-quality' | 'approve' | 'request-changes' | 'reject' | 'comment') {
     if (!review || acting) return
     if (name === 'comment' && !comment.trim()) return
@@ -96,13 +107,14 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   const publishable = report?.publishable === true && Boolean(review.approvalProof)
   const path = review.path === '/' ? '' : review.path
   const width = device === 'mobile' ? 390 : 1440
+  const available = mode === 'live' ? availableByPane.live : mode === 'proposed' ? availableByPane.proposed : new Set([...availableByPane.live, ...availableByPane.proposed])
   return <main className={styles.workspace} data-page-review data-panel-open={panel}>
-    <header className={styles.bar} aria-label="Pending change review">
+    <header className={styles.bar} aria-label="Pending change review" data-page-review-bar>
       <div className={styles.identity}><span aria-hidden="true" /><div><strong>{submitted ? 'This page has a pending change' : `Change set ${review.state}`}</strong><small>{review.name} · revision {review.revision}</small></div></div>
-      <div className={styles.viewControls} role="group" aria-label="Comparison view">
+      <div className={styles.viewControls} role="group" aria-label="Comparison view" data-page-review-view-controls>
         {([['live', 'Live'], ['proposed', 'Proposed'], ['side', 'Side by side']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>{label}</button>)}
       </div>
-      <div className={styles.deviceControls} role="group" aria-label="Preview device">
+      <div className={styles.deviceControls} role="group" aria-label="Preview device" data-page-review-device-controls>
         <button type="button" aria-pressed={device === 'desktop'} onClick={() => setDevice('desktop')}>Desktop</button><button type="button" aria-pressed={device === 'mobile'} onClick={() => setDevice('mobile')}>Mobile</button>
       </div>
       <button className={styles.panelButton} type="button" aria-expanded={panel} onClick={() => setPanel((open) => !open)}>{panel ? 'Hide details' : 'Details and actions'}</button>
@@ -111,14 +123,14 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
     <div className={styles.content}>
       <section className={styles.canvas} aria-label="Rendered page comparison" data-review-mode={mode} data-device={device}>
         <div className={styles.frames} data-single={mode !== 'side'}>
-          {mode !== 'proposed' && <article className={styles.pane} data-review-frame="live"><span className={styles.paneLabel}>Live</span><ReviewFrame title="Live page" src={`/preview/changes/${review.previewJobID}/live${path || '/'}`} width={width} changed={changedIDs} active={active} onReady={rememberAvailable} /></article>}
-          {mode !== 'live' && <article className={styles.pane} data-review-frame="proposed"><span className={`${styles.paneLabel} ${styles.proposed}`}>Proposed</span><ReviewFrame title="Proposed page" src={`/preview/changes/${review.previewJobID}/proposed${path || '/'}`} width={width} changed={changedIDs} active={active} onReady={rememberAvailable} /></article>}
+          {mode !== 'proposed' && <article className={styles.pane} data-review-frame="live"><span className={styles.paneLabel}>Live</span><ReviewFrame title="Live page" src={`/preview/changes/${review.previewJobID}/live${path || '/'}`} width={width} changed={review.changedBlocks} active={active} variant="live" onReady={rememberLive} /></article>}
+          {mode !== 'live' && <article className={styles.pane} data-review-frame="proposed"><span className={`${styles.paneLabel} ${styles.proposed}`}>Proposed</span><ReviewFrame title="Proposed page" src={`/preview/changes/${review.previewJobID}/proposed${path || '/'}`} width={width} changed={review.changedBlocks} active={active} variant="proposed" onReady={rememberProposed} /></article>}
         </div>
       </section>
-      {panel && <aside className={styles.rail} aria-label="Review details">
+      {panel && <aside className={styles.rail} aria-label="Review details" data-page-review-rail>
         <section className={styles.summary}><span>Change set</span><h1>{review.name}</h1><p>Revision {review.revision} · {review.state}</p></section>
-        <section className={styles.changes} aria-labelledby="page-changes" tabIndex={0}><h2 id="page-changes">Changes on this page</h2>
-          {review.changedBlocks.length ? <ol>{review.changedBlocks.map((change) => <li key={change.id}><button type="button" aria-pressed={active === change.id} onClick={() => setActive(change.id)}><strong>{change.label}</strong><span>{change.summary}</span>{!available.has(change.id) && <small>Rendered block unavailable in the current pane</small>}</button></li>)}</ol> : <p>No block-level changes on this page.</p>}
+        <section className={styles.changes} aria-labelledby="page-changes" tabIndex={0} data-page-review-change-list><h2 id="page-changes">Changes on this page</h2>
+          {review.changedBlocks.length ? <ol>{review.changedBlocks.map((change) => <li key={change.id}><button type="button" aria-pressed={active === change.id} onClick={() => setActive(change.id)}><strong>{change.label}</strong><span>{change.summary}</span>{!available.has(change.id) && <small>Rendered block unavailable in the visible comparison</small>}</button>{change.details.length > 0 && <dl className={styles.fieldChanges}>{change.details.map((detail, index) => <div key={`${detail.field}-${index}`}><dt>{detail.field}</dt><dd><span>Live</span>{detail.before}</dd><dd><span>Proposed</span>{detail.after}</dd></div>)}</dl>}</li>)}</ol> : <p>No block-level changes on this page.</p>}
           {review.pageFields.length > 0 && <p><strong>Page fields:</strong> {review.pageFields.join(', ')}</p>}
           {review.otherChanges.length > 0 && <p>{review.otherChanges.length} other captured record{review.otherChanges.length === 1 ? '' : 's'} in this change set.</p>}
         </section>
@@ -132,7 +144,7 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
         <section className={styles.comments}><h2>Comments</h2>{review.reviewComments.length ? review.reviewComments.map((item) => <article key={item.id}><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString()}</small></article>) : <p>No review comments.</p>}
           {submitted && <><label htmlFor="page-review-comment">Add a comment</label><textarea id="page-review-comment" rows={3} maxLength={2000} value={comment} onChange={(event) => setComment(event.target.value)} /><button type="button" disabled={acting || !comment.trim()} onClick={() => void action('comment')}>Add comment</button></>}
         </section>
-        {submitted && <section className={styles.actions} aria-label="Review actions"><h2>Decision</h2>
+        {submitted && <section className={styles.actions} aria-label="Review actions" data-page-review-actions><h2>Decision</h2>
           <button className={styles.approve} type="button" disabled={acting || !publishable || !data.fresh} onClick={() => void action('approve')}>Approve and queue publish</button>
           {!publishable && <small>Approval requires passing readiness checks for this exact comparison.</small>}
           {publishable && !data.fresh && <small>Sign in again before approval because this session is older than 15 minutes.</small>}

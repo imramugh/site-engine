@@ -1,7 +1,9 @@
 import type { Payload } from 'payload'
 import { SiteSnapshotSchema } from '@site-engine/contract'
+import { deriveRoutes } from '@site-engine/engine'
 import { changeSetHash } from './publishing'
 import { exactQualityProof } from './review-quality'
+import { fieldDiffs } from './field-diffs'
 
 type RecordValue = Record<string, unknown>
 type CapturedChange = { collection: string; id: string; before?: unknown; after?: unknown }
@@ -9,9 +11,14 @@ type CapturedChange = { collection: string; id: string; before?: unknown; after?
 export type ReviewBlockChange = {
   id: string
   type: string
+  liveType?: string
+  proposedType?: string
+  liveOccurrence?: number
+  proposedOccurrence?: number
   label: string
   summary: string
   fields: string[]
+  details: Array<{ field: string; before: string; after: string }>
 }
 
 export type ReviewModeData = {
@@ -48,19 +55,42 @@ const labelFor = (block: RecordValue) => {
   return typeof block.type === 'string' ? `${block.type.replace(/([a-z])([A-Z])/g, '$1 $2')} block` : 'Content block'
 }
 
+const humanValue = (value: unknown): string => {
+  if (value === undefined || value === null || value === '') return 'Not set'
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (Array.isArray(value)) {
+    if (!value.length) return 'None'
+    if (value.every((item) => ['string', 'number', 'boolean'].includes(typeof item))) return value.map(String).join(', ')
+    return `${value.length} item${value.length === 1 ? '' : 's'}`
+  }
+  const object = record(value)
+  for (const key of ['heading', 'title', 'name', 'label', 'text', 'body', 'summary', 'slug']) if (typeof object[key] === 'string' && object[key]) return String(object[key])
+  const count = Object.keys(object).length
+  return `${count} structured field${count === 1 ? '' : 's'}`
+}
+
+function blockPositions(manifest: unknown, pageID?: string): Map<string, { type: string; occurrence: number }> {
+  if (!pageID) return new Map()
+  const snapshot = SiteSnapshotSchema.parse(manifest)
+  const page = snapshot.pages.find((candidate) => candidate.id === pageID)
+  const counts = new Map<string, number>()
+  const positions = new Map<string, { type: string; occurrence: number }>()
+  for (const block of page?.blocks ?? []) {
+    if (block.hidden) continue
+    const occurrence = counts.get(block.type) ?? 0
+    positions.set(block.id, { type: block.type, occurrence })
+    counts.set(block.type, occurrence + 1)
+  }
+  return positions
+}
+
 export function routeForReviewPreview(manifest: unknown, includedChangeKeys: unknown): { path: string; pageID?: string } {
   const snapshot = SiteSnapshotSchema.parse(manifest)
   const pageID = Array.isArray(includedChangeKeys) ? includedChangeKeys.find((key): key is string => typeof key === 'string' && key.startsWith('pages:'))?.slice('pages:'.length) : undefined
-  const page = snapshot.pages.find((candidate) => candidate.id === pageID)
-  if (!page) return { path: '/' }
-  if (page.id === snapshot.settings.homepageId) return { path: '/', pageID: page.id }
-  const section = snapshot.settings.sections.find((candidate) => candidate.id === page.sectionId)
-  if (!section) return { path: '/', pageID: page.id }
-  const pages = new Map(snapshot.pages.map((candidate) => [candidate.id, candidate]))
-  const ancestors: string[] = []
-  let parent = page.parentId ? pages.get(page.parentId) : undefined
-  while (parent && parent.id !== section.landingPageId) { ancestors.unshift(parent.slug); parent = parent.parentId ? pages.get(parent.parentId) : undefined }
-  return { path: `/${[section.slug, ...ancestors, page.slug].filter(Boolean).join('/')}`, pageID: page.id }
+  if (!pageID) return { path: '/' }
+  const route = deriveRoutes(snapshot).routes.find((candidate) => candidate.page.id === pageID)
+  return { path: route?.path ?? '/', pageID }
 }
 
 export function describeReviewChanges(changes: CapturedChange[], pageID?: string) {
@@ -76,7 +106,10 @@ export function describeReviewChanges(changes: CapturedChange[], pageID?: string
     const value = next ?? previous ?? {}
     const fields = changedFields(previous, next).filter((field) => !['id', 'type'].includes(field))
     const summary = !previous ? 'Added to this page' : !next ? 'Removed from this page' : fields.length ? `Changed ${fields.map((field) => field.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}` : 'Content changed'
-    changedBlocks.push({ id, type: typeof value.type === 'string' ? value.type : 'block', label: labelFor(value), summary, fields })
+    const details = fieldDiffs(previous, next, 24)
+      .filter(([field]) => !['id', 'type', 'hidden'].includes(field) && !field.startsWith('appearance'))
+      .map(([field, left, right]) => ({ field: field.replace(/([a-z])([A-Z])/g, '$1 $2'), before: humanValue(left), after: humanValue(right) }))
+    changedBlocks.push({ id, type: typeof value.type === 'string' ? value.type : 'block', label: labelFor(value), summary, fields, details })
   }
   const pageFields = changedFields(before, after).filter((field) => field !== 'blocks')
   const otherChanges = changes.filter((change) => change !== pageChange).map((change) => ({ collection: change.collection, id: change.id, fields: changedFields(change.before, change.after) }))
@@ -89,9 +122,18 @@ export async function loadReviewModeData(payload: Payload, id: string): Promise<
   if (!preview || preview.status !== 'ready' || typeof preview.jobID !== 'string') throw new Error('This review does not have a ready comparison.')
   const job = await payload.findByID({ collection: 'preview-render-jobs', id: preview.jobID, depth: 0, overrideAccess: true })
   const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
-  if (job.status !== 'completed' || !job.artifactDigest || relationID(job.changeSet) !== String(set.id) || String(job.id) !== preview.jobID || Number(set.revision) !== Number(job.reviewRevision) || Number(preview.revision) !== Number(job.reviewRevision) || preview.changeHash !== job.changeHash || changeSetHash(changes as never[]) !== job.changeHash || preview.liveManifestHash !== job.liveManifestHash || preview.proposedManifestHash !== job.proposedManifestHash) throw new Error('This comparison is no longer current.')
+  const includedChangeKeys = Array.isArray(job.includedChangeKeys) ? job.includedChangeKeys.filter((value): value is string => typeof value === 'string') : []
+  const previewKeys = Array.isArray(preview.includedChangeKeys) ? preview.includedChangeKeys.filter((value): value is string => typeof value === 'string') : []
+  if (job.status !== 'completed' || !job.artifactDigest || relationID(job.changeSet) !== String(set.id) || String(job.id) !== preview.jobID || Number(set.revision) !== Number(job.reviewRevision) || Number(preview.revision) !== Number(job.reviewRevision) || preview.changeHash !== job.changeHash || changeSetHash(changes as never[]) !== job.changeHash || JSON.stringify([...includedChangeKeys].sort()) !== JSON.stringify([...previewKeys].sort()) || preview.liveManifestHash !== job.liveManifestHash || preview.proposedManifestHash !== job.proposedManifestHash) throw new Error('This comparison is no longer current.')
   const route = routeForReviewPreview(job.proposedManifest, job.includedChangeKeys)
-  const described = describeReviewChanges(changes, route.pageID)
+  const included = new Set(includedChangeKeys)
+  const described = describeReviewChanges(changes.filter((change) => included.has(`${change.collection}:${change.id}`)), route.pageID)
+  const livePositions = blockPositions(job.liveManifest, route.pageID)
+  const proposedPositions = blockPositions(job.proposedManifest, route.pageID)
+  described.changedBlocks = described.changedBlocks.map((change) => {
+    const live = livePositions.get(change.id); const proposed = proposedPositions.get(change.id)
+    return { ...change, liveType: live?.type, proposedType: proposed?.type, liveOccurrence: live?.occurrence, proposedOccurrence: proposed?.occurrence }
+  })
   const quality = set.quality as ReviewQuality | undefined
   const currentProof = typeof preview.contentHash === 'string' && Array.isArray(preview.includedChangeKeys) && preview.includedChangeKeys.every((value): value is string => typeof value === 'string') && Number.isInteger(preview.baselineSequence) && quality?.proof?.previewJobID === preview.jobID && exactQualityProof(quality, { revision: Number(set.revision), changeHash: String(job.changeHash), contentHash: preview.contentHash, includedChangeKeys: preview.includedChangeKeys, baselineSnapshotID: typeof preview.baselineSnapshotID === 'string' ? preview.baselineSnapshotID : undefined, baselineSequence: Number(preview.baselineSequence) })
   return {
