@@ -201,7 +201,9 @@ async function selectCapturedSet(page: import('@playwright/test').Page, pageID: 
   const set = data.sets.find(item => item.state === 'open' && item.changes?.some(change => change.collection === 'pages' && change.id === pageID))
   expect(set, 'The created page must have its own captured open change set').toBeTruthy()
   await page.locator(`[data-change-set-id="${set!.id}"]`).click()
+  return set!.id
 }
+
 
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(60_000)
@@ -215,9 +217,11 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     return pageBody.doc.id
   })
   await page.goto('/admin/editorial')
-  await expect(page.getByRole('heading', { name: 'Pending changes' })).toBeVisible()
-  await selectCapturedSet(page, created)
-  await expect(page.getByText('title', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-admin-page-title]')).toHaveText('Reviews')
+
+  const changeSetID = await selectCapturedSet(page, created)
+
+  await expect(page.getByText('Title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
   const editorQuality = await page.evaluate(async () => (await fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: document.querySelector('button[aria-pressed="true"]')?.textContent?.split(' — ')[0] }) })).status)
@@ -235,7 +239,11 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await reviewer.addScriptTag({ path: axeSource })
   expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
-  await reviewer.getByRole('button', { name: 'Unsubmitted edits — submitted' }).click()
+  const submittedQueueItem = reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`)
+  await expect(submittedQueueItem).toContainText('revision')
+  await expect(submittedQueueItem.locator('[data-editorial-state="submitted"]')).toHaveText('submitted')
+  await submittedQueueItem.click()
+  await expect(reviewer.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toHaveText('submitted')
   await expect(reviewer.getByLabel(/Include pages/)).toBeChecked()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
   await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
@@ -250,29 +258,65 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   }, value)
   const completed = await reviewer.request.post('/api/internal/preview-jobs/complete', { headers: workerHeaders, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'b'.repeat(64) } })
   expect(completed.ok(), await completed.text()).toBeTruthy()
+  await expect(reviewer.getByRole('status').filter({ hasText: 'Private comparison is ready for review.' })).toContainText('ready for review')
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
+  const proposedPreview = reviewer.getByRole('link', { name: 'Open proposed preview' })
+  await expect(proposedPreview).toHaveAttribute('href', new RegExp(`/preview/changes/${claim.job.id}/proposed/workflow-browser/workflow-page$`))
+  await expect(reviewer.getByText('This rendered preview does not yet include on-page review controls.')).toBeVisible()
+  await expect(reviewer.locator('[data-editorial-change-rail]')).toContainText('Changes')
+  await reviewer.setViewportSize({ width: 1440, height: 1000 })
+  const desktopFrames = reviewer.locator('[data-editorial-frame]')
+  const liveBox = (await desktopFrames.nth(0).boundingBox())!
+  const proposedBox = (await desktopFrames.nth(1).boundingBox())!
+  expect(liveBox.x).not.toBe(proposedBox.x)
+  expect(liveBox.y).toBe(proposedBox.y)
+  const previewViewport = (title: string) => reviewer.getByTitle(title).evaluate((frame: HTMLIFrameElement) => ({ width: frame.contentWindow?.innerWidth, height: frame.contentWindow?.innerHeight }))
+  await expect.poll(() => previewViewport('Live comparison')).toEqual({ width: 760, height: 640 })
+  const assertReviewAccessibility = async () => {
+    expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  }
+  await assertReviewAccessibility()
+  await reviewer.evaluate(() => window.scrollTo(0, 0))
+  await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await reviewer.screenshot({ path: 'artifacts/editorial-comparison-1440.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Live', exact: true }).click()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveCount(0)
+  const singlePane = reviewer.locator('[data-editorial-frame]')
+  const panes = reviewer.locator('[data-editorial-frames]')
+  expect((await singlePane.boundingBox())!.width).toBeGreaterThan((await panes.boundingBox())!.width - 30)
   await reviewer.getByRole('button', { name: 'Proposed', exact: true }).click()
   await expect(reviewer.getByTitle('Live comparison')).toHaveCount(0)
   await reviewer.getByRole('button', { name: 'Side by side' }).click()
   await reviewer.getByRole('button', { name: 'Mobile', exact: true }).click()
-  expect(await reviewer.getByTitle('Live comparison').evaluate((frame) => frame.style.width)).toBe('390px')
+  await expect.poll(() => previewViewport('Live comparison')).toEqual({ width: 390, height: 640 })
+  await reviewer.setViewportSize({ width: 390, height: 844 })
+  const mobileFrames = reviewer.locator('[data-editorial-frame]')
+  expect((await mobileFrames.nth(0).boundingBox())!.y).not.toBe((await mobileFrames.nth(1).boundingBox())!.y)
+  expect(await reviewer.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  await assertReviewAccessibility()
+  await reviewer.evaluate(() => window.scrollTo(0, 0))
+  await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await reviewer.screenshot({ path: 'artifacts/editorial-comparison-390.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Desktop', exact: true }).click()
-  expect(await reviewer.getByTitle('Proposed comparison').evaluate((frame) => frame.style.width)).toBe('760px')
-  await expect(reviewer.getByText('Approval is disabled until the exact comparison has a passing readiness proof.')).toBeVisible()
+  await expect.poll(() => previewViewport('Proposed comparison')).toEqual({ width: 760, height: 640 })
+  let commentAttempts = 0
+  await reviewer.route('**/api/editorial/comment', async (route) => { commentAttempts += 1; if (commentAttempts === 1) return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' }); return route.continue() })
+  const comment = reviewer.getByLabel('Add review comment'); await comment.fill('Retry-safe browser comment'); await reviewer.getByRole('button', { name: 'Add comment' }).click()
+  await expect(reviewer.getByRole('status').filter({ hasText: 'Unable to add this comment' })).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
+  await reviewer.getByRole('button', { name: 'Add comment' }).click(); await expect(comment).toHaveValue('')
+  await expect(reviewer.getByText('Approval requires a passing readiness proof for this exact comparison.')).toBeVisible()
   await reviewer.getByRole('button', { name: 'Run readiness checks' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Deterministic readiness checks completed' })).toContainText('completed')
   await expect(reviewer.getByText(/SEO_DESCRIPTION_MISSING/).first()).toBeVisible()
   await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
-  const displayed = await reviewer.evaluate(async () => {
+  const displayed = await reviewer.evaluate(async (id) => {
     const response = await fetch('/api/editorial/list', { cache: 'no-store' })
-    const body = await response.json() as { sets: Array<{ id: string; name: string; quality?: { proof?: Record<string, unknown> } }> }
-    const set = body.sets.find((item) => item.name === 'Unsubmitted edits')!
+    const body = await response.json() as { sets: Array<{ id: string; quality?: { proof?: Record<string, unknown> } }> }
+    const set = body.sets.find((item) => item.id === id)!
     return { id: set.id, proof: set.quality?.proof! }
-  })
+  }, changeSetID)
   const beforeApproval = await (await reviewer.request.get('/__e2e/publish-state')).json()
   const staleProof = await reviewer.evaluate(async ({ id, proof }) => (await fetch('/api/editorial/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, proof: { ...proof, previewJobID: '00000000-0000-4000-8000-000000000000' } }) })).status, displayed)
   expect(staleProof).toBe(400)
@@ -287,7 +331,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.getByRole('button', { name: 'Add comment' }).click()
   await expect(reviewer.getByText('Browser review comment')).toBeVisible()
   await reviewer.reload()
-  await reviewer.getByRole('button', { name: 'Unsubmitted edits — approved' }).click()
+  await reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`).click()
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible()
   expect((await reviewer.request.post('/__e2e/review-owner/disable')).status()).toBe(204)
   await reviewer.reload()
@@ -299,8 +343,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow refreshed' }) })
   }, created)
   await page.reload()
-  await expect(page.getByText('open', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Unsubmitted edits — approved' })).toBeVisible()
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="open"]')).toBeVisible()
+  await expect(page.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"] [data-editorial-state="approved"]`)).toBeVisible()
 })
 
 test('an owner schedules, reschedules, and cancels a reviewed future publication without queuing it immediately', async ({ browser, page }) => {
@@ -314,12 +358,12 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
     await fetch(`/api/pages/${createdBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Scheduled workflow revised' }) })
     return createdBody.doc.id
   })
-  await page.goto('/admin/editorial'); await selectCapturedSet(page, scheduledPageID); await page.getByRole('button', { name: 'Submit for review' }).click()
+  await page.goto('/admin/editorial'); const scheduledSetID = await selectCapturedSet(page, scheduledPageID); await page.getByRole('button', { name: 'Submit for review' }).click()
   const editorList = await page.evaluate(async () => (await fetch('/api/editorial/schedules/list')).status)
   expect(editorList).toBe(403)
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
   await signInLocalOwner(owner, scheduleOwnerRecoveryCode, scheduleOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
-  await owner.getByRole('button', { name: 'Unsubmitted edits — submitted' }).last().click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
+  await owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"]`).click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
   const headers = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
   const claimed = await owner.request.post('/api/internal/preview-jobs/claim', { headers, data: {} }); const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
   const hash = async (value: unknown) => owner.evaluate(async (input) => { const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input))); return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') }, value)
@@ -330,7 +374,7 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); await expect(owner.getByText('UTC 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
   owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.getByText('UTC 2031-01-02T04:04:00.000Z')).toBeVisible()
-  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.getByRole('button', { name: 'Unsubmitted edits — changes-requested' })).toBeVisible()
+  await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"] [data-editorial-state="changes-requested"]`)).toBeVisible()
   const seeded = await owner.request.post('/__e2e/schedule-page'); expect(seeded.ok(), await seeded.text()).toBeTruthy(); await owner.reload()
   await expect(owner.getByText('Page 1 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Next schedules' })).toBeEnabled(); await owner.getByRole('button', { name: 'Next schedules' }).click(); await expect(owner.getByText('Page 2 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Previous schedules' })).toBeEnabled()
   await ownerContext.close()
