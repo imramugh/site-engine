@@ -260,8 +260,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && request.url === '/__e2e/direct-preview-worker') {
     void withPayloadTransaction(payload, async req => {
+      const before = await payload.find({ collection: 'preview-render-jobs', where: { status: { in: ['pending', 'processing'] } }, sort: '-createdAt', limit: 5, depth: 0, overrideAccess: true, req })
       const job = await claimPreviewRenderJob(payload, req)
-      if (!job) throw new Error('No preview job is pending.')
+      if (!job) throw new Error(`No claimable preview job: ${before.docs.map((item) => `${item.id}:${item.status}:${item.leaseToken ?? ''}`).join(',')}`)
       return completePreviewRenderJob(payload, req, String(job.id), String(job.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'f'.repeat(64) })
     }).then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
