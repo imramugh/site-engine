@@ -18,3 +18,17 @@ export async function POST(request: Request) {
     return Response.json({ job: { id: job.id, status: job.status } }, { headers: noStore })
   } catch { return Response.json({ error: 'The draft preview could not be prepared.' }, { status: 400, headers: noStore }) }
 }
+
+export async function GET(request: Request) {
+  try {
+    const jobID = new URL(request.url).searchParams.get('jobID')
+    if (!jobID || !/^[0-9a-f-]{36}$/i.test(jobID)) return Response.json({ error: 'Preview job is required.' }, { status: 400, headers: noStore })
+    const payload = await getPayload({ config }); const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); const actor = authenticated.user as { id?: string; roles?: string[] } | null
+    if (!actor?.id) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
+    if (!actor.roles?.some((role) => role === 'owner' || role === 'editor')) return Response.json({ error: 'Editor access required.' }, { status: 403, headers: noStore })
+    const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true })
+    const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
+    if (!['open', 'changes-requested'].includes(String(set.state)) || (!actor.roles?.includes('owner') && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) !== actor.id)) return Response.json({ error: 'Preview unavailable.' }, { status: 403, headers: noStore })
+    return Response.json({ job: { id: job.id, status: job.status } }, { headers: noStore })
+  } catch { return Response.json({ error: 'Preview unavailable.' }, { status: 404, headers: noStore }) }
+}
