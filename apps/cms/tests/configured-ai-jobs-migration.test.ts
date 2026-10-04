@@ -14,8 +14,10 @@ describe('configured AI jobs migration', () => {
   it('upgrades the 30-migration database, preserves existing ledger configuration, and rolls back only job schema', async () => {
     const client = createClient({ url: `file:${join(directory, 'upgrade.sqlite')}` })
     const db = drizzle(client)
-    const target = migrations.find((migration) => migration.name === '20261004_020000_configured_ai_jobs')
-    const prior = migrations.filter((migration) => migration.name !== '20261004_020000_configured_ai_jobs')
+    const targetIndex = migrations.findIndex((migration) => migration.name === '20261004_020000_configured_ai_jobs')
+    expect(targetIndex).toBe(30)
+    const target = migrations[targetIndex]
+    const prior = migrations.slice(0, targetIndex)
     expect(target).toBeDefined(); expect(prior).toHaveLength(30)
     for (const [batch, migration] of prior.entries()) {
       await migration.up({ db } as never)

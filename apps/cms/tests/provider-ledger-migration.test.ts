@@ -18,8 +18,10 @@ function database(name: string) {
 describe('provider ledger migration', () => {
   it('upgrades all 29 deployed migrations and preserves an encrypted configuration through down', async () => {
     const { client, db } = database('upgrade.sqlite')
-    const ledger = migrations.find(migration => migration.name === '20261004_010000_provider_ledger')
-    const deployed = migrations.filter(migration => migration.name !== '20261004_010000_provider_ledger')
+    const ledgerIndex = migrations.findIndex(migration => migration.name === '20261004_010000_provider_ledger')
+    expect(ledgerIndex).toBe(29)
+    const ledger = migrations[ledgerIndex]
+    const deployed = migrations.slice(0, ledgerIndex)
     expect(ledger).toBeDefined()
     expect(deployed).toHaveLength(29)
     for (const [batch, migration] of deployed.entries()) {
