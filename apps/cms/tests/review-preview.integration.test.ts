@@ -22,6 +22,7 @@ const reviewSessionRoute = await import('../app/api/auth/preview/review-session/
 const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 const reviewModeRoute = await import('../app/api/editorial/review/[id]/route.js')
 const pageReviewEntryRoute = await import('../app/api/editorial/page-review-entry/route.js')
+const directPreviewRoute = await import('../app/api/editorial/direct-edit/preview/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 const versions = { themeVersion: 'theme-test-1', engineVersion: 'engine-test-1', contractVersion: '1.0.0' }
 const digest = 'a'.repeat(64)
@@ -280,6 +281,21 @@ describe('ENG-030 immutable review preview jobs', () => {
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
     expect((await reviewSession(editorHeaders, path)).status).toBe(403)
     expect((await reviewSession(new Headers(), path)).status).toBe(401)
+  })
+
+  it('lets an Approver prepare and read only their own current page draft preview', async () => {
+    const current = await fixture('approver-draft-session')
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { actor: current.reviewer.id, state: 'open', preview: null }, overrideAccess: true, context: { editorialInternal: true } })
+    const job = await withPayloadTransaction(payload, req => prepareReviewPreview({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], draft: true }))
+    const get = (headers: Headers) => directPreviewRoute.GET(new Request(`http://cms.test/api/editorial/direct-edit/preview?jobID=${job.id}&pageID=${current.changes[0]!.id}`, { headers }))
+    expect((await get(current.headers)).status).toBe(200)
+    expect((await get(await reviewHeaders('editor'))).status).toBe(403)
+    expect((await get(new Headers())).status).toBe(401)
+
+    const otherApprover = await payload.create({ collection: 'users', data: { email: `other-approver-${randomUUID()}@example.test`, name: 'Other approver', roles: ['approver'] }, overrideAccess: true })
+    expect((await get(await headersFor(otherApprover))).status).toBe(403)
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { revision: 5 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await get(current.headers)).status).toBe(403)
   })
 
   it('authorizes only the current completed comparison and its safe nested artifacts', async () => {

@@ -19,7 +19,8 @@ export default async function ContentEditorPage({
       payload,
     })
   ).user
-  if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login')
+  if (!hasRole(user as never, ['owner', 'approver', 'editor']))
+    redirect('/admin/login')
   const { id } = await params
   return (
     <StaffShell>

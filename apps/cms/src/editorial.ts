@@ -126,7 +126,10 @@ export async function openSet(payload: Payload, actor: Actor, req: PayloadReques
 export async function captureChange(input: { collection: CapturedCollection; doc: Record<string, unknown>; previousDoc?: Record<string, unknown>; operation: 'create' | 'update'; req: PayloadRequest }): Promise<void> {
   const { collection, doc, previousDoc, operation, req } = input
   const actor = req.user as Actor | undefined
-  if (!actor || !hasRole(actor, ['owner', 'editor']) || req.context.editorialInternal) return
+  const capturesCollection =
+    hasRole(actor, ['owner', 'editor']) ||
+    (collection === 'pages' && hasRole(actor, ['approver']))
+  if (!actor || !capturesCollection || req.context.editorialInternal) return
   let after = snapshot(collection, doc)
   let before = operation === 'create' ? null : snapshot(collection, previousDoc)
   if (collection === 'pages') {
@@ -263,6 +266,6 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
 
 export async function createNamedChangeSet(payload: Payload, req: PayloadRequest, actor: Actor | undefined, name: string): Promise<Record<string, unknown>> {
   assertActor(actor)
-  if (!hasRole(actor, ['owner', 'editor'])) throw new Error('Editor role required.')
+  if (!hasRole(actor, ['owner', 'approver', 'editor'])) throw new Error('Editor role required.')
   return payload.create({ collection: 'change-sets', data: { id: randomUUID(), name, actor: actor.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Promise<Record<string, unknown>>
 }

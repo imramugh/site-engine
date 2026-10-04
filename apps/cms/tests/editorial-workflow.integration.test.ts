@@ -37,6 +37,8 @@ describe('ENG-008 change-set capture and lifecycle', () => {
   it('uses server-owned transitions, reviewer roles, and a transactional audit entry', async () => {
     const editor = await payload.create({ collection: 'users', data: { email: 'editor-two@example.test', name: 'Editor Two', roles: ['editor'] }, overrideAccess: true })
     const reviewer = await payload.create({ collection: 'users', data: { email: 'reviewer@example.test', name: 'Reviewer', roles: ['approver'] }, overrideAccess: true })
+    const reviewerSet = await withPayloadTransaction(payload, (req) => createNamedChangeSet(payload, req, reviewer, 'Approver page edits'))
+    expect(reviewerSet).toMatchObject({ actor: expect.objectContaining({ id: reviewer.id }), state: 'open', revision: 0 })
     const set = await withPayloadTransaction(payload, (req) => createNamedChangeSet(payload, req, editor, 'Reviewable changes'))
     await expect(withPayloadTransaction(payload, (req) => transitionChangeSet({ payload, req, actor: editor, id: set.id as string, action: 'request-changes' }))).rejects.toThrow('Reviewer role required')
     await expect(withPayloadTransaction(payload, (req) => transitionChangeSet({ payload, req, actor: editor, id: set.id as string, action: 'submit' }))).rejects.toThrow('Add at least one draft change')
