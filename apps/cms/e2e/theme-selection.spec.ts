@@ -26,6 +26,7 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
   const owner = await signedInOwner(browser)
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
+  await owner.page.getByText('More tools', { exact: true }).click()
   await expect(owner.page.getByRole('link', { name: 'Themes' })).toBeVisible()
   await owner.page.getByRole('link', { name: 'Themes' }).click()
   await expect(owner.page).toHaveURL(/\/themes$/)
