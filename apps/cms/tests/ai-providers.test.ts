@@ -41,6 +41,19 @@ describe('ENG-023 provider protocol execution', () => {
     let contacted = false; await expect(executeConfiguredAIJob(payload, { provider: 'openai', input: 'over cap', estimatedCost: 9 }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE'); expect(contacted).toBe(false)
   })
 
+  it('serializes concurrent cap reservations so they cannot both contact a provider', async () => {
+    const configuredRecord = await configured('openai', 'concurrent', 'concurrent-secret', { monthlyCap: 10, monthlyUsage: 0, usageMonth: '2026-10' })
+    let contacted = 0
+    const transport = async () => { contacted += 1; return Response.json({ output: [{ content: [{ type: 'output_text', text: 'reserved' }] }], usage: { total_tokens: 6 } }) }
+    const jobs = await Promise.allSettled([
+      executeConfiguredAIJob(payload, { provider: 'openai', input: 'first', estimatedCost: 6 }, { now, transport }),
+      executeConfiguredAIJob(payload, { provider: 'openai', input: 'second', estimatedCost: 6 }, { now, transport }),
+    ])
+    expect(jobs.filter((job) => job.status === 'fulfilled')).toHaveLength(1)
+    expect(contacted).toBe(1)
+    expect(await payload.findByID({ collection: 'integration-configurations', id: configuredRecord.id, overrideAccess: true })).toMatchObject({ monthlyUsage: 6, monthlyCap: 10 })
+  })
+
   it('does not retry or fall back from rejected and revoked credentials', async () => {
     const rejected = await configured('google-gemini', 'gemini-test', 'do-not-leak', { fallbackProvider: 'openrouter' }); await configured('openrouter', 'fallback', 'also-not-leaked'); const requests: Request[] = []
     await expect(executeConfiguredAIJob(payload, { provider: 'google-gemini', fallbackProvider: 'openrouter', input: 'private input', estimatedCost: 1 }, { now, transport: async request => { requests.push(request); return new Response('{}', { status: 401 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE'); expect(requests).toHaveLength(1); expect((await payload.findByID({ collection: 'integration-configurations', id: rejected.id, overrideAccess: true })).health).toBe('rejected')
