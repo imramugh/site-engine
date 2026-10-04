@@ -14,7 +14,8 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   const before = await editor.page.request.get('/__e2e/publish-state').then(response => response.json()) as { releaseCount: number }
   await editor.page.goto('/direct-edit')
   await expect(editor.page.getByRole('heading', { name: 'Hero draft editor' })).toBeVisible()
-  await editor.page.locator('main select').first().selectOption({ label: 'Direct edit browser page' })
+  await editor.page.locator('main').getByLabel('Page').selectOption({ label: 'Direct edit browser page' })
+  await editor.page.locator('main').getByLabel('Change set').selectOption({ label: 'Browser Editor draft (open)' })
   await editor.page.setViewportSize({ width: 1440, height: 900 })
   await editor.page.getByLabel('Heading').fill('Browser saved heading')
   await editor.page.getByLabel('Body').fill('Browser saved body after heading save.')
