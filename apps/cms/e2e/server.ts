@@ -58,6 +58,11 @@ const pageEditorSetID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbf'
 const pageEditorSessionToken = 'synthetic-page-editor-owner-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
+const shellSessionTokens = {
+  owner: 'synthetic-shell-owner-session-token',
+  editor: 'synthetic-shell-editor-session-token',
+  approver: 'synthetic-shell-approver-session-token',
+} as const
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -235,6 +240,14 @@ async function seed(): Promise<void> {
   applicationOwnerID = String(applicationOwner.id)
   const pageEditorOwner = await payload.create({ collection: 'users', data: { email: 'page-editor-owner.synthetic@example.test', name: 'Synthetic Page Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
+  const shellUsers: Record<keyof typeof shellSessionTokens, { id: string }> = {} as Record<keyof typeof shellSessionTokens, { id: string }>
+  for (const role of ['owner', 'editor', 'approver'] as const) {
+    shellUsers[role] = await payload.create({
+      collection: 'users',
+      data: { email: `shell-${role}.synthetic@example.test`, name: `Synthetic Shell ${role}`, roles: [role] },
+      overrideAccess: true,
+    })
+  }
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
@@ -262,6 +275,13 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'pages', data: { id: pageEditorPageID, title: 'Page editor browser page', summary: 'Synthetic page for the complete protected page editor flow.', slug: 'page-editor-browser-page', sectionId: directSection.id, template: 'standard', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba1', type: 'hero', heading: 'Page editor original heading', body: 'Page editor original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }, { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba2', type: 'contact', heading: 'Original contact block', body: 'Remove this block during the browser flow.', inquiryForm: false, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: pageEditorSetID, name: 'Browser full page draft', state: 'open', actor: pageEditorOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  for (const role of ['owner', 'editor', 'approver'] as const) {
+    await payload.create({
+      collection: 'auth-sessions',
+      data: { tokenHash: hashOpaqueToken(shellSessionTokens[role]), user: shellUsers[role].id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry },
+      overrideAccess: true,
+    })
+  }
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(initialBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: initialBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
