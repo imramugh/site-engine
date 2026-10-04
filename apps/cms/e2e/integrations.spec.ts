@@ -27,6 +27,15 @@ test('ENG-023 Owner rotates a masked credential without a connection claim', asy
   await owner.page.getByRole('button', { name: 'Save provider configuration' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('Credential rotation and reviewed pricing saved.')
   await owner.page.reload(); const body = await owner.page.locator('body').textContent() ?? ''
   expect(body).not.toContain('synthetic-browser-credential'); await expect(owner.page.getByLabel('Configured integrations')).toContainText('configured')
+  await owner.page.route('**/api/integrations', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const body = route.request().postDataJSON() as { action?: string; credential?: string }
+    if (body.action !== 'test') return route.continue()
+    expect(body).toEqual({ action: 'test', provider: 'openai' })
+    expect(JSON.stringify(body)).not.toContain('synthetic-browser-credential')
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ integration: { id: 'mock', provider: 'openai', health: 'connected', credentialConfigured: true } }) })
+  })
+  await owner.page.getByRole('button', { name: 'Test connection' }).click(); await expect(owner.page.getByRole('status')).toContainText('Connection test completed.')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
 })

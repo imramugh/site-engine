@@ -50,10 +50,10 @@ function endpoint(provider: IntegrationProvider, model: string, credential: stri
   const encodedModel = encodeURIComponent(model)
   if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }
-  if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}?key=${encodeURIComponent(credential)}`, headers: {} }
+  if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}`, headers: { 'x-goog-api-key': credential } }
   const [author, slug, ...rest] = model.split('/')
   if (!author || !slug || rest.length) return undefined
-  return { url: `https://openrouter.ai/api/v1/model/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
+  return { url: `https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
 }
 
 async function drainBounded(response: Response) {
@@ -79,11 +79,20 @@ export async function providerConnectionTransport(input: { provider: Integration
   if (!target) return { ok: false, code: 'unavailable' }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
-  try {
-    const response = await fetcher(target.url, { method: 'GET', headers: target.headers, signal: controller.signal, redirect: 'error' })
+  const request = async (url: string, headers: Record<string, string>): Promise<ConnectionResult> => {
+    const response = await fetcher(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' })
     await drainBounded(response)
     if (response.status === 401 || response.status === 403) return { ok: false, code: 'rejected' }
     return response.ok ? { ok: true, code: 'connected' } : { ok: false, code: 'unavailable' }
+  }
+  try {
+    // OpenRouter's model catalog is public. Verify the key first, then check
+    // the selected model so a public catalog response cannot validate a bad key.
+    if (input.provider === 'openrouter') {
+      const key = await request('https://openrouter.ai/api/v1/key', { authorization: `Bearer ${input.credential}` })
+      if (!key.ok) return key
+    }
+    return await request(target.url, target.headers)
   } catch {
     return { ok: false, code: 'unavailable' }
   } finally { clearTimeout(timeout) }
