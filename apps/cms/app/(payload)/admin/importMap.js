@@ -1,10 +1,15 @@
 import { EditorialNavLink as EditorialNavLink_632522f2ad46966492d14c5efecf18cf } from '../../../app/(payload)/admin/editorial-nav-link'
 import { LeadsNavLink as LeadsNavLink_97a340e60a035174805e262a316b6f86 } from '../../../app/(payload)/admin/leads-nav-link'
+import { AdminNavigation as AdminNavigation_a6d5e1b3a2b1d8c0e9f123456789abcd } from '../../../app/components/admin-navigation'
+import { AdminTopbar as AdminTopbar_f47f53c29deed8beba76543210fedcba, AdminBrandLogo as AdminBrandLogo_e3b0c44298fc1c149afbf4c8996fb924 } from '../../../app/components/admin-topbar'
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from '@payloadcms/next/rsc'
 
 /** @type import('payload').ImportMap */
 export const importMap = {
   "./app/(payload)/admin/editorial-nav-link#EditorialNavLink": EditorialNavLink_632522f2ad46966492d14c5efecf18cf,
   "./app/(payload)/admin/leads-nav-link#LeadsNavLink": LeadsNavLink_97a340e60a035174805e262a316b6f86,
+  "./app/components/admin-navigation#AdminNavigation": AdminNavigation_a6d5e1b3a2b1d8c0e9f123456789abcd,
+  "./app/components/admin-topbar#AdminTopbar": AdminTopbar_f47f53c29deed8beba76543210fedcba,
+  "./app/components/admin-topbar#AdminBrandLogo": AdminBrandLogo_e3b0c44298fc1c149afbf4c8996fb924,
   "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1
 }

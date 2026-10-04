@@ -78,3 +78,21 @@ transaction tests.
 ### Local owner bootstrap
 
 Only before any user or live invitation exists, an operator may run `pnpm bootstrap:local-owner <email> <name>` with `ALLOW_LOCAL_OWNER_BOOTSTRAP=true`, `PAYLOAD_SECRET`, `EMERGENCY_TOTP_ENCRYPTION_KEY`, a protected `BOOTSTRAP_OPERATOR_TOKEN_FILE`, and a new `LOCAL_OWNER_CREDENTIALS_FILE`. The command writes the TOTP handoff material only to that exclusive 0600 file; it never prints credentials.
+# CMS
+
+## Optional admin branding bundle
+
+The public engine has neutral admin styling. A private build may provide an
+optional bundle without adding private assets to this repository:
+
+- `admin-branding/branding.json` is a runtime manifest, copied into the CMS
+  standalone image and exposed to the process through `ADMIN_BRANDING_DIR` when
+  it is not located beside the CMS runtime.
+- `public/admin-branding/admin-branding.css` and `public/admin-branding/assets/`
+  are the browser-visible stylesheet and same-origin logo assets.
+
+The manifest accepts `name` (1–80 characters), `initials` (1–4 characters), an
+optional root-relative `/admin-branding/...` `logoUrl`, and the bounded color
+tokens `--admin-accent`, `--admin-accent-contrast`, `--admin-surface`,
+`--admin-sidebar`, `--admin-text`, and `--admin-border`. An absent or invalid
+bundle always falls back to the neutral public shell.
