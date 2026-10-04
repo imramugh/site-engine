@@ -63,6 +63,13 @@ describe('ENG-023 provider monetary accounting', () => {
     expect(Date.now() - started).toBeLessThan(500)
   })
 
+  it('returns only final text parts and rejects reasoning-only provider responses', async () => {
+    await expect(invokeProvider('openai', 'secret', 'model', 'prompt', 10, async () => Response.json({ output: [{ content: [{ type: 'reasoning', text: 'private' }, { type: 'output_text', text: 'final ' }, { type: 'output_text', text: 'answer' }] }], usage: { input_tokens: 1, output_tokens: 2 } }))).resolves.toMatchObject({ outcome: 'success', output: 'final answer' })
+    await expect(invokeProvider('anthropic', 'secret', 'model', 'prompt', 10, async () => Response.json({ content: [{ type: 'thinking', text: 'private' }, { type: 'text', text: 'final ' }, { type: 'text', text: 'answer' }], usage: { input_tokens: 1, output_tokens: 2 } }))).resolves.toMatchObject({ outcome: 'success', output: 'final answer' })
+    await expect(invokeProvider('google-gemini', 'secret', 'model', 'prompt', 10, async () => Response.json({ candidates: [{ content: { parts: [{ thought: true, text: 'private' }, { text: 'final ' }, { text: 'answer' }] } }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, thoughtsTokenCount: 3 } }))).resolves.toMatchObject({ outcome: 'success', output: 'final answer' })
+    await expect(invokeProvider('google-gemini', 'secret', 'model', 'prompt', 10, async () => Response.json({ candidates: [{ content: { parts: [{ thought: true, text: 'private' }] } }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 0, thoughtsTokenCount: 3 } }))).resolves.toEqual({ outcome: 'unavailable' })
+  })
+
   it('records actual usage above its reservation and closes the cap to later work', async () => {
     const record = await configured('openai', 'overrun', 'secret', { monthlyCapMicroUsd: 250, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
     let contacted = 0
