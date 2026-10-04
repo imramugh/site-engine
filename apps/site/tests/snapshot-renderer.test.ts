@@ -390,7 +390,7 @@ describe('static snapshot renderer', () => {
       for (const path of ['/unknown-target/', '/docs/archive-marker/']) {
         const response = await page.goto(`${served.origin}${path}`, { waitUntil: 'domcontentloaded' });
         expect(response?.status()).toBe(404);
-        await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+        expect(await page.getByRole('heading', { name: 'Page not found' }).isVisible()).toBe(true);
         expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
       }
     } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }
