@@ -54,6 +54,14 @@ describe('ENG-023 provider protocol execution', () => {
     expect(await payload.findByID({ collection: 'integration-configurations', id: configuredRecord.id, overrideAccess: true })).toMatchObject({ monthlyUsage: 6, monthlyCap: 10 })
   })
 
+  it('aborts a timed-out transport and releases its reservation', async () => {
+    const record = await configured('openai', 'timeout', 'timeout-secret', { monthlyCap: 10, monthlyUsage: 0, usageMonth: '2026-10' })
+    let aborted = false
+    await expect(executeConfiguredAIJob(payload, { provider: 'openai', input: 'wait', estimatedCost: 4 }, { now, timeoutMs: 5, transport: async request => new Promise((_, reject) => request.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')) })) })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(aborted).toBe(true)
+    expect(await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })).toMatchObject({ monthlyUsage: 0, health: 'unavailable' })
+  })
+
   it('does not retry or fall back from rejected and revoked credentials', async () => {
     const rejected = await configured('google-gemini', 'gemini-test', 'do-not-leak', { fallbackProvider: 'openrouter' }); await configured('openrouter', 'fallback', 'also-not-leaked'); const requests: Request[] = []
     await expect(executeConfiguredAIJob(payload, { provider: 'google-gemini', fallbackProvider: 'openrouter', input: 'private input', estimatedCost: 1 }, { now, transport: async request => { requests.push(request); return new Response('{}', { status: 401 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE'); expect(requests).toHaveLength(1); expect((await payload.findByID({ collection: 'integration-configurations', id: rejected.id, overrideAccess: true })).health).toBe('rejected')
