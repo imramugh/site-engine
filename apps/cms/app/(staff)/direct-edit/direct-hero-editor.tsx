@@ -26,6 +26,9 @@ export function DirectHeroEditor() {
   const page = useMemo(() => data.pages.find((item) => item.id === pageID) ?? data.pages[0], [data.pages, pageID])
   const changeSet = useMemo(() => data.changeSets.find((item) => item.id === changeSetID) ?? data.changeSets[0], [data.changeSets, changeSetID])
   const hero = page?.heroes[0]
+  const headingDirty = Boolean(hero && heading !== hero.heading)
+  const bodyDirty = Boolean(hero && body !== hero.body)
+  const dirty = headingDirty || bodyDirty
   const clearPreview = useCallback(() => { requestVersion.current += 1; if (timer.current) window.clearTimeout(timer.current); timer.current = undefined; setPreview(undefined) }, [])
 
   const load = useCallback(async () => {
@@ -100,10 +103,24 @@ export function DirectHeroEditor() {
       <label>Page <select value={page?.id ?? ''} disabled={busy} onChange={(event) => { clearPreview(); setPageID(event.target.value) }}>{data.pages.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
       <label>Change set <select value={changeSet?.id ?? ''} disabled={busy} onChange={(event) => { clearPreview(); setChangeSetID(event.target.value) }}>{data.changeSets.map((item) => <option value={item.id} key={item.id}>{item.name} ({item.state})</option>)}</select></label>
     </div>
+    {dirty ? <p className={styles.unsaved}>You have unsaved Hero changes. Save each changed field before submitting for review.</p> : null}
     <div className={styles.workspace}>
-      <section>{hero ? <><h2>Hero</h2><label>Heading <input value={heading} disabled={busy} onChange={(event) => setHeading(event.target.value)} /></label><button disabled={!ready || busy} onClick={() => void save('heading')}>Save heading</button><label>Body <textarea value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /></label><button disabled={!ready || busy} onClick={() => void save('body')}>Save body</button></> : <p>No editable Hero is available for this page.</p>}</section>
-      <section aria-label="Preview"><h2>Preview</h2><p>See the saved draft as it will be rendered before submitting it for review.</p><button disabled={!changeSet || busy} onClick={() => void preparePreview()}>{preview?.status === 'pending' || preview?.status === 'processing' ? 'Preparing preview…' : 'Prepare preview'}</button>{preview?.status === 'completed' ? <iframe className={styles.previewFrame} title="Proposed draft preview" src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`} /> : <p>Prepare a preview after saving your changes.</p>}</section>
+      <section>
+        {hero ? <>
+          <h2>Hero</h2>
+          <label>Heading <input value={heading} disabled={busy} onChange={(event) => setHeading(event.target.value)} /></label>
+          <button disabled={!ready || busy || !headingDirty} onClick={() => void save('heading')}>Save heading</button>
+          <label>Body <textarea value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /></label>
+          <button disabled={!ready || busy || !bodyDirty} onClick={() => void save('body')}>Save body</button>
+        </> : <p>No editable Hero is available for this page.</p>}
+      </section>
+      <section aria-label="Preview">
+        <h2>Preview</h2>
+        <p>Preview uses the last saved draft. Unsaved fields are not included.</p>
+        <button disabled={!changeSet || busy} onClick={() => void preparePreview()}>{preview?.status === 'pending' || preview?.status === 'processing' ? 'Preparing preview…' : 'Prepare preview'}</button>
+        {preview?.status === 'completed' ? <iframe className={styles.previewFrame} title="Proposed draft preview" src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`} /> : <p>Prepare a preview after saving your changes.</p>}
+      </section>
     </div>
-    <button disabled={!changeSet || busy} onClick={() => void submit()}>Submit for review</button>
+    <button disabled={!changeSet || busy || dirty} onClick={() => void submit()}>Submit for review</button>
   </main>
 }

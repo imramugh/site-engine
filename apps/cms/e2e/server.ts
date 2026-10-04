@@ -97,8 +97,8 @@ process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
-process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
-process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'
+process.env.PREVIEW_THEME_VERSION = '1.0.0'
+process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
 process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
@@ -149,6 +149,14 @@ function html(response: ServerResponse, body: string, status = 200): void {
 function json(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   response.end(JSON.stringify(body))
+}
+
+function previewContentType(path: string): string {
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8'
+  if (path.endsWith('.js') || path.endsWith('.mjs')) return 'application/javascript; charset=utf-8'
+  if (path.endsWith('.svg')) return 'image/svg+xml'
+  if (path.endsWith('.woff2')) return 'font/woff2'
+  return 'application/octet-stream'
 }
 
 async function provider(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -256,24 +264,45 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const relativePath = (request.url ?? '').split('/').slice(5).join('/') || 'index.html'
       const artifact = join(previewArtifacts, jobID, 'proposed', relativePath)
       if (!artifact.startsWith(join(previewArtifacts, jobID, 'proposed'))) { response.writeHead(403); response.end(); return }
-      return readFile(artifact).then((bytes) => { response.writeHead(200, { 'content-type': artifact.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/octet-stream' }); response.end(bytes) }).catch(() => { response.writeHead(404); response.end() })
+      return readFile(artifact)
+        .catch(() => readFile(join(artifact, 'index.html')))
+        .then((bytes) => {
+          const contentType = artifact.endsWith('.html') || !relativePath.includes('.') ? 'text/html; charset=utf-8' : previewContentType(artifact)
+          response.writeHead(200, { 'content-type': contentType })
+          response.end(bytes)
+        })
+        .catch(() => { response.writeHead(404); response.end() })
     }).catch(() => { response.writeHead(403); response.end() })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/direct-preview-worker') {
-    void withPayloadTransaction(payload, async req => {
-      const job = await claimPreviewRenderJob(payload, req)
+    void (async () => {
+      const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job) throw new Error('No claimable preview job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') {
+          return {
+            job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt },
+            live: job.liveManifest,
+            proposed: job.proposedManifest,
+            basePaths: { live: 'live', proposed: 'proposed' },
+            versionPins: job.versionPins,
+          }
+        }
         if (action === 'renew') return { ok: true }
-        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        if (action === 'complete') {
+          return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), {
+            liveManifestHash: String(body.liveManifestHash),
+            proposedManifestHash: String(body.proposedManifestHash),
+            artifactDigest: String(body.artifactDigest),
+          }))
+        }
         throw new Error('Unsupported preview worker action.')
       }
       const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
-      return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true, req })
-    }).then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
+      return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
+    })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
