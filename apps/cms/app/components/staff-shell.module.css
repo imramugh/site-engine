@@ -89,3 +89,20 @@
   .workspace table { display: block; overflow-x: auto; }
   .workspace input, .workspace select { max-width: 100%; }
 }
+.headerActions { display: flex; align-items: center; gap: .625rem; }
+.adminSearch { position: relative; width: min(260px, 30vw); }
+.adminSearch input { width: 100%; min-height: 36px; margin: 0; padding: .45rem 2.5rem .45rem 2rem; border: 1px solid var(--admin-border); border-radius: .375rem; background: #fff; color: var(--admin-text); font: inherit; font-size: .8125rem; }
+.adminSearchIcon { position: absolute; z-index: 1; top: 50%; left: .625rem; width: 14px; height: 14px; color: #5f6b76; transform: translateY(-50%); pointer-events: none; }
+.adminSearchShortcut { position: absolute; top: 50%; right: .5rem; padding: .1rem .25rem; border: 1px solid var(--admin-border); border-radius: .2rem; background: var(--admin-surface); color: #5f6b76; font: inherit; font-size: .6875rem; line-height: 1.2; transform: translateY(-50%); pointer-events: none; }
+.searchResults { position: absolute; z-index: 40; top: calc(100% + .375rem); right: 0; width: min(360px, calc(100vw - 2rem)); padding: .375rem; display: grid; gap: 2px; border: 1px solid var(--admin-border); border-radius: .5rem; background: #fff; box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
+.searchResults p { margin: .5rem; font-size: .8125rem; }
+.searchResults button { min-height: 38px; padding: .5rem .625rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; border: 0; border-radius: .25rem; background: transparent; color: var(--admin-text); font: inherit; font-size: .8125rem; text-align: left; cursor: pointer; }
+.searchResults button:hover, .searchResults button[aria-selected="true"] { background: var(--admin-surface); }
+.searchResults small { color: #5f6b76; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 700px) {
+  .adminSearch { width: 140px; }
+  .headerActions { gap: .375rem; }
+  .searchResults { position: fixed; top: 118px; right: 16px; left: 16px; width: auto; }
+  .headerActions > a { padding-inline: .4rem; font-size: .75rem; }
+}

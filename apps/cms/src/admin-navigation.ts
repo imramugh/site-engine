@@ -1,3 +1,4 @@
+import type { Payload } from 'payload'
 export type AdminRole = 'owner' | 'editor' | 'approver' | 'sales' | 'hiring'
 
 export type AdminNavigationItem = {
@@ -49,4 +50,21 @@ export const payloadCollectionItems: readonly AdminNavigationItem[] = [
 export function navigationForRoles(roles: readonly string[] | null | undefined, items = adminNavigationItems): AdminNavigationItem[] {
   const actorRoles = new Set(roles)
   return items.filter((item) => item.roles.some((role) => actorRoles.has(role)))
+}
+
+type CountInput = Parameters<Payload['count']>[0]
+
+export type AdminNavigationBadges = Partial<Record<'Leads' | 'Careers' | 'Reviews', number>>
+
+/** Aggregate-only, role-filtered counts for sidebar badges. Failed queries omit a badge. */
+export async function navigationBadges(payload: Pick<Payload, 'count'>, user: { id?: string | number | null; roles?: readonly AdminRole[] | null; disabled?: boolean | null }): Promise<AdminNavigationBadges> {
+  const allowed = (role: AdminRole) => !user.disabled && Boolean(user.roles?.includes(role))
+  const pending: Array<Promise<void>> = []
+  const badges: AdminNavigationBadges = {}
+  const count = (key: keyof AdminNavigationBadges, input: CountInput) => pending.push(payload.count(input).then(result => { if (result.totalDocs > 0) badges[key] = result.totalDocs }).catch(() => undefined))
+  if (allowed('owner') || allowed('sales')) count('Leads', { collection: 'inquiries', where: { stage: { equals: 'new' } }, overrideAccess: false, user })
+  if (allowed('owner') || allowed('hiring')) count('Careers', { collection: 'applications', where: { status: { equals: 'new' } }, overrideAccess: false, user })
+  if (allowed('owner') || allowed('editor') || allowed('approver')) count('Reviews', { collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: false, user })
+  await Promise.all(pending)
+  return badges
 }
