@@ -1,7 +1,7 @@
 'use client'
 
 import type { AdminNavigationItem, AdminRole } from '../../src/admin-navigation'
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import styles from './staff-shell.module.css'
 
@@ -29,6 +29,11 @@ export function AdminNavigationToggle({ items, collections, displayName, roles }
   const button = useRef<HTMLButtonElement>(null)
   const pathname = usePathname()
   const close = () => { setOpen(false); button.current?.focus() }
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && open) close() }
+    window.addEventListener('keydown', escape)
+    return () => window.removeEventListener('keydown', escape)
+  }, [open])
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => { if (event.key === 'Escape' && open) { event.preventDefault(); close() } }
   const link = (item: AdminNavigationItem) => <a key={item.href} href={item.href} aria-current={pathname === item.href ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} />{item.label}</a>
   return <>

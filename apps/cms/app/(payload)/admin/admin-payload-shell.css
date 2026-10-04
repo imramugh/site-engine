@@ -1,0 +1,17 @@
+/* Payload owns its outer template; these stable data hooks make the custom
+ * workspace navigation visible without replacing collection controls. */
+@media (min-width: 701px) {
+  body:has([data-admin-sidebar]) .template-default__nav-toggler-wrapper { display: none; }
+  body:has([data-admin-sidebar]) [data-admin-sidebar] {
+    display: flex !important;
+    position: fixed !important;
+    inset: 0 auto 0 0;
+    width: var(--admin-sidebar-width, 240px);
+    z-index: 20;
+    transform: none !important;
+  }
+  body:has([data-admin-sidebar]) .template-default__wrap { margin-left: var(--admin-sidebar-width, 240px); min-height: 100vh; }
+}
+@media (max-width: 700px) {
+  body:has([data-admin-sidebar]) [data-admin-sidebar] { position: fixed; inset: 0 auto 0 0; width: min(19rem, 88vw); z-index: 30; }
+}
