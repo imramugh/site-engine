@@ -1,8 +1,10 @@
 import { expect, test } from 'vitest'
-import { buildContentTree, type ContentTreePage } from '../src/content-tree'
+import { deriveRoutes } from '@site-engine/engine'
+import { neutralFixture } from '@site-engine/contract/fixtures'
+import { buildContentTree, canonicalContentPath, type ContentTreePage } from '../src/content-tree'
 
 const section = { id: 'section-a', name: 'Section A' }
-const page = (id: string, title: string, parentId?: string, sectionId = section.id): ContentTreePage => ({ id, title, template: 'standard', sectionId, parentId })
+const page = (id: string, title: string, parentId?: string, sectionId = section.id): ContentTreePage => ({ id, title, slug: id, template: 'standard', sectionId, parentId })
 
 test('content tree retains more than one Payload page and exposes cycles and missing sections', () => {
   const many = Array.from({ length: 101 }, (_, index) => page(`page-${index}`, `Page ${String(index).padStart(3, '0')}`))
@@ -14,4 +16,60 @@ test('content tree retains more than one Payload page and exposes cycles and mis
   expect(tree.sections[0]?.unplaced).toHaveLength(1)
   expect(tree.sections[0]?.unplaced[0]?.children[0]?.children[0]?.cycle).toBe(true)
   expect(tree.unassigned.map((node) => node.page.title)).toEqual(['Unknown section'])
+})
+
+test('canonical content paths match engine routes for the homepage and section landing page', () => {
+  const snapshot = structuredClone(neutralFixture)
+  const servicesID = '66666666-6666-4666-8666-666666666666'
+  const landingID = '77777777-7777-4777-8777-777777777777'
+  const detailID = '88888888-8888-4888-8888-888888888888'
+  snapshot.settings.sections.push({ id: servicesID, name: 'Services', slug: 'services', landingPageId: landingID, allowedTemplates: ['pillar', 'service'], pageIds: [landingID, detailID] })
+  snapshot.pages.push(
+    { id: landingID, sectionId: servicesID, title: 'Services', summary: 'A synthetic services landing page for route semantics.', slug: 'services', template: 'pillar', status: 'published', blocks: [] },
+    { id: detailID, sectionId: servicesID, parentId: landingID, title: 'Respond', summary: 'A synthetic child page for route semantics.', slug: 'respond', template: 'service', status: 'published', blocks: [] },
+  )
+  const model = deriveRoutes(snapshot)
+  const sections = snapshot.settings.sections.map(({ id, name, slug, landingPageId }) => ({ id, name, slug, landingPageId }))
+  for (const page of snapshot.pages) {
+    expect(canonicalContentPath(page, snapshot.pages, sections, snapshot.settings.homepageId)).toBe(model.routes.find((route) => route.page.id === page.id)?.path)
+  }
+  expect(canonicalContentPath(snapshot.pages.find((item) => item.id === landingID)!, snapshot.pages, sections, snapshot.settings.homepageId)).toBe('/services')
+  expect(canonicalContentPath(snapshot.pages.find((item) => item.id === detailID)!, snapshot.pages, sections, snapshot.settings.homepageId)).toBe('/services/respond')
+})
+
+test('published checks are current-only and reject an invalid image reference', async () => {
+  const { checkForWorkingPage, publishedPageChecks } = await import('../src/content-readiness')
+  const valid = structuredClone(neutralFixture)
+  const pageID = valid.pages[0]!.id
+  const checks = publishedPageChecks(valid)
+  expect(checkForWorkingPage({ id: pageID, status: 'published' }, checks)).toEqual({ state: 'checked', issues: 0 })
+  expect(checkForWorkingPage({ id: pageID, status: 'draft' }, checks)).toEqual({ state: 'checked', issues: 0 })
+  expect(checkForWorkingPage({ id: 'new-unpublished-page', status: 'draft' }, checks)).toEqual({ state: 'not-published' })
+
+  const missingImage = structuredClone(neutralFixture)
+  missingImage.pages[0]!.blocks[0]!.appearance.backgroundImage = { mediaId: '99999999-9999-4999-8999-999999999999', overlay: 0.4 }
+  expect(publishedPageChecks(missingImage)).toBeUndefined()
+  expect(checkForWorkingPage({ id: pageID, status: 'published' }, publishedPageChecks(missingImage))).toEqual({ state: 'unavailable' })
+})
+
+test('malformed imported relationships remain visible without a false canonical path', () => {
+  const section = { id: 'section', name: 'Services', slug: 'services', landingPageId: 'landing' }
+  const landing = { ...page('landing', 'Services', undefined, section.id), slug: 'services' }
+  const crossSectionParent = { ...page('parent', 'Other section', undefined, 'other'), slug: 'other' }
+  const crossSectionChild = { ...page('child', 'Broken child', crossSectionParent.id, section.id), slug: 'child' }
+  const badHomepage = { ...page('home', 'Home', landing.id, section.id), slug: 'home' }
+  expect(canonicalContentPath(crossSectionChild, [landing, crossSectionParent, crossSectionChild], [section], undefined)).toBeUndefined()
+  expect(canonicalContentPath(badHomepage, [landing, badHomepage], [section], badHomepage.id)).toBeUndefined()
+  expect(canonicalContentPath({ ...landing, parentId: 'anything' }, [landing], [section], undefined)).toBeUndefined()
+})
+
+
+test('working page status compares released content rather than Payload draft metadata', async () => {
+  const { workingPageState } = await import('../src/content-readiness')
+  const released = structuredClone(neutralFixture.pages[0]!)
+  const working = { ...released, status: 'draft', _status: 'draft', updatedAt: '2026-10-04', seoDescription: released.seoDescription ?? null, businessCase: released.businessCase ?? null }
+  expect(workingPageState(working, released)).toBe('published')
+  expect(workingPageState({ ...working, title: 'Edited heading' }, released)).toBe('draft-changes')
+  expect(workingPageState(working)).toBe('draft')
+  expect(workingPageState({ ...working, status: 'archived' }, released)).toBe('archived')
 })
