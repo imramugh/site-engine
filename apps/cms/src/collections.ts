@@ -829,6 +829,12 @@ export const StyleGuides: CollectionConfig = {
 export const ConfiguredAIJobs: CollectionConfig = {
   slug: 'configured-ai-jobs', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  hooks: { beforeChange: [({ data, originalDoc, operation }) => {
+    if (operation === 'update' && originalDoc) {
+      for (const field of ['actor', 'idempotencyKey', 'requestDigest', 'input', 'provider', 'fallbackProvider', 'maxOutputTokens', 'configurationSnapshot']) data[field] = originalDoc[field]
+    }
+    return data
+  }] },
   fields: [
     { name: 'actor', type: 'relationship', relationTo: 'users', required: true, admin: { readOnly: true } },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, maxLength: 128, admin: { readOnly: true } },
