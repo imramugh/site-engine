@@ -41,9 +41,9 @@ export async function GET(request: Request): Promise<Response> {
     if (Number(set.revision) !== job.reviewRevision || changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) !== job.changeHash) return response(403)
     if (reviewer && preview?.status === 'ready' && preview.jobID === job.id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.liveManifestHash === job.liveManifestHash && preview.proposedManifestHash === job.proposedManifestHash) return response(204)
     // Draft-preview jobs intentionally never populate changeSets.preview: that
-    // field is reserved for submitted reviewer approval. An Editor may view
+    // field is reserved for submitted reviewer approval. A page editor may view
     // only their own still-editable, hash-current immutable draft artifact.
-    const ownsDraft = ['open', 'changes-requested'].includes(String(set.state)) && (owner || (editor && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id))
+    const ownsDraft = ['open', 'changes-requested'].includes(String(set.state)) && (owner || ((editor || user.roles?.includes('approver')) && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id))
     if (!ownsDraft || job.status !== 'completed' || !job.artifactDigest) return response(403)
     return response(204)
   } catch {
