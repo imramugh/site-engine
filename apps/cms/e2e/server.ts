@@ -54,6 +54,7 @@ const onPageReviewPageID = '12345678-1234-4234-8234-1234567890ab'
 const onPageReviewBlockID = '12345678-1234-4234-8234-1234567890ac'
 const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
 const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
+const onPageReviewerSessionToken = 'synthetic-on-page-reviewer-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
@@ -228,6 +229,7 @@ async function seed(): Promise<void> {
   const onPageEditor = await payload.create({ collection: 'users', data: { email: 'on-page-editor.synthetic@example.test', name: 'Synthetic On-page Editor', roles: ['editor'] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
+  const onPageReviewer = await payload.create({ collection: 'users', data: { email: 'on-page-reviewer.synthetic@example.test', name: 'Synthetic On-page Reviewer', roles: ['owner'] }, overrideAccess: true })
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
@@ -247,6 +249,7 @@ async function seed(): Promise<void> {
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(applicationSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   }
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageEditorSessionToken), user: onPageEditor.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageReviewerSessionToken), user: onPageReviewer.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })

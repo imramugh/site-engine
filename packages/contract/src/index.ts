@@ -124,6 +124,8 @@ export const SectionPresets = {
   services: ['landing', 'pillar', 'service'],
   insights: ['listing', 'article'],
   careers: ['listing', 'job'],
+  future: ['landing', 'standard', 'article'],
+  // Retained for callers that adopted the original generic future-section name.
   landing: ['landing', 'standard', 'article'],
 } as const satisfies Record<string, readonly z.infer<typeof TemplateSchema>[]>;
 const JobPostingSchema = z.object({

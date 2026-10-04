@@ -226,6 +226,16 @@ describe('ENG-003 content-tree and template invariants through the Payload API',
     await expect(payload.create({ collection: 'pages', data: pageData('shared-segment', one.id, 'standard'), user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'slug' })]) } })
   })
 
+  it('creates a copied draft through the CMS API while preserving hierarchy and rejecting a duplicate sibling slug', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'duplicate-owner@example.test', name: 'Duplicate Owner', roles: ['owner'] }, overrideAccess: true })
+    const section = await payload.create({ collection: 'sections', data: { name: 'Copies', summary: 'Synthetic section used to exercise copied page creation through the CMS API.', slug: 'copies-tree', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
+    const original = await payload.create({ collection: 'pages', data: pageData('original-copy', section.id, 'standard'), user: owner, overrideAccess: false })
+    const duplicate = await payload.create({ collection: 'pages', data: { ...pageData('original-copy-copy', section.id, 'standard'), parentId: original.id }, user: owner, overrideAccess: false })
+    expect(duplicate).toMatchObject({ template: original.template, status: 'draft' })
+    expect(typeof duplicate.parentId === 'string' ? duplicate.parentId : duplicate.parentId?.id).toBe(original.id)
+    await expect(payload.create({ collection: 'pages', data: { ...pageData('original-copy-copy', section.id, 'standard'), parentId: original.id }, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'slug' })]) } })
+  })
+
   it('serializes concurrent root-page writes so sibling slugs cannot race', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'race-owner@example.test', name: 'Race Owner', roles: ['owner'] }, overrideAccess: true })
     const section = await payload.create({ collection: 'sections', data: { name: 'Race', summary: 'This section verifies the transaction-backed sibling slug invariant under concurrent writes.', slug: 'race-tree', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
