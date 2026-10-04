@@ -30,13 +30,21 @@ export async function GET(request: Request): Promise<Response> {
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     const user = authenticated.user as { id?: string; roles?: string[] } | undefined
     if (!user) return response(401)
-    if (!user.roles?.some((role) => role === 'owner' || role === 'approver')) return response(403)
+    const owner = user.roles?.includes('owner') === true
+    const reviewer = owner || user.roles?.includes('approver') === true
+    const editor = user.roles?.includes('editor') === true
+    if (!reviewer && !editor) return response(403)
     const job = await payload.findByID({ collection: 'preview-render-jobs', id: match[1]!, depth: 0, overrideAccess: true })
     if (job.status !== 'completed' || !job.artifactDigest) return response(403)
     const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
     const preview = set.preview as { status?: string; jobID?: string; revision?: number; changeHash?: string; proposedManifestHash?: string; liveManifestHash?: string } | undefined
     if (Number(set.revision) !== job.reviewRevision || changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) !== job.changeHash) return response(403)
-    if (preview?.status !== 'ready' || preview.jobID !== job.id || preview.revision !== job.reviewRevision || preview.changeHash !== job.changeHash || preview.liveManifestHash !== job.liveManifestHash || preview.proposedManifestHash !== job.proposedManifestHash) return response(403)
+    if (reviewer && preview?.status === 'ready' && preview.jobID === job.id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.liveManifestHash === job.liveManifestHash && preview.proposedManifestHash === job.proposedManifestHash) return response(204)
+    // Draft-preview jobs intentionally never populate changeSets.preview: that
+    // field is reserved for submitted reviewer approval. An Editor may view
+    // only their own still-editable, hash-current immutable draft artifact.
+    const ownsDraft = ['open', 'changes-requested'].includes(String(set.state)) && (owner || (editor && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id))
+    if (!ownsDraft || job.status !== 'completed' || !job.artifactDigest) return response(403)
     return response(204)
   } catch {
     return response(401)

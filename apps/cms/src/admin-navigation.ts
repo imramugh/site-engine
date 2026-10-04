@@ -17,6 +17,7 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/content-tree', label: 'Content tree', roles: ['owner', 'editor', 'approver'] },
   { href: '/editorial', label: 'Editorial review', roles: ['owner', 'editor', 'approver'] },
   { href: '/block-gallery', label: 'Block gallery', roles: ['owner', 'editor'] },
+  { href: '/direct-edit', label: 'Hero draft editor', roles: ['owner', 'editor'] },
   { href: '/leads', label: 'Lead pipeline', roles: ['owner', 'sales'] },
   { href: '/applications', label: 'Applications', roles: ['owner', 'hiring'] },
   { href: '/operations', label: 'Operations', roles: ['owner'] },

@@ -2,6 +2,7 @@ import { createServer as createHTTPServer, request as requestUpstream, type Inco
 import { createServer } from 'node:https'
 import { once } from 'node:events'
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
@@ -10,7 +11,11 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
+import { withPayloadTransaction } from '../src/auth-transaction.js'
+import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
 import { canonicalHash } from '../src/publishing.js'
+import { deriveRoutes } from '@site-engine/engine'
+import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 
@@ -40,6 +45,9 @@ const applicationSectionID = '77777777-7777-4777-8777-777777777777'
 const applicationChangeSetID = '88888888-8888-4888-8888-888888888888'
 const draftApplicationJobID = '99999999-9999-4999-8999-999999999999'
 const expiredApplicationJobID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const directEditPageID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const directEditBlockID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+const directEditSetID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
@@ -53,6 +61,7 @@ const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
+const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
@@ -65,6 +74,9 @@ initialBaseline.settings.sections.push({ id: applicationSectionID, name: 'Career
 initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSectionID, title: 'Synthetic Application Engineer', summary: 'A published synthetic role used only to exercise the private application HTTP flow.', slug: 'synthetic-application-engineer', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2030-01-01T00:00:00.000Z' } })
 initialBaseline.pages.push({ id: draftApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Draft Role', summary: 'A draft synthetic role which must not accept applications.', slug: 'synthetic-draft-role', template: 'job', status: 'draft', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' } } })
 initialBaseline.pages.push({ id: expiredApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Expired Role', summary: 'An expired synthetic role which must not accept applications.', slug: 'synthetic-expired-role', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2026-10-02T00:00:00.000Z' } })
+const directEditSectionID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+initialBaseline.settings.sections.push({ id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'], pageIds: [directEditPageID] })
+initialBaseline.pages.push({ id: directEditPageID, sectionId: directEditSectionID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', template: 'landing', status: 'published', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
 const inquiryPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc'
 initialBaseline.settings.sections[0]!.allowedTemplates.push('standard')
 initialBaseline.settings.sections[0]!.pageIds.push(inquiryPageID)
@@ -85,10 +97,11 @@ process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
-process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
-process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'
+process.env.PREVIEW_THEME_VERSION = '1.0.0'
+process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
 process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
+const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -136,6 +149,14 @@ function html(response: ServerResponse, body: string, status = 200): void {
 function json(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   response.end(JSON.stringify(body))
+}
+
+function previewContentType(path: string): string {
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8'
+  if (path.endsWith('.js') || path.endsWith('.mjs')) return 'application/javascript; charset=utf-8'
+  if (path.endsWith('.svg')) return 'image/svg+xml'
+  if (path.endsWith('.woff2')) return 'font/woff2'
+  return 'application/octet-stream'
 }
 
 async function provider(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -214,6 +235,9 @@ async function seed(): Promise<void> {
   for (const [role, user] of Object.entries({ owner: applicationOwner, hiring: applicationUsers.hiring, editor, sales: applicationUsers.sales }) as Array<[keyof typeof applicationSessionTokens, { id: string }]>) {
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(applicationSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   }
+  const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
@@ -234,7 +258,51 @@ async function seed(): Promise<void> {
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
-    html(response, '<!doctype html><title>Synthetic private comparison</title><main>Authenticated private comparison fixture</main>')
+    void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
+      if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
+      const jobID = (request.url ?? '').split('/')[3]!
+      const relativePath = (request.url ?? '').split('/').slice(5).join('/') || 'index.html'
+      const artifact = join(previewArtifacts, jobID, 'proposed', relativePath)
+      if (!artifact.startsWith(join(previewArtifacts, jobID, 'proposed'))) { response.writeHead(403); response.end(); return }
+      return readFile(artifact)
+        .catch(() => readFile(join(artifact, 'index.html')))
+        .then((bytes) => {
+          const contentType = artifact.endsWith('.html') || !relativePath.includes('.') ? 'text/html; charset=utf-8' : previewContentType(artifact)
+          response.writeHead(200, { 'content-type': contentType })
+          response.end(bytes)
+        })
+        .catch(() => { response.writeHead(404); response.end() })
+    }).catch(() => { response.writeHead(403); response.end() })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/direct-preview-worker') {
+    void (async () => {
+      const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+      if (!job) throw new Error('No claimable preview job.')
+      const api = async (action: string, body: Record<string, unknown> = {}) => {
+        if (action === 'claim') {
+          return {
+            job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt },
+            live: job.liveManifest,
+            proposed: job.proposedManifest,
+            basePaths: { live: 'live', proposed: 'proposed' },
+            versionPins: job.versionPins,
+          }
+        }
+        if (action === 'renew') return { ok: true }
+        if (action === 'complete') {
+          return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), {
+            liveManifestHash: String(body.liveManifestHash),
+            proposedManifestHash: String(body.proposedManifestHash),
+            artifactDigest: String(body.artifactDigest),
+          }))
+        }
+        throw new Error('Unsupported preview worker action.')
+      }
+      const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
+      return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
+    })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
