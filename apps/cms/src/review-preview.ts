@@ -8,7 +8,7 @@ import { markStaleIfNeeded } from './editorial'
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
 type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings' | 'site-settings'; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
-type Baseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
+export type PreviewBaseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
 const MAX_BODY_BYTES = 16 * 1024
 
@@ -28,7 +28,7 @@ function selectionFromJob(job: Record<string, unknown>) {
   }
 }
 
-export async function loadInitialPreviewBaseline(): Promise<Baseline | undefined> {
+export async function loadInitialPreviewBaseline(): Promise<PreviewBaseline | undefined> {
   const file = process.env.INITIAL_PUBLISH_BASELINE_FILE
   if (!file) return undefined
   const manifest = SiteSnapshotSchema.parse(JSON.parse(await readFile(file, 'utf8')))
@@ -37,15 +37,15 @@ export async function loadInitialPreviewBaseline(): Promise<Baseline | undefined
   return { manifest, sequence: 0, versions }
 }
 
-async function latestPublished(payload: Payload, req: PayloadRequest): Promise<Baseline | undefined> {
-  const result = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
+async function latestPublished(payload: Payload, req?: PayloadRequest): Promise<PreviewBaseline | undefined> {
+  const result = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, ...(req ? { req } : {}) })
   const release = result.docs[0]; const snapshot = release?.snapshot
   if (!snapshot || typeof snapshot !== 'object') return undefined
   return { manifest: SiteSnapshotSchema.parse(snapshot.manifest), snapshotID: idOf(snapshot), sequence: Number(release.sequence), versions: { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion) } }
 }
 
-async function queueHead(payload: Payload, req: PayloadRequest): Promise<Baseline | undefined> {
-  const result = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, req })
+async function queueHead(payload: Payload, req?: PayloadRequest): Promise<PreviewBaseline | undefined> {
+  const result = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, ...(req ? { req } : {}) })
   const job = result.docs[0]; const snapshot = job?.snapshot
   if (!snapshot || typeof snapshot !== 'object') return undefined
   return { manifest: SiteSnapshotSchema.parse(snapshot.manifest), snapshotID: idOf(snapshot), sequence: Number(job.sequence), versions: { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion) } }
@@ -53,7 +53,7 @@ async function queueHead(payload: Payload, req: PayloadRequest): Promise<Baselin
 
 /** The candidate's selection is authoritative for approval and publication.
  * Legacy jobs omit the live pins; new jobs preserve both rendered variants. */
-function previewVersions(live: Baseline, proposed: SiteSnapshot, base: Baseline): PreviewVersions {
+function previewVersions(live: PreviewBaseline, proposed: SiteSnapshot, base: PreviewBaseline): PreviewVersions {
   const themeVersion = proposed.settings.theme?.version ?? base.versions.themeVersion
   const liveThemeVersion = live.manifest.settings.theme?.version ?? live.versions.themeVersion
   return {
@@ -65,8 +65,44 @@ function previewVersions(live: Baseline, proposed: SiteSnapshot, base: Baseline)
   }
 }
 
+export type PreviewThemeIdentity = { name: string; version: string }
+
+function themeIdentity(manifest: SiteSnapshot): PreviewThemeIdentity | undefined {
+  const selected = manifest.settings.theme
+  return selected ? { name: selected.id, version: selected.version } : undefined
+}
+
+/** Resolve the same live and queued baseline used by the real preview worker.
+ * Only the public theme identity leaves this server-side helper. */
+export async function previewThemeContext(input: {
+  payload: Payload
+  changeSets: Array<Record<string, unknown>>
+  initialBaseline?: PreviewBaseline
+  req?: PayloadRequest
+}) {
+  const live = await latestPublished(input.payload, input.req) ?? input.initialBaseline
+  const base = await queueHead(input.payload, input.req) ?? live
+  if (!live || !base) return { liveManifest: undefined, activeTheme: null, changeSetThemes: {} as Record<string, PreviewThemeIdentity | null> }
+  const activeTheme = themeIdentity(base.manifest) ?? null
+  const changeSetThemes: Record<string, PreviewThemeIdentity | null> = {}
+  for (const set of input.changeSets) {
+    const changes = Array.isArray(set.changes) ? set.changes as Change[] : []
+    if (!changes.some((change) => change.collection === 'theme-settings')) {
+      changeSetThemes[String(set.id)] = activeTheme
+      continue
+    }
+    const included = changes.map((change) => `${change.collection}:${change.id}`)
+    try {
+      changeSetThemes[String(set.id)] = themeIdentity(buildCandidate(base.manifest, changes, included, base.versions)) ?? null
+    } catch {
+      changeSetThemes[String(set.id)] = null
+    }
+  }
+  return { liveManifest: live.manifest, activeTheme, changeSetThemes }
+}
+
 /** Prepares exact immutable worker inputs; callers load the configured file before opening SQLite. */
-export async function prepareReviewPreview(input: { payload: Payload; req: PayloadRequest; actor: { id: string; roles?: string[] }; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; initialBaseline?: Baseline; draft?: boolean }) {
+export async function prepareReviewPreview(input: { payload: Payload; req: PayloadRequest; actor: { id: string; roles?: string[] }; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; initialBaseline?: PreviewBaseline; draft?: boolean }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, initialBaseline, draft = false } = input
   requireTransaction(req, 'Review preview preparation')
   const reviewer = await payload.findByID({ collection: 'users', id: actor.id, depth: 0, overrideAccess: true, req }) as { disabled?: boolean; roles?: string[] }

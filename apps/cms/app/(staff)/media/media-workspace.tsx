@@ -1,0 +1,184 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import type { MediaAsset } from '../../../src/media-workspace'
+import styles from './media-workspace.module.css'
+
+type Data = { assets: MediaAsset[]; total: number; truncated: boolean; page: number; totalPages: number; pageSize: number }
+type Filter = 'all' | 'missing-alt' | 'unused' | 'large' | 'bin'
+type Metadata = { alt: string; decorative: boolean; caption: string; credit: string; tags: string[] }
+type View = { filter: Filter; query: string; page: number }
+const filters: Array<{ value: Filter; label: string }> = [
+  { value: 'all', label: 'All' }, { value: 'missing-alt', label: 'Missing alt text' },
+  { value: 'unused', label: 'Unused' }, { value: 'large', label: 'Large files' },
+  { value: 'bin', label: 'Deletion bin' },
+]
+const metadata = (asset?: MediaAsset): Metadata => ({ alt: asset?.alt ?? '', decorative: Boolean(asset?.decorative), caption: asset?.caption ?? '', credit: asset?.credit ?? '', tags: asset?.tags ?? [] })
+const sameMetadata = (left: Metadata, right: Metadata) => JSON.stringify(left) === JSON.stringify(right)
+const size = (bytes?: number | null) => !bytes ? 'Size unavailable' : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+const dimensions = (asset: MediaAsset) => asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Dimensions unavailable'
+
+export function MediaWorkspace({ initial }: { initial: Data }) {
+  const initialAsset = initial.assets[0]
+  const [data, setData] = useState(initial)
+  const [selectedID, setSelectedID] = useState(initialAsset?.id ?? '')
+  const [baseline, setBaseline] = useState(() => metadata(initialAsset))
+  const [draft, setDraft] = useState(() => metadata(initialAsset))
+  const [tagText, setTagText] = useState(() => metadata(initialAsset).tags.join(', '))
+  const [view, setView] = useState<View>({ filter: 'all', query: '', page: initial.page })
+  const [search, setSearch] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [retryView, setRetryView] = useState<View | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [lifecycleBusy, setLifecycleBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadAlt, setUploadAlt] = useState('')
+  const [uploadDecorative, setUploadDecorative] = useState(false)
+  const request = useRef(0)
+  const abort = useRef<AbortController | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const uploadPanel = useRef<HTMLDivElement>(null)
+  const selected = useMemo(() => data.assets.find((asset) => asset.id === selectedID), [data.assets, selectedID])
+  const dirty = Boolean(selected) && !sameMetadata(draft, baseline)
+  const confirmDiscard = () => !dirty || window.confirm('Discard unsaved media metadata?')
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = '' } }
+    const followLink = (event: MouseEvent) => {
+      if (!dirty || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      const target = event.target instanceof Element ? event.target.closest('a[href]') : null
+      if (target && !window.confirm('Discard unsaved media metadata?')) { event.preventDefault(); event.stopPropagation() }
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    document.addEventListener('click', followLink, true)
+    return () => { window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('click', followLink, true) }
+  }, [dirty])
+
+  function useAsset(asset?: MediaAsset) {
+    setSelectedID(asset?.id ?? '')
+    const next = metadata(asset)
+    setBaseline(next)
+    setDraft(next)
+    setTagText(next.tags.join(', '))
+  }
+
+  async function load(next: View, preferredID?: string) {
+    const version = ++request.current
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    setLoading(true); setError(''); setMessage('')
+    try {
+      const parameters = new URLSearchParams({ filter: next.filter, q: next.query, page: String(next.page), pageSize: String(data.pageSize || 24) })
+      const response = await fetch(`/api/media/workspace?${parameters}`, { signal: controller.signal })
+      const body = await response.json() as Data & { error?: string }
+      if (version !== request.current) return
+      if (!response.ok) throw new Error(body.error ?? 'Unable to load media.')
+      setData(body)
+      const accepted = { ...next, page: body.page }
+      setView(accepted); setSearch(accepted.query); setRetryView(null)
+      useAsset(body.assets.find((asset) => asset.id === (preferredID ?? selectedID)) ?? body.assets[0])
+    } catch (reason) {
+      if (version !== request.current || (reason instanceof DOMException && reason.name === 'AbortError')) return
+      setError(reason instanceof Error ? reason.message : 'Unable to load media.'); setRetryView(next)
+    } finally { if (version === request.current) setLoading(false) }
+  }
+
+  function changeView(next: View) { if (confirmDiscard()) void load(next) }
+  function submitSearch(event: FormEvent) { event.preventDefault(); changeView({ filter: view.filter, query: search.trim(), page: 1 }) }
+  function select(asset: MediaAsset) { if (asset.id !== selectedID && confirmDiscard()) { useAsset(asset); setError(''); setMessage('') } }
+
+  async function save() {
+    if (!selected || saving) return
+    setSaving(true); setError(''); setMessage('')
+    try {
+      const response = await fetch('/api/media/workspace', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: selected.id, ...draft }) })
+      const body = await response.json() as { asset?: Partial<Metadata>; error?: string }
+      if (!response.ok) throw new Error(body.error ?? 'Unable to save metadata.')
+      const saved = { ...draft, ...body.asset, tags: body.asset?.tags ?? draft.tags }
+      setBaseline(saved); setDraft(saved)
+      setTagText(saved.tags.join(', '))
+      setData((current) => ({ ...current, assets: current.assets.map((asset) => asset.id === selected.id ? { ...asset, ...saved } : asset) }))
+      setMessage('Metadata saved.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save metadata.') } finally { setSaving(false) }
+  }
+
+  async function updateLifecycle(action: 'bin' | 'restore') {
+    if (!selected || lifecycleBusy || !confirmDiscard()) return
+    setLifecycleBusy(true); setError(''); setMessage('')
+    try {
+      const response = await fetch('/api/media/lifecycle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId: selected.id, action }) })
+      const body = await response.json() as { error?: string; status?: 'blocked' | 'binned' | 'restored' }
+      if (!response.ok) throw new Error(body.error ?? 'Unable to update this asset.')
+      if (body.status === 'blocked') { setError('This asset is used on a page and cannot be moved to the deletion bin.'); return }
+      await load(view)
+      setMessage(action === 'bin' ? 'Asset moved to the deletion bin.' : 'Asset restored.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to update this asset.') } finally { setLifecycleBusy(false) }
+  }
+
+  async function submitUpload(event: FormEvent) {
+    event.preventDefault()
+    if (!uploadFile || uploading) return
+    if (!uploadDecorative && !uploadAlt.trim()) { setError('Add accurate alt text or mark the image as decorative before uploading.'); return }
+    if (!confirmDiscard()) return
+    setUploading(true); setError(''); setMessage('')
+    try {
+      const form = new FormData(); form.set('file', uploadFile); form.set('_payload', JSON.stringify({ alt: uploadDecorative ? '' : uploadAlt.trim(), decorative: uploadDecorative }))
+      const response = await fetch('/api/assets', { method: 'POST', body: form })
+      const body = await response.json().catch(() => ({})) as { doc?: { id?: string }; errors?: Array<{ message?: string }>; message?: string }
+      if (!response.ok) throw new Error(body.errors?.[0]?.message ?? body.message ?? 'Upload failed. Use a supported raster image under 15 MiB.')
+      setUploadFile(null); setUploadAlt(''); setUploadDecorative(false); if (fileInput.current) fileInput.current.value = ''
+      await load({ filter: 'all', query: '', page: 1 }, body.doc?.id)
+      setMessage('Image uploaded.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Upload failed. Use a supported raster image under 15 MiB.') } finally { setUploading(false) }
+  }
+
+  const openUpload = () => {
+    setUploadOpen(true)
+    window.requestAnimationFrame(() => { uploadPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); fileInput.current?.focus() })
+  }
+
+  return <main className={styles.workspace} data-media-workspace>
+    <h1 className={styles.srOnly}>Media</h1>
+    {error ? <div className={styles.feedback} role="alert"><span>{error}</span>{retryView ? <button type="button" onClick={() => void load(retryView)}>Retry</button> : null}</div> : null}
+    {message ? <p className={styles.feedback} role="status" aria-live="polite">{message}</p> : null}
+    <div className={styles.layout} data-media-layout>
+      <section className={styles.library} data-media-library aria-label="Media library" aria-busy={loading}>
+        <div className={styles.toolbar} data-media-toolbar><div className={styles.filters} role="group" aria-label="Media filters">{filters.map(({ value, label }) => <button type="button" key={value} aria-pressed={view.filter === value} disabled={loading} onClick={() => changeView({ filter: value, query: view.query, page: 1 })}>{label}</button>)}</div><div className={styles.toolbarEnd}><span className={styles.count}>{data.total} {data.total === 1 ? 'asset' : 'assets'}</span><button type="button" className={styles.primary} data-media-primary onClick={openUpload}>Upload new asset</button></div></div>
+        <form className={styles.search} role="search" onSubmit={submitSearch}><label htmlFor="media-search">Search media</label><div><input id="media-search" value={search} maxLength={80} onChange={(event) => setSearch(event.target.value)} /><button type="submit">Search</button></div></form>
+        {uploadOpen ? <div ref={uploadPanel} className={styles.uploadPanel} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) setUploadFile(file) }}>
+          <form onSubmit={submitUpload}>
+            <div className={styles.uploadIntro}><div><strong>Upload a new image</strong><span>PNG, JPEG, WebP, or AVIF up to 15 MiB</span></div><label className={styles.fileButton}>Choose image<input ref={fileInput} type="file" accept="image/avif,image/jpeg,image/png,image/webp" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} /></label></div>
+            <p className={styles.chosenFile}>{uploadFile ? uploadFile.name : 'Drop an image here or choose a file.'}</p>
+            <div className={styles.uploadMetadata}>
+              <label htmlFor="upload-alt">Alt text<input id="upload-alt" value={uploadAlt} maxLength={240} disabled={uploadDecorative || uploading} onChange={(event) => setUploadAlt(event.target.value)} /></label>
+              <label className={styles.checkLabel}><input type="checkbox" checked={uploadDecorative} disabled={uploading} onChange={(event) => setUploadDecorative(event.target.checked)} />Decorative image</label>
+              <button className={styles.primary} data-media-primary type="submit" disabled={!uploadFile || uploading || (!uploadDecorative && !uploadAlt.trim())}>{uploading ? 'Uploading…' : 'Upload image'}</button>
+            </div><small>{uploadDecorative ? 'Decorative images have no alt text.' : 'Describe the image’s purpose. Do not use its filename as alt text.'}</small>
+          </form>
+        </div> : null}
+        <div className={styles.grid} data-media-grid>{data.assets.map((asset) => <button type="button" key={asset.id} className={styles.card} data-media-asset aria-pressed={selectedID === asset.id} onClick={() => select(asset)}><span className={styles.thumb}>{asset.url ? <img src={asset.url} alt="" /> : <span>Preview unavailable</span>}</span><span className={styles.cardCopy}><strong>{asset.filename}</strong><small>{dimensions(asset)} · {size(asset.filesize)}</small>{!asset.decorative && !asset.alt?.trim() ? <em>Missing alt text</em> : null}{(asset.filesize ?? 0) > 3 * 1024 * 1024 ? <em className={styles.warning}>Large file</em> : null}</span></button>)}</div>
+        {!data.assets.length ? <div className={styles.empty} data-media-empty><strong>No matching media</strong><span>Try another search or filter.</span></div> : null}
+        <nav className={styles.pagination} aria-label="Media pages"><button type="button" disabled={loading || view.page <= 1} onClick={() => changeView({ ...view, page: view.page - 1 })}>Previous</button><span>Page {view.page} of {data.totalPages}</span><button type="button" disabled={loading || view.page >= data.totalPages} onClick={() => changeView({ ...view, page: view.page + 1 })}>Next</button></nav>
+      </section>
+      <aside className={styles.detail} aria-label="Selected media" data-media-detail>{selected ? <>
+        <header className={styles.detailHeading}><div><h2>{selected.filename}</h2><span>{selected.id}</span></div><p>{selected.mimeType} · {dimensions(selected)} · {size(selected.filesize)}</p></header>
+        <div className={styles.detailBody}>
+          <div className={styles.preview} data-media-preview>{selected.url ? <img src={selected.url} alt="" /> : <span>Preview unavailable</span>}</div>
+          <label htmlFor="asset-alt">Alt text<textarea id="asset-alt" rows={3} value={draft.alt} maxLength={240} disabled={draft.decorative || saving} onChange={(event) => setDraft((current) => ({ ...current, alt: event.target.value }))} /><small>{draft.decorative ? 'Decorative images do not need alt text.' : 'Describe the image’s purpose and relevant content.'}</small></label>
+          <label className={styles.checkLabel}><input type="checkbox" checked={draft.decorative} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, decorative: event.target.checked }))} />Decorative image</label>
+          <label htmlFor="asset-caption">Caption<textarea id="asset-caption" rows={2} value={draft.caption} maxLength={300} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, caption: event.target.value }))} /></label>
+          <label htmlFor="asset-credit">Credit<input id="asset-credit" value={draft.credit} maxLength={240} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, credit: event.target.value }))} /></label>
+          <label htmlFor="asset-tags">Tags<input id="asset-tags" value={tagText} disabled={saving} onChange={(event) => { setTagText(event.target.value); setDraft((current) => ({ ...current, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12) })) }} /><small>Separate up to 12 tags with commas.</small></label>
+          <button type="button" className={styles.primary} data-media-primary onClick={() => void save()} disabled={saving || !dirty || (!draft.decorative && !draft.alt.trim())}>{saving ? 'Saving…' : 'Save metadata'}</button>
+          <section className={styles.usage}><h3>Used in</h3>{selected.usages.length ? <ul>{selected.usages.map((usage) => <li key={usage.pageId}><a href={`/content-editor/${encodeURIComponent(usage.pageId)}`}>{usage.pageTitle}</a></li>)}</ul> : <p>Not used on any page.</p>}</section>
+          <p className={styles.immutable}>Upload a new asset when the image file changes. Existing published snapshots keep their original file.</p>
+          <div className={styles.actions} data-media-actions><button type="button" onClick={openUpload}>Upload new asset</button>{selected.deletedAt ? <button type="button" disabled={lifecycleBusy} onClick={() => void updateLifecycle('restore')}>{lifecycleBusy ? 'Restoring…' : 'Restore'}</button> : <button type="button" className={styles.danger} disabled={lifecycleBusy || selected.usages.length > 0} title={selected.usages.length ? 'Remove this asset from every page before deleting it.' : 'Move this asset to the deletion bin.'} onClick={() => void updateLifecycle('bin')}>{lifecycleBusy ? 'Moving…' : 'Move to bin'}</button>}</div>
+        </div></> : <div className={styles.empty} data-media-empty><strong>Select an asset</strong><span>Choose an item to inspect its metadata and usage.</span></div>}</aside>
+    </div>
+  </main>
+}

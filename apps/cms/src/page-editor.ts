@@ -1,6 +1,7 @@
 import type { Payload, PayloadRequest } from 'payload'
 import {
   BlockSchema,
+  AppearanceOptions,
   PageSchema,
   TemplateAllowedBlocks,
   type Block,
@@ -11,6 +12,7 @@ import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog } from './block-gallery'
 import { workingPageState } from './content-readiness'
 import { canonicalHash } from './publishing'
+import { previewThemeContext, type PreviewBaseline } from './review-preview'
 
 export type PageEditorActor = {
   id: string
@@ -338,10 +340,11 @@ export async function pageEditorContext(
   payload: Payload,
   actor: PageEditorActor,
   pageID: string,
+  initialBaseline?: PreviewBaseline,
 ) {
   if (!hasRole(actor, ['owner', 'editor']) || !uuid.test(pageID))
     throw new Error('EDITOR_ROLE_REQUIRED')
-  const [page, sets, pages, sections, assets, releases] = await Promise.all([
+  const [page, sets, pages, sections, assets] = await Promise.all([
     payload.findByID({
       collection: 'pages',
       id: pageID,
@@ -389,14 +392,6 @@ export async function pageEditorContext(
       user: actor as never,
       overrideAccess: false,
     }),
-    payload.find({
-      collection: 'published-releases',
-      sort: '-sequence',
-      limit: 1,
-      depth: 0,
-      user: actor as never,
-      overrideAccess: false,
-    }),
   ])
   const pageRecord = page as unknown as Record<string, unknown>
   const sectionID = relationID(pageRecord.sectionId)
@@ -413,22 +408,12 @@ export async function pageEditorContext(
     ancestors.unshift({ id: String(parent.id), title: String(parent.title) })
     parentID = relationID(parent.parentId)
   }
-  const release = releases.docs[0]
-  const snapshotID = relationID(release?.snapshot)
-  const snapshot = snapshotID
-    ? await payload
-        .findByID({
-          collection: 'publish-snapshots',
-          id: snapshotID,
-          depth: 0,
-          user: actor as never,
-          overrideAccess: false,
-        })
-        .catch(() => undefined)
-    : undefined
-  const releasedPages =
-    (snapshot?.manifest as { pages?: Record<string, unknown>[] } | undefined)
-      ?.pages ?? []
+  const previewContext = await previewThemeContext({
+    payload,
+    changeSets: sets.docs as unknown as Array<Record<string, unknown>>,
+    initialBaseline,
+  })
+  const releasedPages = previewContext.liveManifest?.pages ?? []
   const released = releasedPages.find((item) => item.id === pageID)
   const draft = pageEditorProjection(pageRecord)
   const template = pageRecord.template as ContractPage['template']
@@ -455,10 +440,18 @@ export async function pageEditorContext(
       state: String(set.state),
       revision: Number(set.revision ?? 0),
       changes: Array.isArray(set.changes) ? set.changes.length : 0,
+      theme: Object.prototype.hasOwnProperty.call(
+        previewContext.changeSetThemes,
+        String(set.id),
+      )
+        ? previewContext.changeSetThemes[String(set.id)]
+        : previewContext.activeTheme,
     })),
     blockCatalog: blockCatalog.filter((item) =>
       TemplateAllowedBlocks[template].includes(item.type),
     ),
+    appearanceCapabilities: AppearanceOptions,
+    activeTheme: previewContext.activeTheme,
     references: {
       media: assets.docs.map((asset) => ({
         id: String(asset.id),

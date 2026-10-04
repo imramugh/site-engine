@@ -39,7 +39,7 @@
 .adminAccount { margin-top: auto; border-top: 1px solid color-mix(in srgb, var(--admin-sidebar-foreground) 18%, transparent); position: relative; }
 .adminAccount summary { min-height: 68px; padding: .75rem 1rem; display: flex; align-items: center; gap: .625rem; cursor: pointer; list-style: none; }
 .adminAccount summary::-webkit-details-marker { display: none; }
-.accountInitials { width: 34px; height: 34px; display: grid; flex: none; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--admin-accent) 68%, #fff); color: var(--admin-text); font-size: .75rem; font-weight: 800; }
+.accountInitials { width: 34px; height: 34px; display: grid; flex: none; place-items: center; border-radius: 50%; background: var(--admin-accent); color: var(--admin-accent-contrast); font-size: .75rem; font-weight: 800; }
 .adminAccount summary > span:nth-child(2) { display: grid; min-width: 0; flex: 1; }
 .adminAccount strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; }
 .adminAccount small { color: color-mix(in srgb, var(--admin-sidebar-foreground) 65%, transparent); font-size: .75rem; text-transform: capitalize; }
@@ -52,26 +52,31 @@
 .skipLink { position: fixed; z-index: 100; top: .5rem; left: -10000px; padding: .5rem .75rem; background: #fff; color: var(--admin-text); border: 2px solid var(--admin-accent); border-radius: .25rem; }
 .skipLink:focus { left: .5rem; }
 .mobileMenu { display: none; }
-.workspace main { max-width: 1200px; margin: auto; padding: 2rem 1.5rem 4rem; }
-.workspace h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.2; margin: 0 0 1rem; }
-.workspace h2 { font-size: 1.3rem; line-height: 1.3; margin: 0 0 1rem; }
-.workspace h3 { font-size: 1.1rem; }
-.workspace section, .workspace fieldset { margin: 1.5rem 0; padding: 1.5rem; background: #fff; border: 1px solid var(--admin-border); border-radius: .6rem; min-width: 0; }
-.workspace a { color: var(--admin-accent); text-underline-offset: .2em; }
-.workspace label { display: inline-block; font-weight: 600; margin: .5rem .5rem .25rem 0; }
-.workspace input, .workspace select, .workspace textarea, .workspace button { font: inherit; border: 1px solid #8b98ab; border-radius: .3rem; padding: .5rem .75rem; max-width: 100%; }
-.workspace input, .workspace select, .workspace textarea { background: #fff; color: var(--admin-text); margin: .25rem .75rem .5rem 0; }
-.workspace textarea { display: block; width: 100%; min-height: 7rem; }
-.workspace button { cursor: pointer; background: var(--admin-accent); color: var(--admin-accent-contrast); margin: .25rem .5rem .25rem 0; min-height: 44px; }
-.workspace button:hover:not(:disabled) { filter: brightness(.86); }
-.workspace button:disabled { background: #e6eaf0; color: #485568; cursor: default; }
+/* These are fallback styles for plain workspace content. Keeping them in a
+   lower-priority layer prevents shared defaults from overriding feature
+   modules or shell navigation when bundlers reorder CSS assets. */
+@layer staff-content {
+  .workspace main { max-width: 1200px; margin: auto; padding: 2rem 1.5rem 4rem; }
+  .workspace h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.2; margin: 0 0 1rem; }
+  .workspace h2 { font-size: 1.3rem; line-height: 1.3; margin: 0 0 1rem; }
+  .workspace h3 { font-size: 1.1rem; }
+  .workspace section, .workspace fieldset { margin: 1.5rem 0; padding: 1.5rem; background: #fff; border: 1px solid var(--admin-border); border-radius: .6rem; min-width: 0; }
+  .workspace a { color: var(--admin-accent); text-underline-offset: .2em; }
+  .workspace label { display: inline-block; font-weight: 600; margin: .5rem .5rem .25rem 0; }
+  .workspace input, .workspace select, .workspace textarea, .workspace button { font: inherit; border: 1px solid #8b98ab; border-radius: .3rem; padding: .5rem .75rem; max-width: 100%; }
+  .workspace input, .workspace select, .workspace textarea { background: #fff; color: var(--admin-text); margin: .25rem .75rem .5rem 0; }
+  .workspace textarea { display: block; width: 100%; min-height: 7rem; }
+  .workspace button { cursor: pointer; background: var(--admin-accent); color: var(--admin-accent-contrast); margin: .25rem .5rem .25rem 0; min-height: 44px; }
+  .workspace button:hover:not(:disabled) { filter: brightness(.86); }
+  .workspace button:disabled { background: #e6eaf0; color: #485568; cursor: default; }
+  .workspace table { width: 100%; border-collapse: collapse; background: #fff; }
+  .workspace th, .workspace td { padding: .8rem; border-bottom: 1px solid #d4dbe5; text-align: left; vertical-align: top; }
+  .workspace caption { text-align: left; font-weight: 700; padding: .75rem 0; }
+  .workspace li { margin: .35rem 0; }
+  .workspace [role="alert"] { color: #842020; background: #fff0f0; border-left: 4px solid #ad3030; padding: 1rem; }
+  .workspace [role="status"] { padding: 1rem; background: #eaf1f8; border-radius: .3rem; }
+}
 .workspace :focus-visible, .adminSidebar :focus-visible, .header :focus-visible { outline: 3px solid #bd6900; outline-offset: 3px; }
-.workspace table { width: 100%; border-collapse: collapse; background: #fff; }
-.workspace th, .workspace td { padding: .8rem; border-bottom: 1px solid #d4dbe5; text-align: left; vertical-align: top; }
-.workspace caption { text-align: left; font-weight: 700; padding: .75rem 0; }
-.workspace li { margin: .35rem 0; }
-.workspace [role="alert"] { color: #842020; background: #fff0f0; border-left: 4px solid #ad3030; padding: 1rem; }
-.workspace [role="status"] { padding: 1rem; background: #eaf1f8; border-radius: .3rem; }
 @media (max-width: 700px) {
   .workspace { display: block; }
   .adminSidebar { width: 100%; min-height: 0; position: static; overflow: visible; }
@@ -84,10 +89,12 @@
   .adminAccount { margin-top: .25rem; }
   .header { position: static; height: 60px; padding: 0 1rem; }
   .adminWorkspace { margin-left: 0; padding-top: 0; }
-  .workspace main { padding: 1.5rem 1rem 3rem; }
-  .workspace section, .workspace fieldset { padding: 1rem; }
-  .workspace table { display: block; overflow-x: auto; }
-  .workspace input, .workspace select { max-width: 100%; }
+  @layer staff-content {
+    .workspace main { padding: 1.5rem 1rem 3rem; }
+    .workspace section, .workspace fieldset { padding: 1rem; }
+    .workspace table { display: block; overflow-x: auto; }
+    .workspace input, .workspace select { max-width: 100%; }
+  }
 }
 .headerActions { display: flex; align-items: center; gap: .625rem; }
 .adminSearch { position: relative; width: min(260px, 30vw); }

@@ -66,7 +66,7 @@ function ReviewFrame({ title, src, width, changed, active, variant, onReady }: {
   </div>
 }
 
-export function OnPageReview({ changeSetID }: { changeSetID: string }) {
+export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pageID?: string }) {
   const [data, setData] = useState<Data | null>(null)
   const [mode, setMode] = useState<Mode>('side')
   const [device, setDevice] = useState<Device>('desktop')
@@ -80,12 +80,13 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   const [acting, setActing] = useState(false)
   const load = useCallback(async () => {
     try {
-      const response = await fetch(`/api/editorial/review/${encodeURIComponent(changeSetID)}`, { cache: 'no-store' })
+      const selection = pageID ? `?pageID=${encodeURIComponent(pageID)}` : ''
+      const response = await fetch(`/api/editorial/review/${encodeURIComponent(changeSetID)}${selection}`, { cache: 'no-store' })
       const body = await response.json() as Data & { error?: string }
       if (!response.ok) { setMessage(body.error ?? 'This review is unavailable.'); return }
       setData(body)
     } catch { setMessage('Unable to load this review. Try again.') } finally { setLoading(false) }
-  }, [changeSetID])
+  }, [changeSetID, pageID])
   useEffect(() => { void load() }, [load])
   useEffect(() => {
     const media = window.matchMedia('(max-width: 700px)')

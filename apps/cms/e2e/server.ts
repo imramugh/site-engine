@@ -9,6 +9,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import sharp from 'sharp'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
@@ -18,8 +19,10 @@ import { deriveRoutes } from '@site-engine/engine'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
+import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
@@ -40,6 +43,7 @@ const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const themeOwnerEmail = 'theme-owner.synthetic@example.test'
 const themeOwnerRecoveryCode = 'synthetic-theme-owner-code-08'
 const themeOwnerSessionToken = 'synthetic-theme-owner-session-token'
+const mediaOwnerSessionToken = 'synthetic-media-owner-session-token'
 const applicationJobID = '66666666-6666-4666-8666-666666666666'
 const applicationSectionID = '77777777-7777-4777-8777-777777777777'
 const applicationChangeSetID = '88888888-8888-4888-8888-888888888888'
@@ -51,6 +55,7 @@ const directEditSetID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const onPageReviewPageID = '12345678-1234-4234-8234-1234567890ab'
 const onPageReviewBlockID = '12345678-1234-4234-8234-1234567890ac'
 const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
+const secondOnPageReviewSetID = '12345678-1234-4234-8234-1234567890ae'
 const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
 const onPageReviewerSessionToken = 'synthetic-on-page-reviewer-session-token'
 const pageEditorPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
@@ -58,6 +63,11 @@ const pageEditorSetID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbf'
 const pageEditorSessionToken = 'synthetic-page-editor-owner-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
+const shellSessionTokens = {
+  owner: 'synthetic-shell-owner-session-token',
+  editor: 'synthetic-shell-editor-session-token',
+  approver: 'synthetic-shell-approver-session-token',
+} as const
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
@@ -114,6 +124,7 @@ process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
 process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
+const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -235,12 +246,21 @@ async function seed(): Promise<void> {
   applicationOwnerID = String(applicationOwner.id)
   const pageEditorOwner = await payload.create({ collection: 'users', data: { email: 'page-editor-owner.synthetic@example.test', name: 'Synthetic Page Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
+  const shellUsers: Record<keyof typeof shellSessionTokens, { id: string }> = {} as Record<keyof typeof shellSessionTokens, { id: string }>
+  for (const role of ['owner', 'editor', 'approver'] as const) {
+    shellUsers[role] = await payload.create({
+      collection: 'users',
+      data: { email: `shell-${role}.synthetic@example.test`, name: `Synthetic Shell ${role}`, roles: [role] },
+      overrideAccess: true,
+    })
+  }
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
+  const mediaOwner = await payload.create({ collection: 'users', data: { email: 'media-owner.synthetic@example.test', name: 'Synthetic Media Owner', roles: ['owner'] }, overrideAccess: true })
   await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
   for (const [role, identity] of Object.entries({ hiring: identities.hiring, sales: identities.sales }) as Array<['hiring' | 'sales', Identity]>) {
@@ -262,7 +282,31 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'pages', data: { id: pageEditorPageID, title: 'Page editor browser page', summary: 'Synthetic page for the complete protected page editor flow.', slug: 'page-editor-browser-page', sectionId: directSection.id, template: 'standard', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba1', type: 'hero', heading: 'Page editor original heading', body: 'Page editor original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }, { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba2', type: 'contact', heading: 'Original contact block', body: 'Remove this block during the browser flow.', inquiryForm: false, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: pageEditorSetID, name: 'Browser full page draft', state: 'open', actor: pageEditorOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  for (const role of ['owner', 'editor', 'approver'] as const) {
+    await payload.create({
+      collection: 'auth-sessions',
+      data: { tokenHash: hashOpaqueToken(shellSessionTokens[role]), user: shellUsers[role].id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry },
+      overrideAccess: true,
+    })
+  }
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(mediaOwnerSessionToken), user: mediaOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  const mediaRaster = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#155e75' } }).png().toBuffer()
+  const mediaAssets = []
+  for (let index = 0; index < 26; index += 1) {
+    mediaAssets.push(await payload.create({
+      collection: 'assets',
+      data: { alt: `Synthetic media fixture ${String(index).padStart(2, '0')}`, caption: index === 1 ? 'Searchable lighthouse caption' : undefined },
+      file: { data: mediaRaster, mimetype: 'image/png', name: `media-fixture-${String(index).padStart(2, '0')}.png`, size: mediaRaster.length },
+      user: mediaOwner,
+      overrideAccess: false,
+    }))
+  }
+  const mediaSection = await payload.create({ collection: 'sections', data: { name: 'Media browser fixtures', summary: 'Synthetic section for media workspace browser verification.', slug: 'media-browser-fixtures', allowedTemplates: ['standard'] }, user: mediaOwner, overrideAccess: false })
+  await payload.create({ collection: 'pages', data: { title: 'Media usage fixture page', summary: 'Synthetic page that keeps one media fixture in use.', slug: 'media-usage-fixture', sectionId: mediaSection.id, template: 'standard', blocks: [{ id: 'a1000000-0000-4000-8000-000000000001', type: 'media', mediaId: mediaAssets[0]!.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: mediaOwner, overrideAccess: false })
+  const binnedAsset = await payload.create({ collection: 'assets', data: { alt: 'Synthetic restorable media fixture' }, file: { data: mediaRaster, mimetype: 'image/png', name: 'media-restorable.png', size: mediaRaster.length }, user: mediaOwner, overrideAccess: false })
+  const binnedAt = new Date().toISOString()
+  await payload.update({ collection: 'assets', id: binnedAsset.id, data: { deletedAt: binnedAt, deleteAfter: new Date(Date.now() + 30 * 86_400_000).toISOString() }, overrideAccess: true, user: mediaOwner, context: { mediaLifecycle: 'bin' } })
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(initialBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: initialBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
@@ -281,6 +325,11 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && request.url === '/__e2e/axe.js') {
+    response.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
+    response.end(readFileSync(axeSourcePath))
+    return
+  }
   if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
     void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
       if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
@@ -330,6 +379,17 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/second-page-review') {
+    void (async () => {
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true })
+      const sourceChange = structuredClone((source.changes as Array<Record<string, unknown>>)[0]!)
+      const after = structuredClone(sourceChange.after) as Record<string, unknown>
+      after.blocks = (structuredClone(after.blocks) as Array<Record<string, unknown>>).map((block) => String(block.id) === onPageReviewBlockID ? { ...block, heading: 'Second proposed review heading', body: 'This is the second proposed rendered review body.' } : block)
+      const created = await payload.create({ collection: 'change-sets', data: { id: secondOnPageReviewSetID, name: 'Second pending page review', actor: source.actor, state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes: [{ ...sourceChange, after, afterHash: null }], quality: source.quality, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
+      return { id: String(created.id) }
+    })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
     void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
@@ -373,9 +433,25 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     ? join(process.cwd(), '..', 'site', 'dist', 'general', 'gallery', 'index.html')
     : pathname === '/careers/synthetic-application-engineer' || pathname === '/careers/synthetic-application-engineer/'
       ? join(process.cwd(), '..', 'site', 'dist', 'careers', 'synthetic-application-engineer', 'index.html')
+      : pathname === '/on-page-review/review-target' || pathname === '/on-page-review/review-target/'
+        ? join(process.cwd(), '..', 'site', 'dist', 'on-page-review', 'review-target', 'index.html')
       : pathname === '/application-form.js' ? join(process.cwd(), '..', 'site', 'dist', 'application-form.js')
     : pathname.startsWith('/_astro/') ? join(process.cwd(), '..', 'site', 'dist', pathname) : undefined
   if (request.method === 'GET' && staticPath && existsSync(staticPath)) {
+    if (staticPath.endsWith('.html') && (pathname === '/on-page-review/review-target' || pathname === '/on-page-review/review-target/')) {
+      void pageReviewEntry(new Request(`${cmsOrigin}/api/editorial/page-review-entry`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? pathname } })).then((guard) => {
+        const setID = guard.headers.get('x-page-review-set')
+        const source = readFileSync(staticPath, 'utf8')
+        const body = guard.status === 200 && setID ? source.replace('</body>', `<script defer src="/api/editorial/page-review-bootstrap" data-page-review-set="${setID}"></script></body>`) : source
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': guard.status === 200 ? 'private, no-store' : 'no-cache',
+          'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self'; frame-ancestors 'self'; object-src 'none'",
+        })
+        response.end(body)
+      }).catch(() => { response.writeHead(502, { 'cache-control': 'no-store' }); response.end() })
+      return
+    }
     response.writeHead(200, { 'content-type': staticPath.endsWith('.html') ? 'text/html; charset=utf-8' : staticPath.endsWith('.css') ? 'text/css' : 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
     response.end(readFileSync(staticPath))
     return

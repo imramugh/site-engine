@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, test } from 'vitest'
 import { getPayload } from 'payload'
 import { createAIWorkerAPI } from '../scripts/run-ai-worker.mjs'
@@ -20,7 +21,7 @@ const port = await new Promise<number>((resolve) => {
   })
 })
 const origin = `http://127.0.0.1:${port}`
-const cmsRoot = join(process.cwd(), 'apps/cms')
+const cmsRoot = fileURLToPath(new URL('../', import.meta.url))
 Object.assign(process.env, {
   DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`,
   PAYLOAD_SECRET: 'synthetic-proxy-http-payload-secret-not-for-production',

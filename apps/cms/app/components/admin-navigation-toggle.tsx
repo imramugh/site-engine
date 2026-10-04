@@ -18,7 +18,7 @@ type Props = {
 
 const titleForPath = (pathname: string) => {
   const titles: Record<string, string> = {
-    '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/leads': 'Leads',
+    '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/media': 'Media', '/leads': 'Leads',
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Change log', '/integrations': 'Integrations',
     '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
   }
