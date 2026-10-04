@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test'
+import { createRequire } from 'node:module'
+const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 async function signIn(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/api/auth/google')
@@ -21,4 +23,21 @@ test('ENG-014 accepts a real authenticated PNG multipart upload and refuses SVG 
   expect(result.png.status, result.png.text).toBe(201)
   expect(result.png.text).toContain('heroAvif')
   expect(result.svg.status).toBeGreaterThanOrEqual(400)
+})
+
+test('ENG-014 media workspace provides an accessible grid, metadata detail, and safe lifecycle state', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/media')
+  await expect(page.getByRole('heading', { name: 'Media' })).toBeVisible()
+  await page.addScriptTag({ path: axeSource })
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  await expect(page.getByRole('button', { name: /synthetic\.png/ })).toBeVisible()
+  await page.getByRole('button', { name: /synthetic\.png/ }).click()
+  await page.getByLabel('Alt text').fill('Synthetic workspace image')
+  await page.getByRole('button', { name: 'Save metadata' }).click()
+  await expect(page.getByRole('status')).toContainText('Metadata saved')
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.locator('main').evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  await page.screenshot({ path: 'artifacts/media-390.png', fullPage: true })
 })
