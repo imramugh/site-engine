@@ -1,12 +1,22 @@
 import { withPayloadTransaction } from './auth-transaction'
-import { credentialFingerprint, encryptCredential, type IntegrationProvider } from './integrations'
+import { credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider } from './integrations'
 
 type PayloadLike = Parameters<typeof withPayloadTransaction>[0]
-type AuditWrite = (input: { payload: PayloadLike; req: unknown; event: string; actor: string | undefined; provider: IntegrationProvider }) => Promise<void>
+type AuditWrite = (input: { payload: PayloadLike; req: unknown; event: string; actor: string | undefined; provider: IntegrationProvider; detail?: Record<string, string> }) => Promise<void>
 
-const defaultAuditWrite: AuditWrite = async ({ payload, req, event, actor, provider }) => {
-  await payload.create({ collection: 'audit-events', data: { event, actor, detail: { provider } }, overrideAccess: true, req: req as never })
+const defaultAuditWrite: AuditWrite = async ({ payload, req, event, actor, provider, detail }) => {
+  await payload.create({ collection: 'audit-events', data: { event, actor, detail: { provider, ...detail } }, overrideAccess: true, req: req as never })
 }
+
+type StoredConfiguration = { id: string; provider: IntegrationProvider; model: string; encryptedCredential: string | null; credentialFingerprint: string | null; health?: string | null; updatedAt?: string | null }
+function snapshot(record: Record<string, unknown>): StoredConfiguration | undefined {
+  if (typeof record.id !== 'string' || !integrationProvider(record.provider) || typeof record.model !== 'string' || !record.encryptedCredential || typeof record.encryptedCredential !== 'string' || !record.credentialFingerprint || typeof record.credentialFingerprint !== 'string' || record.health === 'revoked') return undefined
+  return { id: record.id, provider: record.provider, model: record.model, encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
+}
+const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && ['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(value)
+const unchanged = (left: StoredConfiguration, right: StoredConfiguration) => left.id === right.id && left.provider === right.provider && left.model === right.model && left.encryptedCredential === right.encryptedCredential && left.credentialFingerprint === right.credentialFingerprint && left.updatedAt === right.updatedAt && right.health !== 'revoked'
+
+export class IntegrationConfigurationStaleError extends Error { constructor() { super('INTEGRATION_CONFIGURATION_STALE') } }
 
 export type PricingConfiguration = { monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: number; outputMicroUsdPerMillionTokens: number; pricingSource: string; pricingAsOf: string }
 export async function configureIntegration(payload: PayloadLike, input: { provider: IntegrationProvider; model: string; credential: string; fallbackProvider: IntegrationProvider | null; pricing: PricingConfiguration; actor?: string }, auditWrite: AuditWrite = defaultAuditWrite) {
@@ -27,6 +37,27 @@ export async function revokeIntegration(payload: PayloadLike, input: { provider:
     if (!record) return undefined
     const saved = await payload.update({ collection: 'integration-configurations', id: String(record.id), data: { encryptedCredential: null, credentialFingerprint: null, health: 'revoked', testedAt: new Date().toISOString() }, overrideAccess: true, req })
     await auditWrite({ payload, req, event: 'integration.credential_revoked', actor: input.actor, provider: input.provider })
+    return saved
+  })
+}
+
+/**
+ * Runs an explicit provider metadata check outside SQLite, then writes its
+ * normalized result only when the encrypted configuration is unchanged.
+ */
+export async function testIntegrationConnection(payload: PayloadLike, input: { provider: IntegrationProvider; actor?: string; now?: Date }, transport: ConnectionTransport = providerConnectionTransport, auditWrite: AuditWrite = defaultAuditWrite) {
+  const found = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: input.provider } }, limit: 1, depth: 0, overrideAccess: true })
+  const expected = found.docs[0] && snapshot(found.docs[0] as unknown as Record<string, unknown>)
+  if (!expected) throw new IntegrationConfigurationStaleError()
+
+  const result = await testConnection({ provider: expected.provider, encryptedCredential: expected.encryptedCredential!, model: expected.model }, transport)
+  const testedAt = (input.now ?? new Date()).toISOString()
+  return withPayloadTransaction(payload, async (req) => {
+    const current = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: input.provider } }, limit: 1, depth: 0, overrideAccess: true, req })
+    const actual = current.docs[0] && snapshot(current.docs[0] as unknown as Record<string, unknown>)
+    if (!actual || !unchanged(expected, actual)) throw new IntegrationConfigurationStaleError()
+    const saved = await payload.update({ collection: 'integration-configurations', id: actual.id, data: { health: result.code, testedAt }, overrideAccess: true, req })
+    await auditWrite({ payload, req, event: 'integration.connection_tested', actor: input.actor, provider: input.provider, detail: { health: result.code } })
     return saved
   })
 }

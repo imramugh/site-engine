@@ -3,7 +3,7 @@ import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
 import { serverSessionStrategy } from '../../../src/identity'
-import { configureIntegration, revokeIntegration } from '../../../src/integration-configuration'
+import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -13,6 +13,23 @@ const sameOrigin = (request: Request) => {
 const isProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && integrationProviders.includes(value as IntegrationProvider)
 const privateJSON = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
 const failure = () => privateJSON({ error: 'Integration request could not be completed.' }, 400)
+const MAX_REQUEST_BYTES = 24 * 1024
+async function readBody(request: Request): Promise<Record<string, unknown>> {
+  if (!request.body) throw new Error('missing_body')
+  const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      size += chunk.value.byteLength
+      if (size > MAX_REQUEST_BYTES) throw new Error('body_too_large')
+      chunks.push(chunk.value)
+    }
+  } finally { await reader.cancel().catch(() => undefined) }
+  const value: unknown = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks)))
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_body')
+  return value as Record<string, unknown>
+}
 
 async function owner(request: Request) {
   const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -31,8 +48,12 @@ export async function POST(request: Request) {
   try {
     const { payload, user } = await owner(request)
     if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return privateJSON({ error: 'Fresh Owner authentication is required.' }, 403)
-    const body = await request.json() as Record<string, unknown>
+    const body = await readBody(request)
     if (!isProvider(body.provider)) return failure()
+    if (body.action === 'test') {
+      const tested = await testIntegrationConnection(payload, { provider: body.provider, actor: user.id })
+      return privateJSON({ integration: publicIntegration(tested as unknown as Record<string, unknown>) })
+    }
     if (body.action === 'revoke') {
       const revoked = await revokeIntegration(payload, { provider: body.provider, actor: user.id })
       return revoked ? privateJSON({ integration: publicIntegration(revoked as unknown as Record<string, unknown>) }) : failure()

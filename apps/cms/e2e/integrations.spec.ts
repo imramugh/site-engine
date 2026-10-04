@@ -17,7 +17,7 @@ async function openMenu(page: Awaited<ReturnType<typeof signedIn>>['page']) {
   await expect(first).toHaveAttribute('aria-label', 'Close Menu')
 }
 
-test('ENG-023 Owner rotates a masked credential without a connection claim', async ({ browser }) => {
+test('ENG-023 Owner rotates a masked credential and explicitly tests a connection', async ({ browser }) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/admin'); await openMenu(owner.page)
   await owner.page.getByRole('link', { name: 'Integrations' }).click(); await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
@@ -27,6 +27,21 @@ test('ENG-023 Owner rotates a masked credential without a connection claim', asy
   await owner.page.getByRole('button', { name: 'Save provider configuration' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('Credential rotation and reviewed pricing saved.')
   await owner.page.reload(); const body = await owner.page.locator('body').textContent() ?? ''
   expect(body).not.toContain('synthetic-browser-credential'); await expect(owner.page.getByLabel('Configured integrations')).toContainText('configured')
+  let testRequests = 0
+  await owner.page.route('**/api/integrations', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const body = route.request().postDataJSON() as { action?: string; credential?: string }
+    if (body.action !== 'test') return route.continue()
+    expect(body).toEqual({ action: 'test', provider: 'openai' })
+    expect(JSON.stringify(body)).not.toContain('synthetic-browser-credential')
+    testRequests++
+    if (testRequests === 3) { await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'reauthentication required' }) }); return }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ integration: { id: 'mock', provider: 'openai', health: testRequests === 1 ? 'connected' : 'rejected', testedAt: '2026-10-04T12:00:00.000Z', credentialConfigured: true } }) })
+  })
+  const connectionTest = owner.page.getByLabel('Configured integrations').locator('li').filter({ hasText: /^openai/ }).getByRole('button', { name: 'Test connection' })
+  await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('Connection confirmed at Oct 4, 2026, 8:00 a.m. EDT.')
+  await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('Connection could not be confirmed at Oct 4, 2026, 8:00 a.m. EDT. Provider details are not displayed.')
+  await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('A fresh Owner sign-in is required before testing a connection.')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
 })
