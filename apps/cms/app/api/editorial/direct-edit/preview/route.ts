@@ -5,14 +5,13 @@ import { loadInitialPreviewBaseline, prepareReviewPreview } from '../../../../..
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { changeSetHash } from '../../../../../src/publishing'
 import { SiteSnapshotSchema } from '@site-engine/contract'
+import { deriveRoutes } from '@site-engine/engine'
 
 const noStore = { 'Cache-Control': 'no-store' }
 
 function previewPath(manifest: unknown, pageID: string): string | undefined {
-  const snapshot = SiteSnapshotSchema.parse(manifest); const page = snapshot.pages.find((item) => item.id === pageID)
-  if (!page) return undefined; if (page.id === snapshot.settings.homepageId) return '/'
-  const section = snapshot.settings.sections.find((item) => item.id === page.sectionId); if (!section) return undefined
-  return `/${[section.slug, page.slug].filter(Boolean).join('/')}`
+  const snapshot = SiteSnapshotSchema.parse(manifest)
+  return deriveRoutes(snapshot).routes.find((route) => route.page.id === pageID)?.path
 }
 
 const sameOrigin = (request: Request) => { const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL; return Boolean(configured && request.headers.get('origin') === new URL(configured).origin) }
