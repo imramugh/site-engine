@@ -53,6 +53,7 @@ const directEditSetID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const onPageReviewPageID = '12345678-1234-4234-8234-1234567890ab'
 const onPageReviewBlockID = '12345678-1234-4234-8234-1234567890ac'
 const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
+const secondOnPageReviewSetID = '12345678-1234-4234-8234-1234567890ae'
 const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
 const onPageReviewerSessionToken = 'synthetic-on-page-reviewer-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
@@ -328,6 +329,17 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
       return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/second-page-review') {
+    void (async () => {
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true })
+      const sourceChange = structuredClone((source.changes as Array<Record<string, unknown>>)[0]!)
+      const after = structuredClone(sourceChange.after) as Record<string, unknown>
+      after.blocks = (structuredClone(after.blocks) as Array<Record<string, unknown>>).map((block) => String(block.id) === onPageReviewBlockID ? { ...block, heading: 'Second proposed review heading', body: 'This is the second proposed rendered review body.' } : block)
+      const created = await payload.create({ collection: 'change-sets', data: { id: secondOnPageReviewSetID, name: 'Second pending page review', actor: source.actor, state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes: [{ ...sourceChange, after, afterHash: null }], quality: source.quality, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
+      return { id: String(created.id) }
+    })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {

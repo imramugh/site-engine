@@ -6,11 +6,12 @@ import { hasRole } from '../../../../src/access'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { OnPageReview } from './review-mode'
 
-export default async function ReviewPage({ params }: { params: Promise<{ changeSetID: string }> }) {
+export default async function ReviewPage({ params, searchParams }: { params: Promise<{ changeSetID: string }>; searchParams: Promise<{ pageID?: string }> }) {
   const { changeSetID } = await params
+  const { pageID } = await searchParams
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(changeSetID)) notFound()
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: await headers(), payload })
   if (!hasRole(authenticated.user as never, ['owner', 'approver'])) redirect('/admin/login')
-  return <OnPageReview changeSetID={changeSetID} />
+  return <OnPageReview changeSetID={changeSetID} pageID={pageID} />
 }
