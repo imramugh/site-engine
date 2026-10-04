@@ -21,7 +21,7 @@ export async function searchAdminRecords(payload: Payload, user: { id?: string; 
       payload.find({ collection: 'pages', where: { or: [{ title: text }, { slug: text }] }, select: { title: true }, limit: 10, depth: 0, overrideAccess: false, user }),
       payload.find({ collection: 'assets', where: { or: [{ alt: text }, { caption: text }, { filename: text }] }, select: { alt: true, filename: true }, limit: 10, depth: 0, overrideAccess: false, user }),
     ])
-    response.results.Pages = pages.docs.map((page) => ({ category: 'Pages', title: String(page.title), url: `/admin/collections/pages/${page.id}` }))
+    response.results.Pages = pages.docs.map((page) => ({ category: 'Pages', title: String(page.title), url: `/content-editor/${encodeURIComponent(String(page.id))}` }))
     response.results.Media = assets.docs.map((asset) => ({ category: 'Media', title: String(asset.alt || asset.filename || 'Untitled media'), url: `/admin/collections/assets/${asset.id}` }))
   }
   if (canSeeLeads) {

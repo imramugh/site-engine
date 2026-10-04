@@ -49,7 +49,8 @@ test('ENG-006 searches real permitted records without exposing private lead fiel
   await expect(result).toHaveAttribute('aria-selected', 'true')
   await expect(input).toHaveAttribute('aria-activedescendant', 'admin-search-result-0')
   await input.press('Enter')
-  await expect(page).toHaveURL(/\/admin\/collections\/pages\/[0-9a-f-]+$/)
+  await expect(page).toHaveURL(/\/content-editor\/[0-9a-f-]+$/)
+  await expect(page.getByRole('heading', { name: 'Direct edit browser page' })).toBeVisible()
 
   await page.goto('/admin')
   const lead = await searchJSON(page, 'active-incident')
@@ -98,7 +99,9 @@ test('ENG-006 searches real permitted records without exposing private lead fiel
   const editor = await signedIn(browser, 'editor')
   await expect(editor.page.getByRole('link', { name: 'Reviews', exact: true }).locator('[data-admin-nav-badge]')).toHaveText('1')
   await expect(editor.page.locator('a[href="/leads"]')).toHaveCount(0)
-  expect((await searchJSON(editor.page, 'direct')).body.results.Pages).toHaveLength(1)
+  const editorPages = (await searchJSON(editor.page, 'direct')).body.results.Pages
+  expect(editorPages).toHaveLength(1)
+  expect(editorPages[0].url).toMatch(/^\/content-editor\/[0-9a-f-]+$/)
   expect((await searchJSON(editor.page, 'active-incident')).body.results.Leads).toEqual([])
   await editor.context.close()
 
