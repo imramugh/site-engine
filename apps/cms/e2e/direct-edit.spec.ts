@@ -17,7 +17,7 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   await expect(editor.page.getByRole('status')).toContainText('Draft saved.')
   await editor.page.getByRole('button', { name: 'Prepare preview' }).click()
   await expect(editor.page.getByRole('status')).toContainText('Preparing preview…')
-  expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
+  const worker = await editor.page.request.post('/__e2e/direct-preview-worker'); expect(worker.status(), await worker.text()).toBe(200)
   const frame = editor.page.frameLocator('iframe[title="Proposed draft preview"]')
   await expect(frame.getByText('Browser saved heading')).toBeVisible()
   const previewURL = await editor.page.locator('iframe').getAttribute('src')

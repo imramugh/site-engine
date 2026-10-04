@@ -263,7 +263,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await claimPreviewRenderJob(payload, req)
       if (!job) throw new Error('No preview job is pending.')
       return completePreviewRenderJob(payload, req, String(job.id), String(job.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'f'.repeat(64) })
-    }).then((job) => json(response, { id: job.id, status: job.status })).catch(() => { response.writeHead(500); response.end('Unable to complete preview.') })
+    }).then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
