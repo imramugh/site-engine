@@ -100,7 +100,7 @@ describe('durable preview rendering worker', () => {
     input.versionPins = { engineVersion: pins.engineVersion, contractVersion: '1.1.0', themeVersion: newer.version, liveThemeVersion: older.version, liveContractVersion: '1.0.0' };
     const seen: Array<Record<string, unknown>> = [];
     const render = async (rendererOptions: Record<string, unknown>) => { seen.push(rendererOptions); return buildSnapshot(rendererOptions as Parameters<typeof buildSnapshot>[0]); };
-    await expect(runPreviewOnce({ ...options(), versionPins: { ...pins, contractVersion: '1.1.0', themeVersion: newer.version }, api: async (action: string) => action === 'claim' ? input : { ok: true }, registry, render })).resolves.toBe(true);
+    await expect(runPreviewOnce({ ...options(), versionPins: pins, api: async (action: string) => action === 'claim' ? input : { ok: true }, registry, render })).resolves.toBe(true);
     expect(seen.map((item) => item.versionPins)).toEqual([
       { engineVersion: '1.0.0', contractVersion: '1.0.0', themeVersion: '1.0.0' },
       { engineVersion: '1.0.0', contractVersion: '1.1.0', themeVersion: '1.1.0' },
@@ -167,6 +167,8 @@ describe('durable preview rendering worker', () => {
     await expect(runPreviewOnce({ ...options(), api: async () => bad, render })).rejects.toThrow('INVALID_CLAIM');
     const wrongVersion = claim(); wrongVersion.versionPins = { ...pins, engineVersion: '9.0.0' };
     await expect(runPreviewOnce({ ...options(), api: async () => wrongVersion, render })).rejects.toThrow('INVALID_CLAIM');
+    const unsupportedContract = claim(); unsupportedContract.versionPins = { ...pins, contractVersion: '9.0.0' };
+    await expect(runPreviewOnce({ ...options(), api: async () => unsupportedContract, render })).rejects.toThrow('INVALID_CLAIM');
     expect(await runPreviewOnce({ ...options(), api: async () => ({ job: null }), render })).toBe(false);
   });
 });

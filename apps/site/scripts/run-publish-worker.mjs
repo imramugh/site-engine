@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { SiteSnapshotSchema } from '@site-engine/contract';
+import { SiteSnapshotSchema, compatibleContractVersion } from '@site-engine/contract';
 import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
@@ -24,8 +24,8 @@ export function createPublishAPI({ cmsOrigin, token, fetchImpl = fetch, timeoutM
 }
 function claim(value, pins) {
   if (value?.job === null) return null; const job = value?.job;
-  if (!uuid.test(job?.id ?? '') || typeof job?.leaseToken !== 'string' || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now() || !value?.contentHash || typeof value?.versionPins?.themeVersion !== 'string' || ['engineVersion', 'contractVersion'].some(key => value?.versionPins?.[key] !== pins[key])) throw new WorkerError('INVALID_CLAIM');
-  const snapshot = SiteSnapshotSchema.parse(value.snapshot); if (hash(snapshot) !== value.contentHash || snapshot.settings.contractVersion !== pins.contractVersion) throw new WorkerError('INVALID_CLAIM');
+  if (!uuid.test(job?.id ?? '') || typeof job?.leaseToken !== 'string' || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now() || !value?.contentHash || typeof value?.versionPins?.themeVersion !== 'string' || value?.versionPins?.engineVersion !== pins.engineVersion || !compatibleContractVersion(value?.versionPins?.contractVersion)) throw new WorkerError('INVALID_CLAIM');
+  const snapshot = SiteSnapshotSchema.parse(value.snapshot); if (hash(snapshot) !== value.contentHash || snapshot.settings.contractVersion !== value.versionPins.contractVersion) throw new WorkerError('INVALID_CLAIM');
   if (snapshot.settings.theme?.version && snapshot.settings.theme.version !== value.versionPins.themeVersion) throw new WorkerError('INVALID_CLAIM');
   return { job, snapshot, versionPins: value.versionPins, pins: { contentHash: value.contentHash, ...value.versionPins } };
 }
