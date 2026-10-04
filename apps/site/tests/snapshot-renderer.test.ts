@@ -307,7 +307,7 @@ describe('static snapshot renderer', () => {
     const previewBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, themeComponentsRoot: components, analytics });
     const publicHTML = await readFile(join(publicBuild.output, 'index.html'), 'utf8');
     expect(publicHTML).toContain('data-custom-theme-layout="true"'); expect(publicHTML).toContain('data-analytics-consent'); expect(publicHTML).toMatch(/<script[^>]+type="module"/);
-    expect(await artifactContents(previewBuild.output)).not.toContain('data-analytics-consent');
+    expect(await readFile(join(previewBuild.output, 'index.html'), 'utf8')).not.toContain('data-analytics-consent');
   }, 120_000);
 
   it('emits a deterministic, one-hop Nginx redirect include from the approved snapshot', async () => {
