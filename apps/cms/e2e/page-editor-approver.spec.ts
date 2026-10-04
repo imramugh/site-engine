@@ -32,7 +32,7 @@ test('ENG-006 lets an Approver save, render, and submit an owned page draft with
   await approver.page.getByLabel('Title', { exact: true }).fill('Approver saved page title')
   const hero = approver.page.locator('[data-page-editor-block]').first()
   await hero.locator('summary').click()
-  await hero.getByLabel('Body', { exact: true }).fill('Approver saved body rendered by Astro.')
+  await hero.getByRole('textbox', { name: 'Body', exact: true }).fill('Approver saved body rendered by Astro.')
   await expect(approver.page.getByRole('button', { name: 'Submit for review' })).toBeDisabled()
 
   const queued = approver.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST' && response.status() === 200)
