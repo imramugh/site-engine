@@ -8,14 +8,18 @@ type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
 type Data = { review: ReviewModeData; fresh: boolean }
 
-function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
+function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 760 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
-  const [availableWidth, setAvailableWidth] = useState(width)
+  const [availableWidth, setAvailableWidth] = useState<number>(width)
+  const [viewportHeight, setViewportHeight] = useState(760)
   useEffect(() => {
     const node = shell.current
     if (!node) return
-    const resize = () => setAvailableWidth((node.clientWidth || width) as 390 | 1440)
+    const resize = () => {
+      setAvailableWidth(node.clientWidth || width)
+      setViewportHeight(window.innerWidth <= 700 ? 360 : Math.max(560, window.innerHeight - 82))
+    }
     resize()
     const observer = new ResizeObserver(resize)
     observer.observe(node)
@@ -57,8 +61,8 @@ function ReviewFrame({ title, src, width, changed, active, variant, onReady }: {
   }, [active, changed, onReady, variant])
   useEffect(() => { decorate(Boolean(active)) }, [active, decorate])
   const scale = Math.min(1, availableWidth / width)
-  return <div ref={shell} className={styles.frameViewport} style={{ height: 760 * scale }}>
-    <iframe ref={frame} title={title} src={src} width={width} height={760} style={{ transform: `scale(${scale})` }} onLoad={() => decorate(false)} />
+  return <div ref={shell} className={styles.frameViewport} style={{ height: viewportHeight }} data-render-width={width} data-render-scale={scale.toFixed(3)}>
+    <iframe ref={frame} title={title} src={src} width={width} height={Math.ceil(viewportHeight / scale)} style={{ transform: `scale(${scale})` }} onLoad={() => decorate(false)} />
   </div>
 }
 
@@ -66,6 +70,7 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   const [data, setData] = useState<Data | null>(null)
   const [mode, setMode] = useState<Mode>('side')
   const [device, setDevice] = useState<Device>('desktop')
+  const [narrow, setNarrow] = useState(false)
   const [panel, setPanel] = useState(true)
   const [active, setActive] = useState<string>()
   const [availableByPane, setAvailableByPane] = useState<{ live: Set<string>; proposed: Set<string> }>({ live: new Set(), proposed: new Set() })
@@ -82,6 +87,12 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
     } catch { setMessage('Unable to load this review. Try again.') } finally { setLoading(false) }
   }, [changeSetID])
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 700px)')
+    const update = () => setNarrow(media.matches)
+    update(); media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
   const review = data?.review
   const rememberAvailable = useCallback((pane: 'live' | 'proposed', found: Set<string>) => setAvailableByPane((current) => {
     const previous = current[pane]
@@ -109,7 +120,7 @@ export function OnPageReview({ changeSetID }: { changeSetID: string }) {
   const submitted = review.state === 'submitted'
   const publishable = report?.publishable === true && Boolean(review.approvalProof)
   const path = review.path === '/' ? '' : review.path
-  const width = device === 'mobile' ? 390 : 1440
+  const width = device === 'mobile' || narrow ? 390 : mode === 'side' ? 760 : 1440
   const available = mode === 'live' ? availableByPane.live : mode === 'proposed' ? availableByPane.proposed : new Set([...availableByPane.live, ...availableByPane.proposed])
   return <main className={styles.workspace} data-page-review data-panel-open={panel}>
     <header className={styles.bar} aria-label="Pending change review" data-page-review-bar>
