@@ -277,7 +277,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   let commentAttempts = 0
   await reviewer.route('**/api/editorial/comment', async (route) => { commentAttempts += 1; if (commentAttempts === 1) return route.fulfill({ status: 500, contentType: 'application/json', body: '{}' }); return route.continue() })
   const comment = reviewer.getByLabel('Add review comment'); await comment.fill('Retry-safe browser comment'); await reviewer.getByRole('button', { name: 'Add comment' }).click()
-  await expect(reviewer.getByRole('status')).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
+  await expect(reviewer.getByRole('status').filter({ hasText: 'Unable to add this comment' })).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click(); await expect(comment).toHaveValue('')
   await expect(reviewer.getByText('Approval is disabled until the exact comparison has a passing readiness proof.')).toBeVisible()
   await reviewer.getByRole('button', { name: 'Run readiness checks' }).click()
