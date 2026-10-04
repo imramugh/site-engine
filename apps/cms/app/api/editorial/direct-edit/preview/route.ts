@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     if (!actor.roles?.some((role) => role === 'owner' || role === 'editor')) return Response.json({ error: 'Editor access required.' }, { status: 403, headers: noStore })
     const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true })
     const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true })
-    if (!['open', 'changes-requested'].includes(String(set.state)) || (!actor.roles?.includes('owner') && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) !== actor.id)) return Response.json({ error: 'Preview unavailable.' }, { status: 403, headers: noStore })
+    if (!['open', 'changes-requested'].includes(String(set.state)) || Number(set.revision) !== Number(job.reviewRevision) || changeSetHash(Array.isArray(set.changes) ? set.changes : []) !== String(job.changeHash) || (!actor.roles?.includes('owner') && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) !== actor.id)) return Response.json({ error: 'Preview unavailable.' }, { status: 403, headers: noStore })
     return Response.json({ job: { id: job.id, status: job.status } }, { headers: noStore })
   } catch { return Response.json({ error: 'Preview unavailable.' }, { status: 404, headers: noStore }) }
 }

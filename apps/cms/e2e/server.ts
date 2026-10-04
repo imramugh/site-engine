@@ -248,7 +248,12 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'GET' && /^\/preview\/changes\/[0-9a-f-]+\/(live|proposed)(?:\/[^?]*)?(?:\?.*)?$/i.test(request.url ?? '')) {
     void previewSession(new Request(`${cmsOrigin}/api/auth/preview/review-session`, { headers: { cookie: String(request.headers.cookie ?? ''), 'x-original-uri': request.url ?? '/' } })).then((guard) => {
       if (guard.status !== 204) { response.writeHead(guard.status); response.end(); return }
-      html(response, '<!doctype html><title>Synthetic private comparison</title><main>Authenticated private comparison fixture</main>')
+      const jobID = (request.url ?? '').split('/')[3]!
+      return payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }).then((job) => {
+        const manifest = job.proposedManifest as { pages?: Array<{ id?: string; blocks?: Array<{ type?: string; heading?: string }> }> }
+        const heading = manifest.pages?.flatMap((page) => page.blocks ?? []).find((block) => block.type === 'hero')?.heading ?? 'Preview unavailable'
+        html(response, `<!doctype html><title>Preview</title><main><h1>${String(heading).replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character]!))}</h1></main>`)
+      }).catch(() => { response.writeHead(404); response.end() })
     }).catch(() => { response.writeHead(403); response.end() })
     return
   }

@@ -19,7 +19,7 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   await expect(editor.page.getByRole('status')).toContainText('Immutable draft preview is rendering.')
   expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
   const frame = editor.page.frameLocator('iframe[title="Proposed draft preview"]')
-  await expect(frame.getByText('Authenticated private comparison fixture')).toBeVisible()
+  await expect(frame.getByText('Browser saved heading')).toBeVisible()
   await editor.page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(editor.page.getByRole('status')).toContainText('Submitted for reviewer workflow.')
   const after = await editor.page.request.get('/__e2e/publish-state').then(response => response.json()) as { releaseCount: number }

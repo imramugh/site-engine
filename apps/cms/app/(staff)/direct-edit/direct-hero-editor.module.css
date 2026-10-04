@@ -1,0 +1,7 @@
+.editor { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+.selectors { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+.selectors label, .workspace label { display: grid; gap: .35rem; }
+.workspace { display: grid; grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 1fr); gap: 1.5rem; align-items: start; }
+.workspace section { min-width: 0; }
+.previewFrame { display: block; width: 100%; min-height: 34rem; border: 1px solid currentColor; margin-top: 1rem; }
+@media (max-width: 600px) { .editor { padding: 1rem; } .workspace { grid-template-columns: 1fr; } .previewFrame { min-height: 22rem; } }
