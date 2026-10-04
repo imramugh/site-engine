@@ -1,27 +1,189 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import styles from './lead-workspace.module.css'
+
 type Assignee = { id: string; name: string; email: string }
-type Lead = { id: string; email: string; name?: string; telephone?: string; company?: string; topic: string; message: string; stage: string; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; assignee?: string | Assignee | null; consentBasis?: string; consentedAt?: string }
-type Data = { leads: Lead[]; assignees: Assignee[]; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
-const stages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost']; const topics = ['general', 'project', 'partnership', 'active-incident']
+type Stage = 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost'
+type Lead = { id: string; email: string; name?: string; telephone?: string; company?: string; topic: string; message: string; stage: Stage; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; assignee?: string | null; consentBasis?: string; consentedAt?: string; createdAt?: string; updatedAt?: string }
+type PipelineGroup = { leads: Lead[]; totalDocs: number; hasMore: boolean }
+type Data = { leads: Lead[]; pipeline: Record<Stage, PipelineGroup>; assignees: Assignee[]; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
+type Filters = { stage: string; urgent: boolean; assignee: string; page: number }
+
+const stages: Stage[] = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost']
+const stageLabels: Record<Stage, string> = { new: 'New', qualified: 'Qualified', contacted: 'Contacted', proposal: 'Proposal', won: 'Won', lost: 'Lost' }
+const transitions: Record<Stage, Stage[]> = {
+  new: ['new', 'qualified', 'contacted', 'lost'], qualified: ['qualified', 'contacted', 'lost'],
+  contacted: ['contacted', 'qualified', 'proposal', 'lost'], proposal: ['proposal', 'won', 'lost', 'contacted'], won: ['won'], lost: ['lost'],
+}
+const topics = ['general', 'project', 'partnership', 'active-incident']
 const blank = { email: '', name: '', topic: 'general', sourcePage: '/manual', message: '', consent: false }
-const assigneeID = (lead: Lead) => typeof lead.assignee === 'string' ? lead.assignee : lead.assignee?.id ?? ''
-function parameters(filters: { stage: string; urgent: boolean; assignee: string; page: number }) { const p = new URLSearchParams(); if (filters.stage) p.set('stage', filters.stage); if (filters.urgent) p.set('urgent', 'true'); if (filters.assignee) p.set('assignee', filters.assignee); p.set('page', String(filters.page)); return p.toString() }
+const emptyPipeline = (): Record<Stage, PipelineGroup> => ({ new: { leads: [], totalDocs: 0, hasMore: false }, qualified: { leads: [], totalDocs: 0, hasMore: false }, contacted: { leads: [], totalDocs: 0, hasMore: false }, proposal: { leads: [], totalDocs: 0, hasMore: false }, won: { leads: [], totalDocs: 0, hasMore: false }, lost: { leads: [], totalDocs: 0, hasMore: false } })
+const emptyData = (): Data => ({ leads: [], pipeline: emptyPipeline(), assignees: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })
+
+function parameters(filters: Filters) {
+  const params = new URLSearchParams()
+  if (filters.stage) params.set('stage', filters.stage)
+  if (filters.urgent) params.set('urgent', 'true')
+  if (filters.assignee) params.set('assignee', filters.assignee)
+  params.set('page', String(filters.page))
+  return params.toString()
+}
+
+function displayName(lead: Lead) { return lead.company || lead.name || lead.email }
+function formatDate(value?: string) { if (!value) return 'Unknown'; const date = new Date(value); return Number.isNaN(date.valueOf()) ? 'Unknown' : new Intl.DateTimeFormat('en-CA', { dateStyle: 'medium' }).format(date) }
+function age(value?: string) {
+  if (!value) return 'Unknown'
+  const days = Math.max(0, Math.floor((Date.now() - new Date(value).valueOf()) / 86_400_000))
+  if (days === 0) return 'Today'
+  if (days === 1) return '1 day ago'
+  return `${days} days ago`
+}
+
+function LeadCard({ lead, active, onOpen }: { lead: Lead; active: boolean; onOpen: () => void }) {
+  return <button type="button" className={styles.card} aria-pressed={active} onClick={onOpen} data-lead-card data-urgent={lead.urgent ? 'true' : undefined}>
+    {lead.urgent && <span className={styles.urgent}>Active incident</span>}
+    <strong>{displayName(lead)}</strong>
+    <span>{lead.name && lead.company ? `${lead.name} · ` : ''}{lead.topic}</span>
+    <small><span>{lead.sourcePage}</span><span>{age(lead.createdAt)}</span></small>
+    {lead.nextAction && <em>→ {lead.nextAction}</em>}
+  </button>
+}
+
+function LeadDetail({ lead, assignees, saving, onClose, onSave }: { lead: Lead; assignees: Assignee[]; saving: boolean; onClose: () => void; onSave: (update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) => Promise<void> }) {
+  const [stage, setStage] = useState(lead.stage)
+  const [assignee, setAssignee] = useState(lead.assignee ?? '')
+  const [notes, setNotes] = useState(lead.notes ?? '')
+  const [nextAction, setNextAction] = useState(lead.nextAction ?? '')
+  return <aside className={styles.detail} aria-label="Lead details" data-lead-detail>
+    <header className={styles.detailHeader}>
+      <div><h2>{displayName(lead)}</h2><p>{lead.name && lead.company ? lead.name : lead.email}</p></div>
+      <button type="button" className={styles.iconButton} aria-label="Close lead details" onClick={onClose}>×</button>
+    </header>
+    <dl className={styles.facts}>
+      <dt>Stage</dt><dd><span className={styles.badge}>{stageLabels[lead.stage]}</span></dd>
+      <dt>Email</dt><dd>{lead.email}</dd>
+      {lead.telephone && <><dt>Phone</dt><dd>{lead.telephone}</dd></>}
+      <dt>Source</dt><dd>{lead.sourcePage}</dd>
+      <dt>Received</dt><dd><time dateTime={lead.createdAt}>{formatDate(lead.createdAt)}</time></dd>
+      <dt>Consent</dt><dd>{lead.consentBasis ?? 'Unknown'}{lead.consentedAt ? ` · ${formatDate(lead.consentedAt)}` : ''}</dd>
+    </dl>
+    <section className={styles.message}><h3>Inquiry</h3><p>{lead.message}</p></section>
+    <form className={styles.editForm} onSubmit={(event) => { event.preventDefault(); void onSave({ stage, assignee: assignee || null, notes, nextAction }) }}>
+      <label>Stage<select value={stage} onChange={(event) => setStage(event.target.value as Stage)}>{transitions[lead.stage].map((value) => <option key={value} value={value}>{stageLabels[value]}</option>)}</select></label>
+      <label>Active assignee<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="">Unassigned</option>{assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+      <label>Notes<textarea rows={4} maxLength={5000} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+      <label>Next action<textarea rows={3} maxLength={5000} value={nextAction} onChange={(event) => setNextAction(event.target.value)} /></label>
+      <button className={styles.primary} disabled={saving}>Save lead details</button>
+    </form>
+  </aside>
+}
+
 export function LeadDashboard() {
-  const [data, setData] = useState<Data>({ leads: [], assignees: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })
-  const [filters, setFilters] = useState({ stage: '', urgent: false, assignee: '', page: 1 }); const [selected, setSelected] = useState<string | null>(null)
-  const [manual, setManual] = useState(blank); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [saving, setSaving] = useState(false)
-  const active = useMemo(() => data.leads.find((lead) => lead.id === selected) ?? null, [data.leads, selected])
-  const load = async (next = filters) => { const response = await fetch(`/api/leads?${parameters(next)}`, { cache: 'no-store' }); if (!response.ok) { setError('You need a Sales or Owner session to view leads.'); return }; const body = await response.json() as Data; setData(body); setError(''); setSelected((current) => body.leads.some((lead) => lead.id === current) ? current : body.leads[0]?.id ?? null) }
-  useEffect(() => { void load({ stage: '', urgent: false, assignee: '', page: 1 }) }, [])
-  function changeFilters(change: Partial<typeof filters>) { const next = { ...filters, ...change, page: change.page ?? 1 }; setFilters(next); void load(next) }
-  async function createManual(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setMessage(''); setError(''); try { const response = await fetch('/api/leads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...manual, consentBasis: 'staff-recorded' }) }); const body = await response.json() as { errors?: Record<string, string>; error?: string }; if (!response.ok) { setError(body.error ?? (Object.values(body.errors ?? {}).join(' ') || 'The manual lead could not be created.')); return }; setManual(blank); setMessage('Manual lead recorded with staff-recorded consent.'); await load({ ...filters, page: 1 }) } finally { setSaving(false) } }
-  async function saveLead(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!active) return; const form = new FormData(event.currentTarget); setSaving(true); setMessage(''); setError(''); try { const response = await fetch(`/api/leads/${active.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stage: form.get('stage'), notes: form.get('notes'), nextAction: form.get('nextAction'), assignee: form.get('assignee') || null }) }); const body = await response.json() as { error?: string }; if (!response.ok) { setError(body.error ?? 'The lead could not be updated.'); return }; setMessage('Lead details saved.'); await load() } finally { setSaving(false) } }
-  return <main style={{ maxWidth: 1180, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }} aria-busy={saving}>
-    <h1>Lead pipeline</h1><p>Visitor messages are untrusted text. Manual entries require a staff-recorded consent basis.</p><p role="status" aria-live="polite">{message}</p>{error && <p role="alert">{error}</p>}
-    <section aria-label="Create manual lead"><h2>Record manual lead</h2><form onSubmit={createManual}><p><label>Email <input required type="email" value={manual.email} onChange={(e) => setManual({ ...manual, email: e.target.value })} /></label> <label>Name <input value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} /></label> <label>Topic <select value={manual.topic} onChange={(e) => setManual({ ...manual, topic: e.target.value })}>{topics.map((topic) => <option key={topic}>{topic}</option>)}</select></label></p><p><label>Source page <input required value={manual.sourcePage} onChange={(e) => setManual({ ...manual, sourcePage: e.target.value })} /></label></p><p><label>Message <textarea required value={manual.message} onChange={(e) => setManual({ ...manual, message: e.target.value })} /></label></p><p><label><input required type="checkbox" checked={manual.consent} onChange={(e) => setManual({ ...manual, consent: e.target.checked })} /> I recorded the contact&apos;s consent for staff follow-up.</label></p><button disabled={saving}>Create manual lead</button></form></section>
-    <section aria-label="Lead filters"><h2>Filter leads</h2><label>Stage <select value={filters.stage} onChange={(e) => changeFilters({ stage: e.target.value })}><option value="">All stages</option>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label> <label><input type="checkbox" checked={filters.urgent} onChange={(e) => changeFilters({ urgent: e.target.checked })} /> Urgent only</label> <label>Assignee <select value={filters.assignee} onChange={(e) => changeFilters({ assignee: e.target.value })}><option value="">Anyone</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label> <a href={`/api/leads/export?${parameters(filters)}`}>Export filtered CSV</a></section>
-    <p>{data.totalDocs} lead{data.totalDocs === 1 ? '' : 's'} · page {data.page} of {data.totalPages}</p><div style={{ display: 'grid', gridTemplateColumns: 'minmax(18rem, 1fr) minmax(20rem, 2fr)', gap: '2rem' }}><section aria-label="Lead list"><h2>Leads</h2><ul>{data.leads.map((lead) => <li key={lead.id}><button onClick={() => setSelected(lead.id)} aria-pressed={active?.id === lead.id}>{lead.urgent ? 'Urgent: ' : ''}{lead.email} — {lead.topic} ({lead.stage})</button></li>)}</ul>{!data.leads.length && <p>No leads match these filters.</p>}<p><button disabled={!data.hasPrevPage} onClick={() => changeFilters({ page: data.page - 1 })}>Previous page</button> <button disabled={!data.hasNextPage} onClick={() => changeFilters({ page: data.page + 1 })}>Next page</button></p></section>
-      {active && <section aria-label="Lead details"><h2>Lead details</h2><p><strong>{active.email}</strong>{active.name ? ` · ${active.name}` : ''}</p>{(active.telephone || active.company) && <p>{[active.telephone && `Phone: ${active.telephone}`, active.company && `Company: ${active.company}`].filter(Boolean).join(' · ')}</p>}<p>{active.topic} from {active.sourcePage}{active.urgent ? ' · urgent' : ''}</p><p>{active.message}</p><p>Consent: {active.consentBasis ?? 'unknown'}</p><form onSubmit={saveLead}><p><label>Stage <select name="stage" defaultValue={active.stage}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label></p><p><label>Active assignee <select name="assignee" defaultValue={assigneeID(active)}><option value="">Unassigned</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></p><p><label>Notes <textarea name="notes" defaultValue={active.notes ?? ''} /></label></p><p><label>Next action <textarea name="nextAction" defaultValue={active.nextAction ?? ''} /></label></p><button disabled={saving}>Save lead details</button></form></section>}</div>
+  const [data, setData] = useState<Data>(emptyData)
+  const [mode, setMode] = useState<'pipeline' | 'list'>('pipeline')
+  const [filters, setFilters] = useState<Filters>({ stage: '', urgent: false, assignee: '', page: 1 })
+  const [selected, setSelected] = useState<string | null>(null)
+  const [manual, setManual] = useState(blank)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const addButton = useRef<HTMLButtonElement>(null)
+  const allLeads = useMemo(() => [...data.leads, ...stages.flatMap((stage) => data.pipeline[stage].leads)].filter((lead, index, items) => items.findIndex((item) => item.id === lead.id) === index), [data])
+  const active = allLeads.find((lead) => lead.id === selected) ?? null
+
+  async function load(next = filters, keepSelected = true) {
+    setLoading(true)
+    try {
+      const response = await fetch(`/api/leads?${parameters(next)}`, { cache: 'no-store' })
+      const body = await response.json() as Data & { error?: string }
+      if (!response.ok) throw new Error(body.error ?? 'Leads could not be loaded.')
+      setData(body); setError('')
+      const available = [...body.leads, ...stages.flatMap((stage) => body.pipeline[stage].leads)]
+      setSelected((current) => keepSelected && available.some((lead) => lead.id === current) ? current : null)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Leads could not be loaded.') }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { void load({ stage: '', urgent: false, assignee: '', page: 1 }, false) }, [])
+  useEffect(() => {
+    if (!dialogOpen) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') closeDialog() }
+    document.addEventListener('keydown', close)
+    return () => document.removeEventListener('keydown', close)
+  }, [dialogOpen])
+
+  function changeFilters(change: Partial<Filters>) { const next = { ...filters, ...change, page: change.page ?? 1 }; setFilters(next); void load(next) }
+  function closeDialog() { setDialogOpen(false); requestAnimationFrame(() => addButton.current?.focus()) }
+  async function createManual(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSaving(true); setMessage(''); setError('')
+    try {
+      const response = await fetch('/api/leads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...manual, consentBasis: 'staff-recorded' }) })
+      const body = await response.json() as { errors?: Record<string, string>; error?: string }
+      if (!response.ok) { setError(body.error ?? (Object.values(body.errors ?? {}).join(' ') || 'The manual lead could not be created.')); return }
+      setManual(blank); closeDialog(); setMessage('Manual lead recorded with staff-recorded consent.'); await load({ ...filters, page: 1 }, false)
+    } catch { setError('The manual lead could not be created. Try again.') }
+    finally { setSaving(false) }
+  }
+  async function saveLead(update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) {
+    if (!active) return
+    setSaving(true); setMessage(''); setError('')
+    try {
+      const response = await fetch(`/api/leads/${active.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(update) })
+      const body = await response.json() as { error?: string }
+      if (!response.ok) { setError(body.error ?? 'The lead could not be updated.'); return }
+      setMessage('Lead details saved.'); await load(filters)
+    } catch { setError('The lead could not be updated. Try again.') }
+    finally { setSaving(false) }
+  }
+
+  return <main className={styles.workspace} aria-busy={loading || saving} data-leads-workspace>
+    <h1 className={styles.srOnly}>Lead pipeline</h1>
+    <div className={styles.actions}>
+      <div className={styles.tabs} role="group" aria-label="Lead view">
+        <button type="button" aria-pressed={mode === 'pipeline'} onClick={() => setMode('pipeline')}>Pipeline</button>
+        <button type="button" aria-pressed={mode === 'list'} onClick={() => setMode('list')}>List</button>
+      </div>
+      <div><a className={styles.button} href={`/api/leads/export?${parameters(filters)}`}>Export CSV</a><button ref={addButton} type="button" className={styles.primary} onClick={() => setDialogOpen(true)}>+ Add lead</button></div>
+    </div>
+    <p className={styles.status} role="status" aria-live="polite">{message}</p>
+    {error && <div className={styles.error} role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>Try again</button></div>}
+    <div className={`${styles.layout} ${active ? styles.withDetail : ''}`}>
+      <section className={styles.content} aria-label={mode === 'pipeline' ? 'Lead pipeline' : 'Lead list'}>
+        <div className={styles.filters} aria-label="Lead filters">
+          {mode === 'list' && <label>Stage<select value={filters.stage} onChange={(event) => changeFilters({ stage: event.target.value })}><option value="">All stages</option>{stages.map((stage) => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}</select></label>}
+          <label>Assignee<select value={filters.assignee} onChange={(event) => changeFilters({ assignee: event.target.value })}><option value="">Anyone</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+          <label className={styles.check}><input type="checkbox" checked={filters.urgent} onChange={(event) => changeFilters({ urgent: event.target.checked })} /> Urgent only</label>
+        </div>
+        {loading && !allLeads.length ? <p className={styles.empty}>Loading leads…</p> : mode === 'pipeline' ? <div className={styles.pipeline} data-leads-pipeline>
+          {stages.map((stage) => <section className={styles.column} key={stage} aria-labelledby={`stage-${stage}`}>
+            <header><h2 id={`stage-${stage}`}>{stageLabels[stage]}</h2><span>{data.pipeline[stage].totalDocs}</span></header>
+            <div>{data.pipeline[stage].leads.map((lead) => <LeadCard key={lead.id} lead={lead} active={active?.id === lead.id} onOpen={() => setSelected(lead.id)} />)}{!data.pipeline[stage].leads.length && <p>No leads</p>}</div>
+            {data.pipeline[stage].hasMore && <small>Showing {data.pipeline[stage].leads.length} of {data.pipeline[stage].totalDocs}</small>}
+          </section>)}
+        </div> : <>
+          <div className={styles.listHeader}><span>Lead</span><span>Topic</span><span>Stage</span><span>Source</span><span>Received</span><span>Next action</span></div>
+          <div className={styles.list}>{data.leads.map((lead) => <button type="button" key={lead.id} aria-pressed={active?.id === lead.id} onClick={() => setSelected(lead.id)}>
+            <span><strong>{displayName(lead)}</strong><small>{lead.email}</small></span><span>{lead.topic}</span><span><em className={styles.badge}>{stageLabels[lead.stage]}</em></span><span>{lead.sourcePage}</span><span>{age(lead.createdAt)}</span><span>{lead.nextAction || '—'}</span>
+          </button>)}</div>
+          {!data.leads.length && <p className={styles.empty}>No leads match these filters.</p>}
+          <div className={styles.pagination}><button disabled={!data.hasPrevPage} onClick={() => changeFilters({ page: data.page - 1 })}>Previous</button><span>Page {data.page} of {data.totalPages} · {data.totalDocs} lead{data.totalDocs === 1 ? '' : 's'}</span><button disabled={!data.hasNextPage} onClick={() => changeFilters({ page: data.page + 1 })}>Next</button></div>
+        </>}
+      </section>
+      {active && <LeadDetail key={active.id} lead={active} assignees={data.assignees} saving={saving} onClose={() => setSelected(null)} onSave={saveLead} />}
+    </div>
+    {dialogOpen && <div className={styles.dialogBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog() }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="add-lead-title" className={styles.dialog}>
+        <header><h2 id="add-lead-title">Add lead</h2><button type="button" aria-label="Close add lead" className={styles.iconButton} onClick={closeDialog}>×</button></header>
+        <form onSubmit={createManual}>
+          <div className={styles.formGrid}><label>Email<input autoFocus required type="email" value={manual.email} onChange={(event) => setManual({ ...manual, email: event.target.value })} /></label><label>Name<input value={manual.name} onChange={(event) => setManual({ ...manual, name: event.target.value })} /></label></div>
+          <div className={styles.formGrid}><label>Topic<select value={manual.topic} onChange={(event) => setManual({ ...manual, topic: event.target.value })}>{topics.map((topic) => <option key={topic}>{topic}</option>)}</select></label><label>Source page<input required value={manual.sourcePage} onChange={(event) => setManual({ ...manual, sourcePage: event.target.value })} /></label></div>
+          <label>Message<textarea rows={5} required maxLength={5000} value={manual.message} onChange={(event) => setManual({ ...manual, message: event.target.value })} /></label>
+          <label className={styles.consent}><input required type="checkbox" checked={manual.consent} onChange={(event) => setManual({ ...manual, consent: event.target.checked })} /> I recorded the contact&apos;s consent for staff follow-up.</label>
+          <footer><button type="button" onClick={closeDialog}>Cancel</button><button className={styles.primary} disabled={saving}>Create manual lead</button></footer>
+        </form>
+      </section>
+    </div>}
   </main>
 }
