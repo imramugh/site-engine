@@ -17,6 +17,7 @@ describe('ENG-002 versioned contract', () => {
     expect(compatibleContractVersion('1.1.0')).toBe(true);
     expect(compatibleContractVersion('1.2.0')).toBe(true);
     expect(compatibleContractVersion('1.3.0')).toBe(true);
+    expect(compatibleContractVersion('1.4.0')).toBe(true);
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);

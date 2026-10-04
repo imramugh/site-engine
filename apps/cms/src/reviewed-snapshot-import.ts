@@ -21,10 +21,10 @@ function capture(changes: Captured[], collection: CapturedCollection, id: string
   // Payload materializes an omitted optional SEO description as null. Keep
   // null only when it clears a description present in the frozen baseline.
   if (collection === 'pages') {
-    if (before?.seoDescription === null) { const { seoDescription: _seoDescription, ...normalized } = before; before = normalized }
-    if (after?.seoDescription === null && !(before && 'seoDescription' in before)) { const { seoDescription: _seoDescription, ...normalized } = after; after = normalized }
-    if (before?.businessCase === null) { const { businessCase: _businessCase, ...normalized } = before; before = normalized }
-    if (after?.businessCase === null) { const { businessCase: _businessCase, ...normalized } = after; after = normalized }
+    for (const field of ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) {
+      if (before?.[field] === null) { const normalized = { ...before }; delete normalized[field]; before = normalized }
+      if (after?.[field] === null && !(before && field in before)) { const normalized = { ...after }; delete normalized[field]; after = normalized }
+    }
   }
   const existing = changes.findIndex(change => change.collection === collection && change.id === id)
   if (same(before, after)) {

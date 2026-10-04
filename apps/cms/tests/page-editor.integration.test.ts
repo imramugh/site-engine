@@ -89,14 +89,14 @@ async function session(user: { id: string }) {
   })
   return `${cookieName(SESSION_COOKIE)}=${token}`
 }
-async function fixture(user: { id: string }) {
+async function fixture(user: { id: string }, template: 'landing' | 'article' | 'job' = 'landing') {
   const unique = randomUUID().replaceAll('-', '').slice(0, 12)
   const section = await payload.create({
     collection: 'sections',
     data: {
       name: `Section ${unique}`,
       slug: `section-${unique}`,
-      allowedTemplates: ['landing', 'standard'],
+      allowedTemplates: ['landing', 'standard', 'article', 'job'],
     },
     overrideAccess: true,
     context: { editorialInternal: true },
@@ -109,8 +109,8 @@ async function fixture(user: { id: string }) {
         'A synthetic page with enough summary text for page editor tests.',
       slug: `page-${unique}`,
       sectionId: section.id,
-      template: 'landing',
-      blocks: [hero, text],
+      template,
+      blocks: template === 'landing' ? [hero, text] : [text],
     },
     overrideAccess: true,
     context: { editorialInternal: true },
@@ -159,6 +159,20 @@ function save(
   }
 }
 
+function previewBaseline(contractVersion: '1.3.0' | '1.4.0'): PreviewBaseline {
+  const manifest = structuredClone(neutralFixture)
+  manifest.settings.contractVersion = contractVersion
+  return {
+    manifest,
+    sequence: 0,
+    versions: {
+      themeVersion: 'test-theme',
+      engineVersion: 'test-engine',
+      contractVersion,
+    },
+  }
+}
+
 beforeAll(async () => {
   payload = await getPayload({ config })
 }, 30_000)
@@ -173,6 +187,7 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     const current = await fixture(editor)
     const unconfigured = await pageEditorContext(payload, editor as never, current.page.id)
     expect(unconfigured.activeTheme).toBeNull()
+    expect(unconfigured.activeContractVersion).toBeNull()
     expect(unconfigured.changeSets.find((set) => set.id === current.set.id)?.theme).toBeNull()
     const manifest = structuredClone(neutralFixture)
     manifest.settings.theme = {
@@ -197,7 +212,9 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
       initialBaseline,
     )
     expect(baselineContext.activeTheme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+    expect(baselineContext.activeContractVersion).toBe('1.0.0')
     expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.theme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+    expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.contractVersion).toBe('1.0.0')
 
     const selection = {
       id: 'counsel',
@@ -228,6 +245,7 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     )
     const contextTheme = proposedContext.changeSets.find((item) => item.id === current.set.id)?.theme
     expect(contextTheme).toEqual({ name: 'counsel', version: '2.0.0' })
+    expect(proposedContext.changeSets.find((item) => item.id === current.set.id)?.contractVersion).toBe('1.0.0')
     const job = await withPayloadTransaction(payload, (req) => prepareReviewPreview({
       payload,
       req,
@@ -328,6 +346,84 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     expect(set.changes).toEqual([
       expect.objectContaining({ collection: 'pages', id: current.page.id }),
     ])
+  })
+
+  it('saves, clears, and hashes article and job metadata as part of the whole-page draft', async () => {
+    const editor = await actor()
+    const article = await fixture(editor, 'article')
+    const current = pageEditorProjection(article.page as unknown as Record<string, unknown>)
+    const businessCase = { anonymizedClient: 'Regional organization', industry: 'Services', challenge: 'A clear challenge.', approach: 'A clear approach.', outcome: 'A clear outcome.', services: ['Advisory'], publicationDate: '2026-09-30T00:00:00.000Z' }
+    const desired = { ...current, publishedAt: '2026-09-29T00:00:00.000Z', lastReviewed: '2026-10-01T00:00:00.000Z', businessCase }
+    await withPayloadTransaction(payload, (req) => applyPageEditorSave({ payload, req, actor: editor as never, initialBaseline: previewBaseline('1.4.0'), save: { pageID: article.page.id, changeSetID: article.set.id, expectedPageHash: pageEditorHash(current), expectedChangeSetRevision: 0, draft: desired } }))
+    const stored = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
+    expect(pageEditorProjection(stored as unknown as Record<string, unknown>)).toMatchObject(desired)
+    const changedSet = await payload.findByID({ collection: 'change-sets', id: article.set.id, overrideAccess: true })
+    const withMetadata = pageEditorProjection(stored as unknown as Record<string, unknown>)
+    await withPayloadTransaction(payload, (req) => applyPageEditorSave({ payload, req, actor: editor as never, initialBaseline: previewBaseline('1.4.0'), save: { pageID: article.page.id, changeSetID: article.set.id, expectedPageHash: pageEditorHash(withMetadata), expectedChangeSetRevision: Number(changedSet.revision), draft: { ...withMetadata, publishedAt: undefined, lastReviewed: undefined, businessCase: undefined } } }))
+    const cleared = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
+    expect(cleared).toMatchObject({ publishedAt: null, lastReviewed: null, businessCase: null })
+
+    const job = await fixture(editor, 'job')
+    const jobCurrent = pageEditorProjection(job.page as unknown as Record<string, unknown>)
+    const jobPosting = { datePosted: '2026-10-01T00:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2026-11-01T00:00:00.000Z' }
+    const parsed = parsePageEditorDraft({ ...jobCurrent, jobPosting })
+    expect(parsed.jobPosting).toEqual(jobPosting)
+    expect(pageEditorHash(parsed)).not.toBe(pageEditorHash(jobCurrent))
+  })
+
+  it('rejects 1.4-only metadata before capture when the proposed contract is older or unavailable', async () => {
+    const editor = await actor()
+    const article = await fixture(editor, 'article')
+    const current = pageEditorProjection(article.page as unknown as Record<string, unknown>)
+    const saveWithLastReviewed = {
+      pageID: article.page.id,
+      changeSetID: article.set.id,
+      expectedPageHash: pageEditorHash(current),
+      expectedChangeSetRevision: 0,
+      draft: { ...current, lastReviewed: '2026-10-01T00:00:00.000Z' },
+    }
+    await expect(withPayloadTransaction(payload, (req) => applyPageEditorSave({
+      payload,
+      req,
+      actor: editor as never,
+      initialBaseline: previewBaseline('1.3.0'),
+      save: saveWithLastReviewed,
+    }))).rejects.toThrow('PAGE_METADATA_UNSUPPORTED')
+    await expect(withPayloadTransaction(payload, (req) => applyPageEditorSave({
+      payload,
+      req,
+      actor: editor as never,
+      save: saveWithLastReviewed,
+    }))).rejects.toThrow('PAGE_METADATA_UNSUPPORTED')
+    const cookie = await session(editor)
+    const response = await editorRoute.POST(
+      new Request('http://cms.test/api/editorial/page-editor/metadata', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://cms.test',
+          cookie,
+        },
+        body: JSON.stringify({
+          changeSetID: saveWithLastReviewed.changeSetID,
+          expectedPageHash: saveWithLastReviewed.expectedPageHash,
+          expectedChangeSetRevision: saveWithLastReviewed.expectedChangeSetRevision,
+          draft: saveWithLastReviewed.draft,
+        }),
+      }),
+      { params: Promise.resolve({ id: article.page.id }) },
+    )
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'The selected theme does not support service introduction or last-reviewed metadata. Choose a theme compatible with content contract 1.4.0 before saving these fields.',
+    })
+    const unchangedSet = await payload.findByID({ collection: 'change-sets', id: article.set.id, overrideAccess: true })
+    expect(unchangedSet.changes).toEqual([])
+
+    const context = await pageEditorContext(payload, editor as never, article.page.id, previewBaseline('1.4.0'))
+    expect(context.activeTheme).toBeNull()
+    expect(context.activeContractVersion).toBe('1.4.0')
+    expect(context.changeSets.find((item) => item.id === article.set.id)?.contractVersion).toBe('1.4.0')
   })
 
   it('serializes duplicate and competing writes while rejecting stale page and set revisions', async () => {

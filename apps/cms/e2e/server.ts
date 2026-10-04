@@ -60,7 +60,15 @@ const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
 const onPageReviewerSessionToken = 'synthetic-on-page-reviewer-session-token'
 const pageEditorPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
 const pageEditorSetID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbf'
+const pageEditorMetadataPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
 const pageEditorSessionToken = 'synthetic-page-editor-owner-session-token'
+const metadataEditorSessionToken = 'synthetic-metadata-editor-owner-session-token'
+const metadataSectionID = 'abcd0000-0000-4000-8000-000000000001'
+const metadataPillarID = 'abcd0000-0000-4000-8000-000000000002'
+const metadataServiceID = 'abcd0000-0000-4000-8000-000000000003'
+const metadataArticleID = pageEditorMetadataPageID
+const metadataJobID = 'abcd0000-0000-4000-8000-000000000004'
+const metadataSetID = 'abcd0000-0000-4000-8000-000000000005'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const shellSessionTokens = {
@@ -80,7 +88,7 @@ const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
-const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
+const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
 writeFileSync(themeRegistry, JSON.stringify({ themes: [
@@ -88,6 +96,7 @@ writeFileSync(themeRegistry, JSON.stringify({ themes: [
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
 ] }))
 const initialBaseline = structuredClone(neutralFixture)
+initialBaseline.settings.contractVersion = '1.4.0'
 initialBaseline.settings.sections.push({ id: applicationSectionID, name: 'Careers', slug: 'careers', allowedTemplates: ['listing', 'job'], pageIds: [applicationJobID, draftApplicationJobID, expiredApplicationJobID] })
 initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSectionID, title: 'Synthetic Application Engineer', summary: 'A published synthetic role used only to exercise the private application HTTP flow.', slug: 'synthetic-application-engineer', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2030-01-01T00:00:00.000Z' } })
 initialBaseline.pages.push({ id: draftApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Draft Role', summary: 'A draft synthetic role which must not accept applications.', slug: 'synthetic-draft-role', template: 'job', status: 'draft', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' } } })
@@ -245,6 +254,7 @@ async function seed(): Promise<void> {
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
   const pageEditorOwner = await payload.create({ collection: 'users', data: { email: 'page-editor-owner.synthetic@example.test', name: 'Synthetic Page Editor Owner', roles: ['owner'] }, overrideAccess: true })
+  const metadataEditorOwner = await payload.create({ collection: 'users', data: { email: 'metadata-editor-owner.synthetic@example.test', name: 'Synthetic Metadata Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
   const shellUsers: Record<keyof typeof shellSessionTokens, { id: string }> = {} as Record<keyof typeof shellSessionTokens, { id: string }>
   for (const role of ['owner', 'editor', 'approver'] as const) {
@@ -281,6 +291,13 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(pageEditorSessionToken), user: pageEditorOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'pages', data: { id: pageEditorPageID, title: 'Page editor browser page', summary: 'Synthetic page for the complete protected page editor flow.', slug: 'page-editor-browser-page', sectionId: directSection.id, template: 'standard', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba1', type: 'hero', heading: 'Page editor original heading', body: 'Page editor original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }, { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba2', type: 'contact', heading: 'Original contact block', body: 'Remove this block during the browser flow.', inquiryForm: false, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: pageEditorSetID, name: 'Browser full page draft', state: 'open', actor: pageEditorOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(metadataEditorSessionToken), user: metadataEditorOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  const metadataSection = await payload.create({ collection: 'sections', data: { id: metadataSectionID, name: 'Metadata browser section', slug: 'metadata-browser', allowedTemplates: ['pillar', 'service', 'article', 'job'] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: metadataPillarID, title: 'Metadata service pillar', summary: 'Synthetic pillar for service metadata browser verification.', slug: 'service-pillar', sectionId: metadataSection.id, template: 'pillar', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: metadataServiceID, title: 'Metadata service page', summary: 'Synthetic service for type-specific metadata browser verification.', slug: 'service-page', sectionId: metadataSection.id, parentId: metadataPillarID, template: 'service', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: metadataArticleID, title: 'Metadata article page', summary: 'Synthetic article for type-specific metadata browser verification.', slug: 'article-page', sectionId: metadataSection.id, template: 'article', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba4', type: 'richText', body: 'Synthetic article body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: metadataJobID, title: 'Metadata job page', summary: 'Synthetic job for type-specific metadata browser verification.', slug: 'job-page', sectionId: metadataSection.id, template: 'job', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'change-sets', data: { id: metadataSetID, name: 'Browser metadata draft', state: 'open', actor: metadataEditorOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   for (const role of ['owner', 'editor', 'approver'] as const) {
     await payload.create({

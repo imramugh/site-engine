@@ -41,8 +41,11 @@ function pageForContract(page: Page, blocks: unknown[]): Record<string, unknown>
     id: String(page.id), sectionId: relationID(page.sectionId), parentId: relationID(page.parentId),
     title: page.title, summary: page.summary, slug: page.slug, template: page.template,
     status: page.status === 'archived' ? 'archived' : 'draft', blocks,
+    kicker: page.kicker ?? undefined, lede: page.lede ?? undefined,
     seoDescription: typeof page.seoDescription === 'string' && page.seoDescription.trim() ? page.seoDescription : undefined,
-    noindex: page.noindex === true, businessCase: page.businessCase ?? undefined,
+    noindex: page.noindex === true, publishedAt: page.publishedAt ?? undefined,
+    lastReviewed: page.lastReviewed ?? undefined, jobPosting: page.jobPosting ?? undefined,
+    businessCase: page.businessCase ?? undefined,
   }
 }
 

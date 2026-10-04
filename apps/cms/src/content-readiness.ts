@@ -33,8 +33,9 @@ export function workingPageState(page: Record<string, unknown>, released?: Recor
   if (!released || released.status !== 'published') return 'draft'
   const comparable = (document: Record<string, unknown>) => {
     const value = snapshot('pages', document)!
-    if (value.seoDescription == null) delete value.seoDescription
-    if (value.businessCase == null) delete value.businessCase
+    for (const field of ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) {
+      if (value[field] == null) delete value[field]
+    }
     value.noindex = value.noindex === true
     return value
   }
