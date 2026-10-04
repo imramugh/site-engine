@@ -12,6 +12,15 @@ export const WidthSchema = z.enum(['content', 'wide', 'full']);
 export const SpacingSchema = z.enum(['compact', 'default', 'spacious']);
 export const MotionIntentSchema = z.enum(['none', 'subtle', 'ambient', 'signature']);
 export const LogoToneSchema = z.enum(['default', 'inverse']);
+/** Shared generated option metadata for CMS configuration and theme tooling. */
+export const AppearanceOptions = Object.freeze({
+  backgrounds: BackgroundSchema.options,
+  widths: WidthSchema.options,
+  spacings: SpacingSchema.options,
+  motionIntents: MotionIntentSchema.options,
+  logoTones: LogoToneSchema.options,
+});
+export type AppearanceOptions = typeof AppearanceOptions;
 export const AppearanceSchema = z.object({
   background: BackgroundSchema.default('default'), width: WidthSchema.default('content'),
   spacing: SpacingSchema.default('default'), motionIntent: MotionIntentSchema.default('none'),

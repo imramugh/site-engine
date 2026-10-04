@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createHash } from 'node:crypto'
 import { getPayload } from 'payload'
 import { z } from 'zod'
-import { BackgroundSchema, BlockSchemas, MotionIntentSchema, TemplateAllowedBlocks, TemplateSchema, WidthSchema } from '@site-engine/contract'
+import { AppearanceOptions, BlockSchemas, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
 import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
@@ -39,11 +39,11 @@ const contentSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentRe
 const redirectSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [redirectsReadScope] }], requiredScopes: [redirectsReadScope], effectiveUserRequired: true }
 const toolLimits = 'Draft edits require explicit write scope and CMS editing permission. This server cannot publish, approve, manage users, send email, or bypass CMS permissions.'
 
-const blockLibrary = {
+export const blockLibrary = {
   contractVersion: '1.0.0',
   blockTypes: Object.keys(BlockSchemas),
   templates: Object.fromEntries(TemplateSchema.options.map((template) => [template, TemplateAllowedBlocks[template]])),
-  appearance: { backgrounds: BackgroundSchema.options, widths: WidthSchema.options, motionIntents: MotionIntentSchema.options },
+  appearance: AppearanceOptions,
 }
 
 type RpcRequest = { jsonrpc: '2.0'; id?: string | number | null; method: string; params?: Record<string, unknown> }
