@@ -1,4 +1,5 @@
 import type { Payload } from 'payload'
+import { previewThemeContext, type PreviewBaseline } from './review-preview'
 
 type Actor = { id?: string; roles?: string[]; disabled?: boolean } | undefined
 export type MediaAsset = {
@@ -13,9 +14,16 @@ export type MediaAsset = {
   caption?: string | null
   credit?: string | null
   tags?: string[] | null
+  focalX: number
+  focalY: number
   deletedAt?: string | null
   url?: string | null
   usages: Array<{ pageId: string; pageTitle: string; locations: string[] }>
+}
+
+export async function mediaFocalContractVersion(payload: Payload, initialBaseline?: PreviewBaseline): Promise<'1.4.0' | null> {
+  const context = await previewThemeContext({ payload, changeSets: [], initialBaseline })
+  return context.activeContractVersion === '1.4.0' ? '1.4.0' : null
 }
 
 export async function mediaWorkspace(
@@ -71,6 +79,8 @@ export async function mediaWorkspace(
     id: asset.id, filename: asset.filename ?? 'Untitled asset', mimeType: asset.mimeType ?? 'unknown',
     width: asset.width, height: asset.height, filesize: asset.filesize, alt: asset.alt,
     decorative: asset.decorative, caption: asset.caption, credit: asset.credit, tags: asset.tags,
+    focalX: typeof asset.focalX === 'number' && Number.isFinite(asset.focalX) ? Math.round(Math.min(100, Math.max(0, asset.focalX))) : 50,
+    focalY: typeof asset.focalY === 'number' && Number.isFinite(asset.focalY) ? Math.round(Math.min(100, Math.max(0, asset.focalY))) : 50,
     deletedAt: asset.deletedAt, url: asset.url, usages: usage.get(asset.id) ?? [],
   }))
   const filtered = mapped.filter(asset => {

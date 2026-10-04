@@ -27,7 +27,13 @@ export function mediaPublicURL(id: string, variant: keyof typeof MEDIA_VARIANTS)
 }
 
 export function focalPointPosition(focalX = 50, focalY = 50): string {
-  return `${Math.min(100, Math.max(0, focalX))}% ${Math.min(100, Math.max(0, focalY))}%`
+  return `${canonicalFocalPoint(focalX)}% ${canonicalFocalPoint(focalY)}%`
+}
+
+export function canonicalFocalPoint(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(100, Math.max(0, value)))
+    : 50
 }
 
 export function mediaMetadataIssues(input: { alt?: unknown; decorative?: unknown; focalX?: unknown; focalY?: unknown }): { field: string; message: string }[] {
@@ -92,7 +98,7 @@ export async function assertReferencedAssetsAreAccessible(payload: Payload, req:
   }
 }
 
-export function snapshotMediaReference(asset: AssetLike) {
+export function snapshotMediaReference(asset: AssetLike, includeFocalPoint = true) {
   if (!asset.filename || !asset.mimeType || !asset.width || !asset.height) throw new Error(`Asset ${asset.id} is missing immutable upload metadata.`)
   const original = trustedMedia(asset.filename)
   const variants = Object.fromEntries(Object.entries(MEDIA_VARIANTS).flatMap(([name, expected]) => {
@@ -108,6 +114,7 @@ export function snapshotMediaReference(asset: AssetLike) {
     ...(Object.keys(variants).length ? { variants } : {}),
     alt: asset.alt ?? undefined,
     decorative: asset.decorative === true,
+    ...(includeFocalPoint ? { focalX: canonicalFocalPoint(asset.focalX), focalY: canonicalFocalPoint(asset.focalY) } : {}),
     width: asset.width,
     height: asset.height,
     mimeType: asset.mimeType,

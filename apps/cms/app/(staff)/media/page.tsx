@@ -4,7 +4,8 @@ import { redirect } from 'next/navigation'
 import config from '../../../payload.config'
 import { hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
-import { mediaWorkspace } from '../../../src/media-workspace'
+import { mediaFocalContractVersion, mediaWorkspace } from '../../../src/media-workspace'
+import { loadInitialPreviewBaseline } from '../../../src/review-preview'
 import { StaffShell } from '../../components/staff-shell'
 import { MediaWorkspace } from './media-workspace'
-export default async function MediaPage() { const payload = await getPayload({ config }); const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user; if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login'); return <StaffShell><MediaWorkspace initial={await mediaWorkspace(payload, user as never)} /></StaffShell> }
+export default async function MediaPage() { const initialBaseline = await loadInitialPreviewBaseline(); const payload = await getPayload({ config }); const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user; if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login'); return <StaffShell><MediaWorkspace initial={{ ...await mediaWorkspace(payload, user as never), focalEditingAvailable: Boolean(await mediaFocalContractVersion(payload, initialBaseline)) }} /></StaffShell> }
