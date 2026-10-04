@@ -10,7 +10,8 @@ import { deriveRoutes } from '@site-engine/engine'
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
-type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string; baselineSnapshotID?: string; baselineSequence?: number }
+type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string; baselineSnapshotID?: string; baselineSequence?: number; versionPins?: PreviewVersions }
+type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[] }
 export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
 const MAX_PUBLISH_ATTEMPTS = 3
@@ -97,6 +98,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const redirects = new Map(base.redirects.map((redirect) => [redirect.from, structuredClone(redirect)]))
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
   let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
+  let selectedThemeTransition = false
   let siteSettings = structuredClone(base.settings) as Record<string, unknown>
   let styleGuide = structuredClone(base.styleGuide) as Record<string, unknown> | undefined
   const included = new Set(includedChangeKeys)
@@ -127,7 +129,11 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
         ? { selection: selectedTheme, settings: themeSettings, ...structuredClone(change.after) }
         : mergeCapturedChange({ selection: selectedTheme, settings: themeSettings }, change)
       if (!merged?.selection) throw new Error('Theme selection cannot be removed.')
-      selectedTheme = merged.selection as SiteSnapshot['settings']['theme']; Object.assign(themeSettings, merged.settings as Record<string, unknown>)
+      const nextSelection = merged.selection as SiteSnapshot['settings']['theme']
+      selectedThemeTransition ||= nextSelection?.contract !== selectedTheme?.contract
+        || nextSelection?.version !== selectedTheme?.version
+        || nextSelection?.manifestDigest !== selectedTheme?.manifestDigest
+      selectedTheme = nextSelection; Object.assign(themeSettings, merged.settings as Record<string, unknown>)
     }
     if (change.collection === 'site-settings') {
       // The singleton may be introduced after a baseline exists. Apply only its
@@ -170,7 +176,10 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     if (normalized.businessCase === null) delete normalized.businessCase
     return normalized
   })
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion: versions.contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  // Contract upgrades are only caused by the reviewed theme selection itself.
+  // Ordinary content edits keep the immutable baseline pin intact.
+  const contractVersion = selectedThemeTransition ? selectedTheme?.contract : versions.contractVersion
+  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const occupiedPaths = new Set(newRoutes.map(route => route.path))

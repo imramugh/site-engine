@@ -7,8 +7,10 @@ import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { transitionChangeSet } from '../src/editorial'
-import { canonicalHash, changeSetHash } from '../src/publishing'
-import { prepareReviewPreview } from '../src/review-preview'
+import { approveChangeSet, canonicalHash, changeSetHash } from '../src/publishing'
+import { claimPreviewRenderJob, completePreviewRenderJob, prepareReviewPreview } from '../src/review-preview'
+import { runReviewQuality } from '../src/review-quality'
+import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-theme-selection-'))
 const registryFile = join(directory, 'theme-registry.json')
@@ -17,7 +19,7 @@ const oldManifest = {
   name: 'synthetic-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js',
   standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} },
 }
-const manifest = { ...oldManifest, version: '2.4.7' }
+const manifest = { ...oldManifest, version: '2.4.7', contract: '1.1.0' }
 const registry = { themes: [{ manifest: oldManifest, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest, installedAt: '2026-10-04T00:00:00.000Z' }] }
 
 process.env.DATABASE_URI = `file:${db}`
@@ -77,9 +79,23 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
 
     expect(settings.selection).toEqual(selection)
     expect(proposed.settings.theme).toEqual(selection)
-    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0' })
+    expect(proposed.settings.contractVersion).toBe('1.1.0')
+    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.1.0', liveContractVersion: '1.0.0' })
     expect(proposed.settings.themeSettings).toEqual({ 'retained-theme': { tone: 'preserved' }, [manifest.name]: { tone: 'warm' } })
     expect((await payload.findByID({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })).manifest).toEqual(published)
     expect((await payload.find({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(1)
+
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease?.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'b'.repeat(64) }))
+    await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: set.id }))
+    const token = newOpaqueToken(); const now = new Date().toISOString()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const approved = await withPayloadTransaction(payload, req => {
+      req.headers = new Headers({ cookie: `site_engine_session=${token}` })
+      return approveChangeSet({ payload, req, actor: owner, id: set.id, expectedRevision: Number(submitted.revision), expectedChangeHash: changeSetHash(submitted.changes), includedChangeKeys: [`theme-settings:${change.id}`], previewContentHash: canonicalHash(proposed), versions: job.versionPins as { themeVersion: string; engineVersion: string; contractVersion: string }, initialBaseline: published })
+    })
+    const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: String(approved.snapshotID), overrideAccess: true })
+    expect(approvedSnapshot).toMatchObject({ contractVersion: '1.1.0', themeVersion: manifest.version })
+    expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.1.0')
   })
 })

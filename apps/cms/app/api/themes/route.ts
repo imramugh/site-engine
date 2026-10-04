@@ -4,6 +4,7 @@ import { withPayloadTransaction } from '../../../src/auth-transaction'
 import { createNamedChangeSet } from '../../../src/editorial'
 import { serverSessionStrategy } from '../../../src/identity'
 import { compatibilityReport, getInstalledTheme, installedThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
+import { SiteSnapshotSchema } from '@site-engine/contract'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,6 +33,23 @@ function publicSelection(value: ThemeSelection | null) {
   return value && { id: value.id, version: value.version, contract: value.contract }
 }
 
+/** A selection is reviewed as a candidate snapshot. This is the sole path
+ * that may advance a contract pin; ordinary editorial changes retain theirs. */
+function selectionCandidate(manifest: unknown, selection: ThemeSelection) {
+  const snapshot = SiteSnapshotSchema.parse(manifest)
+  const hasHeroExtensions = snapshot.pages.some((page) => page.blocks.some((block) => block.type === 'hero' && (block.secondaryCta || block.supportPanel)))
+  if (snapshot.settings.contractVersion === '1.1.0' && selection.contract === '1.0.0' && hasHeroExtensions) {
+    throw new Error('This theme would downgrade a snapshot that uses Hero supporting content.')
+  }
+  return SiteSnapshotSchema.parse({ ...snapshot, settings: { ...snapshot.settings, contractVersion: selection.contract, theme: selection } })
+}
+
+function compatibilityFor(manifest: unknown, installed: { manifest: Parameters<typeof compatibilityReport>[1]; manifestDigest: string }) {
+  const selection: ThemeSelection = { id: installed.manifest.name, version: installed.manifest.version, contract: installed.manifest.contract, manifestDigest: installed.manifestDigest }
+  try { return compatibilityReport(selectionCandidate(manifest, selection), installed.manifest) }
+  catch { return { compatible: false, actions: [{ action: 'contract-version', pageID: '', blockID: '', reason: 'theme-contract-transition-invalid' }] } }
+}
+
 async function currentState(payload: Awaited<ReturnType<typeof getPayload>>) {
   const [release, setting] = await Promise.all([
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true }),
@@ -57,7 +75,7 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>) {
       contract: installed.manifest.contract,
       standardBlocks: installed.manifest.standardBlocks,
       settingKeys: installed.manifest.settingKeys,
-      compatibility: compatibilityReport(state.manifest, installed.manifest),
+      compatibility: compatibilityFor(state.manifest, installed),
     })),
     publishedSelection: publicSelection(published),
     draftSelection: publicSelection(state.setting?.selection ?? null),
@@ -89,14 +107,15 @@ export async function POST(request: Request): Promise<Response> {
     const installed = getInstalledTheme(registry, body.id, body.version)
     if (!installed) throw new Error('Choose a currently installed theme version.')
     const state = await currentState(payload)
-    const compatibility = compatibilityReport(state.manifest, installed.manifest)
-    if (!compatibility.compatible) throw new Error('This theme cannot render the current published content.')
     const selection: ThemeSelection = {
       id: installed.manifest.name,
       version: installed.manifest.version,
       contract: installed.manifest.contract,
       manifestDigest: installed.manifestDigest,
     }
+    const candidate = selectionCandidate(state.manifest, selection)
+    const compatibility = compatibilityReport(candidate, installed.manifest)
+    if (!compatibility.compatible) throw new Error('This theme cannot render the current published content.')
     if (state.setting?.selection?.id === selection.id && state.setting.selection.version === selection.version && state.setting.selection.manifestDigest === selection.manifestDigest) throw new Error('This theme version is already the pending selection.')
 
     const result = await withPayloadTransaction(payload, async (req) => {

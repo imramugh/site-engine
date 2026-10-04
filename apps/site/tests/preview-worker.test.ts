@@ -9,7 +9,7 @@ import { buildSnapshot } from '../scripts/build-snapshot.mjs';
 import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-type PreviewPins = { engineVersion: string; themeVersion: string; contractVersion: string; liveThemeVersion?: string };
+type PreviewPins = { engineVersion: string; themeVersion: string; contractVersion: string; liveThemeVersion?: string; liveContractVersion?: string };
 const pins: PreviewPins = { engineVersion: '1.0.0', themeVersion: '1.0.0', contractVersion: '1.0.0' };
 const secret = 'synthetic-preview-worker-token-32-characters';
 const themeManifest = { name: 'synthetic-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } };
@@ -92,20 +92,22 @@ describe('durable preview rendering worker', () => {
   it('renders a retained live theme and selected proposed upgrade with separate immutable pins', async () => {
     const input = claim();
     const older = { ...themeManifest, version: '1.0.0' };
-    const newer = { ...themeManifest, version: '1.0.1' };
+    const newer = { ...themeManifest, version: '1.1.0', contract: '1.1.0' };
     const registry = parseThemeRegistry({ themes: [{ manifest: older, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest: newer, installedAt: '2026-10-04T00:00:00.000Z' }] });
     input.live.settings.theme = { id: older.name, version: older.version, contract: older.contract, manifestDigest: getInstalledTheme(registry, older.name, older.version)!.manifestDigest };
     input.proposed.settings.theme = { id: newer.name, version: newer.version, contract: newer.contract, manifestDigest: getInstalledTheme(registry, newer.name, newer.version)!.manifestDigest };
-    input.versionPins = { engineVersion: pins.engineVersion, contractVersion: pins.contractVersion, themeVersion: newer.version, liveThemeVersion: older.version };
+    input.proposed.settings.contractVersion = '1.1.0';
+    input.versionPins = { engineVersion: pins.engineVersion, contractVersion: '1.1.0', themeVersion: newer.version, liveThemeVersion: older.version, liveContractVersion: '1.0.0' };
     const seen: Array<Record<string, unknown>> = [];
     const render = async (rendererOptions: Record<string, unknown>) => { seen.push(rendererOptions); return buildSnapshot(rendererOptions as Parameters<typeof buildSnapshot>[0]); };
-    await expect(runPreviewOnce({ ...options(), api: async (action: string) => action === 'claim' ? input : { ok: true }, registry, render })).resolves.toBe(true);
+    await expect(runPreviewOnce({ ...options(), versionPins: { ...pins, contractVersion: '1.1.0', themeVersion: newer.version }, api: async (action: string) => action === 'claim' ? input : { ok: true }, registry, render })).resolves.toBe(true);
     expect(seen.map((item) => item.versionPins)).toEqual([
       { engineVersion: '1.0.0', contractVersion: '1.0.0', themeVersion: '1.0.0' },
-      { engineVersion: '1.0.0', contractVersion: '1.0.0', themeVersion: '1.0.1' },
+      { engineVersion: '1.0.0', contractVersion: '1.1.0', themeVersion: '1.1.0' },
     ]);
     expect(JSON.parse(await readFile(join(root, id, 'live', 'snapshot-manifest.json'), 'utf8')).sourceVersions.themeVersion).toBe('1.0.0');
-    expect(JSON.parse(await readFile(join(root, id, 'proposed', 'snapshot-manifest.json'), 'utf8')).sourceVersions.themeVersion).toBe('1.0.1');
+    const proposedArtifact = JSON.parse(await readFile(join(root, id, 'proposed', 'snapshot-manifest.json'), 'utf8'));
+    expect(proposedArtifact.sourceVersions).toMatchObject({ themeVersion: '1.1.0', contractVersion: '1.1.0' });
   }, 60_000);
 
   it('rejects a frozen theme selection whose digest does not match the installed registry before rendering', async () => {

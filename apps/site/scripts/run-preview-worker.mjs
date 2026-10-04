@@ -34,13 +34,14 @@ function claimInput(value, expectedVersions) {
     throw new WorkerError('INVALID_CLAIM');
   }
   const input = { job, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
-  if ([input.live, input.proposed].some(snapshot => snapshot.settings.contractVersion !== versionPins.contractVersion)) throw new WorkerError('INVALID_CLAIM');
+  const liveContractVersion = versionPins.liveContractVersion ?? versionPins.contractVersion;
+  if (input.proposed.settings.contractVersion !== versionPins.contractVersion || input.live.settings.contractVersion !== liveContractVersion) throw new WorkerError('INVALID_CLAIM');
   const selectedVersion = snapshot => snapshot.settings.theme?.version;
   const proposedThemeVersion = selectedVersion(input.proposed) ?? versionPins.themeVersion;
   const liveThemeVersion = selectedVersion(input.live) ?? versionPins.liveThemeVersion ?? versionPins.themeVersion;
   if (versionPins.themeVersion !== proposedThemeVersion || ('liveThemeVersion' in versionPins && versionPins.liveThemeVersion !== liveThemeVersion)) throw new WorkerError('INVALID_CLAIM');
   input.variantPins = {
-    live: { engineVersion: versionPins.engineVersion, contractVersion: versionPins.contractVersion, themeVersion: liveThemeVersion },
+    live: { engineVersion: versionPins.engineVersion, contractVersion: liveContractVersion, themeVersion: liveThemeVersion },
     proposed: { engineVersion: versionPins.engineVersion, contractVersion: versionPins.contractVersion, themeVersion: proposedThemeVersion },
   };
   return input;
