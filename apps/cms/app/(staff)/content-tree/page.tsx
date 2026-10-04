@@ -71,7 +71,8 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
     const counts = { all: allRows.length, draft: allRows.filter((row) => matchesDraft(row.page)).length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
     const visible = allRows.filter((row) => (filter === 'all' || (filter === 'draft' ? matchesDraft(row.page) : stateOf(row.page) === filter)) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
     const canCreate = hasRole(user as never, ['owner', 'editor'])
-    const pageHref = (id: string) => canCreate ? `/content-editor/${id}` : `/admin/collections/pages/${id}`
+    const canEdit = hasRole(user as never, ['owner', 'approver', 'editor'])
+    const pageHref = (id: string) => canEdit ? `/content-editor/${id}` : `/admin/collections/pages/${id}`
     return <StaffShell><main data-content-tree>
       <h1 className={styles.visuallyHidden}>Content</h1>
       <section className={styles.contentList} aria-label="Content pages" data-content-list data-testid="content-list">

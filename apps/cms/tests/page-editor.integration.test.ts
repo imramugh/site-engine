@@ -9,6 +9,7 @@ import {
   applyPageEditorSave,
   executePageEditorSave,
   pageEditorHash,
+  pageEditorContext,
   pageEditorProjection,
   parsePageEditorDraft,
 } from '../src/page-editor'
@@ -349,7 +350,88 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
           save: input,
         }),
       ),
+    ).rejects.toThrow('CHANGE_SET_NOT_EDITABLE')
+
+    const approverDraft = await fixture(approver)
+    const approverInput = save(
+      approverDraft.page as unknown as Record<string, unknown>,
+      approverDraft.set,
+      'Approver-owned revision',
+    )
+    await expect(
+      withPayloadTransaction(payload, (req) =>
+        applyPageEditorSave({
+          payload,
+          req,
+          actor: approver as never,
+          save: approverInput,
+        }),
+      ),
+    ).resolves.toMatchObject({ changeSetRevision: 1, noOp: false })
+    const approverSectionID =
+      typeof approverDraft.page.sectionId === 'string'
+        ? approverDraft.page.sectionId
+        : approverDraft.page.sectionId.id
+    await expect(
+      payload.update({
+        collection: 'sections',
+        id: approverSectionID,
+        data: { name: 'Approver must not restructure sections' },
+        user: approver,
+        overrideAccess: false,
+      }),
+    ).rejects.toThrow('not allowed')
+    await expect(
+      payload.create({
+        collection: 'pages',
+        data: {
+          title: 'Approver cannot create a page',
+          summary:
+            'This otherwise valid page must be denied by canonical create access.',
+          slug: `approver-create-${randomUUID().slice(0, 8)}`,
+          sectionId: approverDraft.page.sectionId,
+          template: 'standard',
+          blocks: [],
+        },
+        user: approver,
+        overrideAccess: false,
+      }),
+    ).rejects.toThrow('not allowed')
+
+    const approverCookie = await session(approver)
+    expect(
+      (
+        await editorRoute.GET(
+          new Request('http://cms.test/api/editorial/page-editor/id', {
+            headers: { cookie: approverCookie },
+          }),
+          { params: Promise.resolve({ id: approverDraft.page.id }) },
+        )
+      ).status,
+    ).toBe(200)
+    await payload.update({
+      collection: 'users',
+      id: approver.id,
+      data: { disabled: true },
+      overrideAccess: true,
+    })
+    await expect(
+      pageEditorContext(
+        payload,
+        { id: approver.id, roles: ['approver'], disabled: true },
+        approverDraft.page.id,
+      ),
     ).rejects.toThrow('EDITOR_ROLE_REQUIRED')
+    expect(
+      (
+        await editorRoute.GET(
+          new Request('http://cms.test/api/editorial/page-editor/id', {
+            headers: { cookie: approverCookie },
+          }),
+          { params: Promise.resolve({ id: approverDraft.page.id }) },
+        )
+      ).status,
+    ).toBe(401)
     await payload.update({
       collection: 'change-sets',
       id: current.set.id,

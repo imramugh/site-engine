@@ -196,7 +196,7 @@ export async function applyPageEditorSave(input: {
   save: PageEditorSave
 }): Promise<PageEditorSaveResult> {
   const { payload, req, actor, save } = input
-  if (!hasRole(actor, ['owner', 'editor']))
+  if (!hasRole(actor, ['owner', 'approver', 'editor']))
     throw new Error('EDITOR_ROLE_REQUIRED')
   if (
     !uuid.test(save.pageID) ||
@@ -340,7 +340,7 @@ export async function pageEditorContext(
   actor: PageEditorActor,
   pageID: string,
 ) {
-  if (!hasRole(actor, ['owner', 'editor']) || !uuid.test(pageID))
+  if (!hasRole(actor, ['owner', 'approver', 'editor']) || !uuid.test(pageID))
     throw new Error('EDITOR_ROLE_REQUIRED')
   const [page, sets, pages, sections, assets, releases] = await Promise.all([
     payload.findByID({

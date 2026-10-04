@@ -23,6 +23,14 @@ const editorialAccess = {
   delete: () => false,
 }
 
+// Approvers may revise page copy and blocks through the captured draft
+// workflow. Broader content structure, media, redirects and administration
+// retain their narrower Owner/Editor policies.
+const pageEditorialAccess = {
+  ...editorialAccess,
+  update: staff(editorialRoles),
+}
+
 // Page titles follow the shared PageSchema. Other CMS collections define their
 // own title fields and do not inherit this page-specific contract boundary.
 const pageTitle = {
@@ -169,7 +177,7 @@ export const Pages: CollectionConfig = {
   slug: 'pages',
   admin: { useAsTitle: 'title', defaultColumns: ['title', 'slug', 'parent', 'updatedAt'] },
   versions: { drafts: { autosave: true }, maxPerDoc: 50 },
-  access: editorialAccess,
+  access: pageEditorialAccess,
   hooks: {
     beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
