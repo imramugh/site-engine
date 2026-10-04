@@ -1,3 +1,4 @@
+import styles from './admin-dashboard.module.css'
 import { headers } from 'next/headers'
 import { getPayload } from 'payload'
 import config from '../../payload.config'
@@ -23,7 +24,7 @@ export async function AdminDashboard() {
   const endpoint = new URL('/mcp', process.env.PAYLOAD_PUBLIC_SERVER_URL || 'http://localhost:3000').href
   const summary = [reviews ? `${reviews.total} review${reviews.total === 1 ? '' : 's'} waiting` : '', data.leads ? `${data.leads.new} new lead${data.leads.new === 1 ? '' : 's'}${data.leads.urgent ? `, including ${data.leads.urgent} urgent` : ''}` : ''].filter(Boolean).join(' · ')
 
-  return <main className="admin-dashboard" aria-labelledby="admin-dashboard-title">
+  return <main className={`admin-dashboard ${styles.dashboard}`} aria-labelledby="admin-dashboard-title">
     <header data-dashboard-greeting>
       <div><h2 id="admin-dashboard-title">{greeting()}</h2><p>{summary || 'Your workspace is ready.'}</p></div>
       {data.actions.length > 0 && <div data-dashboard-actions>{data.actions.map(action => action.href === '/integrations' ? <details key={action.href} data-dashboard-connect><summary>Connect an assistant</summary><div><h3>Connect your MCP client</h3><p>Add a remote MCP connection using this address, then sign in with your staff account and approve the requested access.</p><label>Server address<input readOnly value={endpoint} /></label><p>Microsoft or Google login is not required when your local account is enabled.</p></div></details> : <a key={action.href} href={action.href}>{action.label}</a>)}</div>}
