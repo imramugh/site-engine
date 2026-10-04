@@ -6,5 +6,5 @@
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }, "./components/Layout.astro": "./src/components/Layout.astro", "./components/BlockRenderer.astro": "./src/components/BlockRenderer.astro", "./theme.json": "./theme.json" },
   "files": ["dist", "src/components", "theme.json"],
   "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc --noEmit", "lint": "tsc --noEmit" },
-  "dependencies": { "@site-engine/contract": "workspace:^" }
+  "dependencies": { "@site-engine/contract": "workspace:^", "@site-engine/engine": "workspace:^" }
 }

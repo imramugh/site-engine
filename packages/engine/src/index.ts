@@ -1,6 +1,8 @@
 import { SiteSnapshotSchema, ThemeInstallSchema, type Page, type Section, type SiteSnapshot, type Block, type PublicRoute, type RouteModel } from '@site-engine/contract';
 export type { PublicRoute, RouteModel } from '@site-engine/contract';
 
+export const HEADER_SERVICE_LIMIT = 6;
+
 export function validateThemeInstall(input: unknown) { return ThemeInstallSchema.safeParse(input); }
 export function visibleBlocks(snapshot: SiteSnapshot): Block[] { return snapshot.pages.filter((page) => page.status === 'published').flatMap((page) => page.blocks).filter((block) => !block.hidden); }
 
@@ -45,7 +47,8 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
     routes.push(route); byPath.set(path, route);
   }
   if (!byPath.has('/')) throw new Error('Homepage cannot be hidden by an unpublished ancestor');
-  for (const section of snapshot.settings.sections) if (section.pageIds.length > 8) warnings.push(`Section ${section.slug} has more than eight pages; excess pages are footer-only.`);
+  const services = routes.filter((route) => route.page.template === 'service');
+  if (services.length > HEADER_SERVICE_LIMIT) warnings.push(`Header has more than ${HEADER_SERVICE_LIMIT} service pages; excess services are footer-only.`);
   const redirects = new Map<string, string>();
   for (const redirect of snapshot.redirects) { if (byPath.has(redirect.from)) throw new Error(`Redirect ${redirect.from} conflicts with a published route`); if (!byPath.has(redirect.to)) warnings.push(`Redirect ${redirect.from} points to an unavailable route ${redirect.to}`); else redirects.set(redirect.from, redirect.to); }
   return { routes, byPath, redirects, warnings };
@@ -53,6 +56,9 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
 
 export function childrenOf(route: PublicRoute, model: RouteModel): PublicRoute[] { return model.routes.filter((candidate) => candidate.page.parentId === route.page.id); }
 export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title)); }
+
+/** Header exposes a bounded service list; the footer retains every published service. */
+export function headerServiceNavigation(model: RouteModel): PublicRoute[] { return serviceNavigation(model).slice(0, HEADER_SERVICE_LIMIT); }
 export {
   effectiveMotion,
   motionPreferenceKey,
