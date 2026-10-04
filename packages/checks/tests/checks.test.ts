@@ -85,6 +85,16 @@ describe('ENG-011 deterministic readiness report', () => {
     expect(checkSiteSnapshot(snapshot, { asOf }).blockers.filter(issue => issue.code === 'INTERNAL_LINK_BROKEN')).toEqual([])
   })
 
+  it('checks optional hero action and supporting-panel links', () => {
+    const snapshot = structuredClone(neutralFixture)
+    const hero = snapshot.pages[0]!.blocks[0]!
+    if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.')
+    hero.secondaryCta = { label: 'Missing option', href: '/missing-option' }
+    hero.supportPanel = { heading: 'Supporting information', body: 'Neutral supporting information.', cta: { label: 'Missing details', href: '/missing-details' } }
+    const paths = checkSiteSnapshot(snapshot, { asOf }).blockers.filter(issue => issue.code === 'INTERNAL_LINK_BROKEN').map(issue => issue.path)
+    expect(paths).toEqual(expect.arrayContaining(['pages.0.blocks.0.secondaryCta.href', 'pages.0.blocks.0.supportPanel.cta.href']))
+  })
+
   it('keeps style, freshness, FAQ, lengths, and orphan checks as visible warnings', () => {
     const snapshot = structuredClone(neutralFixture)
     const page = snapshot.pages[0]!

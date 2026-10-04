@@ -20,12 +20,14 @@ export const AppearanceSchema = z.object({
 }).strict();
 
 const InternalPathSchema = z.string().max(240).regex(/^\/(?!\/)(?!.*[\\\u0000-\u001f])[a-z0-9/_-]*$/i, 'Expected a safe root-relative path');
-const LinkSchema = z.object({ label: safeText(80), href: InternalPathSchema }).strict();
+/** A visitor-facing internal navigation target. Renderers must still treat this
+ * as untrusted input at their boundary. */
+export const LinkSchema = z.object({ label: safeText(80), href: InternalPathSchema }).strict();
 // Plain text is escaped by renderers. Structured rich text is a separate editor format.
 const RichTextSchema = z.string().trim().min(1).max(10_000).refine((v) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(v), 'Control characters are not allowed');
 const BaseBlockSchema = z.object({ id, hidden: z.boolean().default(false), anchorId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), appearance: AppearanceSchema });
 export const BlockSchemas = {
-  hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional() }).strict(),
+  hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), secondaryCta: LinkSchema.optional(), supportPanel: z.object({ eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional() }).strict().optional() }).strict(),
   incidentBar: BaseBlockSchema.extend({ type: z.literal('incidentBar'), message: safeText(240), cta: LinkSchema.optional() }).strict(),
   pillarGrid: BaseBlockSchema.extend({ type: z.literal('pillarGrid'), heading: safeText(120), items: z.array(z.object({ title: safeText(100), body: safeText(300), href: InternalPathSchema }).strict()).min(1).max(12) }).strict(),
   featureGrid: BaseBlockSchema.extend({ type: z.literal('featureGrid'), heading: safeText(120), items: z.array(z.object({ title: safeText(100), body: safeText(300) }).strict()).min(1).max(12) }).strict(),

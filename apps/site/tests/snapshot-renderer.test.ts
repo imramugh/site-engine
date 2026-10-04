@@ -173,6 +173,8 @@ describe('static snapshot renderer', () => {
     expect(html).not.toMatch(/<style(?:\s|>)/i);
     expect(html).toMatch(/<link[^>]+rel="stylesheet"[^>]+href="\/preview\//);
     expect(html).not.toContain('>Search<');
+    expect(html).not.toContain('hero__support');
+    expect(html).not.toContain('data-secondary-cta');
     expect(Object.keys(alphaBuild.manifest.files).some(path => path.endsWith('.css'))).toBe(true);
     browserOutput = alphaBuild.output;
   }, 180_000);
@@ -230,6 +232,38 @@ describe('static snapshot renderer', () => {
       served.server.close();
       await browser.close();
     }
+  }, 120_000);
+
+  it('ENG-002 ENG-005 renders optional hero actions and supporting information accessibly at desktop and mobile widths', async () => {
+    const snapshot = fixture('Hero supporting content');
+    const hero = snapshot.pages[0]!.blocks[0]!;
+    if (hero.type !== 'hero') throw new Error('Fixture must begin with a hero.');
+    hero.secondaryCta = { label: 'Compare options', href: '/docs' };
+    hero.supportPanel = { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review this neutral supporting information before continuing. <img id="hero-injected" src=x onerror=alert(1)>', cta: { label: 'Read details', href: '/docs' } };
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'hero-supporting-content.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const served = await staticServer(built.output, '/');
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${served.origin}/`, { waitUntil: 'networkidle' });
+      expect(await page.locator('[data-primary-cta]').count()).toBe(1);
+      expect(await page.locator('[data-secondary-cta]').count()).toBe(1);
+      expect(await page.getByRole('link', { name: 'Compare options' }).getAttribute('href')).toBe('/docs');
+      const support = page.getByRole('complementary', { name: 'Before you begin' });
+      expect(await support.textContent()).toContain('Review this neutral supporting information');
+      expect(await page.locator('#hero-injected').count()).toBe(0);
+      expect(await support.getByRole('link', { name: 'Read details' }).getAttribute('href')).toBe('/docs');
+      await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await page.locator('.hero--with-panel').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(width === 1280 ? 2 : 1);
+        const violations = await page.evaluate(async () => {
+          const axe = (window as typeof window & { axe: { run: (context: string, options: unknown) => Promise<{ violations: unknown[] }> } }).axe;
+          return (await axe.run('.hero', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations;
+        });
+        expect(violations).toEqual([]);
+      }
+    } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }
   }, 120_000);
 
   it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {

@@ -52,6 +52,21 @@ describe('ENG-002 versioned contract', () => {
     expect(BlockSchema.safeParse({ ...cta, cta: { label: 'Read', href } }).success).toBe(false);
   });
 
+  it('accepts optional hero supporting content while preserving legacy heroes and rejecting unsafe nested links', () => {
+    const legacy = { id: blockId, type: 'hero' as const, heading: 'A clear heading', body: 'A clear body.', appearance };
+    const enhanced = {
+      ...legacy,
+      secondaryCta: { label: 'Compare options', href: '/options' },
+      supportPanel: { eyebrow: 'Helpful context', heading: 'Before you begin', body: 'Review the neutral supporting information.', cta: { label: 'Read details', href: '/details' } },
+    };
+    expect(BlockSchema.safeParse(legacy).success).toBe(true);
+    expect(BlockSchema.safeParse(enhanced).success).toBe(true);
+    expect(BlockSchema.safeParse({ ...enhanced, secondaryCta: { label: 'Unsafe', href: 'javascript:alert(1)' } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, cta: { label: 'Unsafe', href: '//evil.example/path' } } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { heading: '', body: 'Missing heading.' } }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...enhanced, supportPanel: { ...enhanced.supportPanel, extra: '<script>alert(1)</script>' } }).success).toBe(false);
+  });
+
   it('requires testimonial permission to be recorded, while allowing unapproved drafts', () => {
     const testimonial = { id: blockId, type: 'testimonials', appearance, items: [{ quote: 'Synthetic quote', attribution: 'Example Person' }] };
     expect(BlockSchema.safeParse(testimonial).success).toBe(false);
