@@ -4,7 +4,7 @@ import { executeConfiguredAIJob, type AIConfigurationSnapshot, type ProviderFetc
 import { beginConfiguredAIJob, claimConfiguredAIJob, completeConfiguredAIJob, failUnbegunConfiguredAIJob, manualReviewConfiguredAIJob, renewConfiguredAIJob } from './configured-ai-job-lifecycle'
 import type { IntegrationProvider } from './integrations'
 
-type StoredJob = { id: string; state: string; leaseToken?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; maxOutputTokens: number; configurationSnapshot: unknown }
+type StoredJob = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; maxOutputTokens: number; configurationSnapshot: unknown }
 export type ClaimedConfiguredAIJob = { job: StoredJob; leaseToken: string }
 export type ConfiguredAIExecutionOptions = { transport: ProviderFetch; now?: Date; clock?: () => Date; timeoutMs?: number }
 
@@ -43,6 +43,8 @@ export async function executeClaimedConfiguredAIJob(payload: Payload, claim: Cla
   const snapshot = snapshots(job.configurationSnapshot)
   if (!job.leaseToken || expectedToken !== job.leaseToken || job.state !== 'running') throw new Error('LEASE_INVALID')
   if (job.dispatchStartedAt) {
+    const expiresAt = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN
+    if (Number.isFinite(expiresAt) && expiresAt > clock().getTime()) throw new Error('ALREADY_DISPATCHED')
     await manualReviewConfiguredAIJob(payload, job.id, 'DISPATCH_RECOVERY_REQUIRED', expectedToken)
     throw new Error('AI_JOB_UNAVAILABLE')
   }

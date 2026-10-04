@@ -199,6 +199,18 @@ describe('configured AI job CMS execution', () => {
     await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'running', leaseToken: second.leaseToken, dispatchStartedAt: null })
   })
 
+  it('leaves an active begun lease alone when the same claim is submitted twice', async () => {
+    await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0; let release: (() => void) | undefined; let entered: (() => void) | undefined
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve })
+    const first = executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async () => { calls += 1; entered?.(); await new Promise<void>(resolve => { release = resolve }); return answer() } })
+    await enteredPromise
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async () => { calls += 1; return answer() } })).rejects.toThrow('ALREADY_DISPATCHED')
+    expect(calls).toBe(1)
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'running', leaseToken: claimed.leaseToken, dispatchStartedAt: expect.any(String) })
+    release?.()
+    await expect(first).resolves.toMatchObject({ state: 'completed' })
+  })
+
   it('reports the full held reservation when an unavailable primary falls back successfully', async () => {
     await usableConfiguration()
     await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-test', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback-fingerprint', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-04T00:00:00.000Z' }, overrideAccess: true })
@@ -209,5 +221,19 @@ describe('configured AI job CMS execution', () => {
     expect(JSON.parse(completed.result)).toMatchObject({ reservedMicroUsd: 4, usageCostMicroUsd: null, costStatus: 'reserved', usedProvider: 'anthropic', fallbackUsed: true })
     const reservations = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
     expect(reservations.docs).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'reserved' }), expect.objectContaining({ state: 'settled', settledMicroUsd: 2 })]))
+  })
+
+  it('fails closed if configuration rotates between preflight and transactional reservation', async () => {
+    const primary = await usableConfiguration()
+    await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-test', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback-fingerprint', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-04T00:00:00.000Z' }, overrideAccess: true })
+    const queuedJob = await enqueueConfiguredAIJob(payload, ownerID, { ...input, fallbackProvider: 'anthropic', idempotencyKey: `rotation-race-${randomBytes(8).toString('hex')}` }); const claimed = await claim(); let configReads = 0; let calls = 0
+    const racedPayload = Object.create(payload) as any
+    racedPayload.findByID = async (args: any) => {
+      if (args.collection === 'integration-configurations' && ++configReads === 3) await payload.update({ collection: 'integration-configurations', id: primary.id, data: { model: 'rotated-in-transaction' }, overrideAccess: true })
+      return payload.findByID(args)
+    }
+    await expect(executor.executeClaimedConfiguredAIJob(racedPayload, claimed, { now, transport: async () => { calls += 1; return answer() } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(0)
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN' })
   })
 })

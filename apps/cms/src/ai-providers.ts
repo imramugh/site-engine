@@ -18,11 +18,12 @@ export const providerCapabilities: Record<IntegrationProvider, ProviderCapabilit
 export type ProviderFetch = (request: Request) => Promise<Response>
 export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd | null; reservedMicroUsd: MicroUsd; usageCostStatus: 'actual' | 'reserved' }
 type TokenUsage = { inputTokens: number; outputTokens: number }
-type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' }
+type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' | 'snapshot-stale' }
 type StoredConfiguration = Record<string, unknown> & { id: string; provider: IntegrationProvider; model: string; encryptedCredential?: string | null; credentialFingerprint?: string | null; monthlyCapMicroUsd?: number | null; monthlyUsageMicroUsd?: number | null; usageMonth?: string | null; health?: string | null; inputMicroUsdPerMillionTokens?: number | null; outputMicroUsdPerMillionTokens?: number | null; pricingSource?: string | null; pricingAsOf?: string | null }
 type Pricing = { inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; source: string; asOf: string }
 type UsageReservation = Record<string, unknown> & { id: string; configuration: string | { id: string }; executionKey: string; usageMonth: string; reservedMicroUsd: number; settledMicroUsd?: number | null; state: 'reserved' | 'settled' | 'released' }
 type Reservation = { id: string; config: StoredConfiguration; pricing: Pricing; reservedMicroUsd: MicroUsd; usageMonth: string }
+const SNAPSHOT_STALE = 'AI_JOB_SNAPSHOT_STALE'
 const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
@@ -173,7 +174,7 @@ async function reserve(
   now: Date,
   snapshot?: AIConfigurationSnapshot,
   executionKey?: string,
-): Promise<Reservation | undefined> {
+): Promise<Reservation | 'snapshot-stale' | undefined> {
   const usageMonth = monthAt(now);
   try {
     return await withPayloadTransaction(payload, async (req) => {
@@ -184,11 +185,11 @@ async function reserve(
         overrideAccess: true,
         req,
       })) as unknown as StoredConfiguration;
+      if (snapshot && !sameSnapshot(current, snapshot)) throw new Error(SNAPSHOT_STALE)
       if (
         current.provider !== provider ||
         !current.encryptedCredential ||
-        current.health === "revoked" ||
-        (snapshot && !sameSnapshot(current, snapshot))
+        current.health === "revoked"
       )
         return undefined;
       const pricing = pricingFor(current);
@@ -274,7 +275,8 @@ async function reserve(
         usageMonth,
       };
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === SNAPSHOT_STALE) return 'snapshot-stale'
     return undefined;
   }
 }
@@ -352,14 +354,16 @@ export async function executeConfiguredAIJob(payload: Payload, job: AIJob, optio
     const snapshot = options.configurationSnapshot?.find(candidate => candidate.provider === provider)
     if (options.configurationSnapshot && !snapshot) return { outcome: 'rejected' }
     const config = snapshot ? await payload.findByID({ collection: 'integration-configurations', id: snapshot.id, depth: 0, overrideAccess: true }) as unknown as StoredConfiguration : await configuration(payload, provider)
-    if (!config || !config.encryptedCredential || config.health === 'revoked' || (snapshot && !sameSnapshot(config, snapshot))) return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
+    if (snapshot && (!config || !sameSnapshot(config, snapshot))) return { outcome: 'snapshot-stale' }
+    if (!config || !config.encryptedCredential || config.health === 'revoked') return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
     const reservation = await reserve(payload, config.id, provider, job, now, snapshot, options.executionKey?.(provider))
+    if (reservation === 'snapshot-stale') return { outcome: 'snapshot-stale' }
     if (!reservation) return { outcome: 'unavailable' }
     let credential: string
     try { credential = decryptCredential(reservation.config.encryptedCredential!, provider) } catch { await settle(payload, reservation, undefined, 'rejected', now); return { outcome: 'rejected' } }
     const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
-    await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome, now)
+    await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome === 'rejected' ? 'rejected' : 'unavailable', now)
     return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : { ...result, reservedMicroUsd: result.outcome === 'unavailable' ? reservation.reservedMicroUsd : 0, usageCostMicroUsd: null, usageCostStatus: result.outcome === 'unavailable' ? 'reserved' : 'actual' }
   }
   const primary = await attempt(job.provider)
