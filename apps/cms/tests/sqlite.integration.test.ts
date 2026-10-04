@@ -174,6 +174,12 @@ describe('ENG-003 content-tree and template invariants through the Payload API',
     ...(parentId ? { parentId } : {}),
   })
 
+  it('ENG-002 returns a field-level API error for an undeclared appearance value', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'appearance-owner@example.test', name: 'Appearance Owner', roles: ['owner'] }, overrideAccess: true })
+    const section = await payload.create({ collection: 'sections', data: { name: 'Appearance', summary: 'Synthetic section for contract appearance validation.', slug: 'appearance-contract', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
+    await expect(payload.create({ collection: 'pages', data: { ...pageData('invalid-appearance', section.id, 'standard'), blocks: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', type: 'hero', heading: 'Valid heading', body: 'Valid body.', hidden: false, appearance: { background: 'raw-colour', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: owner, overrideAccess: false })).rejects.toMatchObject({ data: { errors: expect.arrayContaining([expect.objectContaining({ path: 'blocks.0.appearance.background' })]) } })
+  })
+
   it('enforces section policy, template parents, moves, subtree depth, and policy changes', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'tree-owner@example.test', name: 'Tree Owner', roles: ['owner'] }, overrideAccess: true })
     const services = await payload.create({
