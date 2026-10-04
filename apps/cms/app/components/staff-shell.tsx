@@ -11,12 +11,6 @@ export async function StaffShell({ children }: { children: ReactNode }) {
   const authenticated = await serverSessionStrategy.authenticate({ headers: await headers(), payload })
   return <div className={styles.workspace} data-admin-shell data-testid="admin-shell">
     <WorkspaceNavigation user={authenticated.user as { name?: string | null; email?: string | null; roles?: string[] | null } | null} />
-    <div className={styles.adminWorkspace} data-admin-workspace id="admin-workspace">
-      <header className={styles.header} data-admin-header>
-        <a href="/admin">Workspace overview</a>
-        <a href="/">View site</a>
-      </header>
-      {children}
-    </div>
+    <div className={styles.adminWorkspace} data-admin-workspace id="admin-workspace">{children}</div>
   </div>
 }
