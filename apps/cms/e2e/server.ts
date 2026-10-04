@@ -265,7 +265,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await claimPreviewRenderJob(payload, req)
       if (!job) throw new Error('No claimable preview job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
         if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
         throw new Error('Unsupported preview worker action.')
