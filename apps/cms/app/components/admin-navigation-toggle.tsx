@@ -46,12 +46,12 @@ export function AdminNavigationToggle({ items, collections, displayName, roles }
         <summary>CMS collections</summary>
         <nav className={styles.adminLinks} aria-label="CMS collections">{collections.map(link)}</nav>
       </details> : null}
-      <footer className={styles.adminAccount} aria-label="Account menu">
-        <span>{displayName}</span>
+      <details className={styles.adminAccount} aria-label="Account menu">
+        <summary>{displayName}</summary>
         <span className={styles.roleList}>{roles.join(', ') || 'staff'}</span>
         <a href="/admin/account">Account</a>
         <a href="/admin/logout">Log out</a>
-      </footer>
+      </details>
     </div>
   </>
 }
