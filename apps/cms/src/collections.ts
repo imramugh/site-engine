@@ -1,7 +1,7 @@
 import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
-import { ChangeSetSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { ChangeSetSchema, CmsPageFieldConfig, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
@@ -23,7 +23,7 @@ const editorialAccess = {
   delete: () => false,
 }
 
-const title = { name: 'title', type: 'text' as const, required: true, maxLength: 180 }
+const title = { name: 'title', type: 'text' as const, required: true, maxLength: CmsPageFieldConfig.title.maxLength }
 
 function contractError(result: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }, req?: PayloadRequest, collection?: string): void {
   if (result.success) return
@@ -212,8 +212,8 @@ export const Pages: CollectionConfig = {
     },
     { name: 'sectionId', type: 'relationship', relationTo: 'sections', required: true, admin: { description: 'Required content section.' } },
     { name: 'parentId', type: 'relationship', relationTo: 'pages', admin: { description: 'Parent page for tree-oriented navigation.' } },
-    { name: 'summary', type: 'textarea', required: true, minLength: 24, maxLength: 300, admin: { description: 'Write one or two sentences for listings and editorial context.' } },
-    { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job'] },
+    { name: 'summary', type: 'textarea', required: true, minLength: CmsPageFieldConfig.summary.minLength, maxLength: CmsPageFieldConfig.summary.maxLength, admin: { description: 'Write one or two sentences for listings and editorial context.' } },
+    { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: CmsPageFieldConfig.templateOptions },
     { name: 'status', type: 'select', defaultValue: 'draft', options: ['draft', 'published', 'archived'], admin: { readOnly: true } },
     { name: 'blocks', type: 'json', defaultValue: [] },
     { name: 'seoDescription', type: 'text', maxLength: 160 },

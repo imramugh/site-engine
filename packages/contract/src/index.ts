@@ -21,6 +21,8 @@ export const AppearanceOptions = Object.freeze({
   logoTones: LogoToneSchema.options,
 });
 export type AppearanceOptions = typeof AppearanceOptions;
+/** Metadata consumed by the existing CMS field factory; validation remains the
+ * strict PageSchema/BlockSchema boundary so JSON storage does not drift. */
 export const AppearanceSchema = z.object({
   background: BackgroundSchema.default('default'), width: WidthSchema.default('content'),
   spacing: SpacingSchema.default('default'), motionIntent: MotionIntentSchema.default('none'),
@@ -65,6 +67,7 @@ export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, Bloc
 export type Block = z.infer<typeof BlockSchema>;
 
 export const TemplateSchema = z.enum(['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job']);
+export const CmsPageFieldConfig = Object.freeze({ title: { maxLength: 180 }, summary: { minLength: 24, maxLength: 300 }, templateOptions: TemplateSchema.options, blocks: { schema: 'BlockSchema', strict: true } });
 const generalBlocks = Object.keys(BlockSchemas).filter((type) => type !== 'contact') as Block['type'][];
 export const TemplateAllowedBlocks: Record<z.infer<typeof TemplateSchema>, readonly Block['type'][]> = {
   landing: generalBlocks,
