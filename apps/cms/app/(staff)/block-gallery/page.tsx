@@ -1,11 +1,11 @@
 import { getPayload } from 'payload'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import config from '../../payload.config'
-import { hasRole } from '../../src/access'
-import { blockCatalog, appearanceOptions } from '../../src/block-gallery'
-import { serverSessionStrategy } from '../../src/identity'
-import { StaffShell } from '../components/staff-shell'
+import config from '../../../payload.config'
+import { hasRole } from '../../../src/access'
+import { blockCatalog, appearanceOptions } from '../../../src/block-gallery'
+import { serverSessionStrategy } from '../../../src/identity'
+import { StaffShell } from '../../components/staff-shell'
 import { BlockGallery } from './block-gallery'
 
 export default async function BlockGalleryPage() {

@@ -1,4 +1,4 @@
-import { StaffShell } from '../components/staff-shell'
+import { StaffShell } from '../../components/staff-shell'
 import { ThemeChooser } from './theme-chooser'
 
 export default function ThemesPage() {

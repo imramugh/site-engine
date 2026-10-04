@@ -1,10 +1,10 @@
-import { StaffShell } from '../components/staff-shell'
+import { StaffShell } from '../../components/staff-shell'
 import { getPayload } from 'payload'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import config from '../../payload.config'
-import { hasRole } from '../../src/access'
-import { serverSessionStrategy } from '../../src/identity'
+import config from '../../../payload.config'
+import { hasRole } from '../../../src/access'
+import { serverSessionStrategy } from '../../../src/identity'
 import { LeadDashboard } from './lead-dashboard'
 
 export default async function LeadsPage() {
