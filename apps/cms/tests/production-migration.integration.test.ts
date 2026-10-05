@@ -18,6 +18,7 @@ const searchControlsMigration = '20261003_210000_search_controls'
 const styleGuidesMigration = '20261003_220000_style_guides'
 const sectionLandingMigration = '20261003_230000_section_landing_page'
 const siteIdentityMigration = '20261005_114210_site_identity_navigation_1_5'
+const crawlerPolicyMigration = '20261005_164500_crawler_policy_1_7'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -167,15 +168,20 @@ describe('production migrations (ENG-036)', () => {
       'DROP TABLE site_settings',
       `DELETE FROM payload_migrations WHERE name = '${siteSettingsMigration}'`,
       `DELETE FROM payload_migrations WHERE name = '${siteIdentityMigration}'`,
+      `DELETE FROM payload_migrations WHERE name = '${crawlerPolicyMigration}'`,
     ]) await sqlite.execute(statement)
     const siteSettingsForward = migrate()
     expect(siteSettingsForward.status, siteSettingsForward.stderr || siteSettingsForward.stdout).toBe(0)
     const siteSettingsColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('key', 'site_name', 'default_locale')")
     expect(siteSettingsColumns.rows.map((row) => row.name)).toEqual(['key', 'site_name', 'default_locale'])
+    const crawlerPolicyColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name = 'crawler_policy'")
+    expect(crawlerPolicyColumns.rows.map((row) => row.name)).toEqual(['crawler_policy'])
     const lockColumns = await sqlite.execute("SELECT name FROM pragma_table_info('payload_locked_documents_rels') WHERE name = 'site_settings_id'")
     expect(lockColumns.rows.map((row) => row.name)).toEqual(['site_settings_id'])
     const siteSettingsApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${siteSettingsMigration}'`)
     expect(siteSettingsApplied.rows.map((row) => row.name)).toEqual([siteSettingsMigration])
+    const crawlerPolicyApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${crawlerPolicyMigration}'`)
+    expect(crawlerPolicyApplied.rows.map((row) => row.name)).toEqual([crawlerPolicyMigration])
 
     // Reconstruct the persisted schema before reviewed search controls and
     // replay the production migrator. Pages are versioned, so both the live
@@ -221,5 +227,5 @@ describe('production migrations (ENG-036)', () => {
     const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
     expect(verify.status, verify.stderr || verify.stdout).toBe(0)
     } finally { rmSync(directory, { recursive: true, force: true }) }
-  }, 90_000)
+  }, 120_000)
 })
