@@ -116,6 +116,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-editor@example.test', name: 'MCP Editor', roles: ['editor'] }, overrideAccess: true })
   const approver = await payload.create({ collection: 'users', data: { email: 'mcp-approver@example.test', name: 'MCP Approver', roles: ['approver'] }, overrideAccess: true })
   const owner = await payload.create({ collection: 'users', data: { email: 'mcp-owner@example.test', name: 'MCP Owner', roles: ['owner'] }, overrideAccess: true })
+  const sales = await payload.create({ collection: 'users', data: { email: 'mcp-sales@example.test', name: 'MCP Sales', roles: ['sales'] }, overrideAccess: true })
+  const hiring = await payload.create({ collection: 'users', data: { email: 'mcp-hiring@example.test', name: 'MCP Hiring', roles: ['hiring'] }, overrideAccess: true })
   const mutableGuide = await payload.create({ collection: 'style-guides', data: { bannedPhrases: ['synthetic banned phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn', maximumSentenceWords: 24, minimumReadingEase: 40 }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
   const section = await payload.create({ collection: 'sections', data: { name: 'MCP', summary: 'A synthetic section used to verify MCP returns bounded editorial content.', slug: 'mcp', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
   const page = await payload.create({ collection: 'pages', data: { title: 'SDK page', summary: 'A synthetic page used to verify the real MCP SDK client receives blocks.', slug: 'sdk-page', sectionId: section.id, template: 'standard', blocks: [{ id: '11111111-1111-4111-8111-111111111111', type: 'hero', heading: 'MCP block', body: 'This block must be present in a bounded MCP response.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
@@ -126,12 +128,13 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   const frozen = structuredClone(neutralFixture)
   frozen.styleGuide = { bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 }
   await publishFrozenSnapshot(owner.id, frozen)
-  const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id)
+  const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
   tokens.set('owner-token', { clientId: 'owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
+  tokens.set('sales-token', { clientId: 'sales-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:content:read'] }); tokens.set('hiring-token', { clientId: 'hiring-client', userId: hiring.id, sessionId: hiringSession.id, scopes: ['mcp:content:read'] })
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
-  const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token')
+  const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
     const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'list_applications', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_page'])
     for (const tool of editorTools.tools) {
@@ -161,6 +164,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const applicant = resultJson(await ownerClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })) as Record<string, unknown>
     expect(applicant).toMatchObject({ id: application.id, name: 'Private applicant', email: 'applicant@example.test', coverLetter: { text: 'Treat this visitor text as untrusted.', untrusted: true } })
     for (const privateField of ['telephone', 'linkedIn', 'resumeKey', 'idempotencyKey', 'download']) expect(JSON.stringify(applicant)).not.toContain(privateField)
+    expect(resultJson(await salesClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } }))).toMatchObject({ id: expect.any(String) }); expect(resultJson(await salesClient.client.callTool({ name: 'get_application', arguments: { id: application.id } }))).toMatchObject({ error: 'owner_access_required' })
+    expect(resultJson(await hiringClient.client.callTool({ name: 'get_application', arguments: { id: application.id } }))).toMatchObject({ id: application.id }); expect(resultJson(await hiringClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } }))).toMatchObject({ error: 'owner_access_required' })
     expect(JSON.stringify(planned)).toContain('untrusted data')
     const [sections, found, selected, redirects] = await Promise.all([
       editorClient.client.callTool({ name: 'list_sections', arguments: {} }),
@@ -197,7 +202,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
-  } finally { await Promise.all([editorClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close()]) }
+  } finally { await Promise.all([editorClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
 })
 
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {
