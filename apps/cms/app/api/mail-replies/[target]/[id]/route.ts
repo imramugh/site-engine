@@ -18,7 +18,12 @@ export async function POST(request: Request, context: { params: Promise<{ target
   try {
     if (body.action === 'prepare') return Response.json({ draft: await prepareReply(payload, target, id, user.id, body as { sender: unknown; subject: unknown; body: unknown; threadID?: unknown }) }, { status: 201, headers: noStore })
     if (typeof body.grantID !== 'string') throw new Error('invalid_reply')
-    if (body.action === 'authorize') return Response.json({ authorization: await authorizeReply(payload, actor, body.grantID) }, { headers: noStore })
+    const draftID = body.action === 'authorize' ? body.grantID : (await payload.findByID({ collection: 'mail-authorizations', id: body.grantID, depth: 0, overrideAccess: true }) as { draft: string | { id: string } }).draft
+    const resolvedDraftID = typeof draftID === 'string' ? draftID : draftID.id
+    const draft = await payload.findByID({ collection: 'mail-drafts', id: resolvedDraftID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const relation = target === 'lead' ? draft.lead : draft.application; const relationID = typeof relation === 'string' ? relation : (relation as { id?: string } | null)?.id
+    if (relationID !== id) throw new Error('invalid_reply')
+    if (body.action === 'authorize') return Response.json({ authorization: await authorizeReply(payload, actor, resolvedDraftID) }, { headers: noStore })
     if (body.action === 'cancel') return Response.json({ authorization: await cancelReply(payload, actor, body.grantID) }, { headers: noStore })
     if (body.action === 'send') return Response.json({ delivery: await sendReply(payload, actor, body.grantID) }, { headers: noStore })
     throw new Error('invalid_reply')
