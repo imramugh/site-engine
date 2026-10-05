@@ -46,6 +46,17 @@ Owner journey also verifies collection navigation, the actual admin logout
 link, revoked-cookie rejection, and immediate disablement. These
 tests do not establish connectivity to a real Google or Microsoft registration.
 
+### Editorial role boundary
+
+Owners and Editors may create and edit Pages. Approvers may update existing
+Pages through the whole-page editor or an explicitly consented MCP
+content-write grant, own and submit the resulting change set, and review other
+submitted work. Approvers cannot create Pages or change Sections, Assets,
+Redirects, themes, integrations, or users. Every Approver edit remains a draft;
+approval still requires a separate fresh-authentication action bound to the
+exact change-set revision, change hash, rendered preview, and version pins.
+MCP exposes no approval or publication tool.
+
 ### AI provider pricing and caps
 
 Provider jobs use integer micro-USD (`1,000,000` = US $1) for every cap and

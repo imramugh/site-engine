@@ -286,3 +286,25 @@ test('ENG-017 creates and updates draft pages only through an explicit revisione
     expect((await payload.find({ collection: 'pages', where: { id: { equals: created.id } }, overrideAccess: true })).docs[0]?.title).toBe(before.docs[0]?.title)
   } finally { await sdk.transport.close() }
 })
+
+test('an Approver grant updates existing pages but cannot create pages or approve', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `approver-fixture-editor-${randomUUID()}@example.test`, name: 'Approver fixture editor', roles: ['editor'] }, overrideAccess: true })
+  const approver = await payload.create({ collection: 'users', data: { email: `approver-writer-${randomUUID()}@example.test`, name: 'Approver writer', roles: ['approver'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: 'Approver MCP pages', summary: 'Synthetic section used to verify bounded Approver page editing through MCP.', slug: `approver-mcp-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const page = await payload.create({ collection: 'pages', data: { title: 'Approver MCP original', summary: 'Synthetic existing page that an Approver may revise through a scoped assistant.', slug: `approver-page-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false })
+  const session = await sessionFor(approver.id)
+  tokens.set('approver-write-token', { clientId: 'approver-write-client', userId: approver.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sdk = await clientFor('approver-write-token')
+  try {
+    const set = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Approver MCP page revision' } })) as { id: string; revision: number }
+    const updated = resultJson(await sdk.client.callTool({ name: 'update_page', arguments: { id: page.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, title: 'Approver MCP revised' } })) as { title: string }
+    expect(updated.title).toBe('Approver MCP revised')
+    const captured = await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })
+    expect(captured).toMatchObject({ actor: expect.objectContaining({ id: approver.id }), revision: 1 })
+    expect(resultJson(await sdk.client.callTool({ name: 'create_page', arguments: { changeSetId: set.id, expectedChangeSetRevision: captured.revision, requestKey: randomUUID(), title: 'Denied Approver create', summary: 'This valid page must remain outside the Approver creation permission boundary.', slug: `denied-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard' } }))).toMatchObject({ error: 'write_failed' })
+    expect((await sdk.client.listTools()).tools.map((tool) => tool.name)).not.toContain('approve_change_set')
+    expect(resultJson(await sdk.client.callTool({ name: 'submit_change_set', arguments: { id: set.id, expectedRevision: captured.revision } }))).toMatchObject({ state: 'submitted', revision: 2 })
+  } finally {
+    await sdk.transport.close()
+  }
+})

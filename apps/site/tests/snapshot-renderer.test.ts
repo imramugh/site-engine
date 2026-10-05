@@ -281,6 +281,31 @@ describe('static snapshot renderer', () => {
     } finally { served.server.closeAllConnections(); served.server.close(); await browser.close(); }
   }, 120_000);
 
+  it('composes service page metadata into one hero and generates one header when no hero exists', async () => {
+    const snapshot = fixture('Service metadata');
+    snapshot.settings.contractVersion = '1.4.0';
+    const service = snapshot.pages.find((page) => page.template === 'service')!;
+    service.kicker = 'Advisory';
+    service.lede = 'A persisted service introduction.';
+    service.lastReviewed = '2026-10-01T00:00:00.000Z';
+    service.blocks.unshift({ id: 'cccccccc-0000-4000-8000-000000000001', type: 'hero', heading: 'Stored hero heading', body: 'Stored hero body.', cta: { label: 'Preserved action', href: '/docs' }, hidden: false, appearance: { background: 'accent', width: 'wide', spacing: 'spacious', motionIntent: 'none', logoTone: 'default' } });
+    const withoutHero = { ...structuredClone(service), id: 'cccccccc-0000-4000-8000-000000000002', slug: 'without-hero', title: 'Service without hero', kicker: 'Planning', lede: 'A generated service introduction.', blocks: service.blocks.filter((block) => block.type !== 'hero') };
+    snapshot.pages.push(withoutHero);
+    snapshot.settings.sections[0]!.pageIds.push(withoutHero.id);
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'service-metadata.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const withHero = await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8');
+    const generated = await readFile(join(built.output, 'docs/guide/without-hero/index.html'), 'utf8');
+    expect(withHero.match(/<h1(?:\s|>)/g)).toHaveLength(1);
+    expect(withHero).toContain('Service metadata install');
+    expect(withHero).toContain('A persisted service introduction.');
+    expect(withHero).toContain('Preserved action');
+    expect(withHero).toContain('block--accent');
+    expect(withHero).toContain('Last reviewed');
+    expect(generated.match(/<h1(?:\s|>)/g)).toHaveLength(1);
+    expect(generated).toContain('Service without hero');
+    expect(generated).toContain('A generated service introduction.');
+  }, 120_000);
+
   it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {
     const customComponents = await customThemeComponents(root);
     const custom = fixture('Custom theme host'); custom.settings.searchEnabled = true; const defaultSnapshot = fixture('Default theme host');
@@ -440,14 +465,14 @@ describe('static snapshot renderer', () => {
       expect((await readdir(join(built.output, 'media'))).sort()).toEqual([...visibleMediaNames, 'sample-image-hero.avif'].sort());
       expect(await readFile(join(built.output, 'media/sample-image.svg'), 'utf8')).toContain('<svg');
       expect(await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
-      expect(await readFile(join(built.output, 'docs/release-notes/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image-hero.avif`);
+      expect(await readFile(join(built.output, 'docs/release-notes/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
 
       const served = await staticServer(built.output, BASE_PATH);
       const browser = await chromium.launch();
       try {
         const page = await browser.newPage();
         await page.goto(`${served.origin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'networkidle' });
-        expect(await page.locator('picture img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 640 && image.currentSrc.endsWith('sample-image-hero.avif'))).toBe(true);
+        expect(await page.locator('picture img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0 && image.currentSrc.endsWith('sample-image.svg'))).toBe(true);
       } finally { await browser.close(); served.server.closeAllConnections(); served.server.close(); }
       const promoted = (await readdir(root)).filter((name) => name.startsWith('snapshot-'));
       snapshot.media[0]!.sha256 = '0'.repeat(64);
@@ -455,6 +480,81 @@ describe('static snapshot renderer', () => {
       await rm(join(source, 'sample-image.svg'));
       await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'missing-media.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow('unavailable');
       expect((await readdir(root)).filter((name) => name.startsWith('snapshot-'))).toEqual(promoted);
+    } finally {
+      if (previousMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = previousMediaDirectory;
+      await rm(source, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('renders focal crops from immutable full sources while retaining generated variants', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'site-focal-source-'));
+    const previousMediaDirectory = process.env.SITE_MEDIA_DIR;
+    const sharp = createRequire(new URL('../../cms/package.json', import.meta.url))('sharp');
+    try {
+      const fullSource = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#ef2929' } })
+        .composite([{ input: { create: { width: 400, height: 150, channels: 3, background: '#2455e6' } }, left: 0, top: 150 }])
+        .png().toBuffer();
+      const generatedVariant = await sharp({ create: { width: 400, height: 225, channels: 3, background: '#168596' } }).avif().toBuffer();
+      await writeFile(join(source, 'focal-source.png'), fullSource);
+      await writeFile(join(source, 'focal-hero.avif'), generatedVariant);
+      process.env.SITE_MEDIA_DIR = source;
+      const snapshot = fixture('Focal crops');
+      snapshot.settings.contractVersion = '1.4.0';
+      const topID = snapshot.media[0]!.id;
+      const bottomID = '11111111-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const identity = { filename: 'focal-source.png', sha256: createHash('sha256').update(fullSource).digest('hex'), variants: { heroAvif: { filename: 'focal-hero.avif', width: 400, height: 225, mimeType: 'image/avif' as const, sha256: createHash('sha256').update(generatedVariant).digest('hex') } }, alt: 'Two-color focal test image', decorative: false, width: 400, height: 300, mimeType: 'image/png' as const };
+      snapshot.media[0] = { id: topID, ...identity, focalX: 50, focalY: 0 };
+      snapshot.media.push({ id: bottomID, ...identity, focalX: 50, focalY: 100 });
+      const article = snapshot.pages.find((page) => page.slug === 'release-notes')!;
+      article.blocks = [
+        { id: 'dddddddd-1111-4111-8111-111111111111', type: 'media', mediaId: topID, caption: 'Top focal crop', hidden: false, appearance: article.blocks[0]!.appearance },
+        { id: 'dddddddd-3333-4333-8333-333333333333', type: 'media', mediaId: bottomID, caption: 'Bottom focal crop', hidden: false, appearance: article.blocks[0]!.appearance },
+      ];
+      const pillar = snapshot.pages.find((page) => page.slug === 'guide')!;
+      pillar.blocks.push(
+        { id: 'dddddddd-4444-4444-8444-444444444444', type: 'gallery', mediaIds: [topID, bottomID], hidden: false, appearance: pillar.blocks[0]!.appearance },
+        { id: 'dddddddd-5555-4555-8555-555555555555', type: 'logoStrip', mediaIds: [topID], hidden: false, appearance: pillar.blocks[0]!.appearance },
+      );
+      const sourceHashBefore = createHash('sha256').update(await readFile(join(source, 'focal-source.png'))).digest('hex');
+      const variantHashBefore = createHash('sha256').update(await readFile(join(source, 'focal-hero.avif'))).digest('hex');
+      const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'focal-crops.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
+      expect(createHash('sha256').update(await readFile(join(source, 'focal-source.png'))).digest('hex')).toBe(sourceHashBefore);
+      expect(createHash('sha256').update(await readFile(join(source, 'focal-hero.avif'))).digest('hex')).toBe(variantHashBefore);
+      expect(createHash('sha256').update(await readFile(join(built.output, 'media/focal-source.png'))).digest('hex')).toBe(sourceHashBefore);
+      expect(createHash('sha256').update(await readFile(join(built.output, 'media/focal-hero.avif'))).digest('hex')).toBe(variantHashBefore);
+      const served = await staticServer(built.output, BASE_PATH);
+      const browser = await chromium.launch();
+      try {
+        const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
+        await page.goto(`${served.origin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'networkidle' });
+        const wide = page.locator('.media-frame--wide');
+        expect(await wide.count()).toBe(2);
+        for (const frame of await wide.all()) {
+          const box = await frame.boundingBox();
+          expect(box && box.width / box.height).toBeCloseTo(16 / 9, 1);
+          expect(await frame.locator('source').count()).toBe(0);
+          expect(await frame.locator('img').evaluate((image: HTMLImageElement) => image.currentSrc.endsWith('/media/focal-source.png') && getComputedStyle(image).objectFit === 'cover')).toBe(true);
+        }
+        const center = async (index: number) => {
+          const { data, info } = await sharp(await wide.nth(index).locator('img').screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+          const offset = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * info.channels;
+          return [data[offset], data[offset + 1], data[offset + 2]];
+        };
+        const top = await center(0); const bottom = await center(1);
+        expect(top[0]).toBeGreaterThan(top[2]);
+        expect(bottom[2]).toBeGreaterThan(bottom[0]);
+        await page.goto(`${served.origin}${BASE_PATH}docs/guide/`, { waitUntil: 'networkidle' });
+        const squares = page.locator('.media-frame--square');
+        expect(await squares.count()).toBe(2);
+        const squareBox = await squares.first().boundingBox();
+        expect(squareBox && squareBox.width / squareBox.height).toBeCloseTo(1, 1);
+        const logo = page.locator('.logo-media').first();
+        expect(await logo.locator('img').evaluate((image: HTMLImageElement) => getComputedStyle(image).objectFit)).toBe('contain');
+        await page.goto(`${served.origin}${BASE_PATH}docs/guide/install/`, { waitUntil: 'networkidle' });
+        const portrait = page.locator('.media-frame--portrait'); const portraitBox = await portrait.boundingBox();
+        expect(portraitBox && portraitBox.width / portraitBox.height).toBeCloseTo(4 / 5, 1);
+        expect(await portrait.locator('img').evaluate((image: HTMLImageElement) => image.currentSrc.endsWith('/media/focal-source.png'))).toBe(true);
+      } finally { await browser.close(); served.server.closeAllConnections(); served.server.close(); }
     } finally {
       if (previousMediaDirectory === undefined) delete process.env.SITE_MEDIA_DIR; else process.env.SITE_MEDIA_DIR = previousMediaDirectory;
       await rm(source, { recursive: true, force: true });

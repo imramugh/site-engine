@@ -9,12 +9,20 @@ import sharp from 'sharp'
 import { existsSync } from 'node:fs'
 import { mediaStorageDirectory, snapshotMediaReference } from '../src/media'
 import { moveAssetToBin, restoreAssetFromBin } from '../src/media-lifecycle'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
 const db = join(directory, 'cms.sqlite')
 process.env.DATABASE_URI = `file:${db}`
 process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
+const contract14Baseline = join(directory, 'contract-1.4.json')
+const contract13Baseline = join(directory, 'contract-1.3.json')
+writeFileSync(contract14Baseline, JSON.stringify({ ...neutralFixture, settings: { ...neutralFixture.settings, contractVersion: '1.4.0' } }))
+writeFileSync(contract13Baseline, JSON.stringify({ ...neutralFixture, settings: { ...neutralFixture.settings, contractVersion: '1.3.0' } }))
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-payload'
+process.env.PREVIEW_THEME_VERSION = '1.0.0'
+process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
+process.env.PREVIEW_CONTRACT_VERSION = '1.4.0'
 const tokenFile = join(directory, 'bootstrap-token')
 writeFileSync(tokenFile, 'test-only-bootstrap-token')
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = tokenFile
@@ -69,6 +77,13 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     expect((await resolve(roleToken)).status).toBe(200)
     await payload.update({ collection: 'users', id: roleUser.id, data: { roles: ['approver'] }, overrideAccess: true })
     expect((await resolve(roleToken)).status).toBe(401)
+
+    const approver = await payload.create({ collection: 'users', data: { email: 'bridge-approver@example.test', name: 'Bridge approver', roles: ['approver'] }, overrideAccess: true })
+    const approverToken = newOpaqueToken()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(approverToken), user: approver.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const approverResolution = await resolve(approverToken)
+    expect(approverResolution.status).toBe(200)
+    await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] } })
   })
 
   it('rejects unauthenticated, malformed, oversized, and non-POST OAuth bridge requests', async () => {
@@ -255,6 +270,7 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
   const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
 
   it('rejects missing alt text, transforms a real upload, and blocks binning an in-use asset with locations', async () => {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
     const owner = await payload.create({ collection: 'users', data: { email: 'media-owner@example.test', name: 'Media Owner', roles: ['owner'] }, overrideAccess: true })
     const file = { data: await raster(), mimetype: 'image/png', name: 'synthetic-media.png', size: 0 }
     file.size = file.data.length
@@ -266,12 +282,36 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     expect(asset.sizes?.cardWebp?.filename).toBeTruthy()
     expect(existsSync(`${mediaStorageDirectory()}/${asset.sizes?.heroAvif?.filename}`)).toBe(true)
     const captured = snapshotMediaReference(asset)
+    const legacyCaptured = snapshotMediaReference(asset, false)
     expect(captured.filename).toBe(asset.filename)
     expect(captured.sha256).toMatch(/^[a-f0-9]{64}$/)
-    await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 80 }, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
+    expect(captured).toMatchObject({ focalX: 25, focalY: 75 })
+    expect(legacyCaptured).not.toHaveProperty('focalX')
+    expect(legacyCaptured).not.toHaveProperty('focalY')
+    const updatedFocal = await payload.update({ collection: 'assets', id: asset.id, data: { focalX: 80, focalY: 20 }, user: owner, overrideAccess: false })
+    expect(updatedFocal).toMatchObject({ focalX: 80, focalY: 20, filename: asset.filename })
+    const recaptured = snapshotMediaReference(updatedFocal)
+    expect(recaptured).toMatchObject({ focalX: 80, focalY: 20, filename: captured.filename, sha256: captured.sha256, variants: captured.variants })
+    expect(captured).toMatchObject({ focalX: 25, focalY: 75 })
+    const focalSets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+    const capturedAsset = focalSets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+    expect(capturedAsset?.after).toMatchObject({ focalX: 80, focalY: 20 })
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract13Baseline
+    try {
+      const oldDefault = await payload.create({ collection: 'assets', data: { alt: 'Old contract centred image' }, file: { ...file, name: 'old-contract-centred.png' }, user: owner, overrideAccess: false })
+      expect(oldDefault).toMatchObject({ focalX: 50, focalY: 50 })
+      await expect(payload.create({ collection: 'assets', data: { alt: 'Old contract custom focal image', focalX: 25, focalY: 75 }, file: { ...file, name: 'old-contract-custom-focal.png' }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
+      expect(existsSync(`${mediaStorageDirectory()}/old-contract-custom-focal.png`)).toBe(false)
+      await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Legacy-contract metadata edit' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Legacy-contract metadata edit' })
+      const legacySets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+      const legacyCapturedAsset = legacySets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+      expect(legacyCapturedAsset?.after).not.toHaveProperty('focalX')
+      await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 81, focalY: 20 }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
+    } finally {
+      process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
+    }
     await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Replacement' }, file, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
-    expect(snapshotMediaReference(asset).sha256).toBe(captured.sha256)
-    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Updated description', focalX: asset.focalX, focalY: asset.focalY }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Updated description' })
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Updated description' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Updated description' })
     expect(captured.variants?.heroAvif).toMatchObject({ filename: asset.sizes?.heroAvif?.filename, width: asset.sizes?.heroAvif?.width, height: asset.sizes?.heroAvif?.height, mimeType: 'image/avif', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
 
     const section = await payload.create({ collection: 'sections', data: { name: 'Media', summary: 'Synthetic media section used to verify asset usage and lifecycle validation.', slug: 'media-lifecycle', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
@@ -295,17 +335,20 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     const headers = async (user: { id: string }) => new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${await token(user)}` })
     const ownerHeaders = await headers(owner); const editorHeaders = await headers(editor); const status = async (response: Promise<Response>) => { const result = await response; await result.text(); return result.status }
     expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-private', { headers: ownerHeaders })))).toBe(200)
-    const ownerBody = await (await mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-private', { headers: ownerHeaders }))).json() as { assets: Array<{ id: string; usages: unknown[] }> }
+    const ownerBody = await (await mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-private', { headers: ownerHeaders }))).json() as { assets: Array<{ id: string; usages: unknown[]; focalX: number; focalY: number }> }
     expect(ownerBody.assets.find((item) => item.id === asset.id)?.usages).toHaveLength(1)
+    expect(ownerBody.assets.find((item) => item.id === asset.id)).toMatchObject({ focalX: 50, focalY: 50 })
     expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace', { headers: editorHeaders })))).toBe(200)
     for (const user of [...denied, disabled]) expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace', { headers: await headers(user) })))).toBe(403)
     expect(await status(mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace')))).toBe(403)
     const patch = (body: unknown, headers: Headers) => mediaWorkspacePATCH(new Request('https://cms.example.test/api/media/workspace', { method: 'PATCH', headers: new Headers({ ...Object.fromEntries(headers), origin: 'https://cms.example.test', 'content-type': 'application/json' }), body: JSON.stringify(body) }))
     expect(await status(mediaWorkspacePATCH(new Request('https://cms.example.test/api/media/workspace', { method: 'PATCH', headers: ownerHeaders, body: '{}' })))).toBe(403)
     expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, unexpected: true }, ownerHeaders))).toBe(400)
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, focalX: -1, focalY: 50 }, ownerHeaders))).toBe(400)
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, focalX: 50, focalY: '50' }, ownerHeaders))).toBe(400)
     expect(await status(patch({ id: asset.id, alt: 'x'.repeat(9_000), decorative: false }, ownerHeaders))).toBe(413)
-    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'] }, editorHeaders))).toBe(200)
-    expect((await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).alt).toBe('Updated safe description')
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'], focalX: 27.6, focalY: 72.2 }, editorHeaders))).toBe(200)
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated safe description', focalX: 28, focalY: 72 })
   })
 
   it('allows a decorative image and bins an unused asset for exactly thirty days', async () => {

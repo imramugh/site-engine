@@ -19,10 +19,10 @@ type CapturedChange = {
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
-  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'seoDescription', 'noindex', 'businessCase'],
+  pages: ['title', 'slug', 'sectionId', 'parentId', 'summary', 'template', 'status', 'blocks', 'kicker', 'lede', 'seoDescription', 'noindex', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'],
   sections: ['name', 'summary', 'slug', 'landingPageId', 'allowedTemplates', 'pageIds'],
   redirects: ['from', 'to', 'status'],
-  assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'sizes'],
+  assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'focalX', 'focalY', 'sizes'],
   'theme-settings': ['selection', 'settings'],
   'style-guides': ['bannedPhrases', 'preferredTerms', 'canadianSpelling', 'maximumSentenceWords', 'minimumReadingEase'],
   'site-settings': ['siteName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'contactEmail', 'contactPhone', 'seoDescription', 'searchEnabled'],
@@ -51,16 +51,15 @@ function hash(value: Record<string, unknown> | null): string | null {
 function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!value) return value
   const normalized = { ...value }
-  if (normalized.seoDescription === null && !(prior && 'seoDescription' in prior)) delete normalized.seoDescription
-  // The portable contract represents an omitted business case as absence;
-  // removing it still remains visible because the prior snapshot has the key.
-  if (normalized.businessCase === null) delete normalized.businessCase
+  for (const field of ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) {
+    if (normalized[field] === null && !(prior && field in prior)) delete normalized[field]
+  }
   return normalized
 }
 
-export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined): Record<string, unknown> | null {
+export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined, includeFocalPoint = false): Record<string, unknown> | null {
   if (!document) return null
-  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0])
+  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint)
   return Object.fromEntries(mutableFields[collection].flatMap((field): [string, unknown][] => {
     const value = document[field]
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
@@ -93,12 +92,25 @@ export function snapshot(collection: CapturedCollection, document: Record<string
 function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
   // Payload applies partial updates. Explicit nulls clear fields that were absent
   // from the baseline rather than leaving a later editor's addition behind.
-  return Object.fromEntries(mutableFields[collection].map((field) => {
+  // Asset bytes and generated variants are immutable. A discard restores only
+  // the editable public metadata represented by the capture; sending null for
+  // generated `sizes` corrupts Payload's upload-field validation.
+  const fields = collection === 'assets'
+    ? ['alt', 'decorative', ...(capturedAssetHasFocalPoint(value) ? ['focalX', 'focalY'] : [])]
+    : mutableFields[collection]
+  return Object.fromEntries(fields.map((field) => {
     // Draft persistence cannot accept the snapshot-only published status.
     // Restoring an archived draft returns it to the ordinary draft workflow.
     if (collection === 'pages' && field === 'status') return [field, 'draft']
     return [field, field in value ? value[field] : null]
   }))
+}
+
+/** Media focal points entered the portable contract after existing captured
+ * changes were already durable. The capture itself is therefore the source of
+ * truth for which projection must be compared and restored. */
+function capturedAssetHasFocalPoint(value: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(value && (Object.prototype.hasOwnProperty.call(value, 'focalX') || Object.prototype.hasOwnProperty.call(value, 'focalY')))
 }
 
 function equivalent(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
@@ -127,9 +139,13 @@ export async function openSet(payload: Payload, actor: Actor, req: PayloadReques
 export async function captureChange(input: { collection: CapturedCollection; doc: Record<string, unknown>; previousDoc?: Record<string, unknown>; operation: 'create' | 'update'; req: PayloadRequest }): Promise<void> {
   const { collection, doc, previousDoc, operation, req } = input
   const actor = req.user as Actor | undefined
-  if (!actor || !hasRole(actor, ['owner', 'editor']) || req.context.editorialInternal) return
-  let after = snapshot(collection, doc)
-  let before = operation === 'create' ? null : snapshot(collection, previousDoc)
+  const capturesCollection =
+    hasRole(actor, ['owner', 'editor']) ||
+    (collection === 'pages' && hasRole(actor, ['approver']))
+  if (!actor || !capturesCollection || req.context.editorialInternal) return
+  const includeFocalPoint = req.context.mediaFocalContract === '1.4.0'
+  let after = snapshot(collection, doc, includeFocalPoint)
+  let before = operation === 'create' ? null : snapshot(collection, previousDoc, includeFocalPoint)
   if (collection === 'pages') {
     before = normalizePageOptionalNulls(before)
     after = normalizePageOptionalNulls(after, before)
@@ -164,7 +180,7 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 }
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
-  const current = snapshot(collection, value)
+  const current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
   return collection === 'pages' ? normalizePageOptionalNulls(current, expected) : current
 }
 
@@ -264,6 +280,6 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
 
 export async function createNamedChangeSet(payload: Payload, req: PayloadRequest, actor: Actor | undefined, name: string): Promise<Record<string, unknown>> {
   assertActor(actor)
-  if (!hasRole(actor, ['owner', 'editor'])) throw new Error('Editor role required.')
+  if (!hasRole(actor, ['owner', 'approver', 'editor'])) throw new Error('Editor role required.')
   return payload.create({ collection: 'change-sets', data: { id: randomUUID(), name, actor: actor.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Promise<Record<string, unknown>>
 }

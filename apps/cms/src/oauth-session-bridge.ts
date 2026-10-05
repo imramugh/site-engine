@@ -14,7 +14,7 @@ type BridgeRequest = { operation: 'resolve' } | { operation: 'validate'; session
 
 function scopesForRoles(roles: readonly string[] | null | undefined): string[] {
   if (roles?.includes('owner') || roles?.includes('editor')) return [contentRead, contentWrite, redirectsRead, redirectsWrite]
-  if (roles?.includes('approver')) return [contentRead, redirectsRead]
+  if (roles?.includes('approver')) return [contentRead, contentWrite, redirectsRead]
   return []
 }
 

@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import sharp from 'sharp'
+import { SiteSnapshotSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { transitionChangeSet } from '../src/editorial'
@@ -15,6 +16,16 @@ const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-quality-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
 process.env.PAYLOAD_SECRET = 'synthetic-editorial-quality-secret-that-is-long-enough'
+process.env.PREVIEW_THEME_VERSION = 'synthetic-theme'
+process.env.PREVIEW_ENGINE_VERSION = 'synthetic-engine'
+process.env.PREVIEW_CONTRACT_VERSION = '1.4.0'
+const contract14BaselineFile = join(directory, 'contract-1.4.json')
+const contract13BaselineFile = join(directory, 'contract-1.3.json')
+const contract14Baseline = SiteSnapshotSchema.parse({ ...structuredClone(neutralFixture), settings: { ...structuredClone(neutralFixture.settings), contractVersion: '1.4.0' } })
+const contract13Baseline = SiteSnapshotSchema.parse({ ...structuredClone(neutralFixture), settings: { ...structuredClone(neutralFixture.settings), contractVersion: '1.3.0' } })
+writeFileSync(contract14BaselineFile, JSON.stringify(contract14Baseline))
+writeFileSync(contract13BaselineFile, JSON.stringify(contract13Baseline))
+process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14BaselineFile
 
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
@@ -37,7 +48,7 @@ describe('editorial quality captures all portable change collections', () => {
     const data = await raster()
     const asset = await payload.create({
       collection: 'assets',
-      data: { alt: 'A real synthetic teal test image' },
+      data: { alt: 'A real synthetic teal test image', focalX: 25, focalY: 75 },
       file: { data, mimetype: 'image/png', name: 'editorial-quality.png', size: data.length },
       draft: true,
       user: owner,
@@ -49,9 +60,10 @@ describe('editorial quality captures all portable change collections', () => {
     const changes = set.changes as Array<{ collection: string; id: string }>
     const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
     expect(includedChangeKeys).toEqual(expect.arrayContaining([`assets:${asset.id}`, `sections:${section.id}`, `pages:${page.id}`]))
+    expect((set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }>).find((change) => change.collection === 'assets')?.after).toMatchObject({ focalX: 25, focalY: 75 })
 
     const submitted = await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'submit' }))
-    const baseline = structuredClone(neutralFixture)
+    const baseline = structuredClone(contract14Baseline)
     const job = await withPayloadTransaction(payload, req => prepareReviewPreview({
       payload,
       req,
@@ -63,7 +75,41 @@ describe('editorial quality captures all portable change collections', () => {
       initialBaseline: { manifest: baseline, sequence: 0, versions: { themeVersion: 'synthetic-theme', engineVersion: 'synthetic-engine', contractVersion: baseline.settings.contractVersion } },
     }))
     expect(job.status).toBe('pending')
-    expect((job.proposedManifest as { media: Array<{ id: string }> }).media).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id })]))
+    expect((job.proposedManifest as { media: Array<{ id: string; focalX?: number; focalY?: number }> }).media).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id, focalX: 25, focalY: 75 })]))
+
+    await payload.update({ collection: 'assets', id: asset.id, data: { focalX: 80, focalY: 20 }, user: owner, overrideAccess: false })
+    await expect(withPayloadTransaction(payload, req => prepareReviewPreview({
+      payload,
+      req,
+      actor: owner,
+      id: set.id,
+      expectedRevision: Number(submitted.revision),
+      expectedChangeHash: changeSetHash(submitted.changes),
+      includedChangeKeys,
+      initialBaseline: { manifest: baseline, sequence: 0, versions: { themeVersion: 'synthetic-theme', engineVersion: 'synthetic-engine', contractVersion: '1.4.0' } },
+    }))).rejects.toThrow('reviewed revision')
+
+    const later = await payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: owner.id } }, { state: { equals: 'open' } }] }, limit: 1, depth: 0, overrideAccess: true })
+    expect(later.docs).toHaveLength(1)
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: later.docs[0]!.id, action: 'discard' }))).resolves.toMatchObject({ state: 'discarded' })
+    await expect(payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).resolves.toMatchObject({ focalX: 25, focalY: 75 })
+  })
+
+  it('keeps legacy focal-free asset captures compatible with old contracts', async () => {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract13BaselineFile
+    try {
+      const owner = await payload.create({ collection: 'users', data: { email: `legacy-asset-owner-${randomUUID()}@example.test`, name: 'Legacy asset owner', roles: ['owner'] }, overrideAccess: true })
+      const data = await raster()
+      const asset = await payload.create({ collection: 'assets', data: { alt: 'Legacy contract image' }, file: { data, mimetype: 'image/png', name: `legacy-${randomUUID()}.png`, size: data.length }, draft: true, user: owner, overrideAccess: false })
+      const set = await setFor(owner.id)
+      const assetChange = (set.changes as Array<{ collection: string; after?: Record<string, unknown> }>).find((change) => change.collection === 'assets')
+      expect(assetChange?.after).not.toHaveProperty('focalX')
+      expect(assetChange?.after).not.toHaveProperty('focalY')
+      await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+      await expect(payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).resolves.toMatchObject({ focalX: 50, focalY: 50 })
+    } finally {
+      process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14BaselineFile
+    }
   })
 
   it('accepts a valid style guide and rejects malformed captured assets and style guides', async () => {

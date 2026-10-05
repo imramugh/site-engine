@@ -171,10 +171,11 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   // Captures use null to represent an explicit editor clear. The immutable
   // public contract represents optional page metadata by omission.
   const candidatePages = [...pages.values()].map((page) => {
-    const normalized = { ...page }
-    if (normalized.seoDescription === null) delete normalized.seoDescription
-    if (normalized.businessCase === null) delete normalized.businessCase
-    return normalized
+    const normalized = { ...page } as typeof page & Record<string, unknown>
+    for (const field of ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) {
+      if (normalized[field] === null) delete normalized[field]
+    }
+    return normalized as typeof page
   })
   // Contract upgrades are only caused by the reviewed theme selection itself.
   // Ordinary content edits keep the immutable baseline pin intact.

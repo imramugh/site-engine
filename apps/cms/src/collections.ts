@@ -10,6 +10,8 @@ import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } f
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
+import { mediaFocalContractVersion } from './media-workspace'
+import { loadInitialPreviewBaseline } from './review-preview'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -21,6 +23,14 @@ const editorialAccess = {
   // lifecycle uses an internal, transactional delete for newly created drafts;
   // ordinary API deletes stay unavailable until archival is implemented.
   delete: () => false,
+}
+
+// Approvers may revise page copy and blocks through the captured draft
+// workflow. Broader content structure, media, redirects and administration
+// retain their narrower Owner/Editor policies.
+const pageEditorialAccess = {
+  ...editorialAccess,
+  update: staff(editorialRoles),
 }
 
 // Page titles follow the shared PageSchema. Other CMS collections define their
@@ -169,7 +179,7 @@ export const Pages: CollectionConfig = {
   slug: 'pages',
   admin: { useAsTitle: 'title', defaultColumns: ['title', 'slug', 'parent', 'updatedAt'] },
   versions: { drafts: { autosave: true }, maxPerDoc: 50 },
-  access: editorialAccess,
+  access: pageEditorialAccess,
   hooks: {
     beforeChange: [async ({ data, originalDoc, req }) => {
     data = { ...originalDoc, ...data }
@@ -186,8 +196,13 @@ export const Pages: CollectionConfig = {
       template: data.template,
       status: archived ? 'archived' : 'draft',
       blocks: data.blocks ?? [],
+      kicker: typeof data.kicker === 'string' && data.kicker.trim() ? data.kicker : undefined,
+      lede: typeof data.lede === 'string' && data.lede.trim() ? data.lede : undefined,
       seoDescription: typeof data.seoDescription === 'string' && data.seoDescription.trim() ? data.seoDescription : undefined,
       noindex: data.noindex === true,
+      publishedAt: data.publishedAt ?? undefined,
+      lastReviewed: data.lastReviewed ?? undefined,
+      jobPosting: data.jobPosting ?? undefined,
       businessCase: data.businessCase ?? undefined,
     }), req, 'pages')
     const sectionId = relationId(data.sectionId)
@@ -225,8 +240,13 @@ export const Pages: CollectionConfig = {
     { name: 'template', type: 'select', required: true, defaultValue: 'standard', options: CmsPageFieldConfig.templateOptions },
     { name: 'status', type: 'select', defaultValue: 'draft', options: ['draft', 'published', 'archived'], admin: { readOnly: true } },
     { name: 'blocks', type: 'json', defaultValue: [] },
+    { name: 'kicker', type: 'text', maxLength: 160, admin: { description: 'Short service-page context shown above the page title.' } },
+    { name: 'lede', type: 'textarea', maxLength: 500, admin: { description: 'Service-page introduction shown with the page title.' } },
     { name: 'seoDescription', type: 'text', maxLength: 160 },
     { name: 'noindex', type: 'checkbox', defaultValue: false, admin: { description: 'Keep this published page out of search engines and the public site search index.' } },
+    { name: 'publishedAt', type: 'date', admin: { description: 'Article publication date.' } },
+    { name: 'lastReviewed', type: 'date', admin: { description: 'Date this service or article was last reviewed.' } },
+    { name: 'jobPosting', type: 'json', admin: { description: 'Job posting date, employment type, location, and optional closing date.' } },
     { name: 'businessCase', type: 'json', admin: { description: 'Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.' } },
   ],
 }
@@ -260,8 +280,6 @@ export const Assets: CollectionConfig = {
     staticDir: (() => { ensureMediaStorageDirectory(); return mediaStorageDirectory() })(),
     mimeTypes: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'],
     pasteURL: false,
-    focalPoint: true,
-    crop: true,
     imageSizes: Object.entries(MEDIA_VARIANTS).map(([name, size]) => ({
       name,
       width: size.width,
@@ -277,18 +295,18 @@ export const Assets: CollectionConfig = {
     // Reject byte-changing operations before that stage to preserve pinned snapshots.
     beforeOperation: [async ({ args, operation, req }) => {
       if (operation !== 'update') return args
-      const immutableMessage = 'Upload a new asset to replace image bytes or change the crop; existing snapshots retain their original files.'
+      const immutableMessage = 'Upload a new asset to replace image bytes; existing snapshots retain their original files.'
       if (req.file) throw new Error(immutableMessage)
-      const data = 'data' in args ? args.data : undefined
-      const focalFields = ['focalX', 'focalY'] as const
-      if (data && focalFields.some(field => data[field] !== undefined)) {
-        if (!('id' in args) || (typeof args.id !== 'string' && typeof args.id !== 'number')) throw new Error(immutableMessage)
-        const original = await req.payload.findByID({ collection: 'assets', id: args.id, depth: 0, overrideAccess: true, req })
-        if (focalFields.some(field => data[field] !== undefined && data[field] !== original[field])) throw new Error(immutableMessage)
-      }
       return args
     }],
-    beforeValidate: [async ({ data, req }) => {
+    beforeValidate: [async ({ data, originalDoc, req }) => {
+      const focalContract = await mediaFocalContractVersion(req.payload, await loadInitialPreviewBaseline(), req)
+      const focalValueChanged = (value: unknown, previous: unknown) => value != null && Number(value) !== Number(previous ?? 50)
+      const focalChanged = originalDoc
+        ? focalValueChanged(data?.focalX, originalDoc.focalX) || focalValueChanged(data?.focalY, originalDoc.focalY)
+        : focalValueChanged(data?.focalX, 50) || focalValueChanged(data?.focalY, 50)
+      if (focalChanged && !focalContract) throw new Error('Focal-point editing requires an active contract 1.4 theme.')
+      req.context.mediaFocalContract = focalContract
       const issues = mediaMetadataIssues(data ?? {})
       if (issues.length) fieldErrors(issues, req, 'assets')
       if (req.file) await validateRasterUpload(req.file)
@@ -455,7 +473,10 @@ export const ChangeSets: CollectionConfig = {
     beforeChange: [async ({ data, originalDoc, req }) => {
       if (!req.context.editorialInternal) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'state', message: 'Change sets are changed through the editorial workflow.' }], req })
       contractError(ChangeSetSchema.safeParse({ id: data.id ?? originalDoc?.id ?? randomUUID(), name: data.name ?? originalDoc?.name, state: data.state ?? originalDoc?.state ?? 'open', revision: data.revision ?? originalDoc?.revision ?? 0 }), req, 'change-sets')
-      return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID() }
+      const creationRequestKey = originalDoc?.creationRequestKey ?? data.creationRequestKey
+      const creationRequestHash = originalDoc?.creationRequestHash ?? data.creationRequestHash
+      if (Boolean(creationRequestKey) !== Boolean(creationRequestHash)) throw new ValidationError({ collection: 'change-sets', errors: [{ path: 'creationRequestKey', message: 'Page creation receipts require both the request key and request hash.' }], req })
+      return { ...originalDoc, ...data, id: data.id ?? originalDoc?.id ?? randomUUID(), creationRequestKey, creationRequestHash }
     }],
   },
   fields: [
@@ -470,6 +491,8 @@ export const ChangeSets: CollectionConfig = {
     { name: 'submittedAt', type: 'date', admin: { readOnly: true } },
     { name: 'reviewedAt', type: 'date', admin: { readOnly: true } },
     { name: 'staleAt', type: 'date', admin: { readOnly: true } },
+    { name: 'creationRequestKey', type: 'text', unique: true, admin: { hidden: true, readOnly: true } },
+    { name: 'creationRequestHash', type: 'text', admin: { hidden: true, readOnly: true } },
     { name: 'summary', type: 'textarea' },
   ],
 }

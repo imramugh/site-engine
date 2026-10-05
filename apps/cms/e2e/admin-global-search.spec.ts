@@ -28,7 +28,7 @@ async function searchJSON(page: Page, query: string) {
 test('ENG-006 searches real permitted records without exposing private lead fields', async ({ browser }) => {
   const owner = await signedIn(browser, 'owner')
   const page = owner.page
-  await expect(page.locator('[data-admin-primary] a[href="/leads"] [data-admin-nav-badge]')).toHaveText('1')
+  await expect(page.locator('[data-admin-primary] a[href="/leads"] [data-admin-nav-badge]')).toHaveText('2')
   await expect(page.locator('[data-admin-primary] a[href="/editorial"] [data-admin-nav-badge]')).toHaveText('1')
 
   const requests: string[] = []
@@ -106,7 +106,7 @@ test('ENG-006 searches real permitted records without exposing private lead fiel
   await editor.context.close()
 
   const sales = await signedIn(browser, 'sales')
-  await expect(sales.page.getByRole('link', { name: 'Leads', exact: true }).locator('[data-admin-nav-badge]')).toHaveText('1')
+  await expect(sales.page.getByRole('link', { name: 'Leads', exact: true }).locator('[data-admin-nav-badge]')).toHaveText('2')
   await expect(sales.page.locator('a[href="/editorial"]')).toHaveCount(0)
   expect((await searchJSON(sales.page, 'direct')).body.results.Pages).toEqual([])
   expect((await searchJSON(sales.page, 'active-incident')).body.results.Leads).toHaveLength(1)

@@ -1,40 +1,174 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 
-async function localOwner(page: import('@playwright/test').Page) {
-  await page.goto('/admin/login')
-  await page.locator('#emergency-email').fill('lead-owner.synthetic@example.test')
-  await page.locator('#emergency-code').fill('synthetic-lead-owner-code-07')
-  await page.getByTestId('emergency-sign-in').click()
-  await page.waitForURL(/\/admin$/)
+const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
+const tokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' }
+
+async function signedIn(browser: Browser, role: keyof typeof tokens) {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: tokens[role], url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  return { context, page: await context.newPage() }
 }
 
-test('ENG-019 staff records, assigns, filters, updates, and exports a manual lead', async ({ page }) => {
-  await localOwner(page)
-  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Leads' })).toBeVisible()
-  await page.goto('/leads')
-  await page.getByLabel('Email').fill('manual-lead@example.test')
-  await page.getByLabel('Name').fill('Manual Lead')
-  await page.getByLabel('Message').fill('Staff-recorded lead details are shown as plain text.')
-  await page.getByLabel(/I recorded the contact/).check()
-  await page.getByRole('button', { name: 'Create manual lead' }).click()
-  await expect(page.getByRole('status')).toContainText('staff-recorded consent')
-  await page.getByRole('button', { name: /manual-lead@example\.test/ }).click()
-  await page.getByLabel('Lead details').getByLabel('Stage').selectOption('qualified')
-  await page.getByLabel('Active assignee').selectOption({ label: 'Synthetic Lead Owner' })
-  await page.getByLabel('Notes').fill('Called the contact.')
-  await page.getByLabel('Next action').fill('Send a scoped proposal.')
-  await page.getByRole('button', { name: 'Save lead details' }).click()
-  await expect(page.getByRole('status')).toContainText('Lead details saved')
-  await page.getByLabel('Lead filters').getByLabel('Stage').selectOption('qualified')
-  await expect(page.getByRole('button', { name: /manual-lead@example\.test/ })).toBeVisible()
-  const csv = await page.request.get(await page.getByRole('link', { name: 'Export filtered CSV' }).getAttribute('href') ?? '')
-  expect(csv.ok()).toBeTruthy(); expect(await csv.text()).toContain('manual-lead@example.test')
+async function axe(page: Page) {
+  await page.addScriptTag({ url: '/__e2e/axe.js' })
+  return page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)
+}
+
+async function attachRenderedFonts(page: Page, testInfo: TestInfo) {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    await cdp.send('DOM.enable'); await cdp.send('CSS.enable')
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true })
+    const evidence = []
+    for (const [name, selector] of [['filter label', '[aria-label="Lead filters"] label'], ['filter input', '[aria-label="Lead filters"] select'], ['primary button', '[data-leads-workspace] button']] as const) {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      expect(nodeId, `${name} font target exists`).toBeTruthy()
+      const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+      expect(fonts.length, `${name} has a rendered platform font`).toBeGreaterThan(0)
+      evidence.push({ name, selector, fonts })
+    }
+    await testInfo.attach('rendered-platform-fonts', { body: Buffer.from(JSON.stringify(evidence, null, 2)), contentType: 'application/json' })
+    if (await page.locator('link[href="/admin-branding/admin-branding.css"]').count()) {
+      expect(evidence.every(({ fonts }) => fonts.some((font) => font.isCustomFont && font.familyName.startsWith('IBM Plex Sans'))), JSON.stringify(evidence)).toBe(true)
+    }
+  } finally { await cdp.detach() }
+}
+
+test('ENG-019 owner uses the real pipeline, manual intake, controlled detail form, filters, and CSV', async ({ browser }, testInfo) => {
+  const owner = await signedIn(browser, 'owner')
+  await owner.page.goto('/leads')
+  await attachRenderedFonts(owner.page, testInfo)
+  await expect(owner.page.getByRole('heading', { name: 'Lead pipeline', level: 1 })).toBeAttached()
+  await expect(owner.page.getByRole('button', { name: 'Pipeline' })).toHaveAttribute('aria-pressed', 'true')
+  const proposal = owner.page.getByRole('region', { name: 'Proposal' })
+  await expect(proposal.locator('header')).toContainText('51')
+  await expect(proposal).toContainText('Showing 6 of 51')
+  await owner.page.screenshot({ path: testInfo.outputPath('leads-pipeline-desktop.png'), fullPage: true })
+  await expect(owner.page.locator('[data-lead-card][data-urgent="true"]').first()).toContainText('Active incident')
+
+  await owner.page.getByRole('button', { name: '+ Add lead' }).click()
+  const dialog = owner.page.getByRole('dialog', { name: 'Add lead' })
+  await dialog.getByLabel('Email').fill('manual-lead@example.test')
+  await dialog.getByLabel('Name').fill('Manual Lead')
+  await dialog.getByLabel('Message').fill('Staff-recorded lead details are shown as plain text.')
+  await dialog.getByLabel(/I recorded the contact/).check()
+  await dialog.getByRole('button', { name: 'Create manual lead' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('staff-recorded consent')
+  await expect(dialog).toHaveCount(0)
+
+  await owner.page.getByRole('button', { name: /First editable lead/ }).click()
+  const detail = owner.page.getByRole('complementary', { name: 'Lead details' })
+  await expect(detail.getByLabel('Notes')).toHaveValue('First lead notes')
+  await expect(detail).toContainText('<img src=x onerror=alert(1)> remains visible text.')
+  await expect(detail.locator('img')).toHaveCount(0)
+  await detail.getByLabel('Notes').fill('Unsaved text that must not cross records')
+  await owner.page.getByRole('button', { name: /Second editable lead/ }).click()
+  await expect(detail.getByLabel('Notes')).toHaveValue('Second lead notes')
+  await detail.getByLabel('Stage').selectOption('proposal')
+  await detail.getByLabel('Active assignee').selectOption({ label: 'Synthetic Lead Owner' })
+  await detail.getByLabel('Notes').fill('Called the contact.')
+  await detail.getByLabel('Next action').fill('Send a scoped proposal.')
+  await detail.getByRole('button', { name: 'Save lead details' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('Lead details saved')
+  await expect(owner.page.getByRole('region', { name: 'Proposal' }).locator('header')).toContainText('52')
+  const audit = await owner.page.request.get('/api/audit-events?where[event][equals]=lead.updated&sort=-createdAt&limit=1&depth=0')
+  expect(audit.ok()).toBeTruthy()
+  expect((await audit.json()).docs[0]).toMatchObject({ event: 'lead.updated', actor: expect.any(String), detail: { fields: expect.arrayContaining(['stage', 'assignee', 'notes', 'nextAction']) } })
+
+  await owner.page.getByRole('button', { name: 'List' }).click()
+  await owner.page.getByLabel('Lead filters').getByLabel('Stage').selectOption('proposal')
+  await owner.page.getByLabel('Lead filters').getByLabel('Source').selectOption('/services/b')
+  await expect(owner.page.getByRole('button', { name: /Second editable lead/ })).toBeVisible()
+  const href = await owner.page.getByRole('link', { name: 'Export CSV' }).getAttribute('href')
+  const csv = await owner.page.request.get(href ?? '')
+  expect(csv.ok()).toBeTruthy()
+  expect(csv.headers()['cache-control']).toBe('no-store')
+  const csvText = await csv.text()
+  expect(csvText).toContain('notes-b.synthetic@example.test')
+  expect(csvText).not.toContain('proposal-0@synthetic.example.test')
+  await owner.page.getByRole('button', { name: 'Pipeline' }).click()
+  await expect(owner.page.getByRole('region', { name: 'Proposal' }).locator('header')).toContainText('1')
+
+  await owner.page.getByRole('button', { name: 'List' }).click()
+  await owner.page.getByLabel('Lead filters').getByLabel('Stage').selectOption('')
+  await owner.page.getByLabel('Lead filters').getByLabel('Source').selectOption('/archive')
+  await expect(owner.page.getByText('No leads match these filters.')).toBeVisible()
+  await owner.page.getByLabel('Lead filters').getByLabel('Received').selectOption('all')
+  await expect(owner.page.getByRole('button', { name: /Archived lead/ })).toBeVisible()
+
+  const list = await owner.page.request.get('/api/leads?stage=proposal&page=1')
+  expect(list.headers()['cache-control']).toBe('no-store')
+  const body = await list.json()
+  expect(body.pipeline.proposal.totalDocs).toBeGreaterThanOrEqual(52)
+  expect(body.pipeline.proposal.leads).toHaveLength(6)
+  expect(body.leads.every((lead: { stage: string }) => lead.stage === 'proposal')).toBeTruthy()
+  expect(body.leads[0]).not.toHaveProperty('idempotencyKey')
+  const filtered = await owner.page.request.get('/api/leads?sourcePage=%2Fservices%2Fb&received=90')
+  expect(filtered.ok()).toBeTruthy()
+  const filteredBody = await filtered.json()
+  expect(filteredBody.leads).toHaveLength(1)
+  expect(filteredBody.leads[0]).toMatchObject({ email: 'notes-b.synthetic@example.test', sourcePage: '/services/b' })
+  expect(filteredBody.pipeline.proposal.totalDocs).toBe(1)
+  expect(filteredBody.pipeline.proposal.leads[0]).toMatchObject({ email: 'notes-b.synthetic@example.test' })
+  const invalidFilter = await owner.page.request.get('/api/leads?received=quarter')
+  expect(invalidFilter.status()).toBe(400)
+  expect(await invalidFilter.json()).toMatchObject({ error: expect.stringContaining('last 7, 30, 90, or 365 days') })
+  const invalidExport = await owner.page.request.get('/api/leads/export?sourcePage=https%3A%2F%2Fevil.test')
+  expect(invalidExport.status()).toBe(400)
+  expect(invalidExport.headers()['cache-control']).toBe('no-store')
+  const invalid = await owner.page.request.patch(`/api/leads/${body.leads[0].id}`, { headers: { origin }, data: { stage: 'new' } })
+  expect(invalid.status()).toBe(422)
+  expect(invalid.headers()['cache-control']).toBe('no-store')
+
+  expect(await axe(owner.page)).toEqual([])
+  await owner.page.screenshot({ path: testInfo.outputPath('leads-list-desktop.png'), fullPage: true })
+  await owner.context.close()
 })
 
-test('ENG-019 redirects an editor away from the protected lead dashboard', async ({ page }) => {
-  await page.goto('/api/auth/google')
-  await page.getByRole('button', { name: 'Sign in as Synthetic Editor' }).click()
-  await page.waitForURL(/\/admin(?:\?.*)?$/)
-  await page.goto('/leads')
-  await page.waitForURL(/\/admin\/login/)
+test('ENG-019 remains keyboard-readable at 390px and recovers from a load error', async ({ browser }, testInfo) => {
+  const owner = await signedIn(browser, 'owner')
+  await owner.page.setViewportSize({ width: 390, height: 844 })
+  let failed = false
+  await owner.page.route('**/api/leads?*', async (route) => {
+    if (!failed) { failed = true; await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic temporary failure.' }) }) }
+    else await route.continue()
+  })
+  await owner.page.goto('/leads')
+  await expect(owner.page.locator('[data-leads-workspace] [role="alert"]')).toContainText('Synthetic temporary failure')
+  await owner.page.unroute('**/api/leads?*')
+  await owner.page.getByRole('button', { name: 'Try again' }).click()
+  await expect(owner.page.getByRole('region', { name: 'New' })).toBeVisible()
+  const board = owner.page.getByRole('region', { name: 'Lead pipeline board' })
+  expect(await owner.page.locator('[data-leads-pipeline]').evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(420)
+  const column = await owner.page.getByRole('region', { name: 'New' }).evaluate((element) => ({ height: element.getBoundingClientRect().height, overflow: getComputedStyle(element).overflowY }))
+  expect(column.height).toBeLessThanOrEqual(392)
+  expect(column.overflow).toBe('auto')
+  expect(await owner.page.getByRole('region', { name: 'Proposal' }).evaluate((element) => { element.scrollTop = element.scrollHeight; return element.scrollTop > 0 })).toBe(true)
+  await owner.page.getByRole('button', { name: /new-lead.synthetic@example.test/ }).focus()
+  await owner.page.keyboard.press('Enter')
+  await expect(owner.page.getByRole('complementary', { name: 'Lead details' })).toBeVisible()
+  await owner.page.getByLabel('Lead filters').getByLabel('Source').selectOption('/archive')
+  await expect(board.getByText('No leads')).toHaveCount(6)
+  await board.focus()
+  await expect(board).toBeFocused()
+  for (let index = 0; index < 12; index += 1) await owner.page.keyboard.press('ArrowRight')
+  await expect.poll(() => board.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
+  expect(await axe(owner.page)).toEqual([])
+  await owner.page.screenshot({ path: testInfo.outputPath('leads-pipeline-390.png'), fullPage: true })
+  await owner.context.close()
+})
+
+test('ENG-019 denies anonymous and non-sales staff without exposing lead data', async ({ browser, request }) => {
+  const anonymous = await request.get(`${origin}/api/leads`)
+  expect(anonymous.status()).toBe(401)
+  expect(anonymous.headers()['cache-control']).toBe('no-store')
+  expect(await anonymous.text()).not.toContain('synthetic@example.test')
+  const editor = await signedIn(browser, 'editor')
+  const denied = await editor.page.request.get('/api/leads')
+  expect(denied.status()).toBe(401)
+  expect(denied.headers()['cache-control']).toBe('no-store')
+  await editor.page.goto('/leads')
+  await expect(editor.page).toHaveURL(/\/admin\/login/)
+  await editor.context.close()
 })

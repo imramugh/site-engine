@@ -80,7 +80,9 @@ describe('configured AI job lease lifecycle', () => {
     expect(winners[0]!.job.id).toBe(job.job.id)
   })
 
-  it('skips the first hundred active leases to claim the next eligible queued job', async () => {
+  // These pagination fixtures perform hundreds of real transactional writes.
+  // Their setup budget is separate from the worker's lease/claim semantics.
+  it('skips the first hundred active leases to claim the next eligible queued job', { timeout: 30_000 }, async () => {
     for (let index = 0; index < 100; index += 1) {
       const active = await queued()
       await payload.update({ collection: 'configured-ai-jobs', id: active.job.id, data: { state: 'running', leaseToken: `active-${index}`, leaseExpiresAt: new Date(61_000).toISOString() }, overrideAccess: true })
@@ -89,7 +91,7 @@ describe('configured AI job lease lifecycle', () => {
     await expect(lifecycle.claimConfiguredAIJob(payload, 'worker', 1_000)).resolves.toMatchObject({ job: { id: eligible.job.id } })
   })
 
-  it('quarantines invalid leases without scanning healthy running jobs and claims eligible work', async () => {
+  it('quarantines invalid leases without scanning healthy running jobs and claims eligible work', { timeout: 30_000 }, async () => {
     for (let index = 0; index < 101; index += 1) {
       const active = await queued()
       await payload.update({ collection: 'configured-ai-jobs', id: active.job.id, data: { state: 'running', leaseToken: `healthy-${index}`, leaseExpiresAt: new Date(61_000).toISOString() }, overrideAccess: true })

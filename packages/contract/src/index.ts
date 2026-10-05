@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.3.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.4.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -128,16 +128,18 @@ export const SectionPresets = {
   // Retained for callers that adopted the original generic future-section name.
   landing: ['landing', 'standard', 'article'],
 } as const satisfies Record<string, readonly z.infer<typeof TemplateSchema>[]>;
-const JobPostingSchema = z.object({
+export const JobPostingSchema = z.object({
   datePosted: z.string().datetime(), employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY', 'INTERN', 'OTHER']),
   location: z.object({ addressLocality: safeText(100), addressRegion: safeText(100).optional(), addressCountry: z.string().regex(/^[A-Z]{2}$/) }).strict(),
   validThrough: z.string().datetime().optional(),
 }).strict().superRefine((job, ctx) => { if (job.validThrough && new Date(job.validThrough) <= new Date(job.datePosted)) ctx.addIssue({ code: 'custom', path: ['validThrough'], message: 'Job closing time must be after its posting time.' }); });
 export const BusinessCaseSchema = z.object({ client: safeText(160).optional(), anonymizedClient: safeText(160).optional(), industry: safeText(100), challenge: RichTextSchema.max(2_000), approach: RichTextSchema.max(2_000), outcome: RichTextSchema.max(2_000), services: z.array(safeText(100)).min(1).max(12), publicationDate: z.string().datetime() }).strict().superRefine((value, ctx) => { if (Boolean(value.client) === Boolean(value.anonymizedClient)) ctx.addIssue({ code: 'custom', path: ['client'], message: 'Provide either the client or an anonymized client.' }); });
-export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(), title: safeText(160), summary: safeText(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), template: TemplateSchema, status: z.enum(['draft', 'published', 'archived']), blocks: z.array(BlockSchema).max(40), seoDescription: safeText(160).optional(), noindex: z.boolean().optional(), publishedAt: z.string().datetime().optional(), updatedAt: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional(), businessCase: BusinessCaseSchema.optional() }).strict().superRefine((page, ctx) => {
+export const PageSchema = z.object({ id, sectionId: id, parentId: id.optional(), title: safeText(160), summary: safeText(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), template: TemplateSchema, status: z.enum(['draft', 'published', 'archived']), blocks: z.array(BlockSchema).max(40), kicker: safeText(160).optional(), lede: safeText(500).optional(), seoDescription: safeText(160).optional(), noindex: z.boolean().optional(), publishedAt: z.string().datetime().optional(), lastReviewed: z.string().datetime().optional(), updatedAt: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional(), businessCase: BusinessCaseSchema.optional() }).strict().superRefine((page, ctx) => {
   if (page.template === 'landing' && page.blocks.find((block) => !block.hidden)?.type !== 'hero') ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Landing pages must begin with a visible Hero' });
   if (page.template !== 'job' && page.jobPosting) ctx.addIssue({ code: 'custom', path: ['jobPosting'], message: 'Job metadata is only allowed on job pages.' });
   if (page.businessCase && page.template !== 'article') ctx.addIssue({ code: 'custom', path: ['businessCase'], message: 'Business-case metadata is only allowed on article pages.' });
+  if (page.template !== 'service' && (page.kicker || page.lede)) ctx.addIssue({ code: 'custom', path: ['kicker'], message: 'Kicker and lede metadata are only allowed on service pages.' });
+  if (page.lastReviewed && page.template !== 'service' && page.template !== 'article') ctx.addIssue({ code: 'custom', path: ['lastReviewed'], message: 'Last-reviewed metadata is only allowed on service and article pages.' });
   const allowed = TemplateAllowedBlocks[page.template]; page.blocks.forEach((block, index) => { if (!allowed.includes(block.type)) ctx.addIssue({ code: 'custom', path: ['blocks', index, 'type'], message: `${block.type} is not allowed by ${page.template}` }); });
 });
 /**
@@ -160,7 +162,7 @@ const MediaDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const MediaMimeTypeSchema = z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'video/mp4', 'video/webm', 'text/vtt']);
 const MediaVariantSchema = z.object({ filename: MediaFilenameSchema, width: z.number().int().positive(), height: z.number().int().positive(), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp']), sha256: MediaDigestSchema }).strict();
 const MediaVariantsSchema = z.object({ heroAvif: MediaVariantSchema.optional(), heroWebp: MediaVariantSchema.optional(), cardAvif: MediaVariantSchema.optional(), cardWebp: MediaVariantSchema.optional(), thumbnailAvif: MediaVariantSchema.optional(), thumbnailWebp: MediaVariantSchema.optional() }).strict();
-export const MediaReferenceSchema = z.object({ id, filename: MediaFilenameSchema, sha256: MediaDigestSchema.optional(), variants: MediaVariantsSchema.optional(), alt: safeText(240).optional(), decorative: z.boolean().default(false), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), mimeType: MediaMimeTypeSchema }).strict().superRefine((media, ctx) => { if (media.mimeType.startsWith('image/') && (!media.width || !media.height)) ctx.addIssue({ code: 'custom', path: ['width'], message: 'Images require intrinsic width and height' }); if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); });
+export const MediaReferenceSchema = z.object({ id, filename: MediaFilenameSchema, sha256: MediaDigestSchema.optional(), variants: MediaVariantsSchema.optional(), alt: safeText(240).optional(), decorative: z.boolean().default(false), focalX: z.number().int().min(0).max(100).optional(), focalY: z.number().int().min(0).max(100).optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), mimeType: MediaMimeTypeSchema }).strict().superRefine((media, ctx) => { if (media.mimeType.startsWith('image/') && (!media.width || !media.height)) ctx.addIssue({ code: 'custom', path: ['width'], message: 'Images require intrinsic width and height' }); if (!media.decorative && !media.alt) ctx.addIssue({ code: 'custom', path: ['alt'], message: 'Non-decorative media requires alt text' }); if ((media.focalX === undefined) !== (media.focalY === undefined)) ctx.addIssue({ code: 'custom', path: ['focalX'], message: 'Focal coordinates must be provided together' }); });
 export const RedirectSchema = z.object({ from: InternalPathSchema, to: InternalPathSchema, status: z.literal(301) }).strict();
 const ThemeNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const ThemeSettingValueSchema = z.union([z.string().max(2_000), z.number().finite(), z.boolean()]);
@@ -220,8 +222,10 @@ export const SiteSnapshotSchema = z.object({
   if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
   const assets = new Map(snapshot.media.map((asset) => [asset.id, asset]));
   if (assets.size !== snapshot.media.length) issue(['media'], 'Media IDs must be unique');
+  if (snapshot.settings.contractVersion !== '1.4.0') snapshot.media.forEach((asset, index) => { if (asset.focalX !== undefined || asset.focalY !== undefined) issue(['media', index], 'Media focal points require contract version 1.4.0.'); });
   const siblingSlugs = new Set<string>();
   for (const [index, page] of snapshot.pages.entries()) {
+    if (snapshot.settings.contractVersion !== '1.4.0' && (page.kicker || page.lede || page.lastReviewed)) issue(['pages', index], 'Service introduction and last-reviewed metadata require contract version 1.4.0.');
     const section = sections.get(page.sectionId);
     if (!section) issue(['pages', index, 'sectionId'], 'Page references an unknown section');
     else if (!section.allowedTemplates.includes(page.template)) issue(['pages', index, 'template'], 'Template is not allowed in this section');
@@ -245,8 +249,8 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
-      if (!['1.2.0', '1.3.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
-      if (snapshot.settings.contractVersion !== '1.3.0' && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
+      if (!['1.2.0', '1.3.0', '1.4.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (!['1.3.0', '1.4.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

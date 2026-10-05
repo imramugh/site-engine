@@ -71,13 +71,14 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
     const counts = { all: allRows.length, draft: allRows.filter((row) => matchesDraft(row.page)).length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
     const visible = allRows.filter((row) => (filter === 'all' || (filter === 'draft' ? matchesDraft(row.page) : stateOf(row.page) === filter)) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
     const canCreate = hasRole(user as never, ['owner', 'editor'])
-    const pageHref = (id: string) => canCreate ? `/content-editor/${id}` : `/admin/collections/pages/${id}`
+    const canEdit = hasRole(user as never, ['owner', 'approver', 'editor'])
+    const pageHref = (id: string) => canEdit ? `/content-editor/${id}` : `/admin/collections/pages/${id}`
     return <StaffShell><main data-content-tree>
       <h1 className={styles.visuallyHidden}>Content</h1>
       <section className={styles.contentList} aria-label="Content pages" data-content-list data-testid="content-list">
         <div className={styles.toolbar}>
           <nav className={styles.tabs} aria-label="Page status" data-content-tabs>{filters.map((item) => <a key={item.value} className={styles.tab} href={hrefFor(item.value, search)} aria-current={filter === item.value ? 'page' : undefined} data-content-tab={item.value}>{item.label} ({counts[item.value]})</a>)}</nav>
-          {canCreate ? <a className={styles.newPage} href="/admin/collections/pages/create" data-content-new-page>+ New page</a> : null}
+          {canCreate ? <a className={styles.newPage} href="/content-editor/new" data-content-new-page>+ New page</a> : null}
         </div>
         <div className={styles.tableWrap} tabIndex={0} aria-label="Page list. Scroll horizontally for all columns on small screens." data-content-table-scroll data-testid="content-table-scroll">
           <table className={styles.table} data-content-table><caption className={styles.visuallyHidden}>Pages matching the selected status and search</caption><thead><tr><th scope="col">Page</th><th scope="col">Template</th><th scope="col">Status</th><th scope="col">Checks</th><th scope="col">Updated</th></tr></thead><tbody>

@@ -306,11 +306,39 @@ export interface Page {
     | number
     | boolean
     | null;
+  /**
+   * Short service-page context shown above the page title.
+   */
+  kicker?: string | null;
+  /**
+   * Service-page introduction shown with the page title.
+   */
+  lede?: string | null;
   seoDescription?: string | null;
   /**
    * Keep this published page out of search engines and the public site search index.
    */
   noindex?: boolean | null;
+  /**
+   * Article publication date.
+   */
+  publishedAt?: string | null;
+  /**
+   * Date this service or article was last reviewed.
+   */
+  lastReviewed?: string | null;
+  /**
+   * Job posting date, employment type, location, and optional closing date.
+   */
+  jobPosting?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   /**
    * Article-only client or anonymized client, industry, challenge, approach, outcome, services, and publication date.
    */
@@ -728,6 +756,8 @@ export interface ChangeSet {
   submittedAt?: string | null;
   reviewedAt?: string | null;
   staleAt?: string | null;
+  creationRequestKey?: string | null;
+  creationRequestHash?: string | null;
   summary?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -1219,8 +1249,13 @@ export interface PagesSelect<T extends boolean = true> {
   template?: T;
   status?: T;
   blocks?: T;
+  kicker?: T;
+  lede?: T;
   seoDescription?: T;
   noindex?: T;
+  publishedAt?: T;
+  lastReviewed?: T;
+  jobPosting?: T;
   businessCase?: T;
   updatedAt?: T;
   createdAt?: T;
@@ -1531,6 +1566,8 @@ export interface ChangeSetsSelect<T extends boolean = true> {
   submittedAt?: T;
   reviewedAt?: T;
   staleAt?: T;
+  creationRequestKey?: T;
+  creationRequestHash?: T;
   summary?: T;
   updatedAt?: T;
   createdAt?: T;

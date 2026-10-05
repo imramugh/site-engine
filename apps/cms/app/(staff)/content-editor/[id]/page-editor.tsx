@@ -3,15 +3,17 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react'
-import type { Block } from '@site-engine/contract'
+import type { Block, Page } from '@site-engine/contract'
+import { MetadataFields, type PageMetadataValue } from './metadata-fields'
 import styles from './page-editor.module.css'
 
-type Draft = {
+type Draft = PageMetadataValue & {
   title: string
   summary: string
   slug: string
@@ -26,6 +28,7 @@ type ChangeSet = {
   revision: number
   changes: number
   theme: { name: string; version: string } | null
+  contractVersion: string | null
 }
 type Reference = { id: string; label: string; mimeType?: string }
 type CatalogItem = {
@@ -36,7 +39,7 @@ type CatalogItem = {
 type Context = {
   page: {
     id: string
-    template: string
+    template: Page['template']
     state: string
     draft: Draft
     hash: string
@@ -52,6 +55,7 @@ type Context = {
     logoTones: string[]
   }
   activeTheme: { name: string; version: string } | null
+  activeContractVersion: string | null
   references: { media: Reference[]; pages: Reference[] }
 }
 type Preview = { id: string; status: string; path?: string }
@@ -352,10 +356,12 @@ function Scalar({
   onChange: (value: unknown) => void
   references: Context['references']
 }) {
+  const controlID = useId()
   if (typeof value === 'boolean')
     return (
-      <label className={styles.checkbox}>
+      <label className={styles.checkbox} htmlFor={controlID}>
         <input
+          id={controlID}
           type="checkbox"
           checked={value}
           onChange={(event) => onChange(event.target.checked)}
@@ -371,9 +377,10 @@ function Scalar({
       : undefined
   if (reference)
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <select
+          id={controlID}
           value={String(value)}
           onChange={(event) => onChange(event.target.value)}
         >
@@ -387,9 +394,10 @@ function Scalar({
     )
   if (typeof value === 'number')
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <input
+          id={controlID}
           type="number"
           value={value}
           onChange={(event) => onChange(Number(event.target.value))}
@@ -398,9 +406,10 @@ function Scalar({
     )
   if (enumOptions[field])
     return (
-      <label>
+      <label htmlFor={controlID}>
         {title(field)}
         <select
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         >
@@ -423,15 +432,17 @@ function Scalar({
     'outcome',
   ].includes(field)
   return (
-    <label>
+    <label htmlFor={controlID}>
       {title(field)}
       {long ? (
         <textarea
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
         <input
+          id={controlID}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -872,6 +883,10 @@ export function PageEditor({ pageID }: { pageID: string }) {
     data?.changeSets.find((item) => item.id === changeSetID) ??
     data?.changeSets[0]
   const selectedTheme = selectedSet ? selectedSet.theme : data?.activeTheme
+  const selectedContractVersion = selectedSet
+    ? selectedSet.contractVersion
+    : data?.activeContractVersion
+  const supportsPageMetadata = selectedContractVersion === '1.4.0'
   const dirty = Boolean(
     draft && saved && JSON.stringify(draft) !== JSON.stringify(saved),
   )
@@ -1370,7 +1385,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
         <div className={styles.controls}>
           <details className={styles.pageFields} data-page-editor-fields>
             <summary>
-              Page fields <span>Title, summary, URL and SEO</span>
+              Page fields <span>Title, summary, metadata, URL and SEO</span>
             </summary>
             <div>
               <label>
@@ -1437,6 +1452,15 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 />{' '}
                 Hide from search engines and public search
               </label>
+              <MetadataFields
+                template={data.page.template}
+                value={draft}
+                disabled={busy}
+                supportsServiceMetadata={supportsPageMetadata}
+                onChange={(metadata) =>
+                  edit((current) => ({ ...current, ...metadata }))
+                }
+              />
             </div>
           </details>
           <section className={styles.blocks} data-page-editor-blocks>

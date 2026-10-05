@@ -7,6 +7,8 @@ const docs = Array.from({ length: 105 }, (_, index) => ({
   mimeType: 'image/png',
   deletedAt: index === 103 ? '2026-10-01T00:00:00.000Z' : null,
   alt: index === 102 ? '' : 'Description',
+  focalX: index === 104 ? 27.6 : undefined,
+  focalY: index === 104 ? 72.2 : undefined,
   privateInternalField: 'must not be exposed',
 }))
 function fixture() {
@@ -24,11 +26,12 @@ describe('media workspace pagination', () => {
     const payload = fixture()
     const later = await mediaWorkspace(payload as never, user, { q: 'later-match', page: 1, pageSize: 10 })
     expect(later).toMatchObject({ total: 1, page: 1, totalPages: 1 })
-    expect(later.assets[0]).toMatchObject({ filename: 'later-match.png', usages: [{ pageId: 'page-1', pageTitle: 'Used page', locations: ['blocks[0].mediaId', 'blocks[1].gallery[0]'] }] })
+    expect(later.assets[0]).toMatchObject({ filename: 'later-match.png', focalX: 28, focalY: 72, usages: [{ pageId: 'page-1', pageTitle: 'Used page', locations: ['blocks[0].mediaId', 'blocks[1].gallery[0]'] }] })
     expect(later.assets[0]).not.toHaveProperty('privateInternalField')
     const missing = await mediaWorkspace(payload as never, user, { filter: 'missing-alt', pageSize: 10 })
     expect(missing.total).toBe(1)
     expect(missing.assets[0]?.id).toBe('asset-102')
+    expect(missing.assets[0]).toMatchObject({ focalX: 50, focalY: 50 })
     const bin = await mediaWorkspace(payload as never, user, { filter: 'bin', pageSize: 10 })
     expect(bin.total).toBe(1)
     expect(bin.assets[0]?.id).toBe('asset-103')
