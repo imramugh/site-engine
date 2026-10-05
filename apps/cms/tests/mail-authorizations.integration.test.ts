@@ -7,7 +7,7 @@ import { getPayload, type Payload } from 'payload'
 import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
-import { prepareReply } from '../src/mail-replies'
+import { prepareReply, sendReply, setReplyDeliveryForTest } from '../src/mail-replies'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mail-authorizations-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -46,6 +46,15 @@ async function draft(): Promise<Draft> {
 const future = () => new Date(Date.now() + 60_000)
 
 describe('local mail authorization transactions', () => {
+  it('consumes an accepted delivery once and marks an ambiguous delivery unknown without retry', async () => {
+    const owner = await actor('owner'); const prepared = await draft(); const grant = await authorizeMailDraft(payload, owner, prepared.id, future()); let calls = 0
+    setReplyDeliveryForTest(async () => { calls += 1; throw new Error('accepted_then_audit_lost') })
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('accepted_then_audit_lost')
+    expect(calls).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'delivery-unknown' })
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+    expect(calls).toBe(1); setReplyDeliveryForTest()
+  })
   it('refuses preparation for a spam lead before persisting a reply', async () => {
     const user = await actor('owner')
     const lead = await payload.create({ collection: 'inquiries', data: { email: `spam-prepare-${randomUUID()}@example.test`, message: 'Spam.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new' }, overrideAccess: true })
