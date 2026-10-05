@@ -942,6 +942,7 @@ export const SiteSettings: CollectionConfig = {
     { name: 'incident', type: 'group', fields: [{ name: 'label', type: 'text', maxLength: 80 }, { name: 'guidance', type: 'textarea', maxLength: 1000 }] },
     { name: 'navigation', type: 'json', admin: { description: 'Validated ordered header and footer references.' } },
     { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
+    { name: 'crawlerPolicy', type: 'json', admin: { description: 'Reviewed robots.txt requests. These preferences do not enforce access.' } },
     { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
   ],
 }

@@ -644,6 +644,18 @@ export interface SiteSetting {
    * Expose the static public search page and include it in the primary navigation after this change is reviewed and published.
    */
   searchEnabled?: boolean | null;
+  /**
+   * Reviewed robots.txt requests. These preferences do not enforce access.
+   */
+  crawlerPolicy?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   contractVersion?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -1808,6 +1820,7 @@ export interface SiteSettingsSelect<T extends boolean = true> {
       };
   navigation?: T;
   searchEnabled?: T;
+  crawlerPolicy?: T;
   contractVersion?: T;
   updatedAt?: T;
   createdAt?: T;

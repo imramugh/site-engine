@@ -1,5 +1,8 @@
-/** Review this policy quarterly. Its version is emitted with crawler-facing output. */
-export const CRAWLER_POLICY_VERSION = '2026-10-03';
+import type { SiteSnapshot } from '@site-engine/contract';
+
+/** Review the supported vendor tokens quarterly. Its version is emitted with
+ * crawler-facing output so a release can be audited without guessing. */
+export const CRAWLER_POLICY_VERSION = '2026-10-05';
 
 export type CrawlerMode = 'public' | 'preview';
 
@@ -11,9 +14,28 @@ export function crawlerMode(basePath: string, configured = process.env.SITE_CRAW
   return 'public';
 }
 
-export function robotsText(mode: CrawlerMode, sitemapURL: string): string {
-  const directives = mode === 'preview'
-    ? ['User-agent: *', 'Disallow: /']
-    : ['User-agent: *', 'Disallow: /admin/', 'Disallow: /preview/', 'Disallow: /api/', 'Disallow: /oauth/', 'Disallow: /mcp/', 'Allow: /', `Sitemap: ${sitemapURL}`];
+type CrawlerPolicy = NonNullable<SiteSnapshot['settings']['crawlerPolicy']>;
+const legacyPolicy: CrawlerPolicy = { searchEngines: true, aiSearchAndAnswers: true, aiModelTraining: true };
+const protectedPaths = ['/admin/', '/preview/', '/api/', '/oauth/', '/mcp/'];
+
+function group(agents: readonly string[], allowed: boolean): string[] {
+  return [
+    ...agents.map(agent => `User-agent: ${agent}`),
+    ...(allowed ? [...protectedPaths.map(path => `Disallow: ${path}`), 'Allow: /'] : ['Disallow: /']),
+  ];
+}
+
+export function robotsText(mode: CrawlerMode, sitemapURL: string, policy: SiteSnapshot['settings']['crawlerPolicy'] = legacyPolicy): string {
+  if (mode === 'preview') return [`# site-engine crawler policy ${CRAWLER_POLICY_VERSION}`, 'User-agent: *', 'Disallow: /', ''].join('\n');
+  const selected = policy ?? legacyPolicy;
+  const directives = [
+    ...group(['*'], selected.searchEngines),
+    '',
+    ...group(['OAI-SearchBot', 'Claude-SearchBot', 'Claude-User', 'PerplexityBot'], selected.aiSearchAndAnswers),
+    '',
+    ...group(['GPTBot', 'ClaudeBot', 'Google-Extended'], selected.aiModelTraining),
+    '',
+    `Sitemap: ${sitemapURL}`,
+  ];
   return [`# site-engine crawler policy ${CRAWLER_POLICY_VERSION}`, ...directives, ''].join('\n');
 }

@@ -26,7 +26,7 @@ const mutableFields: Record<CapturedCollection, readonly string[]> = {
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'focalX', 'focalY', 'sizes'],
   'theme-settings': ['selection', 'settings'],
   'style-guides': ['bannedPhrases', 'preferredTerms', 'canadianSpelling', 'maximumSentenceWords', 'minimumReadingEase'],
-  'site-settings': ['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'searchEnabled'],
+  'site-settings': ['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'searchEnabled', 'crawlerPolicy'],
 }
 
 function idOf(value: unknown): string | undefined {

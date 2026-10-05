@@ -172,7 +172,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   }
   // Payload represents omitted optional singleton fields as null. The public
   // snapshot contract intentionally represents omission, not nullability.
-  for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription']) {
+  for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy']) {
     if (siteSettings[field] === null) delete siteSettings[field]
   }
   // Keep editor-maintained navigation distinct from derived section membership.
