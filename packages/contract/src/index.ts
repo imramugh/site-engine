@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.6.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.7.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -192,6 +192,13 @@ export const StyleGuideSchema = z.object({
   if (new Set(terms.map((term) => term.avoid.toLocaleLowerCase())).size !== terms.length) ctx.addIssue({ code: 'custom', path: ['preferredTerms'], message: 'Preferred terms must have unique avoided terms.' });
 });
 export const PostalAddressSchema = z.object({ streetAddress: safeText(240), addressLocality: safeText(100), addressRegion: safeText(100), postalCode: safeText(24), addressCountry: z.string().regex(/^[A-Z]{2}$/) }).strict();
+/** Reviewed public crawler preferences. These values generate robots.txt
+ * requests; they are not an access-control boundary. */
+export const CrawlerPolicySchema = z.object({
+  searchEngines: z.boolean(),
+  aiSearchAndAnswers: z.boolean(),
+  aiModelTraining: z.boolean(),
+}).strict();
 export const SemanticLogosSchema = z.object({
   primaryLight: MediaReferenceSchema.optional(), primaryDark: MediaReferenceSchema.optional(),
   fullLockupLight: MediaReferenceSchema.optional(), fullLockupDark: MediaReferenceSchema.optional(),
@@ -215,11 +222,11 @@ export const SiteNavigationSchema = z.object({
   if (navigation.header.filter((item) => item.style === 'link').length > 5) ctx.addIssue({ code: 'custom', path: ['header'], message: 'Header navigation allows at most five links.' });
 });
 export const LinkedInURLSchema = z.string().url().max(300).refine(value => { try { const url = new URL(value); return url.protocol === 'https:' && /(^|\.)linkedin\.com$/i.test(url.hostname) && !url.username && !url.password; } catch { return false; } }, 'Expected an HTTPS LinkedIn URL');
-export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), legalName: safeText(160).optional(), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).optional(), logo: MediaReferenceSchema.optional(), logos: SemanticLogosSchema.optional(), contactEmail: z.string().email().optional(), contactPhone: safeText(40).optional(), address: PostalAddressSchema.optional(), linkedIn: LinkedInURLSchema.optional(), incident: z.object({ label: safeText(80), guidance: RichTextSchema.max(1_000) }).strict().optional(), navigation: SiteNavigationSchema.optional(), seoDescription: safeText(160).optional(), searchEnabled: z.boolean().optional(), sections: z.array(SectionSchema).max(20), theme: ThemeSelectionSchema.optional(), themeSettings: z.record(ThemeNameSchema, z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), ThemeSettingValueSchema)).default({}) }).strict();
+export const SiteSettingsSchema = z.object({ contractVersion: ContractVersionSchema, siteName: safeText(100), legalName: safeText(160).optional(), homepageId: id.optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).optional(), logo: MediaReferenceSchema.optional(), logos: SemanticLogosSchema.optional(), contactEmail: z.string().email().optional(), contactPhone: safeText(40).optional(), address: PostalAddressSchema.optional(), linkedIn: LinkedInURLSchema.optional(), incident: z.object({ label: safeText(80), guidance: RichTextSchema.max(1_000) }).strict().optional(), navigation: SiteNavigationSchema.optional(), seoDescription: safeText(160).optional(), searchEnabled: z.boolean().optional(), crawlerPolicy: CrawlerPolicySchema.optional(), sections: z.array(SectionSchema).max(20), theme: ThemeSelectionSchema.optional(), themeSettings: z.record(ThemeNameSchema, z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), ThemeSettingValueSchema)).default({}) }).strict();
 /** Fields an Owner may propose through the CMS singleton. Sections and contract
  * version are separately controlled by editorial collections and operators. */
 const SemanticLogoIDsSchema = z.object({ primaryLight: id.nullable().optional(), primaryDark: id.nullable().optional(), fullLockupLight: id.nullable().optional(), fullLockupDark: id.nullable().optional(), symbolLight: id.nullable().optional(), symbolDark: id.nullable().optional() }).strict();
-export const SiteSettingsDraftSchema = z.object({ siteName: safeText(100), legalName: safeText(160).nullable().optional(), homepageId: id.nullable().optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).nullable().optional(), logo: id.nullable().optional(), logos: SemanticLogoIDsSchema.nullable().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: safeText(40).nullable().optional(), address: PostalAddressSchema.nullable().optional(), linkedIn: LinkedInURLSchema.nullable().optional(), incident: z.object({ label: safeText(80), guidance: RichTextSchema.max(1_000) }).strict().nullable().optional(), navigation: SiteNavigationSchema.nullable().optional(), seoDescription: safeText(160).nullable().optional(), searchEnabled: z.boolean().optional() }).strict();
+export const SiteSettingsDraftSchema = z.object({ siteName: safeText(100), legalName: safeText(160).nullable().optional(), homepageId: id.nullable().optional(), defaultLocale: z.enum(['en', 'en-CA']), organizationType: z.enum(['organization', 'professional-service']).nullable().optional(), logo: id.nullable().optional(), logos: SemanticLogoIDsSchema.nullable().optional(), contactEmail: z.string().email().nullable().optional(), contactPhone: safeText(40).nullable().optional(), address: PostalAddressSchema.nullable().optional(), linkedIn: LinkedInURLSchema.nullable().optional(), incident: z.object({ label: safeText(80), guidance: RichTextSchema.max(1_000) }).strict().nullable().optional(), navigation: SiteNavigationSchema.nullable().optional(), seoDescription: safeText(160).nullable().optional(), searchEnabled: z.boolean().optional(), crawlerPolicy: CrawlerPolicySchema.nullable().optional() }).strict();
 export const ChangeSetStateSchema = z.enum(['open', 'submitted', 'changes-requested', 'approved', 'rejected', 'published', 'discarded', 'stale']);
 export const ChangeSetSchema = z.object({
   id,
@@ -256,10 +263,10 @@ export const SiteSnapshotSchema = z.object({
   if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
   const assets = new Map(snapshot.media.map((asset) => [asset.id, asset]));
   if (assets.size !== snapshot.media.length) issue(['media'], 'Media IDs must be unique');
-  const supports14 = ['1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion);
+  const supports14 = ['1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion);
   if (!supports14) snapshot.media.forEach((asset, index) => { if (asset.focalX !== undefined || asset.focalY !== undefined) issue(['media', index], 'Media focal points require contract version 1.4.0.'); });
   const site15Fields = ['legalName', 'logos', 'address', 'linkedIn', 'incident', 'navigation'] as const;
-  if (!['1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
+  if (!['1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
   if (snapshot.settings.logos) Object.entries(snapshot.settings.logos).forEach(([field, asset]) => { if (!assets.has(asset.id)) issue(['settings', 'logos', field], 'Semantic logos must reference included media.'); });
   const navigation = snapshot.settings.navigation;
   const navigationRefs = [...(navigation?.header ?? []), ...(navigation?.footer.columns.flatMap(column => 'links' in column ? column.links : []) ?? []), ...(navigation?.footer.bottomLinks ?? [])];
@@ -268,7 +275,8 @@ export const SiteSnapshotSchema = z.object({
     if (column.kind === 'section-pillars' && !sections.has(column.sectionId)) issue(['settings', 'navigation', 'footer', 'columns', index, 'sectionId'], 'Generated navigation references an unknown section.');
   });
   const uses16Navigation = Boolean(navigation && (navigationRefs.some(reference => reference.kind === 'unavailable') || navigation.footer.bottomLinks || navigation.footer.columns.some(column => column.kind === 'section-pillars' || column.kind === 'contact')));
-  if (uses16Navigation && snapshot.settings.contractVersion !== '1.6.0') issue(['settings', 'navigation'], 'Generated, contact, bottom, and unavailable navigation require contract version 1.6.0.');
+  if (uses16Navigation && !['1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion)) issue(['settings', 'navigation'], 'Generated, contact, bottom, and unavailable navigation require contract version 1.6.0.');
+  if (snapshot.settings.crawlerPolicy !== undefined && snapshot.settings.contractVersion !== '1.7.0') issue(['settings', 'crawlerPolicy'], 'Reviewed crawler policy requires contract version 1.7.0.');
   const siblingSlugs = new Set<string>();
   for (const [index, page] of snapshot.pages.entries()) {
     if (!supports14 && (page.kicker || page.lede || page.lastReviewed)) issue(['pages', index], 'Service introduction and last-reviewed metadata require contract version 1.4.0.');
@@ -295,9 +303,9 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
-      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
-      if (!['1.3.0', '1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
-      if (!['1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
+      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (!['1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
+      if (!['1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);
