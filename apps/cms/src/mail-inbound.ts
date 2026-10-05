@@ -4,15 +4,26 @@ const opaque = /^[^\u0000-\u001f\u007f]{1,500}$/
 const address = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const providers = new Set(['smtp', 'microsoft', 'google'])
 const clean = (value: unknown, limit: number) => String(value ?? '').replace(/<[^>]*>/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit)
+const inFlight = new Map<string, Promise<unknown>>()
 
 export type InboundMessage = { mailbox: string; provider: 'smtp' | 'microsoft' | 'google'; conversationID: string; messageID: string; sender: string; recipient: string; subject: string; body: string; receivedAt: string; attachmentMetadata?: Array<{ name?: unknown; contentType?: unknown; size?: unknown }> }
+type InboundResult = { matched: false; suggested: boolean } | { matched: true; duplicate: boolean; message: unknown }
 
 /**
  * Appends only to an already-associated provider conversation. Address and
  * subject are deliberately not lookup keys: a new conversation is a staff
  * suggestion, never an automatic lead/application association.
  */
-export async function appendMatchedInbound(payload: Payload, input: InboundMessage) {
+export function appendMatchedInbound(payload: Payload, input: InboundMessage): Promise<InboundResult> {
+  const key = `${input.mailbox}\u0000${input.provider}\u0000${input.messageID}`
+  const active = inFlight.get(key)
+  if (active) return active as Promise<InboundResult>
+  const operation = appendMatchedInboundInner(payload, input).finally(() => { if (inFlight.get(key) === operation) inFlight.delete(key) })
+  inFlight.set(key, operation)
+  return operation as Promise<InboundResult>
+}
+
+async function appendMatchedInboundInner(payload: Payload, input: InboundMessage) {
   const mailbox = String(input.mailbox); const conversationID = String(input.conversationID); const messageID = String(input.messageID)
   const sender = clean(input.sender, 320).toLowerCase(); const recipient = clean(input.recipient, 320).toLowerCase()
   if (!opaque.test(mailbox) || !providers.has(input.provider) || !opaque.test(conversationID) || !opaque.test(messageID) || !address.test(sender) || !address.test(recipient) || Number.isNaN(Date.parse(input.receivedAt))) throw new Error('invalid_inbound_message')
