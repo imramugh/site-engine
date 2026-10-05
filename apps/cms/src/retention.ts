@@ -46,7 +46,7 @@ async function completeJob(payload: Payload, req: PayloadRequest | undefined, id
   await payload.update({ collection: 'retention-purge-jobs', id, data: { state: 'completed', completedAt: new Date().toISOString(), lastError: null, resumeKey: null }, overrideAccess: true, req })
 }
 async function failJob(payload: Payload, req: PayloadRequest | undefined, id: string, attempts: number, error: unknown) {
-  const code = error instanceof Error && /ledger/i.test(error.message) ? 'deletion-ledger-unavailable' : 'storage-purge-failed'
+  const code = error instanceof Error && error.message === 'reply-send-in-progress' ? 'reply-send-in-progress' : error instanceof Error && /ledger/i.test(error.message) ? 'deletion-ledger-unavailable' : 'storage-purge-failed'
   await payload.update({ collection: 'retention-purge-jobs', id, data: { state: 'failed', attempts: attempts + 1, lastError: code }, overrideAccess: true, req })
 }
 
@@ -70,17 +70,23 @@ async function unlinkResume(key: string) {
   try { await unlink(resolve(applicationStorage(), key)) } catch (error: unknown) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error }
 }
 
-async function purgeApplicationUnlocked(payload: Payload, id: string, actor: string | undefined, req?: PayloadRequest): Promise<{ state: 'completed' | 'failed'; jobID: string }> {
+async function assertNoActiveReply(payload: Payload, req: PayloadRequest | undefined, target: 'lead' | 'application', id: string) {
+  const active = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'consumed' } }] }, limit: 1, depth: 0, overrideAccess: true, req })
+  if (active.docs.length) throw new Error('reply-send-in-progress')
+}
+
+async function purgeApplicationUnlocked(payload: Payload, id: string, actor: string | undefined, req?: PayloadRequest, replay = false): Promise<{ state: 'completed' | 'failed'; jobID: string }> {
   const record = await job(payload, req, 'application', id) as { id: string; attempts?: number; state?: string }
   // Even a completed job must recheck the record: an older restored snapshot
   // can contain data that the independent deletion ledger says to remove.
   try {
-    const application = await payload.findByID({ collection: 'applications', id, depth: 0, overrideAccess: true, req }) as { resumeKey: string }
-    await recordDeletionIntent(payload, req, 'application', id)
-    // Storage goes first. A database record remains readable while its private object cannot be purged.
-    await unlinkResume(application.resumeKey)
     await withPayloadTransaction(payload, async (transaction) => {
-      await writeDeletionTombstone(payload, transaction, 'application', id)
+      const application = await payload.findByID({ collection: 'applications', id, depth: 0, overrideAccess: true, req: transaction }) as { resumeKey: string }
+      if (!replay) await assertNoActiveReply(payload, transaction, 'application', id)
+      await recordDeletionIntent(payload, transaction, 'application', id)
+      // Keep the write transaction while removing bytes so a reply cannot be
+      // consumed between the active-send check and removal of its recipient.
+      await unlinkResume(application.resumeKey)
       await payload.delete({ collection: 'applications', id, overrideAccess: true, req: transaction, context: { retentionPurge: true } })
       await payload.create({ collection: 'audit-events', data: { event: 'retention.application_purged', user: actor, actor, detail: { application: id } }, overrideAccess: true, req: transaction })
     })
@@ -93,10 +99,10 @@ async function purgeApplicationUnlocked(payload: Payload, id: string, actor: str
 }
 
 /** Coalesce same-process cleanup/API races; the unique job key covers separate workers. */
-export async function purgeApplication(payload: Payload, id: string, actor: string | undefined, req?: PayloadRequest): Promise<{ state: 'completed' | 'failed'; jobID: string }> {
+export async function purgeApplication(payload: Payload, id: string, actor: string | undefined, req?: PayloadRequest, replay = false): Promise<{ state: 'completed' | 'failed'; jobID: string }> {
   const active = applicationPurgeLocks.get(id)
   if (active) return active
-  const running = purgeApplicationUnlocked(payload, id, actor, req)
+  const running = purgeApplicationUnlocked(payload, id, actor, req, replay)
   applicationPurgeLocks.set(id, running)
   try { return await running } finally { if (applicationPurgeLocks.get(id) === running) applicationPurgeLocks.delete(id) }
 }
@@ -106,6 +112,7 @@ export async function purgeRetainedInquiry(payload: Payload, id: string, actor: 
   await withPayloadTransaction(payload, async (req) => {
     const current = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req }) as { spam?: boolean }
     if (current.spam) throw new Error('Spam inquiries use the spam deletion lifecycle.')
+    await assertNoActiveReply(payload, req, 'lead', id)
     await recordDeletionIntent(payload, req, 'inquiry', id)
     const drafts = await payload.find({ collection: 'mail-drafts', where: { lead: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
     for (const draft of drafts.docs) {
@@ -146,6 +153,7 @@ async function purgeSpamInquiry(payload: Payload, id: string, cutoff: string): P
       const lead = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req })
       // Recheck after claiming the job: an Owner may have restored this lead.
       if (!lead.spam || !lead.spamMarkedAt || lead.spamMarkedAt > cutoff) return 'skipped' as const
+      await assertNoActiveReply(payload, req, 'lead', id)
       await recordDeletionIntent(payload, req, 'inquiry', id)
       req.context.leadSpamDeleteLifecycle = true
       await payload.delete({ collection: 'inquiries', id, overrideAccess: true, req })
@@ -188,7 +196,7 @@ export async function reapplyDeletionTombstones(payload: Payload): Promise<numbe
   let applied = 0
   for (const marker of tombstones.docs as Array<{ resourceType: 'application' | 'inquiry' | 'media'; resourceID: string }>) {
     try {
-      if (marker.resourceType === 'application') { const result = await purgeApplication(payload, marker.resourceID, undefined); if (result.state !== 'completed') throw new Error('Deletion replay could not purge an application.'); applied += 1 }
+      if (marker.resourceType === 'application') { const result = await purgeApplication(payload, marker.resourceID, undefined, undefined, true); if (result.state !== 'completed') throw new Error('Deletion replay could not purge an application.'); applied += 1 }
       else if (marker.resourceType === 'inquiry') { await withPayloadTransaction(payload, async (req) => { req.context.leadSpamDeleteLifecycle = true; await payload.delete({ collection: 'inquiries', id: marker.resourceID, overrideAccess: true, req }); applied += 1 }) }
       else { const result = await purgeMedia(payload, undefined, marker.resourceID); if (result !== 'completed') throw new Error('Deletion replay could not safely purge media.'); applied += 1 }
     } catch (error: unknown) { if (!(error && typeof error === 'object' && 'status' in error && error.status === 404)) throw error }

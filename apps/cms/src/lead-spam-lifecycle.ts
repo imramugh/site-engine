@@ -47,7 +47,6 @@ export async function restoreLeadFromSpam(payload: Payload, id: string, actor: s
 /** Permanently removes an explicitly selected spam record and its mutable,
  * inquiry-bound delivery material. Immutable audit records retain IDs only. */
 export async function deleteSpamLead(payload: Payload, id: string, actor: string) {
-  await recordDeletionIntent(payload, undefined, 'inquiry', id)
   return withPayloadTransaction(payload, async (req) => {
     const current = await payload.find({ collection: 'inquiries', where: { id: { equals: id } }, limit: 1, depth: 0, overrideAccess: true, req })
     const lead = current.docs[0]
@@ -57,16 +56,16 @@ export async function deleteSpamLead(payload: Payload, id: string, actor: string
     const outbox = await payload.find({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
     if (outbox.docs.some((item) => item.state === 'queued')) throw new LeadSpamLifecycleError('ACTIVE_SEND', 'Cancel or finish queued notifications before deleting this spam record.')
     const drafts = await payload.find({ collection: 'mail-drafts', where: { lead: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
-    if (drafts.docs.some((item) => item.state === 'authorized')) throw new LeadSpamLifecycleError('ACTIVE_SEND', 'Revoke the authorized reply before deleting this spam record.')
+    if (drafts.docs.some((item) => ['authorized', 'consumed'].includes(item.state))) throw new LeadSpamLifecycleError('ACTIVE_SEND', 'Revoke the authorized reply before deleting this spam record.')
 
+    await recordDeletionIntent(payload, req, 'inquiry', id)
     for (const draft of drafts.docs) {
       const grants = await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
       for (const grant of grants.docs) await payload.delete({ collection: 'mail-authorizations', id: grant.id, overrideAccess: true, req })
       await payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
     }
-    // Completed/failed notification rows remain as non-PII delivery history.
-    for (const intent of outbox.docs) await payload.update({ collection: 'notification-outbox', id: intent.id, data: { inquiry: null }, overrideAccess: true, req })
-    // The collection hook removes only outbox rows for this exact inquiry.
+    // The collection hook removes associated notification copies, including
+    // completed rows whose payload may still contain personal information.
     req.context.leadSpamDeleteLifecycle = true
     await payload.delete({ collection: 'inquiries', id, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'lead.spam_deleted', user: actor, actor, detail: { lead: id } }, overrideAccess: true, req })
