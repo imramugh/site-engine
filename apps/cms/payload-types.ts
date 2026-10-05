@@ -922,7 +922,7 @@ export interface NotificationDelivery {
     | number
     | boolean
     | null;
-  state: 'queued' | 'processing' | 'delivered' | 'retryable' | 'unknown' | 'unsupported';
+  state: 'queued' | 'processing' | 'delivered' | 'retryable' | 'failed' | 'unknown' | 'unsupported';
   attempts: number;
   nextAttemptAt: string;
   leaseToken?: string | null;

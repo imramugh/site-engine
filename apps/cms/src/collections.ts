@@ -24,7 +24,13 @@ async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 
     await req.payload.delete({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, overrideAccess: true, req })
     await req.payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
   }
-  await req.payload.delete({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, overrideAccess: true, req })
+  const notificationOutboxes = await req.payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const outbox of notificationOutboxes.docs) {
+    const receipts = await req.payload.find({ collection: 'notification-deliveries', where: { outbox: { equals: outbox.id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    if (receipts.docs.some((receipt) => receipt.state === 'processing' && new Date(String(receipt.leaseExpiresAt ?? 0)).getTime() > Date.now())) throw new Error('Notification delivery is actively sending.')
+    for (const receipt of receipts.docs) await req.payload.delete({ collection: 'notification-deliveries', id: receipt.id, overrideAccess: true, req })
+    await req.payload.delete({ collection: 'notification-outbox', id: outbox.id, overrideAccess: true, req })
+  }
   if (target === 'application') {
     const notes = await req.payload.find({ collection: 'audit-events', where: { event: { equals: 'application.note_added' } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
     for (const note of notes.docs) {
@@ -502,6 +508,15 @@ export const Inquiries: CollectionConfig = {
 export const NotificationOutbox: CollectionConfig = {
   slug: 'notification-outbox', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  hooks: { beforeDelete: [async ({ id, req }) => {
+    const receipts = await req.payload.find({ collection: 'notification-deliveries', where: { outbox: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    const now = Date.now()
+    // Once a provider attempt is in progress, deleting the parent must wait for
+    // its bounded lease to settle. This prevents a retention purge from making
+    // an already-claimed event appear deleted while a worker can still send it.
+    if (receipts.docs.some((receipt) => receipt.state === 'processing' && new Date(String(receipt.leaseExpiresAt ?? 0)).getTime() > now)) throw new Error('Notification delivery is actively sending.')
+    for (const receipt of receipts.docs) await req.payload.delete({ collection: 'notification-deliveries', id: receipt.id, overrideAccess: true, req })
+  }] },
   fields: [
     { name: 'inquiry', type: 'relationship', relationTo: 'inquiries' },
     { name: 'kind', type: 'select', required: true, options: ['new-lead', 'active-incident-lead', 'new-job-application', 'change-set-submitted', 'follow-ups-due', 'publish-or-integration-failed'] },

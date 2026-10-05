@@ -73,6 +73,21 @@ reported `cost` is intentionally never used.
 
 Run the HTTP-only poller with `node apps/cms/scripts/run-ai-worker.mjs` from the repository root. It requires `AI_WORKER_CMS_ORIGIN` (an internal HTTP(S) CMS origin with no path), `AI_WORKER_TOKEN` (at least 32 bytes, independent from other worker tokens), and optionally `AI_WORKER_TIMEOUT_MS` (45,000 ms default; maximum 55,000), `AI_WORKER_IDLE_MS`, and `AI_WORKER_ERROR_MS` (each 100–60,000 ms). The CMS route is `POST /api/internal/ai-worker/run`; keep it unavailable through every public edge or proxy. The poller has no Payload, SQLite, credential, or provider configuration access.
 
+### Internal notification worker
+
+Notification dispatch remains inactive until an operator deliberately runs
+`node apps/cms/scripts/run-notification-worker.mjs` from the repository root.
+It requires `NOTIFICATION_WORKER_CMS_ORIGIN` (an internal HTTP(S) CMS origin
+with no path) and an independent `NOTIFICATION_WORKER_TOKEN` of at least 32
+bytes. Optional `NOTIFICATION_WORKER_TIMEOUT_MS` defaults to 45,000 and caps
+at 55,000; `NOTIFICATION_WORKER_IDLE_MS` and
+`NOTIFICATION_WORKER_ERROR_MS` each accept 100–60,000. The worker only calls
+`POST /api/internal/notification-worker/run`; keep it unavailable through
+every public edge or proxy. It has no SQLite, SMTP, mailbox credential, or
+recipient configuration access. Missing or untested mail configuration leaves
+receipts queued or retryable; ambiguous SMTP results become `unknown` and are
+never automatically resent.
+
 ## SQLite transaction compatibility pin
 
 Payload 3.90.2 pins `@libsql/client` 0.14.0. This workspace scopes its package-manager

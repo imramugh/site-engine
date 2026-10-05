@@ -9,6 +9,7 @@ export function proxy(request: NextRequest) {
   if (request.method === 'POST' && (
     request.nextUrl.pathname === '/api/internal/oauth/session'
     || request.nextUrl.pathname === '/api/internal/ai-worker/run'
+    || request.nextUrl.pathname === '/api/internal/notification-worker/run'
     || /^\/api\/internal\/(preview-jobs|publish-jobs)\/(claim|renew|complete|fail)$/.test(request.nextUrl.pathname)
   )) return NextResponse.next()
   const expected = process.env.PAYLOAD_PUBLIC_SERVER_URL
