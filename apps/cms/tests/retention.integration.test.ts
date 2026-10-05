@@ -57,12 +57,14 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     const draft = await payload.create({ collection: 'mail-drafts', data: { application: record.id, threadID: crypto.randomUUID(), recipient: record.email, sender: 'owner@example.test', subject: 'Reply', body: 'Synthetic private correspondence.', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true })
     const authorization = await payload.create({ collection: 'mail-authorizations', data: { draft: draft.id, digest: 'a'.repeat(64), draftRevision: 1, authorizedBy: owner.account.id, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
     const outbox = await payload.create({ collection: 'notification-outbox', data: { kind: 'new-job-application', idempotencyKey: `retention-${crypto.randomUUID()}`, state: 'queued', payload: { application: record.id }, recipientRules: [], recipients: [], channels: [], sourceType: 'application', sourceID: record.id, availableAt: new Date().toISOString() }, overrideAccess: true })
+    const note = await payload.create({ collection: 'audit-events', data: { event: 'application.note_added', user: owner.account.id, actor: owner.account.id, detail: { applicationID: record.id, body: 'Synthetic hiring note that must not survive retention deletion.' } }, overrideAccess: true })
     await expect(purgeApplication(payload, record.id, owner.account.id)).resolves.toMatchObject({ state: 'completed' })
     expect(existsSync(resume)).toBe(false)
     await expect(payload.findByID({ collection: 'applications', id: record.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
     await expect(payload.findByID({ collection: 'mail-drafts', id: draft.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
     await expect(payload.findByID({ collection: 'mail-authorizations', id: authorization.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
     await expect(payload.findByID({ collection: 'notification-outbox', id: outbox.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    await expect(payload.findByID({ collection: 'audit-events', id: note.id, overrideAccess: true })).resolves.toMatchObject({ event: 'application.note_added', detail: { applicationID: record.id, retentionRedacted: true } })
   })
 
   it('requires a fresh Owner for permanent deletion and denies an Editor without changing the record', async () => {
