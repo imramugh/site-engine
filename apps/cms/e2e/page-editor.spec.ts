@@ -427,10 +427,15 @@ test('ENG-006 persists service, article, business-case, and job metadata through
   }
   const saveAndReload = async (id: string) => {
     const saved = editor.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${id}`) && response.request().method() === 'POST')
+    const queued = editor.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST')
     await editor.page.getByRole('button', { name: 'Save draft' }).click()
-    expect((await saved).status()).toBe(200)
-    await expect(editor.page.getByRole('status')).toContainText(/Rendering saved draft preview|Draft saved/, { timeout: 15_000 })
+    const [savedResponse, queuedResponse] = await Promise.all([saved, queued])
+    expect(savedResponse.status(), await savedResponse.text()).toBe(200)
+    expect(queuedResponse.status(), await queuedResponse.text()).toBe(200)
     await expect(editor.page.getByRole('button', { name: 'Save draft' })).toBeDisabled()
+    const worker = await editor.page.request.post('/__e2e/direct-preview-worker')
+    expect(worker.status(), await worker.text()).toBe(200)
+    await expect(editor.page.getByRole('status')).toContainText('Saved draft preview is ready.', { timeout: 120_000 })
     await editor.page.reload()
     await editor.page.getByText('Page fields', { exact: false }).first().click()
   }
