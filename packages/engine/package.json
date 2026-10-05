@@ -17,6 +17,9 @@
       "import": "./dist/theme-registry.js"
     }
   },
+  "bin": {
+    "site-engine-validate-theme": "./dist/theme-package-cli.js"
+  },
   "files": [
     "dist"
   ],
