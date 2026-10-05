@@ -16,9 +16,7 @@ test('ENG-022 dashboard exposes authorized work queues and useful actions on des
       for (const hook of ['reviews','issues','leads','site-status']) await expect(page.locator(`[data-dashboard-${hook}]`)).toBeVisible()
       if (role === 'owner') {
         await expect(page.getByRole('link', { name: '+ New page', exact: true })).toHaveAttribute('href','/content-editor/new')
-        await page.locator('[data-dashboard-connect]>summary').click()
-        await expect(page.getByLabel('Server address')).toHaveValue(`${origin}/mcp`)
-        await page.locator('[data-dashboard-connect]>summary').click()
+        await expect(page.getByRole('link', { name: 'Connect an assistant', exact: true })).toHaveAttribute('href', '/integrations?tab=assistants')
       } else await expect(page.locator('[data-dashboard-actions]')).toHaveCount(0)
       if (role === 'hiring') await expect(page.locator('[data-dashboard-leads]')).toContainText('not available for this role')
       expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false)
