@@ -178,7 +178,7 @@ export function LeadDashboard({ owner = false }: { owner?: boolean }) {
       const response = await fetch('/api/retention', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inquiryID: active.id, confirm: 'permanent-delete' }) })
       if (!response.ok) throw new Error('The inquiry could not be deleted. Check your session and try again.')
       setSelected(null); setMessage('Inquiry permanently deleted.'); await load(filters, false, mode)
-    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Deletion failed.') }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Deletion failed.'); throw failure }
     finally { setSaving(false) }
   }
 

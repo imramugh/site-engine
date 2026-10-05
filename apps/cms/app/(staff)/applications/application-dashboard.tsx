@@ -74,7 +74,7 @@ export function ApplicationDashboard({ owner = false }: { owner?: boolean }) {
       const response = await fetch('/api/retention', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ applicationID: selected.id, confirm: 'permanent-delete' }) })
       if (!response.ok) throw new Error('The application could not be deleted. Check your session and try again.')
       setSelected(null); setConfirmDelete(false); await load()
-    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Deletion failed.') }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Deletion failed.'); throw failure }
     finally { setSaving('') }
   }
 
