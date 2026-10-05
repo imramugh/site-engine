@@ -9,6 +9,6 @@ import { StaffShell } from '../../components/staff-shell'
 
 export default async function DirectEditPage() {
   const payload = await getPayload({ config }); const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user
-  if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login')
+  if (!hasRole(user as never, ['owner', 'approver', 'editor'])) redirect('/admin/login')
   return <StaffShell><DirectHeroEditor /></StaffShell>
 }

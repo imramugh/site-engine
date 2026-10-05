@@ -3,6 +3,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { PageSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { withPayloadTransaction } from './auth-transaction'
+import { directEditDefinition, validDirectEditValue, type DirectEditField } from './direct-edit-fields'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Page = Record<string, unknown>
@@ -10,9 +11,10 @@ type Page = Record<string, unknown>
 export type DirectEditInput = {
   pageID: string
   blockID: string
-  field: 'heading' | 'body'
+  field: DirectEditField
   value: string
   expectedValueHash: string
+  expectedRevision: number
   changeSetID: string
 }
 
@@ -72,8 +74,8 @@ function hasCapturedReplay(set: Record<string, unknown>, edit: DirectEditInput):
  * transaction; this service deliberately does not create review or publish work. */
 export async function applyDirectEdit(input: { payload: Payload; req: PayloadRequest; actor: Actor; edit: DirectEditInput }): Promise<DirectEditResult> {
   const { payload, req, actor, edit } = input
-  if (!hasRole(actor, ['owner', 'editor'])) throw new Error('EDITOR_ROLE_REQUIRED')
-  if (!uuid.test(edit.pageID) || !uuid.test(edit.blockID) || !uuid.test(edit.changeSetID) || !sha256.test(edit.expectedValueHash) || (edit.field !== 'heading' && edit.field !== 'body') || typeof edit.value !== 'string') throw new Error('INVALID_DIRECT_EDIT')
+  if (!hasRole(actor, ['owner', 'approver', 'editor'])) throw new Error('EDITOR_ROLE_REQUIRED')
+  if (!uuid.test(edit.pageID) || !uuid.test(edit.blockID) || !uuid.test(edit.changeSetID) || !sha256.test(edit.expectedValueHash) || !Number.isSafeInteger(edit.expectedRevision) || edit.expectedRevision < 0 || typeof edit.value !== 'string') throw new Error('INVALID_DIRECT_EDIT')
 
   req.user = actor as never
   const page = await payload.findByID({ collection: 'pages', id: edit.pageID, depth: 0, draft: true, user: actor as never, overrideAccess: false, req }) as unknown as Page
@@ -87,13 +89,20 @@ export async function applyDirectEdit(input: { payload: Payload; req: PayloadReq
 
   const blocks = Array.isArray(page.blocks) ? page.blocks.map((block) => ({ ...(block as Record<string, unknown>) })) : []
   const index = blocks.findIndex((block) => block.id === edit.blockID)
-  if (index < 0 || blocks[index]?.type !== 'hero') throw new Error('FIELD_NOT_EDITABLE')
+  const blockType = String(blocks[index]?.type ?? '')
+  if (index < 0 || !directEditDefinition(blockType, edit.field)) throw new Error('FIELD_NOT_EDITABLE')
+  if (!validDirectEditValue(blockType, edit.field, edit.value)) throw new Error('INVALID_DIRECT_EDIT')
   const previous = blocks[index]?.[edit.field]
   if (typeof previous !== 'string') throw new Error('FIELD_NOT_EDITABLE')
   const currentHash = directEditValueHash(previous)
+  const capturedReplay = hasCapturedReplay(set, edit)
+  if (Number(set.revision ?? 0) !== edit.expectedRevision) {
+    if (capturedReplay && previous === edit.value) return { pageID: edit.pageID, changeSetID: edit.changeSetID, replayed: true, noOp: false }
+    throw new Error('STALE_DIRECT_EDIT')
+  }
   if (previous === edit.value) {
     if (currentHash === edit.expectedValueHash) return { pageID: edit.pageID, changeSetID: edit.changeSetID, replayed: false, noOp: true }
-    if (hasCapturedReplay(set, edit)) return { pageID: edit.pageID, changeSetID: edit.changeSetID, replayed: true, noOp: false }
+    if (capturedReplay) return { pageID: edit.pageID, changeSetID: edit.changeSetID, replayed: true, noOp: false }
     throw new Error('STALE_DIRECT_EDIT')
   }
   if (currentHash !== edit.expectedValueHash) throw new Error('STALE_DIRECT_EDIT')

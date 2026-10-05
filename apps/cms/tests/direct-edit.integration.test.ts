@@ -35,7 +35,7 @@ async function fixture(user: { id: string; roles?: string[] }) {
   const set = await payload.create({ collection: 'change-sets', data: { name: 'Direct edit set', state: 'open', actor: user.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   return { section, page, set }
 }
-function edit(pageID: string, setID: string, value = 'Updated heading') { return { pageID, blockID: heroID, field: 'heading' as const, value, expectedValueHash: directEditValueHash('Original heading'), changeSetID: setID } }
+function edit(pageID: string, setID: string, value = 'Updated heading', expectedRevision = 0) { return { pageID, blockID: heroID, field: 'heading' as const, value, expectedValueHash: directEditValueHash('Original heading'), expectedRevision, changeSetID: setID } }
 async function installPublishedPointer(user: { id: string }, setID: string, pageID: string) {
   const sequence = releaseSequence++; const manifest = { pageID, heroHeading: 'Original heading' }
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: 'a'.repeat(64), changeSet: setID, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: 'test-theme', engineVersion: 'test-engine', contractVersion: '1.0.0', approvedBy: user.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
@@ -54,10 +54,12 @@ describe('ENG-026 draft-only direct hero edits', () => {
     await payload.update({ collection: 'pages', id: current.page.id, data: { title: 'Ordinary working draft change' }, draft: true, user: editor, overrideAccess: false })
     const ordinaryDraft = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
     expect(ordinaryDraft._status).toBe('draft')
+    const currentSet = await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })
     const cookie = await session(editor)
-    const response = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id)) }))
+    const intendedEdit = edit(current.page.id, current.set.id, 'Updated heading', Number(currentSet.revision))
+    const response = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(intendedEdit) }))
     expect(response.status).toBe(200); expect(await response.json()).toEqual({ pageID: current.page.id, changeSetID: current.set.id, replayed: false, noOp: false })
-    const replay = await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id) }))
+    const replay = await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: intendedEdit }))
     expect(replay).toMatchObject({ replayed: true, noOp: false })
     const page = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
     expect((page.blocks as { heading: string }[])[0]?.heading).toBe('Updated heading'); expect(page.status).toBe('draft')
@@ -102,18 +104,24 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect((page.blocks as { body: string }[])[0]?.body).toBe('Original hero body.')
   })
 
-  it('does not call an unrecorded same value a replay, and re-applies intent after a change away and back', async () => {
+  it('rejects a stale change-set revision even when that field value has not changed', async () => {
+    const editor = await actor(); const current = await fixture(editor)
+    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Original hero body.'), field: 'body', expectedValueHash: directEditValueHash('Original hero body.') } }))
+    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed body'), field: 'body', expectedValueHash: directEditValueHash('Original hero body.') } }))
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Heading from stale revision') }))).rejects.toThrow('STALE_DIRECT_EDIT')
+  })
+
+  it('does not call an unrecorded same value a replay or revive an intent from a stale revision', async () => {
     const editor = await actor(); const current = await fixture(editor)
     const empty = await payload.create({ collection: 'change-sets', data: { name: 'Empty direct edit set', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
     await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, empty.id, 'Original heading'), expectedValueHash: directEditValueHash('wrong hash') } }))).rejects.toThrow('STALE_DIRECT_EDIT')
     const noOp = await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, empty.id, 'Original heading'), expectedValueHash: directEditValueHash('Original heading') } }))
     expect(noOp).toMatchObject({ replayed: false, noOp: true })
     await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Changed away') }))
-    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Original heading'), expectedValueHash: directEditValueHash('Changed away') } }))
-    const reapplied = await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Changed away') }))
-    expect(reapplied).toMatchObject({ replayed: false, noOp: false })
-    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again'), expectedValueHash: directEditValueHash('Changed away') } }))
-    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again'), expectedValueHash: directEditValueHash('Changed away') } }))).rejects.toThrow('STALE_DIRECT_EDIT')
+    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Original heading', 1), expectedValueHash: directEditValueHash('Changed away') } }))
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Changed away') }))).rejects.toThrow('STALE_DIRECT_EDIT')
+    await withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again', 2), expectedValueHash: directEditValueHash('Original heading') } }))
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Changed again', 2), expectedValueHash: directEditValueHash('Original heading') } }))).resolves.toMatchObject({ replayed: true })
   })
 
   it('enforces roles, same-origin route auth, set ownership, editable state, field allowlist, and contract validation', async () => {
@@ -129,15 +137,23 @@ describe('ENG-026 draft-only direct hero edits', () => {
     const cancelledOverflow = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: stream, duplex: 'half' } as RequestInit))
     expect(cancelledOverflow.status).toBe(413); expect(cancelled).toBe(true)
     const cookie = await session(approver)
-    const deniedRole = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id)) }))
-    expect(deniedRole.status).toBe(403)
+    const deniedOtherSet = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id)) }))
+    expect(deniedOtherSet.status).toBe(403)
+    const approverOwned = await fixture(approver)
+    const approverEdit = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(approverOwned.page.id, approverOwned.set.id, 'Approver-owned revision')) }))
+    expect(approverEdit.status, await approverEdit.text()).toBe(200)
+    const revokedEditor = await actor(); const revokedOwned = await fixture(revokedEditor); const revokedCookie = await session(revokedEditor)
+    const revokedSessions = await payload.find({ collection: 'auth-sessions', where: { user: { equals: revokedEditor.id } }, overrideAccess: true, limit: 10 })
+    for (const item of revokedSessions.docs) await payload.delete({ collection: 'auth-sessions', id: item.id, overrideAccess: true })
+    const revoked = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie: revokedCookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(revokedOwned.page.id, revokedOwned.set.id)) }))
+    expect(revoked.status).toBe(401)
     await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: other as never, edit: edit(current.page.id, current.set.id) }))).rejects.toThrow('CHANGE_SET_NOT_EDITABLE')
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { state: 'submitted' }, overrideAccess: true, context: { editorialInternal: true } })
     await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id) }))).rejects.toThrow('CHANGE_SET_NOT_EDITABLE')
     await payload.update({ collection: 'change-sets', id: current.set.id, data: { state: 'changes-requested' }, overrideAccess: true, context: { editorialInternal: true } })
     await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id, 'Requested revision') }))).resolves.toMatchObject({ replayed: false })
     const requestedHash = directEditValueHash('Requested revision')
-    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id), expectedValueHash: requestedHash, field: 'heading', value: 'x'.repeat(121) } }))).rejects.toThrow('INVALID_DIRECT_EDIT')
-    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id), expectedValueHash: requestedHash, field: 'cta' as never } }))).rejects.toThrow('INVALID_DIRECT_EDIT')
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Updated heading', 1), expectedValueHash: requestedHash, field: 'heading', value: 'x'.repeat(121) } }))).rejects.toThrow('INVALID_DIRECT_EDIT')
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: { ...edit(current.page.id, current.set.id, 'Updated heading', 1), expectedValueHash: requestedHash, field: 'cta' as never } }))).rejects.toThrow('FIELD_NOT_EDITABLE')
   })
 })

@@ -23,7 +23,7 @@ export async function GET(request: Request): Promise<Response> {
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     const user = authenticated.user as { id?: string; roles?: string[] } | null
     if (!user?.id) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
-    if (!hasRole(user as never, ['owner', 'editor'])) return Response.json({ error: 'Editor access required.' }, { status: 403, headers: noStore })
+    if (!hasRole(user as never, ['owner', 'approver', 'editor'])) return Response.json({ error: 'Editor access required.' }, { status: 403, headers: noStore })
     const [pages, sets] = await Promise.all([
       payload.find({ collection: 'pages', draft: true, depth: 0, limit: 50, user: user as never, overrideAccess: false }),
       payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: user.id } }, { state: { in: ['open', 'changes-requested'] } }] }, sort: '-updatedAt', limit: 50, depth: 0, user: user as never, overrideAccess: false }),
