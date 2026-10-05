@@ -87,7 +87,8 @@ test('ENG-035 reports incompatibility and limits theme selection to installed ow
   await owner.page.route('**/api/themes', async route => {
     if (route.request().method() !== 'GET') return route.continue()
     const response = await route.fetch(); const value = await response.json() as Record<string, unknown>
-    await route.fulfill({ response, json: { ...value, publishedSelection: { id: 'browser-theme', version: '2.4.6', contract: '1.4.0' }, draftSelection: null, draftChangeSet: null } })
+    const themes = value.themes as Array<Record<string, unknown>>; const navigation = themes.find(theme => theme.id === 'navigation-browser-theme')!
+    await route.fulfill({ response, json: { ...value, themes: [{ ...navigation, version: '1.5.0', contract: '1.5.0' }, ...themes], publishedSelection: { id: 'browser-theme', version: '2.4.6', contract: '1.4.0' }, draftSelection: null, draftChangeSet: null } })
   })
   await owner.page.goto('/themes')
   const active = owner.page.locator('[data-theme-card][data-theme-family="browser-theme"]')
@@ -96,7 +97,8 @@ test('ENG-035 reports incompatibility and limits theme selection to installed ow
   await expect(active.getByRole('button', { name: 'Create reviewed preview' })).toHaveCount(0)
   await expect(active).toContainText('Installed presentation · Version 2.4.6')
   await expect(active.locator('header')).not.toContainText('Contract 1.4.0')
-  const technical = active.locator('details'); await expect(technical).not.toHaveAttribute('open', ''); await active.getByText('Technical details').click(); await expect(technical).toHaveAttribute('open', ''); await expect(technical).toContainText('Contract 1.4.0')
+  const technical = active.locator('details'); await expect(technical).not.toHaveAttribute('open', ''); await active.getByText('Theme options').click(); await expect(technical).toHaveAttribute('open', ''); await expect(technical).toContainText('Contract 1.4.0')
+  const inactive = owner.page.locator('[data-theme-card][data-theme-family="navigation-browser-theme"]'); await expect(inactive.locator('header')).toContainText('Version 1.6.0'); await inactive.getByText('Theme options').click(); await expect(inactive.getByLabel('Installed version')).toHaveValue('1.6.0')
   const incompatible = owner.page.locator('[data-theme-card][data-theme-family="incomplete-browser-theme"]')
   await expect(incompatible).toContainText('Current content is not compatible.')
   await expect(incompatible).toHaveAttribute('data-theme-status', 'needs-upgrade')
