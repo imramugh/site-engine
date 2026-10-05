@@ -30,6 +30,40 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     expect(() => validateRedirectSet([{ from: '/a', to: '/destination' }, { from: '/a/', to: '/other' }])).toThrow('not unique')
   })
 
+  it('records the immutable creator without exposing it to the public redirect snapshot', async () => {
+    const suffix = randomUUID().slice(0, 8)
+    const creator = await payload.create({ collection: 'users', data: { email: `redirect-creator-${suffix}@example.test`, name: 'Redirect creator', roles: ['editor'] }, overrideAccess: true })
+    const editor = await payload.create({ collection: 'users', data: { email: `redirect-editor-${suffix}@example.test`, name: 'Later editor', roles: ['editor'] }, overrideAccess: true })
+    const redirect = await withPayloadTransaction(payload, async req => {
+      req.user = creator
+      return payload.create({
+        collection: 'redirects', data: { from: `/creator-${suffix}`, to: '/', status: 301, createdBy: editor.id, createdByLabel: 'Forged creator' },
+        user: creator, overrideAccess: false, req, context: { editorialInternal: true },
+      })
+    })
+    expect(typeof redirect.createdBy === 'string' ? redirect.createdBy : redirect.createdBy?.id).toBe(creator.id)
+    expect(redirect.createdByLabel).toBe('Redirect creator')
+    expect(snapshot('redirects', redirect as never)).toEqual({ from: `/creator-${suffix}`, to: '/', status: 301 })
+
+    const updated = await withPayloadTransaction(payload, async req => {
+      req.user = editor
+      return payload.update({
+        collection: 'redirects', id: redirect.id, data: { to: `/destination-${suffix}`, createdBy: editor.id, createdByLabel: 'Forged replacement' },
+        user: editor, overrideAccess: false, req, context: { editorialInternal: true },
+      })
+    })
+    expect(typeof updated.createdBy === 'string' ? updated.createdBy : updated.createdBy?.id).toBe(creator.id)
+    expect(updated.createdByLabel).toBe('Redirect creator')
+    await payload.delete({ collection: 'users', id: creator.id, overrideAccess: true })
+    expect(await payload.findByID({ collection: 'redirects', id: redirect.id, depth: 0, overrideAccess: true })).toMatchObject({ createdBy: null, createdByLabel: 'Redirect creator' })
+
+    const imported = await withPayloadTransaction(payload, async req => {
+      req.user = editor
+      return payload.create({ collection: 'redirects', data: { from: `/legacy-${suffix}`, to: '/', status: 301 }, overrideAccess: true, req, context: { editorialInternal: true, reviewedSnapshotImport: true } })
+    })
+    expect(imported).toMatchObject({ createdBy: null, createdByLabel: null })
+  })
+
   it('returns exact ID, href, homepage, and navigation reference locations before archive', () => {
     const snapshot = structuredClone(neutralFixture)
     const target = snapshot.pages[0]!

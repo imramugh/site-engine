@@ -394,7 +394,7 @@ export const AssetFileVersions: CollectionConfig = {
 export const Redirects: CollectionConfig = {
   slug: 'redirects', admin: { useAsTitle: 'from', group: 'Content' }, access: editorialAccess,
   hooks: {
-    beforeChange: [async ({ data, originalDoc, req }) => {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
       const redirect = normalizedRedirect({ from: data.from ?? originalDoc?.from, to: data.to ?? originalDoc?.to })
       const existing = await req.payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
       validateRedirectSet([
@@ -402,7 +402,14 @@ export const Redirects: CollectionConfig = {
         redirect,
       ])
       contractError(RedirectSchema.safeParse(redirect), req, 'redirects')
-      return { ...originalDoc, ...data, ...redirect, status: 301 }
+      const actor = req.user as { id?: unknown; name?: unknown; email?: unknown } | null
+      const actorLabel = typeof actor?.name === 'string' && actor.name.trim()
+        ? actor.name.trim().slice(0, 160)
+        : typeof actor?.email === 'string' && actor.email.trim() ? actor.email.trim().slice(0, 160) : null
+      const imported = req.context.reviewedSnapshotImport === true
+      const createdBy = operation === 'update' ? originalDoc?.createdBy ?? null : imported || typeof actor?.id !== 'string' ? null : actor.id
+      const createdByLabel = operation === 'update' ? originalDoc?.createdByLabel ?? null : imported ? null : actorLabel
+      return { ...originalDoc, ...data, ...redirect, status: 301, createdBy, createdByLabel }
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       await captureChange({ collection: 'redirects', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
@@ -413,6 +420,8 @@ export const Redirects: CollectionConfig = {
     { name: 'from', type: 'text', required: true, unique: true },
     { name: 'to', type: 'text', required: true },
     { name: 'status', type: 'number', defaultValue: 301, admin: { readOnly: true } },
+    { name: 'createdBy', type: 'relationship', relationTo: 'users', admin: { readOnly: true } },
+    { name: 'createdByLabel', type: 'text', maxLength: 160, admin: { readOnly: true } },
     { name: 'hitCount', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true, description: 'Updated by the edge log ingestion adapter.' } },
     { name: 'lastHitAt', type: 'date', admin: { readOnly: true } },
   ],

@@ -36,6 +36,7 @@ import * as migration_20261005_114210_site_identity_navigation_1_5 from './20261
 import * as migration_20261005_133859 from './20261005_133859';
 import * as migration_20261005_145826_mailbox_workspace from './20261005_145826_mailbox_workspace';
 import * as migration_20261005_164500_crawler_policy_1_7 from './20261005_164500_crawler_policy_1_7';
+import * as migration_20261005_170000_redirect_creator_attribution from './20261005_170000_redirect_creator_attribution';
 
 export const migrations = [
   {
@@ -221,11 +222,16 @@ export const migrations = [
   {
     up: migration_20261005_145826_mailbox_workspace.up,
     down: migration_20261005_145826_mailbox_workspace.down,
-    name: '20261005_145826_mailbox_workspace'
+    name: '20261005_145826_mailbox_workspace',
   },
   {
     up: migration_20261005_164500_crawler_policy_1_7.up,
     down: migration_20261005_164500_crawler_policy_1_7.down,
-    name: '20261005_164500_crawler_policy_1_7',
+    name: '20261005_164500_crawler_policy_1_7'
+  },
+  {
+    up: migration_20261005_170000_redirect_creator_attribution.up,
+    down: migration_20261005_170000_redirect_creator_attribution.down,
+    name: '20261005_170000_redirect_creator_attribution',
   },
 ];
