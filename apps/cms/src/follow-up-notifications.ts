@@ -2,6 +2,7 @@ import type { Payload } from 'payload'
 import { enqueueNotification } from './notification-settings'
 
 const formatterCache = new Map<string, Intl.DateTimeFormat>()
+let currentRun: Promise<number> | undefined
 function parts(now: Date, zone: string) {
   let formatter = formatterCache.get(zone)
   if (!formatter) { formatter = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }); formatterCache.set(zone, formatter) }
@@ -15,6 +16,12 @@ export function followUpTimezone(): string {
 
 /** Creates at most `limit` daily durable intents. It is safe to rerun after 08:00 local time. */
 export async function enqueueDueFollowUps(payload: Payload, now = new Date(), limit = 25): Promise<number> {
+  if (currentRun) return currentRun
+  const run = enqueueDueFollowUpsLocked(payload, now, limit)
+  currentRun = run
+  try { return await run } finally { if (currentRun === run) currentRun = undefined }
+}
+async function enqueueDueFollowUpsLocked(payload: Payload, now: Date, limit: number): Promise<number> {
   const local = parts(now, followUpTimezone())
   if (local.hour < 8) return 0
   const result = await payload.find({ collection: 'inquiries', where: { and: [
