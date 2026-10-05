@@ -60,6 +60,11 @@ export async function configureSMTPMailbox(payload: Payload, input: SMTPConfigur
     const req = internal(transaction); const existing = input.id ? await payload.findByID({ collection: 'mailbox-configurations', id: input.id, depth: 0, overrideAccess: true, req }) as unknown as StoredMailbox : undefined
     const config = validated(input, existing); const password = input.password || (existing?.encryptedCredential ? decryptPassword(existing.encryptedCredential) : '')
     const verifiedAliases = Array.isArray(existing?.verifiedAliases) ? existing.verifiedAliases.map(String).filter((alias) => config.aliases.includes(alias)) : []
+    if (existing) {
+      const mappings = await payload.find({ collection: 'mailbox-area-mappings', where: { mailbox: { equals: existing.id } }, limit: mailboxAreas.length, depth: 0, overrideAccess: true, req })
+      const allowed = [config.primaryAddress, ...verifiedAliases]
+      if (mappings.docs.some((mapping) => !allowed.includes(String(mapping.senderAddress)))) throw new Error('Unassign this mailbox sender before removing or changing its address.')
+    }
     const data = { ...config, verifiedAliases, provider: 'smtp' as const, encryptedCredential: encryptPassword(password), credentialFingerprint: createHash('sha256').update(password).digest('hex').slice(0, 12), health: 'unknown' as const }
     const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as { id: string }).id, provider: 'smtp', credentialFingerprint: data.credentialFingerprint } }, overrideAccess: true, req })
@@ -79,6 +84,16 @@ export async function setMailboxArea(payload: Payload, input: { area: MailboxAre
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: input.mailbox, depth: 0, overrideAccess: true }) as unknown as StoredMailbox; const senderAddress = normalizedEmail(input.senderAddress)
   if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(String) : [])].includes(senderAddress)) throw new Error('Sender address has not been verified on this mailbox.')
   return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const current = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: input.area } }, limit: 1, depth: 0, overrideAccess: true, req }); const saved = current.docs[0] ? await payload.update({ collection: 'mailbox-area-mappings', id: current.docs[0].id, data: { mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-area-mappings', data: { area: input.area, mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.area_mapped', user: actor, actor, detail: { area: input.area, mailbox: input.mailbox, senderAddress } }, overrideAccess: true, req }); return saved })
+}
+
+export async function clearMailboxArea(payload: Payload, area: MailboxArea, actor: string) {
+  if (!mailboxAreas.includes(area)) throw new Error('Mailbox mapping is invalid.')
+  return withPayloadTransaction(payload, async (transaction) => {
+    const req = internal(transaction)
+    const current = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true, req })
+    if (current.docs[0]) await payload.delete({ collection: 'mailbox-area-mappings', id: current.docs[0].id, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'mailbox.area_unmapped', user: actor, actor, detail: { area, mapping: current.docs[0]?.id ?? null } }, overrideAccess: true, req })
+  })
 }
 
 const sendLocks = new Map<string, Promise<void>>()
