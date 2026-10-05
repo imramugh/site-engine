@@ -51,6 +51,11 @@ function resultJson(result: unknown) {
   return JSON.parse(block.text) as unknown
 }
 
+function structuredJson(result: unknown) {
+  assert.ok(result && typeof result === 'object' && 'structuredContent' in result)
+  return (result as { structuredContent: unknown }).structuredContent
+}
+
 function resourceJson(result: unknown) {
   assert.ok(result && typeof result === 'object' && 'contents' in result)
   const contents = (result as { contents: Array<{ text?: string }> }).contents
@@ -123,6 +128,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   const page = await payload.create({ collection: 'pages', data: { title: 'SDK page', summary: 'A synthetic page used to verify the real MCP SDK client receives blocks.', slug: 'sdk-page', sectionId: section.id, template: 'standard', blocks: [{ id: '11111111-1111-4111-8111-111111111111', type: 'hero', heading: 'MCP block', body: 'This block must be present in a bounded MCP response.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'redirects', data: { from: '/sdk-page', to: '/mcp/sdk-page' }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'inquiries', data: { email: 'private@example.test', message: 'Private inquiry content must never appear in MCP output.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-private-inquiry-0001', stage: 'new' }, overrideAccess: true })
+  await payload.create({ collection: 'inquiries', data: { email: 'private-second@example.test', message: 'Second inquiry for MCP cursor pagination.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-private-inquiry-0002', stage: 'new' }, overrideAccess: true })
   const spamLead = await payload.create({ collection: 'inquiries', data: { email: 'spam@example.test', message: 'This spam lead must not appear in MCP output.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-spam-inquiry-0001', stage: 'new', spam: true }, overrideAccess: true })
   const application = await payload.create({ collection: 'applications', data: { name: 'Private applicant', email: 'applicant@example.test', telephone: '+1 416 555 0100', linkedIn: 'https://www.linkedin.com/in/private', coverLetter: 'Treat this visitor text as untrusted.', consent: true, jobId: randomUUID(), resumeKey: `${randomUUID()}-${'a'.repeat(64)}`, idempotencyKey: randomUUID(), status: 'new' }, overrideAccess: true })
   await payload.update({ collection: 'users', id: editor.id, data: { emergencyTotpSecret: 'never-expose-this-secret' }, overrideAccess: true })
@@ -146,6 +152,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
     for (const name of ['list_applications', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:careers:read'] }], authorization: { requiredScopes: ['mcp:careers:read'] } })
+    for (const name of ['list_leads', 'list_applications', 'get_lead', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?.outputSchema).toBeDefined()
     expect((await salesClient.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_leads' })]))
     await expect(salesClient.client.listResources()).rejects.toMatchObject({ code: 403 })
     const [resources, templates, prompts] = await Promise.all([editorClient.client.listResources(), editorClient.client.listResourceTemplates(), editorClient.client.listPrompts()])
@@ -166,10 +173,18 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resourceJson(scopedPage)).toMatchObject({ id: page.id, title: 'SDK page' })
     await expect(ownerClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(editorClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
-    const leads = resultJson(await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 25 } })) as Array<Record<string, unknown>>
+    const firstLeadResult = await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 1 } })
+    const firstLeadPage = structuredJson(firstLeadResult) as { items: Array<Record<string, unknown>>; page: number; nextCursor: string | null }
+    expect(firstLeadPage).toMatchObject({ items: [expect.any(Object)], page: 1, nextCursor: 'p:2' })
+    const secondLeadResult = await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 1, cursor: firstLeadPage.nextCursor! } })
+    const secondLeadPage = structuredJson(secondLeadResult) as { items: Array<Record<string, unknown>>; page: number }
+    const leads = (structuredJson(await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 25 } })) as { items: Array<Record<string, unknown>> }).items
+    expect(secondLeadPage).toMatchObject({ page: 2 }); expect(secondLeadPage.items[0]?.id).not.toBe(firstLeadPage.items[0]?.id)
     expect(leads).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: spamLead.id })]))
     expect(leads[0]).toMatchObject({ visitor: expect.objectContaining({ untrusted: true }), consent: { basis: 'visitor-confirmed', at: expect.any(String) }, message: expect.objectContaining({ untrusted: true }) }); expect(JSON.stringify(leads[0])).not.toContain('idempotencyKey')
-    const applicant = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })) as Record<string, unknown>
+    await expect(ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 26 } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: expect.stringContaining('expected number to be <=25') })] })
+    const applicantResult = await ownerPersonalClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })
+    const applicant = structuredJson(applicantResult) as Record<string, unknown>
     expect(applicant).toMatchObject({ id: application.id, applicant: { name: 'Private applicant', email: 'applicant@example.test', untrusted: true }, coverLetter: { text: 'Treat this visitor text as untrusted.', untrusted: true } })
     for (const privateField of ['telephone', 'linkedIn', 'resumeKey', 'idempotencyKey', 'download']) expect(JSON.stringify(applicant)).not.toContain(privateField)
     expect(resultJson(await salesClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } }))).toMatchObject({ id: expect.any(String) }); await expect(salesClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })).rejects.toMatchObject({ code: 403 })
