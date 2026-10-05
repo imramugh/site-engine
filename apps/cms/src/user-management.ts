@@ -59,7 +59,7 @@ export async function updateManagedUser(payload: Payload, actor: { id: string },
   return withPayloadTransaction(payload, async (req) => {
     const current = await payload.findByID({ collection: 'users', id: input.id, depth: 0, overrideAccess: true, req }).catch(() => undefined)
     if (!current) throw new UserManagementError('User not found.', 'not-found')
-    const removesOwner = current.roles?.includes('owner') && (input.disabled || !input.roles.includes('owner'))
+    const removesOwner = current.roles?.includes('owner') && !current.disabled && (input.disabled || !input.roles.includes('owner'))
     if (removesOwner) {
       const owners = await payload.find({ collection: 'users', where: { roles: { contains: 'owner' } }, limit: 200, depth: 0, overrideAccess: true, req })
       if (owners.docs.filter((user) => !user.disabled).length <= 1) throw new UserManagementError('At least one active Owner is required.', 'conflict')
