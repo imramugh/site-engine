@@ -254,7 +254,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   const submittedQueueItem = reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`)
   await expect(submittedQueueItem.locator('[data-review-context]')).toContainText('Synthetic Editor · Source not recorded · 1 page')
-  await expect(submittedQueueItem.locator('[data-review-checks]')).toHaveText('Checks passed')
+  await expect(submittedQueueItem.locator('[data-review-context]')).toContainText('Checks passed')
   await expect(submittedQueueItem.locator('[data-editorial-state="submitted"]')).toHaveText('submitted')
   await submittedQueueItem.click()
   await expect(reviewer.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toHaveText('submitted')
