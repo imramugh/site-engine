@@ -67,6 +67,11 @@ describe('production migrations (ENG-036)', () => {
     // migrations are recorded, an existing row uses the old global slug index,
     // and the latest migration has not been recorded yet.
     for (const statement of [
+      // The production-mode verifier intentionally created same-slug pages in
+      // separate sections. They are not part of this historical fixture, whose
+      // old schema has a global unique slug index.
+      'DELETE FROM pages',
+      'DELETE FROM sections',
       'DROP INDEX pages_section_parent_slug_idx',
       'CREATE UNIQUE INDEX pages_slug_idx ON pages (slug)',
       "INSERT INTO sections (id, name, summary, slug) VALUES ('10000000-0000-4000-8000-000000000001', 'Legacy one', 'Synthetic legacy section used to prove the page slug migration preserves existing content.', 'legacy-one')",
