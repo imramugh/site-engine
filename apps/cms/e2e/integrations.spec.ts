@@ -17,12 +17,21 @@ test('ENG-023 Owner rotates a masked credential and explicitly tests a connectio
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/admin'); await openMenu(owner.page)
   await owner.page.getByRole('navigation', { name: 'Site', exact: true }).getByRole('link', { name: 'Integrations' }).click(); await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
-  await expect(owner.page.getByText('Provider jobs use encrypted credentials only at execution time')).toBeVisible()
+  await expect(owner.page.getByRole('tab')).toHaveCount(5)
+  await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(4)
+  await expect(owner.page.locator('[data-provider="openai"]')).toContainText('Not connected')
+  await owner.page.getByRole('tab', { name: 'AI providers' }).focus(); await owner.page.keyboard.press('ArrowRight'); await expect(owner.page.getByRole('tab', { name: 'Email' })).toBeFocused(); await expect(owner.page.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true'); await expect(owner.page).toHaveURL(/tab=email/); await expect(owner.page.getByRole('tabpanel')).toContainText('Outbound email is not available')
+  await owner.page.getByRole('tab', { name: 'Sign-in' }).click(); await expect(owner.page).toHaveURL(/tab=signin/); await expect(owner.page.getByRole('tabpanel')).toContainText('Google'); await expect(owner.page.getByRole('tabpanel')).toContainText('Enabled'); await owner.page.goBack(); await expect(owner.page.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true'); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
+  await owner.page.getByRole('tab', { name: 'Connected assistants' }).click(); await expect(owner.page.getByRole('tabpanel')).toContainText(/Not configured|Connection service available/)
+  await owner.page.getByRole('tab', { name: 'Notifications' }).click(); await expect(owner.page.getByRole('tabpanel')).toContainText('Active incident lead')
+  await owner.page.getByRole('tab', { name: 'AI providers' }).click()
+  const addOpenAI = owner.page.locator('[data-provider="openai"]').getByRole('button', { name: 'Add key' })
+  await addOpenAI.click(); await expect(owner.page.getByLabel('Model')).toBeFocused(); await owner.page.keyboard.press('Shift+Tab'); await expect(owner.page.getByRole('button', { name: 'Close provider configuration' })).toBeFocused(); await owner.page.keyboard.press('Shift+Tab'); await expect(owner.page.getByRole('button', { name: 'Save configuration' })).toBeFocused(); await owner.page.keyboard.press('Escape'); await expect(owner.page.locator('[data-integrations-editor]')).toHaveCount(0); await expect(addOpenAI).toBeFocused(); await addOpenAI.click()
   await owner.page.getByLabel('Model').fill('synthetic-model'); await owner.page.getByLabel('Credential').fill('synthetic-browser-credential'); await owner.page.getByLabel('Input micro-USD per million tokens').fill('1000000'); await owner.page.getByLabel('Output micro-USD per million tokens').fill('2000000'); await owner.page.getByLabel('Reviewed pricing source').fill('https://prices.example.test/review'); await owner.page.getByLabel('Pricing as of').fill('2026-10-04')
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
-  await owner.page.getByRole('button', { name: 'Save provider configuration' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('Credential rotation and reviewed pricing saved.')
+  await owner.page.getByRole('button', { name: 'Save configuration' }).click(); expect((await saved).status()).toBe(201); await expect(owner.page.getByRole('status')).toContainText('OpenAI credential and reviewed pricing saved.')
   await owner.page.reload(); const body = await owner.page.locator('body').textContent() ?? ''
-  expect(body).not.toContain('synthetic-browser-credential'); await expect(owner.page.getByLabel('Configured integrations')).toContainText('configured')
+  expect(body).not.toContain('synthetic-browser-credential'); await expect(owner.page.locator('[data-provider="openai"]')).toContainText('configured')
   let testRequests = 0
   await owner.page.route('**/api/integrations', async (route) => {
     if (route.request().method() !== 'POST') return route.continue()
@@ -34,10 +43,35 @@ test('ENG-023 Owner rotates a masked credential and explicitly tests a connectio
     if (testRequests === 3) { await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'reauthentication required' }) }); return }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ integration: { id: 'mock', provider: 'openai', health: testRequests === 1 ? 'connected' : 'rejected', testedAt: '2026-10-04T12:00:00.000Z', credentialConfigured: true } }) })
   })
-  const connectionTest = owner.page.getByLabel('Configured integrations').locator('li').filter({ hasText: /^openai/ }).getByRole('button', { name: 'Test connection' })
+  const connectionTest = owner.page.locator('[data-provider="openai"]').getByRole('button', { name: 'Test' })
   await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('Connection confirmed at Oct 4, 2026, 8:00 a.m. EDT.')
   await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('Connection could not be confirmed at Oct 4, 2026, 8:00 a.m. EDT. Provider details are not displayed.')
-  await connectionTest.click(); await expect(owner.page.getByRole('status')).toContainText('A fresh Owner sign-in is required before testing a connection.')
+  await connectionTest.click(); await expect(owner.page.locator('[data-integrations-status]')).toContainText('A fresh Owner sign-in is required before testing a connection.')
+  await owner.page.locator('[data-provider="anthropic"]').getByRole('button', { name: 'Add key' }).click()
+  await owner.page.getByLabel('Model').fill('preserved-model'); await owner.page.getByLabel('Credential').fill('preserved-secret'); await owner.page.getByLabel('Input micro-USD per million tokens').fill('3'); await owner.page.getByLabel('Output micro-USD per million tokens').fill('4'); await owner.page.getByLabel('Reviewed pricing source').fill('https://prices.example.test/anthropic'); await owner.page.getByLabel('Pricing as of').fill('2026-10-04')
+  await owner.page.route('**/api/integrations', async (route) => { const request = route.request(); if (request.method() === 'POST' && (request.postDataJSON() as { action?: string }).action === 'configure') return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'synthetic failure' }) }); return route.fallback() })
+  await owner.page.getByRole('button', { name: 'Save configuration' }).click(); await expect(owner.page.locator('[data-integrations-status]')).toContainText('synthetic failure'); await expect(owner.page.getByLabel('Model')).toHaveValue('preserved-model'); await expect(owner.page.getByLabel('Credential')).toHaveValue('preserved-secret')
+  await owner.page.getByRole('button', { name: 'Close provider configuration' }).click()
+  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.context.close()
+})
+
+test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
+  await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations')
+  const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(4)
+  const tops = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top))); expect(new Set(tops).size).toBe(1)
+  if (process.env.CMS_PRIVATE_BRAND === '1') {
+    await owner.page.evaluate(() => document.fonts.ready)
+    expect(await owner.page.locator('link[href*="admin-branding.css"]').count()).toBe(1)
+    for (const locator of [owner.page.locator('[data-integrations-workspace]'), cards.first().locator('strong').first(), owner.page.getByRole('tab', { name: 'AI providers' })]) {
+      expect(await locator.evaluate((node) => getComputedStyle(node).fontFamily)).toContain('IBM Plex Sans')
+    }
+  }
+  for (const tab of ['Email', 'Sign-in', 'Connected assistants', 'Notifications', 'AI providers']) { await owner.page.getByRole('tab', { name: tab, exact: true }).click(); await expect(owner.page.getByRole('tabpanel')).toBeVisible() }
+  await owner.page.setViewportSize({ width: 390, height: 844 }); await owner.page.getByRole('tab', { name: 'AI providers' }).click()
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  const boxes = await cards.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width)); expect(boxes.every((width) => width > 300 && width <= 366)).toBe(true)
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
 })
