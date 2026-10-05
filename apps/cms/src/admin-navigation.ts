@@ -26,24 +26,8 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
 ]
 
 export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [
-  { href: '/admin/collections/site-settings', label: 'Site', roles: ['owner'] },
+  { href: '/site', label: 'Site', roles: ['owner'] },
   { href: '/integrations', label: 'Integrations', roles: ['owner'] },
-  { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
-]
-
-/** Related tools remain discoverable without competing with the primary shell. */
-export const adminToolNavigationItems: readonly AdminNavigationItem[] = [
-  { href: '/direct-edit', label: 'Hero draft editor', roles: ['owner', 'editor'] },
-  { href: '/themes', label: 'Themes', roles: ['owner'] },
-  { href: '/ai-jobs', label: 'AI jobs', roles: ['owner'] },
-]
-
-export const payloadCollectionItems: readonly AdminNavigationItem[] = [
-  { href: '/admin/collections/pages', label: 'Pages', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/sections', label: 'Sections', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/assets', label: 'Media', roles: ['owner', 'editor'] },
-  { href: '/admin/collections/redirects', label: 'Redirects', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/audit-events', label: 'Audit events', roles: ['owner'] },
   { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
 ]
 

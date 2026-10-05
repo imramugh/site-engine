@@ -46,9 +46,6 @@ export async function mediaWorkspace(
   const assets = await payload.find({
     collection: 'assets', limit: 0, pagination: false, sort: '-createdAt',
     depth: 0, overrideAccess: false, user,
-    where: q ? { or: [
-      { filename: { contains: q } }, { alt: { contains: q } }, { caption: { contains: q } },
-    ] } : undefined,
   })
   const usage = new Map<string, MediaAsset['usages']>(assets.docs.map(asset => [asset.id, []]))
   if (usage.size) {
@@ -75,15 +72,22 @@ export async function mediaWorkspace(
       })
     }
   }
-  const mapped: MediaAsset[] = assets.docs.map(asset => ({
-    id: asset.id, filename: asset.filename ?? 'Untitled asset', mimeType: asset.mimeType ?? 'unknown',
-    width: asset.width, height: asset.height, filesize: asset.filesize, alt: asset.alt,
+  const mapped: MediaAsset[] = assets.docs.map(asset => {
+    const file: { filename?: string | null; originalFilename?: string | null; mimeType?: string | null; width?: number | null; height?: number | null; filesize?: number | null; url?: string | null } = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile : asset
+    return ({
+    id: asset.id, filename: file.originalFilename ?? file.filename ?? 'Untitled asset', mimeType: file.mimeType ?? 'unknown',
+    width: file.width, height: file.height, filesize: file.filesize, alt: asset.alt,
     decorative: asset.decorative, caption: asset.caption, credit: asset.credit, tags: asset.tags,
     focalX: typeof asset.focalX === 'number' && Number.isFinite(asset.focalX) ? Math.round(Math.min(100, Math.max(0, asset.focalX))) : 50,
     focalY: typeof asset.focalY === 'number' && Number.isFinite(asset.focalY) ? Math.round(Math.min(100, Math.max(0, asset.focalY))) : 50,
-    deletedAt: asset.deletedAt, url: asset.url, usages: usage.get(asset.id) ?? [],
-  }))
+    deletedAt: asset.deletedAt, url: file.url, usages: usage.get(asset.id) ?? [],
+  })})
   const filtered = mapped.filter(asset => {
+    if (q) {
+      const needle = q.toLocaleLowerCase()
+      const searchable = [asset.filename, asset.alt, asset.caption]
+      if (!searchable.some((value) => typeof value === 'string' && value.toLocaleLowerCase().includes(needle))) return false
+    }
     if (query.filter === 'bin') return Boolean(asset.deletedAt)
     if (asset.deletedAt) return false
     if (query.filter === 'missing-alt') return !asset.decorative && !asset.alt?.trim()

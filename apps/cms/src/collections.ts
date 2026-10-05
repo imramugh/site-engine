@@ -284,8 +284,7 @@ export const Assets: CollectionConfig = {
       name,
       width: size.width,
       height: size.height,
-      fit: 'cover' as const,
-      position: 'attention' as const,
+      fit: 'inside' as const,
       withoutEnlargement: true,
       formatOptions: { format: size.format },
     })),
@@ -313,6 +312,10 @@ export const Assets: CollectionConfig = {
       return data
     }],
     beforeChange: [async ({ data, originalDoc, req }) => {
+      const filePointerChanged = originalDoc
+        ? (data.currentFile !== undefined && JSON.stringify(data.currentFile) !== JSON.stringify(originalDoc.currentFile)) || (data.currentFileVersion !== undefined && relationId(data.currentFileVersion) !== relationId(originalDoc.currentFileVersion))
+        : data.currentFile != null || data.currentFileVersion != null
+      if (!req.context.mediaReplacement && filePointerChanged) throw new Error('Asset file-version pointers are server-owned.')
       const lifecycle = req.context.mediaLifecycle
       const serverTransition = lifecycle === 'bin' || lifecycle === 'restore'
       const directLifecycleWrite = data.restoreFromBin === true || Boolean(originalDoc
@@ -339,8 +342,36 @@ export const Assets: CollectionConfig = {
     { name: 'tags', type: 'text', hasMany: true, maxRows: 12 },
     { name: 'focalX', type: 'number', min: 0, max: 100, defaultValue: 50 },
     { name: 'focalY', type: 'number', min: 0, max: 100, defaultValue: 50 },
+    { name: 'currentFileVersion', type: 'relationship', relationTo: 'asset-file-versions', admin: { readOnly: true, hidden: true } },
+    { name: 'currentFile', type: 'json', admin: { readOnly: true, hidden: true } },
     { name: 'deletedAt', type: 'date', admin: { readOnly: true }, access: { create: () => false, update: () => false } },
     { name: 'deleteAfter', type: 'date', admin: { readOnly: true }, access: { create: () => false, update: () => false } },
+  ],
+}
+
+export const AssetFileVersions: CollectionConfig = {
+  slug: 'asset-file-versions',
+  admin: { hidden: true, useAsTitle: 'filename' },
+  access: { create: () => false, read: staff(editorialRoles), update: () => false, delete: () => false },
+  upload: {
+    staticDir: (() => { ensureMediaStorageDirectory(); return mediaStorageDirectory() })(),
+    mimeTypes: ['image/avif', 'image/jpeg', 'image/png', 'image/webp'], pasteURL: false,
+    imageSizes: Object.entries(MEDIA_VARIANTS).map(([name, size]) => ({ name, width: size.width, height: size.height, fit: 'inside' as const, withoutEnlargement: true, formatOptions: { format: size.format } })),
+  },
+  hooks: {
+    beforeValidate: [async ({ data, req }) => { if (req.file) await validateRasterUpload(req.file); return data }],
+    beforeOperation: [async ({ args, operation, req }) => {
+      if (operation === 'create' && !req.context.mediaReplacementVersion) throw new Error('Asset file versions are created through the media replacement service.')
+      if (operation === 'update' || operation === 'delete') throw new Error('Asset file versions are immutable.')
+      return args
+    }],
+  },
+  fields: [
+    { name: 'parentAsset', type: 'relationship', relationTo: 'assets', required: true, index: true },
+    { name: 'digest', type: 'text', required: true, index: true },
+    { name: 'versionKey', type: 'text', required: true, unique: true },
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true },
+    { name: 'originalFilename', type: 'text', required: true, maxLength: 240, admin: { readOnly: true } },
   ],
 }
 

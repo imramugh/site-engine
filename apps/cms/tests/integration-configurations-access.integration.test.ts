@@ -25,6 +25,32 @@ async function freshSession(userID: string) {
 }
 
 describe('ENG-023 integration configuration access', () => {
+  it('returns only redacted, real capability state for the five-tab workspace', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'workspace-owner@example.test', name: 'Workspace owner', roles: ['owner'], emergencyTotpSecret: 'encrypted-local-secret' }, overrideAccess: true })
+    await payload.create({ collection: 'users', data: { email: 'google-user@example.test', name: 'Google user', roles: ['editor'], provider: 'google', providerIssuer: 'https://issuer.example.test', providerSubject: 'google-subject' }, overrideAccess: true })
+    const session = await freshSession(owner.id)
+    Object.assign(process.env, {
+      OIDC_GOOGLE_ISSUER_URL: 'https://issuer.example.test', OIDC_GOOGLE_CLIENT_ID: 'client', OIDC_GOOGLE_CLIENT_SECRET: 'secret',
+      OAUTH_INTERNAL_ORIGIN: 'http://oauth.example.test', OAUTH_INTROSPECTION_SECRET: 'introspection-secret',
+    })
+    try {
+      const response = await integrationRoute.GET(new Request('http://cms.test/api/integrations', { headers: { cookie: session } }))
+      expect(response.status).toBe(200)
+      const body = await response.json() as Record<string, any>
+      expect(body.capabilities).toEqual({
+        identity: { google: { configured: true, users: 1 }, microsoft: { configured: false, users: 0 }, emergencyOwner: { configured: true, users: 1 } },
+        assistants: { oauthConfigured: true, endpoint: 'http://cms.test/mcp' },
+        email: { workerConfigured: false },
+        notifications: { queued: 0, delivered: 0, failed: 0 },
+      })
+      expect(JSON.stringify(body)).not.toContain('encrypted-local-secret')
+      expect(JSON.stringify(body)).not.toContain('introspection-secret')
+      expect(JSON.stringify(body)).not.toContain('OIDC_GOOGLE_CLIENT_SECRET')
+    } finally {
+      for (const name of ['OIDC_GOOGLE_ISSUER_URL', 'OIDC_GOOGLE_CLIENT_ID', 'OIDC_GOOGLE_CLIENT_SECRET', 'OAUTH_INTERNAL_ORIGIN', 'OAUTH_INTROSPECTION_SECRET']) delete process.env[name]
+    }
+  })
+
   it('denies direct owner CRUD so credential changes can only use the audited route', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'integration-owner@example.test', name: 'Integration owner', roles: ['owner'] }, overrideAccess: true })
     const data = { provider: 'openai' as const, model: 'synthetic-model', health: 'unknown' as const }

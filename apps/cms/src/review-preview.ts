@@ -44,6 +44,11 @@ async function latestPublished(payload: Payload, req?: PayloadRequest): Promise<
   return { manifest: SiteSnapshotSchema.parse(snapshot.manifest), snapshotID: idOf(snapshot), sequence: Number(release.sequence), versions: { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion) } }
 }
 
+/** The installed public release is authoritative; bootstrap files only apply before first publication. */
+export async function loadPublishedPreviewBaseline(payload: Payload): Promise<PreviewBaseline | undefined> {
+  return await latestPublished(payload) ?? await loadInitialPreviewBaseline()
+}
+
 async function queueHead(payload: Payload, req?: PayloadRequest): Promise<PreviewBaseline | undefined> {
   const result = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true, ...(req ? { req } : {}) })
   const job = result.docs[0]; const snapshot = job?.snapshot

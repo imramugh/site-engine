@@ -77,6 +77,10 @@ const approverEditorSetID = 'abababab-abab-4bab-8bab-ababababab03'
 const approverEditorSessionToken = 'synthetic-page-editor-approver-session-token'
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
+const galleryOwnerSessionToken = 'synthetic-gallery-owner-session-token'
+const siteOwnerSessionToken = 'synthetic-site-owner-session-token'
+const galleryPageID = 'face0000-0000-4000-8000-000000000001'
+const gallerySetID = 'face0000-0000-4000-8000-000000000002'
 const shellSessionTokens = {
   owner: 'synthetic-shell-owner-session-token',
   editor: 'synthetic-shell-editor-session-token',
@@ -96,13 +100,17 @@ const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact', 'richText'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
+const galleryTheme = process.env.BLOCK_GALLERY_E2E_THEME_ID && process.env.BLOCK_GALLERY_E2E_THEME_VERSION ? { name: process.env.BLOCK_GALLERY_E2E_THEME_ID, version: process.env.BLOCK_GALLERY_E2E_THEME_VERSION, contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } } : undefined
+const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null'
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
 writeFileSync(themeRegistry, JSON.stringify({ themes: [
   { manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
+  ...(galleryTheme ? [{ manifest: galleryTheme, installedAt: '2026-10-05T00:00:00.000Z' }] : []),
 ] }))
 const initialBaseline = structuredClone(neutralFixture)
 initialBaseline.settings.contractVersion = '1.4.0'
+if (galleryTheme) initialBaseline.settings.theme = { id: galleryTheme.name, version: galleryTheme.version, contract: galleryTheme.contract, manifestDigest: createHash('sha256').update(stable(galleryTheme)).digest('hex') }
 initialBaseline.settings.sections.push({ id: applicationSectionID, name: 'Careers', slug: 'careers', allowedTemplates: ['listing', 'job'], pageIds: [applicationJobID, draftApplicationJobID, expiredApplicationJobID] })
 initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSectionID, title: 'Synthetic Application Engineer', summary: 'A published synthetic role used only to exercise the private application HTTP flow.', slug: 'synthetic-application-engineer', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2030-01-01T00:00:00.000Z' } })
 initialBaseline.pages.push({ id: draftApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Draft Role', summary: 'A draft synthetic role which must not accept applications.', slug: 'synthetic-draft-role', template: 'job', status: 'draft', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' } } })
@@ -140,7 +148,7 @@ process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
-process.env.PREVIEW_THEME_VERSION = '1.0.0'
+process.env.PREVIEW_THEME_VERSION = galleryTheme?.version ?? '1.0.0'
 process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
 process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
@@ -270,6 +278,8 @@ async function seed(): Promise<void> {
   const pageCreatorOwner = await payload.create({ collection: 'users', data: { email: 'page-creator-owner.synthetic@example.test', name: 'Synthetic Page Creator Owner', roles: ['owner'] }, overrideAccess: true })
   const pageEditorApprover = await payload.create({ collection: 'users', data: { email: 'page-editor-approver.synthetic@example.test', name: 'Synthetic Page Editor Approver', roles: ['approver'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
+  const galleryOwner = await payload.create({ collection: 'users', data: { email: 'gallery-owner.synthetic@example.test', name: 'Synthetic Gallery Owner', roles: ['owner'] }, overrideAccess: true })
+  const siteOwner = await payload.create({ collection: 'users', data: { email: 'site-owner.synthetic@example.test', name: 'Synthetic Site Owner', roles: ['owner'] }, overrideAccess: true })
   const shellUsers: Record<keyof typeof shellSessionTokens, { id: string }> = {} as Record<keyof typeof shellSessionTokens, { id: string }>
   for (const role of ['owner', 'editor', 'approver'] as const) {
     shellUsers[role] = await payload.create({
@@ -318,6 +328,10 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'pages', data: { id: approverEditorPageID, title: 'Approver page editor target', summary: 'Synthetic published page for the Approver whole-page editing flow.', slug: 'approver-page-editor', sectionId: directSection.id, template: 'standard', blocks: [{ id: approverEditorBlockID, type: 'hero', heading: 'Approver original heading', body: 'Approver original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: approverEditorSetID, name: 'Approver browser page draft', state: 'open', actor: pageEditorApprover.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(galleryOwnerSessionToken), user: galleryOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(siteOwnerSessionToken), user: siteOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'pages', data: { id: galleryPageID, title: 'Gallery recipe target', summary: 'Synthetic standard page for the active-theme gallery browser workflow.', slug: 'gallery-recipe-target', sectionId: directSection.id, template: 'standard', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'change-sets', data: { id: gallerySetID, name: 'Gallery browser recipe', state: 'open', actor: galleryOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   for (const role of ['owner', 'editor', 'approver'] as const) {
     await payload.create({
       collection: 'auth-sessions',
@@ -339,6 +353,13 @@ async function seed(): Promise<void> {
       overrideAccess: false,
     }))
   }
+  // Payload correctly refuses invalid uploads. Corrupt one otherwise-real row
+  // directly so the browser can prove that attaching legacy invalid media to a
+  // page is rejected by the canonical page-save boundary as well.
+  await (payload.db as unknown as { client: { execute: (query: { sql: string; args: unknown[] }) => Promise<unknown> } }).client.execute({
+    sql: 'UPDATE assets SET alt = NULL, decorative = 0 WHERE id = ?',
+    args: [mediaAssets[25]!.id],
+  })
   const mediaSection = await payload.create({ collection: 'sections', data: { name: 'Media browser fixtures', summary: 'Synthetic section for media workspace browser verification.', slug: 'media-browser-fixtures', allowedTemplates: ['standard'] }, user: mediaOwner, overrideAccess: false })
   await payload.create({ collection: 'pages', data: { title: 'Media usage fixture page', summary: 'Synthetic page that keeps one media fixture in use.', slug: 'media-usage-fixture', sectionId: mediaSection.id, template: 'standard', blocks: [{ id: 'a1000000-0000-4000-8000-000000000001', type: 'media', mediaId: mediaAssets[0]!.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: mediaOwner, overrideAccess: false })
   const binnedAsset = await payload.create({ collection: 'assets', data: { alt: 'Synthetic restorable media fixture' }, file: { data: mediaRaster, mimetype: 'image/png', name: 'media-restorable.png', size: mediaRaster.length }, user: mediaOwner, overrideAccess: false })

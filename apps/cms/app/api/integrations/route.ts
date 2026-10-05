@@ -4,6 +4,7 @@ import { freshStaff, hasRole } from '../../../src/access'
 import { integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
 import { serverSessionStrategy } from '../../../src/identity'
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
+import { configuredProvider } from '../../../src/oidc'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -39,8 +40,32 @@ async function owner(request: Request) {
 export async function GET(request: Request) {
   const { payload, user } = await owner(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
-  const records = await payload.find({ collection: 'integration-configurations', sort: 'provider', limit: 20, depth: 0, overrideAccess: true })
-  return privateJSON({ integrations: records.docs.map((doc) => publicIntegration(doc as unknown as Record<string, unknown>)) })
+  const [records, googleUsers, microsoftUsers, emergencyOwners, queued, delivered, failed] = await Promise.all([
+    payload.find({ collection: 'integration-configurations', sort: 'provider', limit: 20, depth: 0, overrideAccess: true }),
+    payload.count({ collection: 'users', where: { provider: { equals: 'google' } }, overrideAccess: true }),
+    payload.count({ collection: 'users', where: { provider: { equals: 'microsoft' } }, overrideAccess: true }),
+    payload.count({ collection: 'users', where: { emergencyTotpSecret: { exists: true } }, overrideAccess: true }),
+    payload.count({ collection: 'notification-outbox', where: { state: { equals: 'queued' } }, overrideAccess: true }),
+    payload.count({ collection: 'notification-outbox', where: { state: { equals: 'delivered' } }, overrideAccess: true }),
+    payload.count({ collection: 'notification-outbox', where: { state: { equals: 'failed' } }, overrideAccess: true }),
+  ])
+  const publicOrigin = process.env.PAYLOAD_PUBLIC_SERVER_URL
+  const oauthConfigured = Boolean(process.env.OAUTH_INTERNAL_ORIGIN && process.env.OAUTH_INTROSPECTION_SECRET && publicOrigin)
+  return privateJSON({
+    integrations: records.docs.map((doc) => publicIntegration(doc as unknown as Record<string, unknown>)),
+    capabilities: {
+      identity: {
+        google: { configured: Boolean(configuredProvider('google')), users: googleUsers.totalDocs },
+        microsoft: { configured: Boolean(configuredProvider('microsoft')), users: microsoftUsers.totalDocs },
+        emergencyOwner: { configured: emergencyOwners.totalDocs > 0, users: emergencyOwners.totalDocs },
+      },
+      assistants: { oauthConfigured, endpoint: oauthConfigured ? new URL('/mcp', publicOrigin).href : null },
+      // A durable outbox exists, but provider delivery is intentionally a later
+      // adapter. Never imply that locally prepared mail can leave the CMS.
+      email: { workerConfigured: false },
+      notifications: { queued: queued.totalDocs, delivered: delivered.totalDocs, failed: failed.totalDocs },
+    },
+  })
 }
 
 export async function POST(request: Request) {

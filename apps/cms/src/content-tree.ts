@@ -61,13 +61,14 @@ export function buildContentTree(sections: ContentTreeSection[], pages: ContentT
  * canonical route until its section or ancestry is repaired. */
 export function canonicalContentPath(page: ContentTreePage, pages: ContentTreePage[], sections: ContentTreeSection[], homepageID?: string): string | undefined {
   const validSlug = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
+  const validSectionSlug = (value: unknown): value is string => value === '' || validSlug(value)
   const pageSectionID = idOf(page.sectionId)
   const section = sections.find((item) => item.id === pageSectionID)
-  if (!section || !validSlug(section.slug) || !validSlug(page.slug)) return undefined
+  if (!section || !validSectionSlug(section.slug) || !validSlug(page.slug)) return undefined
   const landingID = idOf(section.landingPageId)
   const parentID = idOf(page.parentId)
   if (homepageID && page.id === homepageID) return parentID ? undefined : '/'
-  if (landingID && page.id === landingID) return parentID ? undefined : `/${section.slug}`
+  if (landingID && page.id === landingID) return parentID ? undefined : section.slug ? `/${section.slug}` : '/'
   const byID = new Map(pages.map((item) => [item.id, item]))
   const ancestors: ContentTreePage[] = []
   const seen = new Set<string>([page.id])
@@ -80,5 +81,5 @@ export function canonicalContentPath(page: ContentTreePage, pages: ContentTreePa
     ancestors.unshift(parent)
     currentParentID = idOf(parent.parentId)
   }
-  return `/${[section.slug, ...ancestors.filter((item) => item.id !== landingID).map((item) => item.slug), page.slug].join('/')}`
+  return `/${[section.slug, ...ancestors.filter((item) => item.id !== landingID).map((item) => item.slug), page.slug].filter(Boolean).join('/')}`
 }

@@ -6,6 +6,7 @@ import * as migration_20261004_010000_provider_ledger from './20261004_010000_pr
 import * as migration_20261004_020000_configured_ai_jobs from './20261004_020000_configured_ai_jobs';
 import * as migration_20261004_030000_page_type_metadata from './20261004_030000_page_type_metadata';
 import * as migration_20261004_031000_page_creation_receipts from './20261004_031000_page_creation_receipts';
+import * as migration_20261004_235511_media_immutable_versions from './20261004_235511_media_immutable_versions';
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
@@ -146,4 +147,5 @@ export const migrations = [
   { up: migration_20261004_020000_configured_ai_jobs.up, down: migration_20261004_020000_configured_ai_jobs.down, name: '20261004_020000_configured_ai_jobs' },
   { up: migration_20261004_030000_page_type_metadata.up, down: migration_20261004_030000_page_type_metadata.down, name: '20261004_030000_page_type_metadata' },
   { up: migration_20261004_031000_page_creation_receipts.up, down: migration_20261004_031000_page_creation_receipts.down, name: '20261004_031000_page_creation_receipts' },
+  { up: migration_20261004_235511_media_immutable_versions.up, down: migration_20261004_235511_media_immutable_versions.down, name: '20261004_235511_media_immutable_versions' },
 ];

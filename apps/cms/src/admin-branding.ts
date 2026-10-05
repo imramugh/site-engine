@@ -7,6 +7,7 @@ export type AdminBranding = {
   logoUrl?: string
   tokens: Record<string, string>
   stylesheetUrl?: string
+  blockGalleryPreviews?: Record<string, Record<string, string>>
 }
 
 const defaultBranding: AdminBranding = {
@@ -48,7 +49,17 @@ export function parseAdminBranding(value: unknown): AdminBranding {
   if (isRecord(value.tokens)) for (const [key, token] of Object.entries(value.tokens)) {
     if (tokenNames.has(key) && typeof token === 'string' && color.test(token)) tokens[key] = token
   }
-  return { name, initials, logoUrl: sameOriginAsset(value.logoUrl), tokens, stylesheetUrl: '/admin-branding/admin-branding.css' }
+  const blockGalleryPreviews: Record<string, Record<string, string>> = {}
+  if (isRecord(value.blockGalleryPreviews)) for (const [theme, previews] of Object.entries(value.blockGalleryPreviews)) {
+    if (!/^[a-z0-9-]{1,80}@[0-9]+\.[0-9]+\.[0-9]+$/i.test(theme) || !isRecord(previews)) continue
+    const safe: Record<string, string> = {}
+    for (const [block, url] of Object.entries(previews)) {
+      const asset = sameOriginAsset(url)
+      if (/^[a-z][a-zA-Z0-9]{0,40}$/.test(block) && asset) safe[block] = asset
+    }
+    if (Object.keys(safe).length) blockGalleryPreviews[theme] = safe
+  }
+  return { name, initials, logoUrl: sameOriginAsset(value.logoUrl), tokens, stylesheetUrl: '/admin-branding/admin-branding.css', ...(Object.keys(blockGalleryPreviews).length ? { blockGalleryPreviews } : {}) }
 }
 
 /** Reads only an optional public build artifact. Invalid or absent files are neutral. */
