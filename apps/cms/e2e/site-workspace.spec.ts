@@ -62,7 +62,7 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByRole('button', { name: 'Save writing guidance' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
 
-  const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as { sets: Array<{ name: string; state: string; changes: Array<{ collection: string }> }> }
+  const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as { sets: Array<{ id: string; name: string; state: string; changes: Array<{ collection: string }> }> }
   const captured = sets.sets.find(item => item.name === 'Navigation 1.6 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides', 'redirects']))
@@ -127,6 +127,14 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
   const mobile = testInfo.outputPath('site-business-details-390.png'); await owner.page.screenshot({ path: mobile, fullPage: true }); await testInfo.attach('Site Business details 390', { path: mobile, contentType: 'image/png' })
   await axe(owner.page)
+
+  // The suite intentionally shares a real SQLite database. Complete this
+  // fixture's open theme-settings lifecycle so the following Theme workspace
+  // test starts from the published selection instead of a foreign Owner's
+  // unresolved 1.6 selection. This uses the normal guarded discard path and
+  // therefore also proves that the draft can be safely restored.
+  const discarded = await owner.page.request.post('/api/editorial/discard', { headers: { origin, 'content-type': 'application/json' }, data: { id: captured!.id } })
+  expect(discarded.status(), await discarded.text()).toBe(200)
   await owner.context.close()
 })
 
