@@ -6,6 +6,7 @@ import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessio
 import { markStaleIfNeeded, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
 import { validateRedirectSet } from './redirect-lifecycle'
 import { deriveRoutes } from '@site-engine/engine'
+import { enqueueNotification } from './notification-settings'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
@@ -376,6 +377,7 @@ export async function claimNextPublishJob(payload: Payload, req: PayloadRequest,
   if (job.status === 'processing' && expired && Number(job.attempts ?? 0) >= maxAttempts) {
     const failed = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: job.id } }, { status: { equals: 'processing' } }, { leaseExpiresAt: { less_than_equal: now.toISOString() } }] }, data: { status: 'failed', errorCode: 'LEASE_EXPIRED', lastError: 'LEASE_EXPIRED', leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
     if (!failed.docs[0]) throw new Error('The publish lease is no longer current.')
+    await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${job.id}`, sourceType: 'publish-job', sourceID: job.id, payload: { publishJob: job.id, errorCode: 'LEASE_EXPIRED' } })
     return null
   }
   const leaseToken = randomUUID()
@@ -392,6 +394,7 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   const nextAttemptAt = terminal ? undefined : new Date(now.getTime() + 1_000 * 2 ** Math.max(0, Number(job.attempts) - 1)).toISOString()
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: terminal ? 'failed' : 'pending', errorCode: cleanErrorCode(errorCode), lastError: cleanErrorCode(errorCode), nextAttemptAt, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  if (terminal) await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
   return updated.docs[0]
 }
 

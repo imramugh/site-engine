@@ -4,6 +4,7 @@ import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSe
 import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
+import { enqueueNotification } from './notification-settings'
 
 export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings' | 'style-guides'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
@@ -318,6 +319,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
   if (details?.checks.some((check) => check.status === 'failed')) throw new Error(`Change-set quality checks failed: ${details.checks.flatMap((check) => check.errors ?? []).map((error) => error.message).join('; ')}`)
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, preview: action === 'submit' ? { status: 'pending' } : undefined, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
+  if (action === 'submit') await enqueueNotification(payload, req, { kind: 'change-set-submitted', idempotencyKey: `change-set-submitted:${id}:${String(set.revision)}`, sourceType: 'change-set', sourceID: id, payload: { changeSet: id, revision: set.revision } })
   await payload.create({ collection: 'audit-events', data: { event: `editorial.change_set_${action}`, user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, state } }, overrideAccess: true, req })
   return set
 }

@@ -84,6 +84,8 @@ export interface Config {
     'provider-usage-reservations': ProviderUsageReservation;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'notification-preferences': NotificationPreference;
+    'urgent-contacts': UrgentContact;
     'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
@@ -118,6 +120,8 @@ export interface Config {
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
+    'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -746,8 +750,14 @@ export interface Inquiry {
  */
 export interface NotificationOutbox {
   id: string;
-  inquiry: string | Inquiry;
-  kind: 'lead-received' | 'urgent-lead-alert';
+  inquiry?: (string | null) | Inquiry;
+  kind:
+    | 'new-lead'
+    | 'active-incident-lead'
+    | 'new-job-application'
+    | 'change-set-submitted'
+    | 'follow-ups-due'
+    | 'publish-or-integration-failed';
   idempotencyKey: string;
   state: 'queued' | 'delivered' | 'failed';
   payload:
@@ -759,7 +769,69 @@ export interface NotificationOutbox {
     | number
     | boolean
     | null;
+  recipientRules:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  recipients:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  channels:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  sourceType?: string | null;
+  sourceID?: string | null;
   availableAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-preferences".
+ */
+export interface NotificationPreference {
+  id: string;
+  key: string;
+  events:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedBy: string | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "urgent-contacts".
+ */
+export interface UrgentContact {
+  id: string;
+  name: string;
+  email: string;
+  mobile?: string | null;
+  enabled: boolean;
   updatedAt: string;
   createdAt: string;
 }
@@ -1197,6 +1269,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-outbox';
         value: string | NotificationOutbox;
+      } | null)
+    | ({
+        relationTo: 'notification-preferences';
+        value: string | NotificationPreference;
+      } | null)
+    | ({
+        relationTo: 'urgent-contacts';
+        value: string | UrgentContact;
       } | null)
     | ({
         relationTo: 'mail-drafts';
@@ -1737,7 +1817,35 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
   idempotencyKey?: T;
   state?: T;
   payload?: T;
+  recipientRules?: T;
+  recipients?: T;
+  channels?: T;
+  sourceType?: T;
+  sourceID?: T;
   availableAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-preferences_select".
+ */
+export interface NotificationPreferencesSelect<T extends boolean = true> {
+  key?: T;
+  events?: T;
+  updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "urgent-contacts_select".
+ */
+export interface UrgentContactsSelect<T extends boolean = true> {
+  name?: T;
+  email?: T;
+  mobile?: T;
+  enabled?: T;
   updatedAt?: T;
   createdAt?: T;
 }

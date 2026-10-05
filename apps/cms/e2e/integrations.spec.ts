@@ -76,6 +76,24 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   await owner.context.close()
 })
 
+test('ENG-022 Owner persists notification routing and private urgent contacts', async ({ browser }, testInfo) => {
+  const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
+  await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications')
+  const panel = owner.page.locator('[data-notification-preferences]'); await expect(panel).toBeVisible(); await expect(panel.locator('fieldset')).toHaveCount(6)
+  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('Messages remain queued until an operator connects a delivery service.')
+  const lead = panel.locator('fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }); await lead.locator('summary').first().click(); await lead.getByLabel('Sales').uncheck()
+  const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/notification-settings') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: 'Save preferences' }).click(); expect((await saved).status()).toBe(200); await expect(panel.getByRole('status')).toContainText('Notification preferences saved.')
+  await owner.page.reload(); await expect(owner.page.locator('[data-notification-preferences] fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }).getByLabel('Sales')).not.toBeChecked()
+  const contacts = [{ name: 'Browser incident contact', email: 'incident-browser@example.test', mobile: '+1 416 555 0199', enabled: true }]
+  const written = await owner.page.request.post('/api/urgent-contacts', { headers: { origin }, data: { contacts } }); expect(written.status()).toBe(200)
+  const reloaded = await owner.page.request.get('/api/urgent-contacts'); expect(reloaded.status()).toBe(200); expect(await reloaded.json()).toMatchObject({ contacts })
+  await owner.page.screenshot({ path: testInfo.outputPath('notifications-1440.png'), fullPage: true })
+  await owner.page.setViewportSize({ width: 390, height: 844 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.screenshot({ path: testInfo.outputPath('notifications-390.png'), fullPage: true })
+  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.context.close()
+})
+
 test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
   expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page).toHaveURL(/\/admin\/login/); await editor.context.close()
