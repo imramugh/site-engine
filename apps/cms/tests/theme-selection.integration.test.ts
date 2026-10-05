@@ -128,10 +128,19 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     }
     const ownerToken = await session(owner); const otherToken = await session(other)
     const request = (token: string, id: string, version: string) => themeRoute.POST(new Request('http://cms.test/api/themes', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `site_engine_session=${token}` }, body: JSON.stringify({ id, version, changeSetName: 'Reviewed route theme' }) }))
+    const chooser = (token: string) => themeRoute.GET(new Request('http://cms.test/api/themes', { headers: { cookie: `site_engine_session=${token}` } }))
+
+    const publishedChooser = await chooser(ownerToken)
+    expect(publishedChooser.status).toBe(200)
+    expect(await publishedChooser.json()).toMatchObject({ publishedSelection: { id: oldManifest.name, version: oldManifest.version }, draftSelection: null, draftChangeSet: null })
 
     const created = await request(ownerToken, manifest.name, manifest.version)
     expect(created.status, await created.clone().text()).toBe(201)
     expect(await created.json()).toMatchObject({ selection: { id: manifest.name, version: manifest.version }, reused: false })
+    const ownedChooser = await chooser(ownerToken)
+    expect(await ownedChooser.json()).toMatchObject({ draftSelection: { id: manifest.name, version: manifest.version }, draftChangeSet: { state: 'open' } })
+    const foreignChooser = await chooser(otherToken)
+    expect(await foreignChooser.json()).toMatchObject({ draftSelection: { id: manifest.name, version: manifest.version }, draftChangeSet: null })
     const denied = await request(otherToken, oldManifest.name, oldManifest.version)
     expect(denied.status).toBe(400)
     expect(await denied.json()).toMatchObject({ error: expect.stringContaining('Another reviewed draft controls') })
