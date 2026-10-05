@@ -88,6 +88,15 @@ describe('ENG-002 versioned contract', () => {
     expect(BlockSchema.safeParse({ ...contact, contactDetails: { ...contact.contactDetails!, channels: [{ kind: 'link', label: 'Link', value: 'Contact', href: 'https://example.test/%0d%0aheader' }] } }).success).toBe(false);
   });
 
+  it('accepts bounded inquiry presentation while rejecting duplicate topics and copy without a form', () => {
+    const contact = { id: blockId, type: 'contact' as const, heading: 'Contact', body: 'Send an inquiry.', inquiryForm: true, inquiryTopicLabel: 'What can we help with?', inquiryTopics: [{ value: 'consultation' as const, label: 'Consultation' }, { value: 'active-incident' as const, label: 'Active incident' }], inquiryConsentLabel: 'You can contact me about this inquiry.', appearance };
+    expect(BlockSchema.safeParse(contact).success).toBe(true);
+    expect(BlockSchema.safeParse({ ...contact, inquiryTopics: [...contact.inquiryTopics, { value: 'consultation', label: 'Another consultation' }] }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, inquiryTopics: Array.from({ length: 13 }, (_, index) => ({ value: index ? 'general' : 'consultation', label: `Topic ${index}` })) }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, inquiryForm: false }).success).toBe(false);
+    expect(BlockSchema.safeParse({ ...contact, inquiryTopics: [{ value: 'unsupported', label: 'Unsupported' }] }).success).toBe(false);
+  });
+
   it('accepts bounded structured service links and rejects unsafe fragments', () => {
     const page = fixture().pages[0]!;
     const pillar = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', type: 'pillarGrid' as const, heading: 'Pillars', items: [{ title: 'One', body: 'Neutral detail.', href: '/services#details', links: [{ label: 'Details', href: '/services#details' }] }], hidden: false, appearance };
