@@ -14,7 +14,7 @@ async function axe(page: Page) {
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 
-test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }) => {
+test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }, testInfo) => {
   const owner = await session(browser, 'synthetic-site-owner-session-token')
   await owner.page.goto('/site')
   await expect(owner.page.locator('[data-site-workspace]')).toBeVisible()
@@ -38,6 +38,8 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   if (await firstLogo.locator('option').count() > 1) await firstLogo.selectOption({ index: 1 })
   await owner.page.getByRole('button', { name: 'Save business details' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
+  await owner.page.setViewportSize({ width: 1440, height: 1000 })
+  const desktop = testInfo.outputPath('site-business-details-1440.png'); await owner.page.screenshot({ path: desktop, fullPage: true }); await testInfo.attach('Site Business details 1440', { path: desktop, contentType: 'image/png' })
 
   await owner.page.getByRole('button', { name: 'Redirects' }).click()
   await expect(owner.page).toHaveURL(/tab=redirects/)
@@ -71,6 +73,8 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByRole('button', { name: 'Redirects' }).click()
   expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
   expect(await owner.page.locator('[data-site-panel=redirects] div').last().evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+  await owner.page.getByRole('button', { name: 'Business details', exact: true }).click()
+  const mobile = testInfo.outputPath('site-business-details-390.png'); await owner.page.screenshot({ path: mobile, fullPage: true }); await testInfo.attach('Site Business details 390', { path: mobile, contentType: 'image/png' })
   await axe(owner.page)
   await owner.context.close()
 })
