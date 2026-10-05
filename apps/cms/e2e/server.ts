@@ -339,6 +339,13 @@ async function seed(): Promise<void> {
       overrideAccess: false,
     }))
   }
+  // Payload correctly refuses invalid uploads. Corrupt one otherwise-real row
+  // directly so the browser can prove that attaching legacy invalid media to a
+  // page is rejected by the canonical page-save boundary as well.
+  await (payload.db as unknown as { client: { execute: (query: { sql: string; args: unknown[] }) => Promise<unknown> } }).client.execute({
+    sql: 'UPDATE assets SET alt = NULL, decorative = 0 WHERE id = ?',
+    args: [mediaAssets[25]!.id],
+  })
   const mediaSection = await payload.create({ collection: 'sections', data: { name: 'Media browser fixtures', summary: 'Synthetic section for media workspace browser verification.', slug: 'media-browser-fixtures', allowedTemplates: ['standard'] }, user: mediaOwner, overrideAccess: false })
   await payload.create({ collection: 'pages', data: { title: 'Media usage fixture page', summary: 'Synthetic page that keeps one media fixture in use.', slug: 'media-usage-fixture', sectionId: mediaSection.id, template: 'standard', blocks: [{ id: 'a1000000-0000-4000-8000-000000000001', type: 'media', mediaId: mediaAssets[0]!.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: mediaOwner, overrideAccess: false })
   const binnedAsset = await payload.create({ collection: 'assets', data: { alt: 'Synthetic restorable media fixture' }, file: { data: mediaRaster, mimetype: 'image/png', name: 'media-restorable.png', size: mediaRaster.length }, user: mediaOwner, overrideAccess: false })
