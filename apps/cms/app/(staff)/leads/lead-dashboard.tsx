@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './lead-workspace.module.css'
+import { MailReplyComposer } from '../mail-reply-composer'
 
 type Assignee = { id: string; name: string; email: string }
 type Stage = 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost'
@@ -72,6 +73,7 @@ function LeadDetail({ lead, assignees, saving, onClose, onSave, onSpam }: { lead
       <dt>Consent</dt><dd>{lead.consentBasis ?? 'Unknown'}{lead.consentedAt ? ` · ${formatDate(lead.consentedAt)}` : ''}</dd>
     </dl>
     <section className={styles.message}><h3>Inquiry</h3><p>{lead.message}</p></section>
+    <MailReplyComposer key={lead.id} target="lead" id={lead.id} recipient={lead.email} />
     <form className={styles.editForm} onSubmit={(event) => { event.preventDefault(); void onSave({ stage, assignee: assignee || null, notes, nextAction }) }}>
       <label>Stage<select value={stage} onChange={(event) => setStage(event.target.value as Stage)}>{transitions[lead.stage].map((value) => <option key={value} value={value}>{stageLabels[value]}</option>)}</select></label>
       <label>Active assignee<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="">Unassigned</option>{assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>

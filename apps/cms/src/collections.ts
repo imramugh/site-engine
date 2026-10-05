@@ -520,18 +520,20 @@ export const MailDrafts: CollectionConfig = {
   slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
   access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
   fields: [
-    { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true },
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries' },
+    { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
     { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
-    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
+    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed', 'sent', 'failed', 'delivery-unknown'] },
   ],
   hooks: {
     beforeChange: [async ({ data, originalDoc, operation, req }) => {
       const requestedLead = relationId(data.lead) ?? (operation === 'update' ? relationId(originalDoc?.lead) : undefined)
-      if (!requestedLead) throw new Error('A valid lead is required for a mail draft.')
-      if (req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
+      const application = relationId(data.application) ?? (operation === 'update' ? relationId(originalDoc?.application) : undefined)
+      if (Boolean(requestedLead) === Boolean(application)) throw new Error('A mail draft must belong to one lead or application.')
+      if (requestedLead && req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
-      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead', 'application']
       // Payload update input is a patch. An omitted draft-bound field must not
       // be treated as an edit when the authorization service only changes state.
       return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
