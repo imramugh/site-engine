@@ -5,10 +5,12 @@ engine contract. It includes standard templates, blocks, appearance choices,
 motion hooks, and accessible layout components without private repositories,
 client copy, assets, credentials, or routes.
 
-The current manifest is **1.1.0**. Its renderer also accepts frozen 1.0.0
-snapshots. A 1.0.0 snapshot has no Hero secondary CTA or supporting panel;
-1.1.0 is the current manifest and supports both. Publish a new immutable theme
-version for later contract fields; do not reinterpret a frozen manifest.
+The current manifest is **1.7.0**. Its renderer accepts every frozen public
+snapshot contract from 1.0.0 through 1.7.0. A 1.0.0 snapshot has no Hero
+secondary CTA or supporting panel; 1.1.0 introduced those fields, and later
+contracts add structured site, contact, inquiry, navigation, and crawler data
+that the host and starter render together. The 1.1.0 manifest remains a
+historic release; publish a new immutable version for later contract fields.
 
 ## Assets and extension rules
 

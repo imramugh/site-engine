@@ -1,6 +1,6 @@
 {
   "name": "@site-engine/theme-starter",
-  "version": "1.1.0",
+  "version": "1.7.0",
   "license": "Apache-2.0",
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }, "./components/Layout.astro": "./src/components/Layout.astro", "./components/BlockRenderer.astro": "./src/components/BlockRenderer.astro", "./theme.json": "./theme.json" },
