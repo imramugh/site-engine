@@ -3,7 +3,7 @@ import type { SessionBridge, SessionUser } from './server.js'
 
 const MAX_RESPONSE_BYTES = 4_096
 const DEFAULT_TIMEOUT_MS = 2_000
-const allowedScopes = new Set(['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'])
+const allowedScopes = new Set(['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'])
 
 export type HttpSessionBridgeOptions = { cmsOrigin: string; secret: string; timeoutMs?: number; fetch?: typeof fetch }
 type BridgeResponse = { user: { id: string; sessionId: string; scopes: string[] } }
