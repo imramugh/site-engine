@@ -32,7 +32,7 @@ function reviewSummary(set: any): DashboardReview {
 }
 function actions(actor: Actor): DashboardShortcut[] {
   return [
-    ...(hasRole(actor ?? undefined, ['owner', 'editor']) ? [{ href: '/content-editor/new', label: '+ New page' }, { href: '/admin/collections/assets/create', label: 'Upload media' }] : []),
+    ...(hasRole(actor ?? undefined, ['owner', 'editor']) ? [{ href: '/content-editor/new', label: '+ New page' }, { href: '/media', label: 'Upload media' }] : []),
     ...(hasRole(actor ?? undefined, ['owner']) ? [{ href: '/integrations', label: 'Connect an assistant' }] : []),
   ]
 }
