@@ -80,15 +80,16 @@ export async function GET(request: Request): Promise<Response> {
     if (error instanceof LeadFilterError) return Response.json({ error: error.message }, { status: 400, headers: noStore })
     throw error
   }
-  const [result, users, pipeline, sources] = await Promise.all([
+  const [result, users, pipeline, sources, spamCount] = await Promise.all([
     payload.find({ collection: 'inquiries', where: leadWhere(filters, true), sort: '-urgent,-updatedAt', limit: 50, page: filters.page, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'users', where: { disabled: { not_equals: true } }, limit: 200, depth: 0, overrideAccess: true }),
-    pipelineFor(payload, filters),
-    payload.find({ collection: 'inquiries', limit: 0, pagination: false, depth: 0, select: { sourcePage: true }, overrideAccess: true }),
+    filters.spam ? Promise.resolve(Object.fromEntries(leadStages.map((stage) => [stage, { leads: [], totalDocs: 0, hasMore: false }]))) : pipelineFor(payload, filters),
+    payload.find({ collection: 'inquiries', where: { or: [{ spam: { equals: false } }, { spam: { exists: false } }] }, limit: 0, pagination: false, depth: 0, select: { sourcePage: true }, overrideAccess: true }),
+    payload.count({ collection: 'inquiries', where: { spam: { equals: true } }, overrideAccess: true }),
   ])
   const assignees = users.docs.filter((candidate) => hasRole(candidate as never, ['owner', 'sales'])).map((candidate) => ({ id: candidate.id, name: candidate.name || candidate.email, email: candidate.email }))
   const sourcePages = [...new Set(sources.docs.map((lead) => lead.sourcePage).filter((source): source is string => typeof source === 'string'))].sort()
-  return Response.json({ leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), pipeline, assignees, sourcePages, page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: noStore })
+  return Response.json({ leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), pipeline, assignees, sourcePages, spamTotalDocs: spamCount.totalDocs, canDeleteSpam: hasRole(user, ['owner']), page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: noStore })
 }
 
 export async function POST(request: Request): Promise<Response> {

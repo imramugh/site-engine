@@ -106,10 +106,11 @@ export async function getAdminDashboardData(payload: DashboardPayload, actor: Ac
     if (hasRole(user, ['owner', 'sales'])) tasks.push((async () => {
       const access = { user, overrideAccess: false, depth: 0 }
       const active = { stage: { not_in: ['won', 'lost'] } }
+      const notSpam = { or: [{ spam: { equals: false } }, { spam: { exists: false } }] }
       const [fresh, urgent, records] = await Promise.all([
-        payload.count({ collection: 'inquiries', where: { stage: { equals: 'new' } }, ...access }),
-        payload.count({ collection: 'inquiries', where: { and: [{ urgent: { equals: true } }, active] }, ...access }),
-        payload.find({ collection: 'inquiries', where: { and: [active, { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }, { nextAction: { exists: true } }] }] }, sort: ['-urgent', 'createdAt'], limit: 5, select: { name: true, company: true, email: true, nextAction: true, topic: true, stage: true, urgent: true }, ...access }),
+        payload.count({ collection: 'inquiries', where: { and: [{ stage: { equals: 'new' } }, notSpam] }, ...access }),
+        payload.count({ collection: 'inquiries', where: { and: [{ urgent: { equals: true } }, active, notSpam] }, ...access }),
+        payload.find({ collection: 'inquiries', where: { and: [active, notSpam, { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }, { nextAction: { exists: true } }] }] }, sort: ['-urgent', 'createdAt'], limit: 5, select: { name: true, company: true, email: true, nextAction: true, topic: true, stage: true, urgent: true }, ...access }),
       ])
       result.leads = { new: fresh.totalDocs, urgent: urgent.totalDocs, items: records.docs.map(record => ({ id: record.id, name: record.name?.trim() || record.email, company: record.company || undefined, note: record.nextAction?.trim() || (record.urgent ? 'Active incident · follow-up needed' : 'New inquiry · follow-up needed'), tag: record.urgent ? 'Urgent' : record.stage === 'new' ? 'New' : 'Follow up' })) }
     })())

@@ -43,7 +43,10 @@ test('public inquiry survives retries and enters the protected staff workflow', 
     const exported = await page.request.get('/api/leads/export')
     expect(exported.status()).toBe(200)
     expect(await exported.text()).toContain(input.email)
-    for (const createdID of [id, legacyID]) expect((await page.request.delete(`/api/inquiries/${createdID}`, { headers })).status()).toBe(200)
+    for (const createdID of [id, legacyID]) {
+      expect((await page.request.patch(`/api/leads/${createdID}`, { headers, data: { action: 'mark-spam' } })).status()).toBe(200)
+      expect((await page.request.delete(`/api/leads/${createdID}`, { headers })).status()).toBe(204)
+    }
     expect((await (await page.request.get('/api/leads')).json()).leads.some((lead: { id: string }) => lead.id === id)).toBe(false)
   } finally { await visitor.close() }
 })

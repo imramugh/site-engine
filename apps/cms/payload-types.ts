@@ -824,7 +824,10 @@ export interface Inquiry {
   consentedAt: string;
   consentBasis: 'visitor-confirmed' | 'staff-recorded' | 'unknown';
   idempotencyKey: string;
-  stage: 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost';
+  stage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
+  spam?: boolean | null;
+  spamMarkedAt?: string | null;
+  spamPreviousStage?: ('new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost') | null;
   urgent?: boolean | null;
   notes?: string | null;
   assignee?: (string | null) | User;
@@ -1952,6 +1955,9 @@ export interface InquiriesSelect<T extends boolean = true> {
   consentBasis?: T;
   idempotencyKey?: T;
   stage?: T;
+  spam?: T;
+  spamMarkedAt?: T;
+  spamPreviousStage?: T;
   urgent?: T;
   notes?: T;
   assignee?: T;
