@@ -1,5 +1,5 @@
 export type Reference = { kind: 'page' | 'section'; id: string; label: string; style?: 'link' | 'button' }
-export type Navigation = { header: Reference[]; footer: { columns: Array<{ heading: string; links: Omit<Reference, 'style'>[] }>; copyright: string | null } }
+export type Navigation = { header: Reference[]; footer: { columns: Array<{ heading: string; links: Omit<Reference, 'style'>[] }>; copyright?: string } }
 export type Logos = { primaryLight: string | null; primaryDark: string | null; fullLockupLight: string | null; fullLockupDark: string | null; symbolLight: string | null; symbolDark: string | null }
 export type Address = { streetAddress: string; addressLocality: string; addressRegion: string; postalCode: string; addressCountry: string }
 export type Settings = {
@@ -27,4 +27,4 @@ export type References = {
 
 export const emptyAddress: Address = { streetAddress: '', addressLocality: '', addressRegion: '', postalCode: '', addressCountry: 'CA' }
 export const emptyLogos: Logos = { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }
-export const emptyNavigation: Navigation = { header: [], footer: { columns: [], copyright: null } }
+export const emptyNavigation: Navigation = { header: [], footer: { columns: [] } }
