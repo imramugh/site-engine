@@ -976,6 +976,8 @@ export interface Application {
   id: string;
   name: string;
   email: string;
+  telephone?: string | null;
+  linkedIn?: string | null;
   coverLetter: string;
   consent: boolean;
   jobId: string;
@@ -2046,6 +2048,8 @@ export interface MailAuthorizationsSelect<T extends boolean = true> {
 export interface ApplicationsSelect<T extends boolean = true> {
   name?: T;
   email?: T;
+  telephone?: T;
+  linkedIn?: T;
   coverLetter?: T;
   consent?: T;
   jobId?: T;

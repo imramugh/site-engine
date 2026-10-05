@@ -6,6 +6,8 @@ const { jobId, enabled } = Astro.props;
   <input type="hidden" name="jobId" value={jobId} />
   <p><label for="application-name">Name <input id="application-name" name="name" required maxlength="160" autocomplete="name" disabled={!enabled} /></label></p>
   <p><label for="application-email">Email <input id="application-email" name="email" type="email" required maxlength="254" autocomplete="email" disabled={!enabled} /></label></p>
+  <p><label for="application-telephone">Phone <span>(optional)</span> <input id="application-telephone" name="telephone" type="tel" maxlength="48" autocomplete="tel" disabled={!enabled} /></label></p>
+  <p><label for="application-linkedin">LinkedIn <span>(optional)</span> <input id="application-linkedin" name="linkedIn" type="url" inputmode="url" maxlength="500" autocomplete="url" placeholder="https://www.linkedin.com/in/…" disabled={!enabled} /></label></p>
   <p><label for="application-cover-letter">Cover letter <textarea id="application-cover-letter" name="coverLetter" required maxlength="10000" disabled={!enabled}></textarea></label></p>
   <p><label for="application-resume">Resume (PDF or DOCX, 5 MB maximum) <input id="application-resume" name="resume" type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx" required disabled={!enabled} /></label></p>
   <p><label><input name="consent" type="checkbox" value="true" required disabled={!enabled} /> I consent to the handling of this application.</label></p>
