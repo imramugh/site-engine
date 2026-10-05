@@ -36,14 +36,15 @@ function pathFor(parent: PageCreationParent | undefined, sectionSlug: string, pa
   return `/${[sectionSlug, ...segments, slug || 'page-url'].filter(Boolean).join('/')}`
 }
 
-export function NewPage({ context }: { context: PageCreationContext }) {
-  const initialSection = context.sections[0]
+export function NewPage({ context, initial }: { context: PageCreationContext; initial?: { section?: string; template?: string } }) {
+  const initialSection = context.sections.find((section) => section.id === initial?.section || section.slug === initial?.section) ?? context.sections[0]
+  const initialTemplate = initialSection?.allowedTemplates.find((template) => template === initial?.template) ?? initialSection?.allowedTemplates[0] ?? context.templates[0] ?? 'standard'
   const [title, setTitle] = useState('')
   const [summary, setSummary] = useState('')
   const [slug, setSlug] = useState('')
   const slugWasEdited = useRef(false)
   const [sectionID, setSectionID] = useState(initialSection?.id ?? '')
-  const [template, setTemplate] = useState<Page['template']>(initialSection?.allowedTemplates[0] ?? context.templates[0] ?? 'standard')
+  const [template, setTemplate] = useState<Page['template']>(initialTemplate)
   const [parentID, setParentID] = useState('')
   const [requestKey] = useState(() => crypto.randomUUID())
   const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle')

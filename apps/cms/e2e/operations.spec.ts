@@ -116,7 +116,7 @@ test('ENG-022 exposes the role-aware Leads and Applications links through the ad
   await openAdminNavigation(owner.page)
   await owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Careers' }).click()
   await expect(owner.page).toHaveURL(/\/applications$/)
-  await expect(owner.page.getByRole('heading', { name: 'Applications' })).toBeVisible()
+  await expect(owner.page.locator('[data-admin-page-title]').filter({ hasText: 'Careers' })).toBeVisible()
   await owner.page.goto('/admin')
   await openAdminNavigation(owner.page)
   const applications = owner.page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Careers' })

@@ -4,7 +4,7 @@ import { hasRole } from '../../../../../src/access'
 import { serverSessionStrategy } from '../../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
-const stages = new Set(['new', 'reviewing', 'closed'])
+const stages = new Set(['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'])
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
@@ -14,5 +14,5 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   let status: unknown
   try { status = (await request.json() as { status?: unknown }).status } catch { return Response.json({ error: 'Send a valid stage.' }, { status: 400 }) }
   if (typeof status !== 'string' || !stages.has(status)) return Response.json({ error: 'Send a valid stage.' }, { status: 400 })
-  try { const { id } = await context.params; const current = await payload.findByID({ collection: 'applications', id, user, overrideAccess: false }) as { status: string }; const application = await payload.update({ collection: 'applications', id, data: { status: status as 'new' | 'reviewing' | 'closed' }, user, overrideAccess: false }) as { id: string; status: string }; if (current.status !== application.status) await payload.create({ collection: 'audit-events', data: { event: 'application.stage_changed', user: String(user.id), actor: String(user.id), detail: { applicationID: id, from: current.status, to: application.status } }, overrideAccess: true }); return Response.json({ id: application.id, status: application.status }) } catch { return Response.json({ error: 'Application not found.' }, { status: 404 }) }
+  try { const { id } = await context.params; const current = await payload.findByID({ collection: 'applications', id, user, overrideAccess: false }) as { status: string }; const application = await payload.update({ collection: 'applications', id, data: { status: status as 'new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed' }, user, overrideAccess: false }) as { id: string; status: string }; if (current.status !== application.status) await payload.create({ collection: 'audit-events', data: { event: 'application.stage_changed', user: String(user.id), actor: String(user.id), detail: { applicationID: id, from: current.status, to: application.status } }, overrideAccess: true }); return Response.json({ id: application.id, status: application.status }) } catch { return Response.json({ error: 'Application not found.' }, { status: 404 }) }
 }

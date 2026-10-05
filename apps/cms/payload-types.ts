@@ -784,7 +784,7 @@ export interface Application {
   jobId: string;
   resumeKey: string;
   idempotencyKey: string;
-  status?: ('new' | 'reviewing' | 'closed') | null;
+  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
 }
