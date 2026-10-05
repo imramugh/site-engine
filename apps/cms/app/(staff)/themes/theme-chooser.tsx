@@ -21,7 +21,7 @@ function messageFor(response: Response): string {
   return response.status === 403 ? 'Owner access is required to manage themes.' : 'Unable to load themes. Check your connection and try again.'
 }
 
-export function ThemeChooser() {
+export function ThemeChooser({ embedded = false }: { embedded?: boolean }) {
   const [data, setData] = useState<Data | null>(null)
   const [selectedKey, setSelectedKey] = useState('')
   const [changeSetName, setChangeSetName] = useState('Switch theme')
@@ -64,8 +64,9 @@ export function ThemeChooser() {
     }
   }
 
-  return <main>
-    <h1>Themes</h1>
+  const Wrapper = embedded ? 'div' : 'main'
+  return <Wrapper data-theme-chooser>
+    {embedded ? <h2>Themes</h2> : <h1>Themes</h1>}
     <p>Choose an installed theme for a reviewed editorial change. A selection does not publish a release.</p>
     <p role="status" aria-live="polite">{message || (!data ? 'Loading installed themes…' : '')}</p>
     {data && <>
@@ -95,5 +96,5 @@ export function ThemeChooser() {
       </form>
       <p><a href="/editorial">Open Editorial review</a></p>
     </>}
-  </main>
+  </Wrapper>
 }

@@ -455,7 +455,7 @@ test('a locally provisioned owner uses the authenticator without OIDC, browses c
   await expect(page.getByText('More tools', { exact: true })).toHaveCount(0)
   const siteNavigation = page.getByRole('navigation', { name: 'Site' })
   await expect(siteNavigation.getByRole('link')).toHaveText(['Site', 'Integrations', 'Users'])
-  await expect(siteNavigation.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('href', '/admin/collections/site-settings')
+  await expect(siteNavigation.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('href', '/site')
   await expect(siteNavigation.getByRole('link', { name: 'Users', exact: true })).toHaveAttribute('href', '/admin/collections/users')
 
   const me = await page.request.get('/api/users/me')

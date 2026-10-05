@@ -18,7 +18,7 @@ const titleForPath = (pathname: string) => {
   const titles: Record<string, string> = {
     '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/media': 'Media', '/leads': 'Leads',
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Change log', '/integrations': 'Integrations',
-    '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
+    '/site': 'Site', '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
   }
   const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events', 'site-settings': 'Site' }
   const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]
@@ -150,7 +150,7 @@ export function AdminNavigationToggle({ primary, site, displayName, roles, badge
   const link = (item: AdminNavigationItem) => {
     const badge = badges[item.label as keyof AdminNavigationBadges]
     const grouped = (item.href === '/content-tree' && pathname.startsWith('/content-editor/'))
-      || (item.label === 'Site' && (pathname === '/themes' || pathname.startsWith('/admin/collections/redirects')))
+      || (item.label === 'Site' && (pathname === '/themes' || pathname.startsWith('/admin/collections/redirects') || pathname.startsWith('/admin/collections/site-settings')))
       || (item.href === '/integrations' && pathname === '/ai-jobs')
     const current = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) || grouped
     return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={current ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>

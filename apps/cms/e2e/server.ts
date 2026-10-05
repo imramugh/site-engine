@@ -78,6 +78,7 @@ const approverEditorSessionToken = 'synthetic-page-editor-approver-session-token
 const applicationSessionTokens = { owner: 'synthetic-application-owner-session-token', hiring: 'synthetic-application-hiring-session-token', editor: 'synthetic-application-editor-session-token', sales: 'synthetic-application-sales-session-token' }
 const operationsSessionToken = 'synthetic-operations-owner-session-token'
 const galleryOwnerSessionToken = 'synthetic-gallery-owner-session-token'
+const siteOwnerSessionToken = 'synthetic-site-owner-session-token'
 const galleryPageID = 'face0000-0000-4000-8000-000000000001'
 const gallerySetID = 'face0000-0000-4000-8000-000000000002'
 const shellSessionTokens = {
@@ -278,6 +279,7 @@ async function seed(): Promise<void> {
   const pageEditorApprover = await payload.create({ collection: 'users', data: { email: 'page-editor-approver.synthetic@example.test', name: 'Synthetic Page Editor Approver', roles: ['approver'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
   const galleryOwner = await payload.create({ collection: 'users', data: { email: 'gallery-owner.synthetic@example.test', name: 'Synthetic Gallery Owner', roles: ['owner'] }, overrideAccess: true })
+  const siteOwner = await payload.create({ collection: 'users', data: { email: 'site-owner.synthetic@example.test', name: 'Synthetic Site Owner', roles: ['owner'] }, overrideAccess: true })
   const shellUsers: Record<keyof typeof shellSessionTokens, { id: string }> = {} as Record<keyof typeof shellSessionTokens, { id: string }>
   for (const role of ['owner', 'editor', 'approver'] as const) {
     shellUsers[role] = await payload.create({
@@ -327,6 +329,7 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'change-sets', data: { id: approverEditorSetID, name: 'Approver browser page draft', state: 'open', actor: pageEditorApprover.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(galleryOwnerSessionToken), user: galleryOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(siteOwnerSessionToken), user: siteOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'pages', data: { id: galleryPageID, title: 'Gallery recipe target', summary: 'Synthetic standard page for the active-theme gallery browser workflow.', slug: 'gallery-recipe-target', sectionId: directSection.id, template: 'standard', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: gallerySetID, name: 'Gallery browser recipe', state: 'open', actor: galleryOwner.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   for (const role of ['owner', 'editor', 'approver'] as const) {
