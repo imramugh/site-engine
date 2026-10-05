@@ -77,14 +77,15 @@ function jobSchema(route: PublicRoute, origin: string, snapshot: SiteSnapshot): 
 }
 
 export function schemaForRoute(route: PublicRoute, model: RouteModel, snapshot: SiteSnapshot, origin: string): Schema {
-  const website = { '@type': 'Organization', '@id': `${origin}/#organization`, name: snapshot.settings.siteName, url: origin } as Record<string, Json>;
-  const service = { '@type': 'ProfessionalService', '@id': `${origin}/#professional-service`, name: snapshot.settings.siteName, url: origin, parentOrganization: { '@id': `${origin}/#organization` } } as Record<string, Json>;
+  const description = snapshot.settings.seoDescription;
+  const website = { '@type': 'Organization', '@id': `${origin}/#organization`, name: snapshot.settings.siteName, url: origin, ...(description ? { description } : {}) } as Record<string, Json>;
+  const service = { '@type': 'ProfessionalService', '@id': `${origin}/#professional-service`, name: snapshot.settings.siteName, url: origin, ...(description ? { description } : {}), parentOrganization: { '@id': `${origin}/#organization` } } as Record<string, Json>;
   return { '@context': 'https://schema.org', '@graph': [website, snapshot.settings.organizationType === 'professional-service' ? service : undefined, pageSchema(route, origin), breadcrumbs(route, origin), articleSchema(route, origin), faqSchema(route.page), jobSchema(route, origin, snapshot), collectionSchema(route, model, origin)].filter((item): item is Record<string, Json> => Boolean(item)) };
 }
 
 export function llmsText(model: RouteModel, snapshot: SiteSnapshot, origin: string): string {
   const pages = model.routes.filter((route) => !route.page.noindex).slice(0, 50).map((route) => `- [${route.page.title}](${absolute(origin, route.canonicalPath)}): ${route.page.summary}`);
-  return [`# ${snapshot.settings.siteName}`, '', 'Public, published site information generated from the current content snapshot.', '', '## Pages', ...pages, ''].join('\n');
+  return [`# ${snapshot.settings.siteName}`, '', snapshot.settings.seoDescription ?? 'Public, published site information generated from the current content snapshot.', '', '## Pages', ...pages, ''].join('\n');
 }
 
 export function machineReadablePages(model: RouteModel, snapshot: SiteSnapshot, origin: string): Json {

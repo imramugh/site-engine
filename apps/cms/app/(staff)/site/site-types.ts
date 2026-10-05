@@ -25,6 +25,14 @@ export type Settings = {
   navigation: Navigation | null
   seoDescription: string | null
   searchEnabled: boolean
+  crawlerPolicy: { searchEngines: boolean; aiSearchAndAnswers: boolean; aiModelTraining: boolean } | null
+}
+export type Guide = {
+  bannedPhrases: string[]
+  preferredTerms: Array<{ avoid: string; prefer: string }>
+  canadianSpelling: 'off' | 'warn'
+  maximumSentenceWords: number
+  minimumReadingEase: number
 }
 export type References = {
   pages: Array<{ id: string; title: string }>
