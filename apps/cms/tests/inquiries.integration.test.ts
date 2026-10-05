@@ -89,7 +89,7 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'deleting-owner@example.test', name: 'Owner', roles: ['owner'] }, overrideAccess: true })
     const lead = (await payload.find({ collection: 'inquiries', where: { urgent: { equals: true } }, overrideAccess: true })).docs[0]!
     expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(2)
-    await expect(payload.delete({ collection: 'inquiries', id: lead.id, user: owner, overrideAccess: true })).rejects.toThrow('audited spam lifecycle')
+    await expect(payload.delete({ collection: 'inquiries', id: lead.id, user: owner, overrideAccess: true })).rejects.toThrow('audited deletion lifecycle')
     expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(2)
   })
 

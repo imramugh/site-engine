@@ -1,8 +1,8 @@
-import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
+import { ValidationError, type CollectionConfig, type PayloadRequest, type AccessResult } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { ChangeSetSchema, CmsPageFieldConfig, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
-import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
+import { bootstrapOnly, freshStaff, hasRole, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
@@ -17,6 +17,25 @@ import { preserveApplicationIntake } from './applications'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
+
+async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 'application', id: string) {
+  const drafts = await req.payload.find({ collection: 'mail-drafts', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const draft of drafts.docs) {
+    await req.payload.delete({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, overrideAccess: true, req })
+    await req.payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
+  }
+  await req.payload.delete({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, overrideAccess: true, req })
+  if (target === 'application') {
+    const notes = await req.payload.find({ collection: 'audit-events', where: { event: { equals: 'application.note_added' } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    for (const note of notes.docs) {
+      if ((note.detail as { applicationID?: string } | null)?.applicationID === id) {
+        // Preserve the event identity and time, removing the private hiring note.
+        await req.payload.update({ collection: 'audit-events', id: note.id, data: { detail: { applicationID: id, retentionRedacted: true } }, overrideAccess: true, req })
+      }
+    }
+  }
+}
+
 
 const editorialAccess = {
   create: staff(['owner', 'editor']),
@@ -344,7 +363,11 @@ export const Assets: CollectionConfig = {
       const next = { ...data }
       delete next.restoreFromBin
       if (serverTransition && lifecycle === 'bin') { if (!next.deletedAt || !next.deleteAfter) throw new Error('Deletion bin timestamps are required.'); }
-      if (serverTransition && lifecycle === 'restore') { next.deletedAt = null; next.deleteAfter = null }
+      if (serverTransition && lifecycle === 'restore') {
+        const purged = await req.payload.find({ collection: 'deletion-tombstones', where: { and: [{ resourceType: { equals: 'media' } }, { resourceID: { equals: String(originalDoc?.id) } }] }, limit: 1, depth: 0, overrideAccess: true, req })
+        if (purged.docs.length) throw new Error('Permanent media purge has started; this asset cannot be restored.')
+        next.deletedAt = null; next.deleteAfter = null
+      }
       return next
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
@@ -380,7 +403,7 @@ export const AssetFileVersions: CollectionConfig = {
     beforeValidate: [async ({ data, req }) => { if (req.file) await validateRasterUpload(req.file); return data }],
     beforeOperation: [async ({ args, operation, req }) => {
       if (operation === 'create' && !req.context.mediaReplacementVersion) throw new Error('Asset file versions are created through the media replacement service.')
-      if (operation === 'update' || operation === 'delete') throw new Error('Asset file versions are immutable.')
+      if (operation === 'update' || (operation === 'delete' && req.context.retentionMediaGC !== true)) throw new Error('Asset file versions are immutable.')
       return args
     }],
   },
@@ -447,9 +470,10 @@ export const Inquiries: CollectionConfig = {
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
-    if (req.context.leadSpamDeleteLifecycle !== true) throw new Error('Lead deletion uses the audited spam lifecycle.')
+    if (req.context.leadSpamDeleteLifecycle !== true && req.context.retentionPurge !== true) throw new Error('Lead deletion uses an audited deletion lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
+    await purgePrivateCorrespondence(req, 'lead', String(id))
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
   }] },
   fields: [
@@ -515,23 +539,33 @@ export const UrgentContacts: CollectionConfig = {
   ],
 }
 
-/** Local-only reply intent. No provider configuration or send worker exists. */
+/** Reply envelopes are written only by the authenticated workflow. */
+const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read']> = ({ req }): AccessResult => {
+  if (hasRole(req.user ?? undefined, ['owner'])) return true
+  const sales = hasRole(req.user ?? undefined, ['sales']); const hiring = hasRole(req.user ?? undefined, ['hiring'])
+  if (sales && hiring) return true
+  if (sales) return { lead: { exists: true } }
+  if (hiring) return { application: { exists: true } }
+  return false
+}
 export const MailDrafts: CollectionConfig = {
   slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
-  access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  access: { create: () => false, read: readMailDrafts, update: () => false, delete: () => false },
   fields: [
-    { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true },
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries' },
+    { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
     { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
-    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
+    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed', 'sent', 'failed', 'delivery-unknown'] },
   ],
   hooks: {
     beforeChange: [async ({ data, originalDoc, operation, req }) => {
       const requestedLead = relationId(data.lead) ?? (operation === 'update' ? relationId(originalDoc?.lead) : undefined)
-      if (!requestedLead) throw new Error('A valid lead is required for a mail draft.')
-      if (req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
+      const application = relationId(data.application) ?? (operation === 'update' ? relationId(originalDoc?.application) : undefined)
+      if (Boolean(requestedLead) === Boolean(application)) throw new Error('A mail draft must belong to one lead or application.')
+      if (requestedLead && req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
-      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead', 'application', 'threadID']
       // Payload update input is a patch. An omitted draft-bound field must not
       // be treated as an edit when the authorization service only changes state.
       return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data
@@ -546,7 +580,7 @@ export const MailDrafts: CollectionConfig = {
 
 /** One immutable, short-lived human authorization per exact draft revision. */
 export const MailAuthorizations: CollectionConfig = {
-  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
+  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
   fields: [
     { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true },
     { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
@@ -557,6 +591,7 @@ export const MailAuthorizations: CollectionConfig = {
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: {
+    beforeDelete: [async ({ req, id }) => { if (req.context.retentionPurge !== true) throw new Error('Applications are permanently deleted through the audited retention lifecycle.'); await purgePrivateCorrespondence(req, 'application', String(id)) }],
     beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? preserveApplicationIntake(data, originalDoc) : data],
     afterChange: [async ({ doc, operation, req }) => {
       if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
@@ -564,6 +599,33 @@ export const Applications: CollectionConfig = {
     }],
   },
   fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'telephone', type: 'text', maxLength: 48 }, { name: 'linkedIn', type: 'text', maxLength: 500 }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
+}
+
+/** Owner-controlled policy. The defaults are encoded in code so a missing row is safe. */
+export const RetentionSettings: CollectionConfig = {
+  slug: 'retention-settings', admin: { useAsTitle: 'key', group: 'Administration', hidden: true },
+  access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'default', admin: { readOnly: true } },
+    { name: 'spamDays', type: 'number', required: true, defaultValue: 30, min: 1, max: 365 },
+    { name: 'mediaBinDays', type: 'number', required: true, defaultValue: 30, min: 1, max: 365 },
+  ],
+}
+
+/** Deliberately minimal replay ledger for restored backups; never store personal content or object keys here. */
+export const DeletionTombstones: CollectionConfig = {
+  slug: 'deletion-tombstones', admin: { hidden: true }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [{ name: 'resourceType', type: 'select', required: true, options: ['application', 'inquiry', 'media'] }, { name: 'resourceID', type: 'text', required: true }, { name: 'deletedAt', type: 'date', required: true }],
+}
+
+/** Operator-visible retry state. The resume key is cleared as soon as storage deletion succeeds. */
+export const RetentionPurgeJobs: CollectionConfig = {
+  slug: 'retention-purge-jobs', admin: { useAsTitle: 'resourceID', group: 'Administration' }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'resourceType', type: 'select', required: true, options: ['spam-inquiry', 'application', 'media'] }, { name: 'resourceID', type: 'text', required: true },
+    { name: 'state', type: 'select', required: true, options: ['queued', 'failed', 'completed'], defaultValue: 'queued' }, { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0 },
+    { name: 'lastError', type: 'text' }, { name: 'resumeKey', type: 'text', access: { read: () => false }, admin: { hidden: true } }, { name: 'completedAt', type: 'date' },
+  ],
 }
 
 export const ChangeSets: CollectionConfig = {
@@ -916,6 +978,13 @@ export const SiteSettings: CollectionConfig = {
       if (clearLogos) delete editable.logos
       const parsed = SiteSettingsDraftSchema.safeParse(editable)
       contractError(parsed, req, 'site-settings')
+      if (parsed.success) {
+        for (const id of [parsed.data.logo, ...Object.values(parsed.data.logos ?? {})]) {
+          if (typeof id !== 'string') continue
+          const asset = await req.payload.findByID({ collection: 'assets', id, depth: 0, overrideAccess: true, req })
+          if (asset.deletedAt) throw new Error('Restore an asset from the media bin before using it in site settings.')
+        }
+      }
       if (parsed.success && parsed.data.navigation) {
         const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => 'links' in column ? column.links : []), ...(parsed.data.navigation.footer.bottomLinks ?? [])]
         for (const reference of references) {

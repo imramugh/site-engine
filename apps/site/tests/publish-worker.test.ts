@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
-import { runPublishOnce } from '../scripts/run-publish-worker.mjs';
+import { createPublishAPI, runPublishOnce } from '../scripts/run-publish-worker.mjs';
 import { createPublicServer } from '../scripts/public-server.mjs';
 import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
@@ -22,6 +22,95 @@ describe('publish worker', () => {
     try { await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${address.port}`, versionPins: pins, registry, render })).resolves.toBe(true); }
     finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
     expect(calls).toEqual(['claim', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
+  }, 60_000);
+  it('serves approved archive and slug-change redirects from the worker-built immutable artifact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
+    vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
+    const snapshot = structuredClone(neutralFixture);
+    const section = snapshot.settings.sections[0]!;
+    section.allowedTemplates = [...section.allowedTemplates, 'standard'];
+    const retired = { ...structuredClone(snapshot.pages[0]!), id: 'f0000000-0000-4000-8000-000000000001', sectionId: section.id, title: 'Retired public page', summary: 'A published page removed by an approved archive change.', slug: 'retired-public-page', template: 'standard' as const, status: 'archived' as const, blocks: [] };
+    snapshot.pages.push(retired); section.pageIds.push(retired.id);
+    const oldPath = `/${section.slug}/${retired.slug}`;
+    const renamed = { ...structuredClone(snapshot.pages[0]!), id: 'f0000000-0000-4000-8000-000000000002', sectionId: section.id, title: 'Renamed public page', summary: 'A published page after an approved slug change.', slug: 'renamed-public-page', template: 'standard' as const, status: 'published' as const, blocks: [] };
+    snapshot.pages.push(renamed); section.pageIds.push(renamed.id);
+    const priorSlugPath = `/${section.slug}/previous-public-page`;
+    const canonicalPath = `/${section.slug}/${renamed.slug}`;
+    // This is the frozen approved manifest: the archived record is absent from
+    // rendered routes and its approval-created redirect remains in the release.
+    snapshot.redirects = [{ from: oldPath, to: '/', status: 301 }, { from: priorSlugPath, to: canonicalPath, status: 301 }];
+    const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot);
+    const calls: string[] = [];
+    const api = async (action: string) => { calls.push(action); return action === 'claim' ? { job, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job } : { job: { status: 'completed' } }; };
+    const releasesRoot = join(root, 'releases');
+    const server = createPublicServer({ releasesRoot });
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('Test server did not listen.');
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: origin, versionPins: pins })).resolves.toBe(true);
+      const response = await fetch(`${origin}${oldPath}`, { redirect: 'manual' });
+      expect(response.status).toBe(301);
+      expect(response.headers.get('location')).toBe('/');
+      const slugChange = await fetch(`${origin}${priorSlugPath}`, { redirect: 'manual' });
+      expect(slugChange.status).toBe(301); expect(slugChange.headers.get('location')).toBe(canonicalPath);
+      expect((await fetch(`${origin}${canonicalPath}`)).status).toBe(200);
+      const redirects = await readFile(join(releasesRoot, 'current', 'redirects.json'), 'utf8');
+      expect(redirects).toContain(oldPath); expect(redirects).toContain(priorSlugPath);
+    } finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
+    expect(calls).toEqual(['claim', 'renew', 'complete']);
+  }, 60_000);
+  it('uses the frozen approval manifest when a newer draft exists by the time the worker publishes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
+    vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
+    const approved = structuredClone(neutralFixture); approved.pages[0]!.title = 'Approved immutable title';
+    const mutableDraft = structuredClone(approved); mutableDraft.pages[0]!.title = 'Edited after approval';
+    const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(approved);
+    const token = 'p'.repeat(40); const calls: string[] = []; let completedArtifact: Record<string, unknown> | undefined;
+    const cms = createServer(async (request, response) => {
+      const action = new URL(request.url ?? '/', 'http://localhost').pathname.split('/').pop(); calls.push(String(action));
+      if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401).end(); return; }
+      if (action === 'claim') { mutableDraft.pages[0]!.title = 'Edited after approval'; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job, snapshot: approved, contentHash, versionPins: pins })); return; }
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (action === 'renew') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken: body.leaseToken } })); return; }
+      if (action === 'complete') { completedArtifact = body.artifact; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { status: 'completed' } })); return; }
+      response.writeHead(400).end();
+    });
+    await new Promise<void>(done => cms.listen(0, '127.0.0.1', done)); const cmsAddress = cms.address(); if (!cmsAddress || typeof cmsAddress === 'string') throw new Error('CMS fixture did not listen.');
+    const releasesRoot = join(root, 'releases'); const publicServer = createPublicServer({ releasesRoot }); await new Promise<void>(done => publicServer.listen(0, '127.0.0.1', done)); const publicAddress = publicServer.address(); if (!publicAddress || typeof publicAddress === 'string') throw new Error('Public fixture did not listen.');
+    try {
+      await expect(runPublishOnce({ api: createPublishAPI({ cmsOrigin: `http://127.0.0.1:${cmsAddress.port}`, token }), buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${publicAddress.port}`, versionPins: pins })).resolves.toBe(true);
+      const html = await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8');
+      expect(html).toContain('Approved immutable title'); expect(html).not.toContain(mutableDraft.pages[0]!.title);
+      expect(completedArtifact).toMatchObject({ sourceContentHash: contentHash }); expect(calls).toEqual(['claim', 'renew', 'complete']);
+    } finally { await Promise.all([new Promise<void>((done, reject) => cms.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))]); }
+  }, 60_000);
+  it('recovers a dropped completion response without a second activation or duplicate terminal release', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
+    vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
+    const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const token = 'r'.repeat(40);
+    let claims = 0; let terminalReleases = 0; const completionTokens: string[] = [];
+    const cms = createServer(async (request, response) => {
+      const action = new URL(request.url ?? '/', 'http://localhost').pathname.split('/').pop();
+      if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401).end(); return; }
+      if (action === 'claim') { const leaseToken = claims++ ? 'c'.repeat(36) : job.leaseToken; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken }, snapshot, contentHash, versionPins: pins })); return; }
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (action === 'renew') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken: body.leaseToken } })); return; }
+      if (action === 'complete') { completionTokens.push(body.leaseToken); if (terminalReleases === 0) { terminalReleases += 1; response.destroy(); return; } response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { status: 'completed' } })); return; }
+      // The first worker's best-effort fail request must not erase the durable completion.
+      if (action === 'fail') { response.writeHead(409).end(); return; }
+      response.writeHead(400).end();
+    });
+    await new Promise<void>(done => cms.listen(0, '127.0.0.1', done)); const cmsAddress = cms.address(); if (!cmsAddress || typeof cmsAddress === 'string') throw new Error('CMS fixture did not listen.');
+    const releasesRoot = join(root, 'releases'); const publicServer = createPublicServer({ releasesRoot }); await new Promise<void>(done => publicServer.listen(0, '127.0.0.1', done)); const publicAddress = publicServer.address(); if (!publicAddress || typeof publicAddress === 'string') throw new Error('Public fixture did not listen.');
+    const worker = () => runPublishOnce({ api: createPublishAPI({ cmsOrigin: `http://127.0.0.1:${cmsAddress.port}`, token }), buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${publicAddress.port}`, versionPins: pins });
+    try {
+      await expect(worker()).rejects.toThrow('BUILD_FAILED');
+      await expect(worker()).resolves.toBe(true);
+      expect(terminalReleases).toBe(1); // second completion is an idempotent acknowledgement, not a new release.
+      expect(completionTokens).toEqual([job.leaseToken, 'c'.repeat(36)]);
+      expect((await readdir(releasesRoot)).filter(name => name.startsWith('release-'))).toEqual([`release-1-${job.id}`]);
+    } finally { await Promise.all([new Promise<void>((done, reject) => cms.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))]); }
   }, 60_000);
   it('publishes a selected upgrade with its job pin while the worker has an older configured theme', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', '1.0.0'); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);

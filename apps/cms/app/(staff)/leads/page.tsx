@@ -11,5 +11,5 @@ export default async function LeadsPage() {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: await headers(), payload })
   if (!hasRole(authenticated.user as never, ['owner', 'sales'])) redirect('/admin/login')
-  return <StaffShell><LeadDashboard /></StaffShell>
+  return <StaffShell><LeadDashboard owner={hasRole(authenticated.user as never, ['owner'])} /></StaffShell>
 }

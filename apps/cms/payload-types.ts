@@ -92,6 +92,9 @@ export interface Config {
     'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
+    'retention-settings': RetentionSetting;
+    'deletion-tombstones': DeletionTombstone;
+    'retention-purge-jobs': RetentionPurgeJob;
     'change-sets': ChangeSet;
     'configured-ai-jobs': ConfiguredAiJob;
     'publish-snapshots': PublishSnapshot;
@@ -131,6 +134,9 @@ export interface Config {
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
+    'retention-settings': RetentionSettingsSelect<false> | RetentionSettingsSelect<true>;
+    'deletion-tombstones': DeletionTombstonesSelect<false> | DeletionTombstonesSelect<true>;
+    'retention-purge-jobs': RetentionPurgeJobsSelect<false> | RetentionPurgeJobsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'configured-ai-jobs': ConfiguredAiJobsSelect<false> | ConfiguredAiJobsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
@@ -932,7 +938,8 @@ export interface UrgentContact {
  */
 export interface MailDraft {
   id: string;
-  lead: string | Inquiry;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
   threadID: string;
   recipient: string;
   sender: string;
@@ -948,7 +955,26 @@ export interface MailDraft {
     | boolean
     | null;
   revision: number;
-  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed';
+  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "applications".
+ */
+export interface Application {
+  id: string;
+  name: string;
+  email: string;
+  telephone?: string | null;
+  linkedIn?: string | null;
+  coverLetter: string;
+  consent: boolean;
+  jobId: string;
+  resumeKey: string;
+  idempotencyKey: string;
+  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -970,20 +996,41 @@ export interface MailAuthorization {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "applications".
+ * via the `definition` "retention-settings".
  */
-export interface Application {
+export interface RetentionSetting {
   id: string;
-  name: string;
-  email: string;
-  telephone?: string | null;
-  linkedIn?: string | null;
-  coverLetter: string;
-  consent: boolean;
-  jobId: string;
-  resumeKey: string;
-  idempotencyKey: string;
-  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  key: string;
+  spamDays: number;
+  mediaBinDays: number;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "deletion-tombstones".
+ */
+export interface DeletionTombstone {
+  id: string;
+  resourceType: 'application' | 'inquiry' | 'media';
+  resourceID: string;
+  deletedAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-purge-jobs".
+ */
+export interface RetentionPurgeJob {
+  id: string;
+  resourceType: 'spam-inquiry' | 'application' | 'media';
+  resourceID: string;
+  state: 'queued' | 'failed' | 'completed';
+  attempts: number;
+  lastError?: string | null;
+  resumeKey?: string | null;
+  completedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1394,6 +1441,18 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'applications';
         value: string | Application;
+      } | null)
+    | ({
+        relationTo: 'retention-settings';
+        value: string | RetentionSetting;
+      } | null)
+    | ({
+        relationTo: 'deletion-tombstones';
+        value: string | DeletionTombstone;
+      } | null)
+    | ({
+        relationTo: 'retention-purge-jobs';
+        value: string | RetentionPurgeJob;
       } | null)
     | ({
         relationTo: 'change-sets';
@@ -2015,6 +2074,7 @@ export interface UrgentContactsSelect<T extends boolean = true> {
  */
 export interface MailDraftsSelect<T extends boolean = true> {
   lead?: T;
+  application?: T;
   threadID?: T;
   recipient?: T;
   sender?: T;
@@ -2056,6 +2116,43 @@ export interface ApplicationsSelect<T extends boolean = true> {
   resumeKey?: T;
   idempotencyKey?: T;
   status?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-settings_select".
+ */
+export interface RetentionSettingsSelect<T extends boolean = true> {
+  key?: T;
+  spamDays?: T;
+  mediaBinDays?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "deletion-tombstones_select".
+ */
+export interface DeletionTombstonesSelect<T extends boolean = true> {
+  resourceType?: T;
+  resourceID?: T;
+  deletedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-purge-jobs_select".
+ */
+export interface RetentionPurgeJobsSelect<T extends boolean = true> {
+  resourceType?: T;
+  resourceID?: T;
+  state?: T;
+  attempts?: T;
+  lastError?: T;
+  resumeKey?: T;
+  completedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

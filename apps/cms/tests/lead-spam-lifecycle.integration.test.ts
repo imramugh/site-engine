@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -9,6 +9,8 @@ import { leadWhere } from '../src/lead-filters'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-lead-spam-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+const ledger = join(directory, 'deletions.ndjson')
+writeFileSync(ledger, '', { mode: 0o600 }); process.env.RETENTION_TOMBSTONES_FILE = ledger
 process.env.PAYLOAD_SECRET = 'lead-spam-lifecycle-test-secret-long-enough'
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
@@ -41,16 +43,17 @@ describe('audited lead spam lifecycle', () => {
     expect(restored).toMatchObject({ id: item.id, spam: false, stage: 'new', spamMarkedAt: null, spamPreviousStage: null })
   }, 120_000)
 
-  it('blocks active delivery, then deletes exact spam PII while preserving detached delivery and ID-only audit history', async () => {
+  it('blocks active delivery, then deletes exact spam PII while removing delivery copies and retaining ID-only audit history', async () => {
     const item = await lead('delete-me', { spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'contacted' })
     for (let index = 0; index < 101; index += 1) await payload.create({ collection: 'notification-outbox', data: { inquiry: item.id, kind: 'new-lead', idempotencyKey: `spam-completed-${item.id}-${index}`, state: 'delivered', payload: {}, recipientRules: [], recipients: [], channels: ['email'], sourceType: 'inquiry', sourceID: item.id, availableAt: new Date().toISOString() }, overrideAccess: true })
     const queued = await payload.create({ collection: 'notification-outbox', data: { inquiry: item.id, kind: 'new-lead', idempotencyKey: `spam-active-${item.id}`, state: 'queued', payload: {}, recipientRules: [], recipients: [], channels: ['email'], sourceType: 'inquiry', sourceID: item.id, availableAt: new Date().toISOString() }, overrideAccess: true })
     await expect(deleteSpamLead(payload, item.id, owner.id)).rejects.toMatchObject({ code: 'ACTIVE_SEND' })
+    expect(readFileSync(ledger, 'utf8')).toBe('')
     await expect(payload.update({ collection: 'inquiries', id: item.id, data: { notes: 'Bypass attempt' }, overrideAccess: true })).rejects.toThrow('Restore spam before editing')
     await payload.update({ collection: 'notification-outbox', id: queued.id, data: { state: 'delivered' }, overrideAccess: true })
     await deleteSpamLead(payload, item.id, owner.id)
     expect((await payload.count({ collection: 'inquiries', where: { id: { equals: item.id } }, overrideAccess: true })).totalDocs).toBe(0)
-    expect(await payload.findByID({ collection: 'notification-outbox', id: queued.id, depth: 0, overrideAccess: true })).toMatchObject({ inquiry: null, state: 'delivered', sourceID: item.id })
+    await expect(payload.findByID({ collection: 'notification-outbox', id: queued.id, depth: 0, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
     expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: item.id } }, overrideAccess: true })).totalDocs).toBe(0)
     const audit = (await payload.find({ collection: 'audit-events', where: { event: { equals: 'lead.spam_deleted' } }, overrideAccess: true })).docs[0]!
     expect(audit.detail).toEqual({ lead: item.id })

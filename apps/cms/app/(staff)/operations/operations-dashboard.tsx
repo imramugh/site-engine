@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import styles from './operations-dashboard.module.css'
 type Row={id:string;createdAt:string;who:string;via:string;title:string;detail:string;status:string;source:string;category:string;diff:null|{label:string;entries:Array<{record:string;field:string;before:string;after:string}>;truncated:boolean;pages:number};rollback:null|{releaseID:string;sequence:number;enabled:boolean;note:string}}
 type Data={audit:{docs:Row[];page:number;totalPages:number};filterOptions:{actors:Array<{id:string;label:string}>;pages:Array<{id:string;label:string}>}}
@@ -8,7 +8,7 @@ const defaults:Filters={actor:'',source:'',target:'',type:'',period:'30'}
 const date=(value:string)=>new Intl.DateTimeFormat('en-CA',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Toronto'}).format(new Date(value))
 function initials(value:string){return value.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'S'}
 function failureMessage(response:Response){return response.status===403?'Owner access is required to view the change log.':'Unable to load the change log. Check your connection and try again.'}
-export function OperationsDashboard(){const[data,setData]=useState<Data>(),[error,setError]=useState(''),[status,setStatus]=useState(''),[filters,setFilters]=useState<Filters>(defaults),[page,setPage]=useState(1),[expanded,setExpanded]=useState<string>(),[busy,setBusy]=useState('');const requestID=useRef(0)
+export function OperationsDashboard({children}:{children?:ReactNode}){const[data,setData]=useState<Data>(),[error,setError]=useState(''),[status,setStatus]=useState(''),[filters,setFilters]=useState<Filters>(defaults),[page,setPage]=useState(1),[expanded,setExpanded]=useState<string>(),[busy,setBusy]=useState('');const requestID=useRef(0)
 async function load(next=1,nextFilters=filters){const current=++requestID.current;const query=new URLSearchParams({page:String(next)});for(const[key,value]of Object.entries(nextFilters))if(value)query.set(key,value);try{const response=await fetch(`/api/operations?${query}`,{cache:'no-store'});if(current!==requestID.current)return;if(!response.ok){setError(failureMessage(response));if(response.status===403)setData(undefined);return}const value=await response.json()as Data;if(current!==requestID.current)return;setData(value);setPage(next);setError('');window.history.replaceState(null,'',`/operations?${query}`)}catch{if(current===requestID.current)setError('Unable to load the change log. Check your connection and try again.')}}
 useEffect(()=>{const query=new URLSearchParams(window.location.search);const initial={...defaults,...Object.fromEntries((Object.keys(defaults)as Array<keyof Filters>).map(key=>[key,query.get(key)??defaults[key]]))};setFilters(initial);void load(Number(query.get('page')??1),initial)},[])
 const update=(key:keyof Filters)=>(event:React.ChangeEvent<HTMLSelectElement>)=>setFilters(current=>({...current,[key]:event.target.value}))

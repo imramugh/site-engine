@@ -218,6 +218,31 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await expect(payload.delete({ collection: 'publish-snapshots', id: snapshot.id, user: current.reviewer, overrideAccess: false })).rejects.toThrow('not allowed')
   })
 
+  it('publishes the approved immutable snapshot rather than a later authorized draft edit', async () => {
+    const current = await fixture('post-approval-edit')
+    const published = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, published.snapshot.id, published.sequence)
+    const approved = await approve(current)
+    const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID!, overrideAccess: true })
+    const approvedPage = (snapshot.manifest as typeof current.baseline).pages.find((page) => page.id === current.changes[0]!.id)!
+
+    await withPayloadTransaction(payload, async (req) => {
+      req.user = current.editor as never
+      await payload.update({ collection: 'pages', id: current.changes[0]!.id, data: { title: 'Edited after approval' }, draft: true, user: current.editor, overrideAccess: false, req })
+    })
+    const mutable = await payload.findByID({ collection: 'pages', id: current.changes[0]!.id, draft: true, overrideAccess: true })
+    expect(mutable.title).toBe('Edited after approval')
+
+    const job = await withPayloadTransaction(payload, (req) => claimNextPublishJob(payload, req))
+    expect(job?.snapshot && typeof job.snapshot === 'object' && job.snapshot.id).toBe(snapshot.id)
+    await withPayloadTransaction(payload, (req) => completePublishJob(payload, req, String(job!.id), String(job!.leaseToken), artifact(snapshot.contentHash)))
+
+    const release = (await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })).docs[0]!
+    const releasedManifest = (release.snapshot as unknown as { manifest: typeof current.baseline }).manifest
+    expect(releasedManifest.pages.find((page) => page.id === current.changes[0]!.id)).toMatchObject({ title: approvedPage.title })
+    expect(JSON.stringify(releasedManifest)).not.toContain('Edited after approval')
+  })
+
   it('rejects mismatched preview, duplicate selection, stale content, and canonical-role revocation', async () => {
     const pending = await fixture('pending', { preview: 'pending' })
     await expect(approve(pending)).rejects.toThrow('exact candidate')

@@ -25,6 +25,34 @@ describe('ENG-004 generic routing', () => {
     hiddenHome.pages[1].status = 'draft';
     expect(() => deriveRoutes(hiddenHome, ids.root)).toThrow('Homepage cannot be hidden');
   });
+  it('keeps a nine-page section routable while bounding header choices and retaining every pillar in the footer', () => {
+    const value = structuredClone(snapshot);
+    const section = value.settings.sections[0]!;
+    value.settings.contractVersion = '1.6.0';
+    value.settings.homepageId = ids.root;
+    const pillars = Array.from({ length: 9 }, (_, index) => ({
+      ...structuredClone(value.pages[1]!),
+      id: `90000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      title: `Service ${index + 1}`,
+      slug: `service-${index + 1}`,
+      parentId: undefined,
+      status: 'published' as const,
+    }));
+    value.pages = [value.pages[0]!, ...pillars];
+    section.pageIds = pillars.map((page) => page.id);
+    value.settings.navigation = {
+      header: pillars.slice(0, 5).map((page) => ({ kind: 'page' as const, id: page.id, label: page.title, style: 'link' as const })),
+      footer: { columns: [{ kind: 'section-pillars' as const, heading: 'Services', sectionId: section.id }], bottomLinks: [] },
+    };
+
+    const model = deriveRoutes(value, ids.root);
+    const navigation = resolveSiteNavigation(value, 2031);
+
+    expect(model.warnings).toContain('Section services has more than eight pages; excess pages are footer-only.');
+    expect(pillars.every((page) => model.byPath.has(`/services/${page.slug}`))).toBe(true);
+    expect(navigation.header).toHaveLength(5);
+    expect((navigation.footer.columns[0] as { items: unknown[] }).items).toHaveLength(9);
+  });
   it('resolves reviewed navigation ordering, unavailable states, contact visibility, and UTC year', () => {
     const value = structuredClone(snapshot);
     value.settings.contractVersion = '1.6.0'; value.settings.homepageId = ids.root;

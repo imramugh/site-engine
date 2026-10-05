@@ -142,8 +142,15 @@ test('ENG-024 searches published static content with accessible canonical result
   await guide.focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/general\/guide\/?$/);
+  await page.route('**/search-index.json', async (route) => route.fulfill({ status: 503 }));
   await page.goto('/search');
-  await page.getByLabel('Search published content').fill('Hidden fixture');
+  await page.getByLabel('Search published content').fill('guide');
+  await page.getByRole('button', { name: 'Search' }).click();
+  await expect(page.getByRole('status')).toHaveText('Search is temporarily unavailable. Please try again.');
+  await page.unroute('**/search-index.json');
+  await page.getByRole('button', { name: 'Search' }).click();
+  await expect(page.getByRole('status')).toContainText('result');
+  await page.getByLabel('Search published content').fill('DRAFT_ONLY_SEARCH_MARKER');
   await page.getByRole('button', { name: 'Search' }).click();
   await expect(page.getByRole('status')).toHaveText('No published pages match your search.');
   await page.addScriptTag({ path: axeSource });

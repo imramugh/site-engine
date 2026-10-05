@@ -7,6 +7,7 @@ import { getPayload, type Payload } from 'payload'
 import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
+import { prepareReply, sendReply, setReplyDeliveryForTest } from '../src/mail-replies'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mail-authorizations-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -20,7 +21,7 @@ afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: 
 type Actor = { id: string; sessionToken: string }
 type Draft = { id: string; recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; lead: string; revision: number }
 
-async function actor(role: 'owner' | 'sales'): Promise<Actor> {
+async function actor(role: 'owner' | 'sales' | 'hiring'): Promise<Actor> {
   const user = await payload.create({ collection: 'users', data: { email: `${role}-${randomUUID()}@example.test`, name: role, roles: [role] }, overrideAccess: true })
   const sessionToken = newOpaqueToken()
   const now = Date.now()
@@ -45,6 +46,65 @@ async function draft(): Promise<Draft> {
 const future = () => new Date(Date.now() + 60_000)
 
 describe('local mail authorization transactions', () => {
+  it('consumes an accepted delivery once and marks an ambiguous delivery unknown without retry', async () => {
+    const owner = await actor('owner'); const prepared = await draft(); await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { attachmentHashes: [] }, overrideAccess: true }); const grant = await authorizeMailDraft(payload, owner, prepared.id, future()); let calls = 0
+    setReplyDeliveryForTest(async () => { calls += 1; throw new Error('accepted_then_audit_lost') })
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('accepted_then_audit_lost')
+    expect(calls).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'delivery-unknown' })
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+    expect(calls).toBe(1); setReplyDeliveryForTest()
+  })
+  it('dispatches the exact confirmed envelope even when persisted draft content changes during consumption', async () => {
+    const owner = await actor('owner'); const prepared = await draft()
+    await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { attachmentHashes: [] }, overrideAccess: true })
+    const grant = await authorizeMailDraft(payload, owner, prepared.id, future())
+    const create = payload.create.bind(payload)
+    payload.create = async (args) => {
+      const result = await create(args as never)
+      if (args.collection === 'audit-events' && (args.data as { event?: string }).event === 'mail.authorization_consumed') {
+        await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { body: 'Changed after authorization was consumed.' }, overrideAccess: true, req: args.req })
+      }
+      return result as never
+    }
+    let delivered: unknown
+    setReplyDeliveryForTest(async (_payload, _area, envelope) => { delivered = envelope; return { provider: 'smtp', messageID: 'synthetic-confirmed-message' } })
+    try {
+      await sendReply(payload, owner, grant.id)
+      expect(delivered).toMatchObject({ body: prepared.body, recipient: prepared.recipient, subject: prepared.subject })
+      await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('draft_already_dispatched')
+    } finally { payload.create = create; setReplyDeliveryForTest() }
+  })
+
+  it('does not silently omit attachments from an authorized draft', async () => {
+    const owner = await actor('owner'); const prepared = await draft()
+    const grant = await authorizeMailDraft(payload, owner, prepared.id, future())
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('reply_attachments_not_supported')
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, overrideAccess: true })).toMatchObject({ consumedAt: null })
+  })
+
+  it('isolates lead and hiring correspondence by staff role and blocks direct draft writes', async () => {
+    const sales = await actor('sales'); const hiring = await actor('hiring'); const owner = await actor('owner')
+    const leadDraft = await draft()
+    const application = await payload.create({ collection: 'applications', data: { name: 'Synthetic applicant', email: 'applicant@example.test', coverLetter: 'Private hiring correspondence.', consent: true, jobId: randomUUID(), resumeKey: 'test-only', idempotencyKey: randomUUID() }, overrideAccess: true })
+    const appDraft = await prepareReply(payload, 'application', application.id, owner.id, { sender: 'team@example.test', subject: 'Private hiring reply', body: 'Private hiring content.' })
+    const salesUser = await payload.findByID({ collection: 'users', id: sales.id, overrideAccess: true })
+    const hiringUser = await payload.findByID({ collection: 'users', id: hiring.id, overrideAccess: true })
+    const salesDrafts = await payload.find({ collection: 'mail-drafts', user: salesUser, overrideAccess: false, limit: 0, pagination: false })
+    const hiringDrafts = await payload.find({ collection: 'mail-drafts', user: hiringUser, overrideAccess: false, limit: 0, pagination: false })
+    expect(salesDrafts.docs.map(item => item.id)).toContain(leadDraft.id)
+    expect(salesDrafts.docs.map(item => item.id)).not.toContain(appDraft.id)
+    expect(hiringDrafts.docs.map(item => item.id)).toEqual([appDraft.id])
+    await expect(payload.update({ collection: 'mail-drafts', id: leadDraft.id, user: salesUser, overrideAccess: false, data: { body: 'Unreviewed change.' } })).rejects.toMatchObject({ status: 403 })
+    await expect(payload.find({ collection: 'mail-authorizations', user: salesUser, overrideAccess: false })).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('refuses preparation for a spam lead before persisting a reply', async () => {
+    const user = await actor('owner')
+    const lead = await payload.create({ collection: 'inquiries', data: { email: `spam-prepare-${randomUUID()}@example.test`, message: 'Spam.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new' }, overrideAccess: true })
+    await expect(prepareReply(payload, 'lead', lead.id, user.id, { sender: 'team@example.test', subject: 'No send', body: 'No send' })).rejects.toThrow('lead_is_spam')
+    expect((await payload.find({ collection: 'mail-drafts', where: { lead: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(0)
+  })
   it('consumes a grant exactly once when two SQLite transactions race', async () => {
     const owner = await actor('owner')
     const prepared = await draft()
@@ -68,6 +128,7 @@ describe('local mail authorization transactions', () => {
   it.each([
     ['recipient', 'another@example.test'],
     ['body', 'The approved text was edited.'],
+    ['threadID', 'different-provider-thread'],
     ['attachmentHashes', ['first-attachment', 'second-attachment']],
   ] as const)('invalidates the grant when its %s changes', async (field, value) => {
     const owner = await actor('owner')

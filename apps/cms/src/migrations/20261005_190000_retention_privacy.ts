@@ -1,0 +1,18 @@
+import { MigrateDownArgs, MigrateUpArgs, sql } from '@payloadcms/db-sqlite'
+
+export async function up({ db }: MigrateUpArgs): Promise<void> {
+  await db.run(sql`CREATE TABLE \`retention_settings\` (\`id\` text(36) PRIMARY KEY NOT NULL, \`key\` text NOT NULL, \`spam_days\` numeric DEFAULT 30 NOT NULL, \`media_bin_days\` numeric DEFAULT 30 NOT NULL, \`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL, \`created_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL);`)
+  await db.run(sql`CREATE UNIQUE INDEX \`retention_settings_key_idx\` ON \`retention_settings\` (\`key\`);`)
+  await db.run(sql`CREATE TABLE \`deletion_tombstones\` (\`id\` text(36) PRIMARY KEY NOT NULL, \`resource_type\` text NOT NULL, \`resource_i_d\` text NOT NULL, \`deleted_at\` text NOT NULL, \`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL, \`created_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL);`)
+  await db.run(sql`CREATE UNIQUE INDEX \`deletion_tombstones_resource_idx\` ON \`deletion_tombstones\` (\`resource_type\`, \`resource_i_d\`);`)
+  await db.run(sql`CREATE TABLE \`retention_purge_jobs\` (\`id\` text(36) PRIMARY KEY NOT NULL, \`resource_type\` text NOT NULL, \`resource_i_d\` text NOT NULL, \`state\` text NOT NULL, \`attempts\` numeric DEFAULT 0 NOT NULL, \`last_error\` text, \`resume_key\` text, \`completed_at\` text, \`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL, \`created_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL);`)
+  await db.run(sql`CREATE INDEX \`retention_purge_jobs_state_idx\` ON \`retention_purge_jobs\` (\`state\`, \`updated_at\`);`)
+  await db.run(sql`CREATE UNIQUE INDEX \`retention_purge_jobs_resource_idx\` ON \`retention_purge_jobs\` (\`resource_type\`, \`resource_i_d\`);`)
+  await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` ADD \`retention_settings_id\` text(36) REFERENCES retention_settings(id);`)
+  await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` ADD \`deletion_tombstones_id\` text(36) REFERENCES deletion_tombstones(id);`)
+  await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` ADD \`retention_purge_jobs_id\` text(36) REFERENCES retention_purge_jobs(id);`)
+  await db.run(sql`CREATE INDEX \`payload_locked_documents_rels_retention_settings_id_idx\` ON \`payload_locked_documents_rels\` (\`retention_settings_id\`);`)
+  await db.run(sql`CREATE INDEX \`payload_locked_documents_rels_deletion_tombstones_id_idx\` ON \`payload_locked_documents_rels\` (\`deletion_tombstones_id\`);`)
+  await db.run(sql`CREATE INDEX \`payload_locked_documents_rels_retention_purge_jobs_id_idx\` ON \`payload_locked_documents_rels\` (\`retention_purge_jobs_id\`);`)
+}
+export async function down({ db }: MigrateDownArgs): Promise<void> { await db.run(sql`DROP INDEX \`payload_locked_documents_rels_retention_purge_jobs_id_idx\`;`); await db.run(sql`DROP INDEX \`payload_locked_documents_rels_deletion_tombstones_id_idx\`;`); await db.run(sql`DROP INDEX \`payload_locked_documents_rels_retention_settings_id_idx\`;`); await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` DROP COLUMN \`retention_purge_jobs_id\`;`); await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` DROP COLUMN \`deletion_tombstones_id\`;`); await db.run(sql`ALTER TABLE \`payload_locked_documents_rels\` DROP COLUMN \`retention_settings_id\`;`); await db.run(sql`DROP INDEX \`retention_purge_jobs_resource_idx\`;`); await db.run(sql`DROP TABLE \`retention_purge_jobs\`;`); await db.run(sql`DROP TABLE \`deletion_tombstones\`;`); await db.run(sql`DROP TABLE \`retention_settings\`;`) }
