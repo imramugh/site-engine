@@ -39,3 +39,16 @@ test('ENG-017 Owner persists MCP phone privacy from Connected assistants and non
   expect((await editor.page.request.put('/api/mcp-privacy', { headers: { origin, 'content-type': 'application/json' }, data: { hidePhone: false } })).status()).toBe(403)
   await Promise.all([owner.context.close(), editor.context.close()])
 })
+
+test('ENG-017 retries a failed MCP privacy read and restores the saved value after a failed write', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-shell-owner-session-token'); let reads = 0
+  await owner.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(false) }))
+  await owner.page.route('**/api/mcp-privacy', (route) => {
+    if (route.request().method() === 'GET') { reads += 1; return reads === 1 ? route.fulfill({ status: 503, json: { error: 'unavailable' } }) : route.fulfill({ json: { hidePhone: true } }) }
+    return route.fulfill({ status: 503, json: { error: 'unavailable' } })
+  })
+  await owner.page.goto('/integrations?tab=assistants'); await expect(owner.page.locator('[data-assistant-status]')).toContainText('unavailable')
+  await owner.page.getByRole('button', { name: 'Retry' }).click(); await expect(owner.page.getByLabel('Hide lead phone numbers')).toBeChecked()
+  await owner.page.getByLabel('Hide lead phone numbers').uncheck(); await expect(owner.page.locator('[data-assistant-status]')).toContainText('unavailable'); await expect(owner.page.getByLabel('Hide lead phone numbers')).toBeChecked()
+  await owner.context.close()
+})
