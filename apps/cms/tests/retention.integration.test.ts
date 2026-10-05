@@ -51,6 +51,20 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     expect(JSON.stringify(entry)).not.toMatch(/Applicant|resume|example\.test/)
   })
 
+  it('purges an application resume and all application-bound correspondence atomically', async () => {
+    writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
+    const owner = await user('owner'); const record = await application(); const resume = join(applicationStorage(), record.resumeKey)
+    const draft = await payload.create({ collection: 'mail-drafts', data: { application: record.id, threadID: crypto.randomUUID(), recipient: record.email, sender: 'owner@example.test', subject: 'Reply', body: 'Synthetic private correspondence.', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true })
+    const authorization = await payload.create({ collection: 'mail-authorizations', data: { draft: draft.id, digest: 'a'.repeat(64), draftRevision: 1, authorizedBy: owner.account.id, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const outbox = await payload.create({ collection: 'notification-outbox', data: { kind: 'new-job-application', idempotencyKey: `retention-${crypto.randomUUID()}`, state: 'queued', payload: { application: record.id }, recipientRules: [], recipients: [], channels: [], sourceType: 'application', sourceID: record.id, availableAt: new Date().toISOString() }, overrideAccess: true })
+    await expect(purgeApplication(payload, record.id, owner.account.id)).resolves.toMatchObject({ state: 'completed' })
+    expect(existsSync(resume)).toBe(false)
+    await expect(payload.findByID({ collection: 'applications', id: record.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    await expect(payload.findByID({ collection: 'mail-drafts', id: draft.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    await expect(payload.findByID({ collection: 'mail-authorizations', id: authorization.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    await expect(payload.findByID({ collection: 'notification-outbox', id: outbox.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+  })
+
   it('requires a fresh Owner for permanent deletion and denies an Editor without changing the record', async () => {
     const record = await application(); const editor = await user('editor'); const staleOwner = await user('owner', false)
     const invoke = (cookie: string) => retentionDELETE(new Request('https://cms.retention.test/api/retention', { method: 'DELETE', headers: { origin: 'https://cms.retention.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify({ applicationID: record.id }) }))
