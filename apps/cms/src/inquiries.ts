@@ -3,6 +3,7 @@ import { INQUIRY_TOPIC_VALUES, type InquiryTopicValue } from '@site-engine/contr
 import type { Payload } from 'payload'
 import { hasRole } from './access'
 import { withPayloadTransaction } from './auth-transaction'
+import { enqueueNotification } from './notification-settings'
 
 export const inquiryTopics = INQUIRY_TOPIC_VALUES
 export const leadStages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] as const
@@ -129,8 +130,8 @@ async function persistAcceptedInquiry(payload: Payload, input: InquiryInput, act
     })
     if (actor) await payload.create({ collection: 'audit-events', data: { event: 'lead.created', user: actor.id, actor: actor.id, detail: { lead: inquiry.id, consentBasis: input.consentBasis } }, overrideAccess: true, req })
     const event = { inquiry: inquiry.id, topic: input.topic, sourcePage: input.sourcePage, urgent }
-    await payload.create({ collection: 'notification-outbox', data: { inquiry: inquiry.id, kind: 'lead-received', idempotencyKey: `lead-received:${input.idempotencyKey}`, state: 'queued', payload: event, availableAt: new Date().toISOString() }, overrideAccess: true, req })
-    if (urgent) await payload.create({ collection: 'notification-outbox', data: { inquiry: inquiry.id, kind: 'urgent-lead-alert', idempotencyKey: `urgent-lead-alert:${input.idempotencyKey}`, state: 'queued', payload: event, availableAt: new Date().toISOString() }, overrideAccess: true, req })
+    await enqueueNotification(payload, req, { inquiry: inquiry.id, kind: 'new-lead', idempotencyKey: `new-lead:${input.idempotencyKey}`, sourceType: 'inquiry', sourceID: inquiry.id, payload: event })
+    if (urgent) await enqueueNotification(payload, req, { inquiry: inquiry.id, kind: 'active-incident-lead', idempotencyKey: `active-incident-lead:${input.idempotencyKey}`, sourceType: 'inquiry', sourceID: inquiry.id, payload: event })
     return { inquiry, duplicate: false as const }
   })
 }

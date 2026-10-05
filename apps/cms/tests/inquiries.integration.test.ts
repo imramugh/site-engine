@@ -33,8 +33,9 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     expect(leads.docs).toHaveLength(1)
     expect(leads.docs[0]).toMatchObject({ topic: 'active-incident', urgent: true, stage: 'new', message: input.message, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
     const queued = await payload.find({ collection: 'notification-outbox', where: { inquiry: { equals: leads.docs[0].id } }, overrideAccess: true })
-    expect(queued.docs.map((event) => event.kind).sort()).toEqual(['lead-received', 'urgent-lead-alert'])
+    expect(queued.docs.map((event) => event.kind).sort()).toEqual(['active-incident-lead', 'new-lead'])
     expect(queued.docs.every((event) => event.state === 'queued')).toBe(true)
+    expect(queued.docs.find((event) => event.kind === 'active-incident-lead')).toMatchObject({ recipientRules: ['urgent-contact', 'owner'], channels: ['email', 'sms'] })
   })
 
   it('persists every current and legacy topic without changing urgency semantics', async () => {

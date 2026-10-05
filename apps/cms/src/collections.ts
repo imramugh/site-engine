@@ -12,6 +12,7 @@ import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/e
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
 import { mediaFocalContractVersion } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
+import { enqueueNotification } from './notification-settings'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -461,12 +462,39 @@ export const NotificationOutbox: CollectionConfig = {
   slug: 'notification-outbox', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
-    { name: 'inquiry', type: 'relationship', relationTo: 'inquiries', required: true },
-    { name: 'kind', type: 'select', required: true, options: ['lead-received', 'urgent-lead-alert'] },
+    { name: 'inquiry', type: 'relationship', relationTo: 'inquiries' },
+    { name: 'kind', type: 'select', required: true, options: ['new-lead', 'active-incident-lead', 'new-job-application', 'change-set-submitted', 'follow-ups-due', 'publish-or-integration-failed'] },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true },
     { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'delivered', 'failed'] },
     { name: 'payload', type: 'json', required: true },
+    { name: 'recipientRules', type: 'json', required: true },
+    { name: 'recipients', type: 'json', required: true },
+    { name: 'channels', type: 'json', required: true },
+    { name: 'sourceType', type: 'text' },
+    { name: 'sourceID', type: 'text' },
     { name: 'availableAt', type: 'date', required: true },
+  ],
+}
+
+/** Private operator settings. These collections never participate in editorial capture or publishing. */
+export const NotificationPreferences: CollectionConfig = {
+  slug: 'notification-preferences', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true },
+    { name: 'events', type: 'json', required: true },
+    { name: 'updatedBy', type: 'relationship', relationTo: 'users', required: true },
+  ],
+}
+
+export const UrgentContacts: CollectionConfig = {
+  slug: 'urgent-contacts', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'name', type: 'text', required: true, maxLength: 120 },
+    { name: 'email', type: 'email', required: true },
+    { name: 'mobile', type: 'text', maxLength: 32 },
+    { name: 'enabled', type: 'checkbox', required: true, defaultValue: true },
   ],
 }
 
@@ -508,7 +536,13 @@ export const MailAuthorizations: CollectionConfig = {
 
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
-  hooks: { beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data] },
+  hooks: {
+    beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data],
+    afterChange: [async ({ doc, operation, req }) => {
+      if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
+      return doc
+    }],
+  },
   fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
 }
 
