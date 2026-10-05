@@ -90,7 +90,7 @@ async function copyThemeComponents(source, destination) {
       const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name);
       const entryInfo = await lstat(sourcePath);
       if (entryInfo.isSymbolicLink()) throw new Error('Theme component root must not contain symbolic links.');
-      if (entryInfo.isDirectory()) { await mkdir(destinationPath); await copyDirectory(sourcePath, destinationPath); }
+      if (entryInfo.isDirectory()) await copyDirectory(sourcePath, destinationPath);
       else if (entryInfo.isFile()) await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
       else throw new Error('Theme component root contains an unsupported entry.');
     }
@@ -102,6 +102,8 @@ async function copyStarterAssets(componentsRoot, stagingRoot) {
   // Starter component CSS may reference package-local, public assets. Copy the
   // conventional fonts directory beside the renderer so relative @font-face
   // URLs survive the isolated snapshot build without executing theme code.
+  const starterRoot = dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro'));
+  if (componentsRoot !== starterRoot) return;
   const fonts = resolve(componentsRoot, '../..', 'fonts');
   const info = await lstat(fonts).catch(() => undefined);
   if (!info) return;
@@ -112,9 +114,11 @@ async function copyStarterAssets(componentsRoot, stagingRoot) {
     for (const entry of entries) {
       const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name); const entryInfo = await lstat(sourcePath);
       if (entryInfo.isSymbolicLink()) throw new Error('Theme fonts directory must not contain symbolic links.');
-      if (entryInfo.isDirectory()) await copyDirectory(sourcePath, destinationPath);
-      else if (entryInfo.isFile()) await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
-      else throw new Error('Theme fonts directory contains an unsupported entry.');
+      if (!entryInfo.isFile()) throw new Error('Theme fonts directory contains an unsupported entry.');
+      if (/\.(?:woff2?|ttf|otf)$/i.test(entry.name)) {
+        if (entryInfo.size > 5_000_000) throw new Error('Theme font file exceeds the maximum allowed size.');
+        await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
+      }
     }
   }
   await copyDirectory(fonts, join(stagingRoot, 'fonts'));

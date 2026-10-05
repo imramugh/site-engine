@@ -87,9 +87,10 @@ async function writeSnapshot(root: string, snapshot: SiteSnapshot, filename = 's
 
 async function customThemeComponents(root: string): Promise<string> {
   const components = await mkdtemp(join(root, 'custom-theme-components-'));
-  await writeFile(join(components, 'theme.css'), 'body { outline: 1px solid #123456; }\n');
+  await mkdir(join(components, 'nested'));
+  await writeFile(join(components, 'nested/theme.css'), 'body { outline: 1px solid #123456; }\n');
   await writeFile(join(components, 'Layout.astro'), `---
-import './theme.css';
+import './nested/theme.css';
 const { title, description } = Astro.props;
 ---
 <!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main><script>document.documentElement.dataset.customThemeEnhancement = 'active';</script></body></html>\n`);
