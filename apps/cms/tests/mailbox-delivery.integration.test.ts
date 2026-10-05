@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { getPayload } from 'payload'
 
@@ -35,8 +36,12 @@ beforeAll(async () => {
 afterAll(async () => { await payload.destroy(); await new Promise<void>((resolve) => smtp.close(() => resolve())); rmSync(directory, { recursive: true, force: true }); for (const key of ['INTEGRATION_CREDENTIAL_ENCRYPTION_KEY', 'MAIL_TEST_SMTP_LOOPBACK']) delete process.env[key] })
 
 test('SMTP credentials stay private while mappings and one-use authorized delivery are real', async () => {
+  for (const address of ['::ffff:127.0.0.1', '::ffff:7f00:1', '::', '0.0.0.0', '100.64.0.1', '198.51.100.1', 'fc00::1', 'fe80::1', '2001:db8::1']) expect(service.isPublicSMTPAddress(address)).toBe(false)
+  for (const address of ['8.8.8.8', '2606:4700:4700::1111', '::ffff:8.8.8.8']) expect(service.isPublicSMTPAddress(address)).toBe(true)
   const owner = await payload.create({ collection: 'users', data: { email: 'mail-owner@example.test', name: 'Mail owner', roles: ['owner'] }, overrideAccess: true })
   const mailbox = await service.configureSMTPMailbox(payload, { name: 'Synthetic mailbox', primaryAddress: 'hello@example.test', aliases: ['careers@example.test'], host: '127.0.0.1', port, security: 'starttls', username: 'synthetic-user', password: 'synthetic-password' }, owner.id)
+  expect(String(mailbox.credentialRevision)).toMatch(/^[a-f0-9]{16}$/)
+  expect(mailbox.credentialRevision).not.toBe(createHash('sha256').update('synthetic-password').digest('hex').slice(0, 12))
   expect(JSON.stringify(service.publicMailbox(mailbox as never))).not.toContain('synthetic-password')
   expect(await service.testSMTPMailbox(payload, mailbox.id, owner.id)).toMatchObject({ health: 'connected' })
   await expect(service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'careers@example.test' }, owner.id)).rejects.toThrow('not been verified')
@@ -54,4 +59,8 @@ test('SMTP credentials stay private while mappings and one-use authorized delive
   expect((await payload.find({ collection: 'mailbox-test-sends', where: { requestKey: { equals: rejectedKey } }, overrideAccess: true })).docs[0]).toMatchObject({ state: 'failed', failureCode: 'provider_unavailable' })
   expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'mailbox.test_send_completed' } }, overrideAccess: true })).docs).toEqual(expect.arrayContaining([expect.objectContaining({ detail: expect.objectContaining({ state: 'failed' }) })]))
   const workspace = await service.mailboxWorkspace(payload); expect(workspace.mappings).toEqual(expect.arrayContaining([{ id: expect.any(String), area: 'careers', mailbox: mailbox.id, senderAddress: 'careers@example.test' }])); expect(JSON.stringify(workspace)).not.toContain('synthetic-password')
+  await expect(service.configureSMTPMailbox(payload, { id: mailbox.id, name: 'Synthetic mailbox', primaryAddress: 'hello@example.test', aliases: ['careers@example.test'], host: 'smtp.changed.example.test', port, security: 'starttls', username: 'changed-user' }, owner.id)).rejects.toThrow('Unassign this mailbox sender')
+  await service.clearMailboxArea(payload, 'careers', owner.id)
+  const changed = await service.configureSMTPMailbox(payload, { id: mailbox.id, name: 'Synthetic mailbox', primaryAddress: 'hello@example.test', aliases: ['careers@example.test'], host: 'smtp.changed.example.test', port, security: 'starttls', username: 'changed-user' }, owner.id)
+  expect(changed).toMatchObject({ verifiedAliases: [], health: 'unknown', testedAt: null })
 })

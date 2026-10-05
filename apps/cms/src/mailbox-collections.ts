@@ -17,7 +17,7 @@ export const MailboxConfigurations: CollectionConfig = {
     { name: 'security', type: 'select', required: true, options: ['starttls', 'tls'] },
     { name: 'username', type: 'text', required: true, maxLength: 320 },
     { name: 'encryptedCredential', type: 'text', access: { read: () => false, create: () => false, update: () => false }, admin: { hidden: true } },
-    { name: 'credentialFingerprint', type: 'text', required: true, admin: { readOnly: true } },
+    { name: 'credentialRevision', type: 'text', required: true, maxLength: 32, admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'rejected', 'unavailable', 'revoked'] },
     { name: 'testedAt', type: 'date' },
   ],

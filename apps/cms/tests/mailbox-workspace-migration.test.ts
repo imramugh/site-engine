@@ -12,11 +12,11 @@ afterAll(() => rmSync(directory, { recursive: true, force: true }))
 
 test('mailbox migration preserves deployed data, enforces area uniqueness, and rolls down cleanly', async () => {
   const client = createClient({ url: `file:${join(directory, 'upgrade.sqlite')}` }); const db = drizzle(client)
-  const index = migrations.findIndex((migration) => migration.name === '20261005_143605_mailbox_workspace'); expect(index).toBeGreaterThan(0)
+  const index = migrations.findIndex((migration) => migration.name === '20261005_145826_mailbox_workspace'); expect(index).toBeGreaterThan(0)
   for (const migration of migrations.slice(0, index)) await migration.up({ db } as never)
   const integration = randomUUID(); await client.execute({ sql: 'INSERT INTO integration_configurations (id, provider, model, encrypted_credential, credential_fingerprint, health, monthly_usage_micro_usd) VALUES (?, ?, ?, ?, ?, ?, ?)', args: [integration, 'openai', 'preserved-model', 'ciphertext', 'fingerprint', 'connected', 0] })
   const migration = migrations[index]!; await migration.up({ db } as never)
-  const mailbox = randomUUID(); await client.execute({ sql: 'INSERT INTO mailbox_configurations (id, name, provider, primary_address, aliases, host, port, security, username, encrypted_credential, credential_fingerprint, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', args: [mailbox, 'Primary', 'smtp', 'hello@example.test', '[]', 'smtp.example.test', 587, 'starttls', 'user', 'encrypted', 'fingerprint', 'unknown'] })
+  const mailbox = randomUUID(); await client.execute({ sql: 'INSERT INTO mailbox_configurations (id, name, provider, primary_address, aliases, host, port, security, username, encrypted_credential, credential_revision, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', args: [mailbox, 'Primary', 'smtp', 'hello@example.test', '[]', 'smtp.example.test', 587, 'starttls', 'user', 'encrypted', 'revision', 'unknown'] })
   await client.execute({ sql: 'INSERT INTO mailbox_area_mappings (id, area, mailbox_id, sender_address) VALUES (?, ?, ?, ?)', args: [randomUUID(), 'leads', mailbox, 'hello@example.test'] })
   await expect(client.execute({ sql: 'INSERT INTO mailbox_area_mappings (id, area, mailbox_id, sender_address) VALUES (?, ?, ?, ?)', args: [randomUUID(), 'leads', mailbox, 'hello@example.test'] })).rejects.toThrow()
   await migration.down({ db } as never)

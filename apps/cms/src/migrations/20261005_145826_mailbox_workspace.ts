@@ -13,7 +13,7 @@ export async function up({ db, payload, req }: MigrateUpArgs): Promise<void> {
     \`security\` text NOT NULL,
     \`username\` text NOT NULL,
     \`encrypted_credential\` text,
-    \`credential_fingerprint\` text NOT NULL,
+    \`credential_revision\` text NOT NULL,
     \`health\` text DEFAULT 'unknown' NOT NULL,
     \`tested_at\` text,
     \`updated_at\` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) NOT NULL,

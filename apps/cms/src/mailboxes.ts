@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
+import ipaddr from 'ipaddr.js'
 import nodemailer from 'nodemailer'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
@@ -44,30 +45,37 @@ function validated(input: SMTPConfiguration, existing?: StoredMailbox) {
   return { name, primaryAddress, aliases, host, port: input.port, security: input.security, username }
 }
 
-const privateAddress = (address: string) => address === '::1' || address === '0.0.0.0' || address.startsWith('127.') || address.startsWith('10.') || address.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[01])\./.test(address) || /^169\.254\./.test(address) || /^f[cd][0-9a-f]{2}:/i.test(address) || /^fe[89ab][0-9a-f]:/i.test(address)
+export function isPublicSMTPAddress(address: string): boolean {
+  if (!ipaddr.isValid(address)) return false
+  let parsed = ipaddr.parse(address)
+  if (parsed.kind() === 'ipv6' && (parsed as ipaddr.IPv6).isIPv4MappedAddress()) parsed = (parsed as ipaddr.IPv6).toIPv4Address()
+  return parsed.range() === 'unicast'
+}
 async function smtpTransport(mailbox: StoredMailbox): Promise<Transport> {
   const allowLoopback = process.env.NODE_ENV === 'test' && process.env.MAIL_TEST_SMTP_LOOPBACK === '1'
-  const resolved = await lookup(String(mailbox.host), { all: true }); const selected = resolved.find((entry) => allowLoopback || !privateAddress(entry.address))
+  const resolved = await lookup(String(mailbox.host), { all: true }); const selected = resolved.find((entry) => allowLoopback || isPublicSMTPAddress(entry.address))
   if (!selected) throw new Error('smtp_target_rejected')
   return nodemailer.createTransport({ host: selected.address, port: Number(mailbox.port), secure: mailbox.security === 'tls', requireTLS: mailbox.security === 'starttls' && !allowLoopback, ignoreTLS: allowLoopback, tls: { servername: String(mailbox.host), rejectUnauthorized: true }, auth: { user: String(mailbox.username), pass: decryptPassword(String(mailbox.encryptedCredential)) }, connectionTimeout: 5_000, greetingTimeout: 5_000, socketTimeout: 10_000, disableFileAccess: true, disableUrlAccess: true }) as Transport
 }
 
 const internal = (req: PayloadRequest) => { req.context.mailboxInternal = true; return req }
-export function publicMailbox(doc: StoredMailbox) { return { id: doc.id, name: doc.name, provider: 'smtp', primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], host: doc.host, port: doc.port, security: doc.security, username: doc.username, health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialFingerprint ? `configured • ${doc.credentialFingerprint}` : null } }
+export function publicMailbox(doc: StoredMailbox) { return { id: doc.id, name: doc.name, provider: 'smtp', primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], host: doc.host, port: doc.port, security: doc.security, username: doc.username, health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null } }
 
 export async function configureSMTPMailbox(payload: Payload, input: SMTPConfiguration, actor: string) {
   return withPayloadTransaction(payload, async (transaction) => {
     const req = internal(transaction); const existing = input.id ? await payload.findByID({ collection: 'mailbox-configurations', id: input.id, depth: 0, overrideAccess: true, req }) as unknown as StoredMailbox : undefined
     const config = validated(input, existing); const password = input.password || (existing?.encryptedCredential ? decryptPassword(existing.encryptedCredential) : '')
-    const verifiedAliases = Array.isArray(existing?.verifiedAliases) ? existing.verifiedAliases.map(String).filter((alias) => config.aliases.includes(alias)) : []
+    const transportChanged = Boolean(existing && (String(existing.host) !== config.host || Number(existing.port) !== config.port || String(existing.security) !== config.security || String(existing.username) !== config.username))
+    const verifiedAliases = !transportChanged && Array.isArray(existing?.verifiedAliases) ? existing.verifiedAliases.map(String).filter((alias) => config.aliases.includes(alias)) : []
     if (existing) {
       const mappings = await payload.find({ collection: 'mailbox-area-mappings', where: { mailbox: { equals: existing.id } }, limit: mailboxAreas.length, depth: 0, overrideAccess: true, req })
       const allowed = [config.primaryAddress, ...verifiedAliases]
       if (mappings.docs.some((mapping) => !allowed.includes(String(mapping.senderAddress)))) throw new Error('Unassign this mailbox sender before removing or changing its address.')
     }
-    const data = { ...config, verifiedAliases, provider: 'smtp' as const, encryptedCredential: encryptPassword(password), credentialFingerprint: createHash('sha256').update(password).digest('hex').slice(0, 12), health: 'unknown' as const }
+    const credentialRevision = input.password ? randomBytes(8).toString('hex') : String(existing?.credentialRevision || randomBytes(8).toString('hex'))
+    const data = { ...config, verifiedAliases, provider: 'smtp' as const, encryptedCredential: encryptPassword(password), credentialRevision, health: 'unknown' as const, testedAt: null }
     const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data, overrideAccess: true, req })
-    await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as { id: string }).id, provider: 'smtp', credentialFingerprint: data.credentialFingerprint } }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as { id: string }).id, provider: 'smtp', credentialRevision } }, overrideAccess: true, req })
     return saved
   })
 }

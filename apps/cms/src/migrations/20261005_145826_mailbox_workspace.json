@@ -4064,8 +4064,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "credential_fingerprint": {
-          "name": "credential_fingerprint",
+        "credential_revision": {
+          "name": "credential_revision",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -7936,6 +7936,6 @@
   "internal": {
     "indexes": {}
   },
-  "id": "e5f1e38b-d38d-490d-a832-a41cc8f6d925",
+  "id": "6e908606-1df9-420d-ab66-3e30e6072ebf",
   "prevId": "00000000-0000-0000-0000-000000000000"
 }
