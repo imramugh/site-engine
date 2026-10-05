@@ -83,7 +83,7 @@ async function context(payload: Awaited<ReturnType<typeof getPayload>>, actor: A
     changeSets: sets.docs.map(set => ({ id: set.id, name: set.name, state: set.state, revision: set.revision })),
     redirects: (redirects.docs as unknown as Document[]).map(doc => ({ id: doc.id, ...redirectValue(doc), hitCount: Number(doc.hitCount ?? 0), lastHitAt: doc.lastHitAt ?? null, hash: canonicalHash(redirectValue(doc)) })),
     navigation,
-    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name })), assets: assetsResult.docs.map(asset => ({ id: asset.id, label: asset.alt || asset.filename || asset.id })) },
+    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name })), assets: assetsResult.docs.filter(asset => !asset.deletedAt).map(asset => { const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as { url?: string } : asset; return { id: asset.id, label: asset.alt || asset.filename || asset.id, url: file.url ?? null } }) },
   }
 }
 

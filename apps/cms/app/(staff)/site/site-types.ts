@@ -22,7 +22,7 @@ export type Settings = {
 export type References = {
   pages: Array<{ id: string; title: string }>
   sections: Array<{ id: string; title: string }>
-  assets: Array<{ id: string; label: string }>
+  assets: Array<{ id: string; label: string; url?: string | null }>
 }
 
 export const emptyAddress: Address = { streetAddress: '', addressLocality: '', addressRegion: '', postalCode: '', addressCountry: 'CA' }
