@@ -20,7 +20,7 @@ async function mediaPage(browser: Browser) {
 
 async function axe(page: Page) {
   await page.addScriptTag({ path: axeSource })
-  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document)).violations)).toEqual([])
 }
 
 async function search(page: Page, value: string) {
@@ -85,7 +85,7 @@ test('ENG-014 keeps drafts behind discard confirmation and ignores an obsolete s
     await obsoleteRelease
     await route.fulfill({ status: 200, json: {
       assets: [{ id: 'obsolete-id', filename: 'obsolete.png', mimeType: 'image/png', alt: 'Obsolete result', decorative: false, caption: '', credit: '', tags: [], url: null, usages: [] }],
-      total: 1, truncated: false, page: 1, totalPages: 1, pageSize: 24,
+      total: 1, counts: { all: 1, missingAlt: 0, unused: 1, large: 0, bin: 0 }, truncated: false, page: 1, totalPages: 1, pageSize: 24,
     } }).catch(() => undefined)
     markObsoleteRouteDone()
   })
@@ -110,8 +110,11 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   const page = session.page
   const uploadName = `media-ui-${Date.now()}.png`
 
-  await page.getByRole('button', { name: 'Upload new asset' }).first().click()
-  await page.getByLabel('Choose image').setInputFiles({ name: uploadName, mimeType: 'image/png', buffer: png })
+  await expect(page.locator('[data-media-upload]')).toContainText('Drop an image here')
+  await expect(page.getByRole('button', { name: /^All 26$/ })).toBeVisible()
+  const fileChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Upload', exact: true }).click()
+  await (await fileChooser).setFiles({ name: uploadName, mimeType: 'image/png', buffer: png })
   await expect(page.getByRole('button', { name: 'Upload image' })).toBeDisabled()
   await page.getByLabel('Alt text', { exact: false }).first().fill('Blue browser test square')
   await page.getByRole('button', { name: 'Upload image' }).click()
@@ -140,6 +143,7 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   for (const crop of ['hero', 'card', 'square']) await expect(page.locator(`[data-media-crop-preview="${crop}"] img`)).toHaveCSS('object-position', '28% 72%')
 
   await page.locator('#asset-alt').fill('Updated blue browser square')
+  await page.getByText('Caption, credit and tags').click()
   await page.getByLabel('Caption').fill('A caption saved through the Media workspace')
   await page.getByLabel('Credit').fill('Synthetic photographer')
   await page.getByLabel('Tags').fill('browser, regression')
@@ -157,11 +161,12 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   const stableAssetID = await page.locator('[data-media-detail] header span').innerText()
   await page.getByLabel('Replace file').setInputFiles({ name: replacementName, mimeType: 'image/png', buffer: replacementPng })
   await page.locator('[data-media-replacement] button[type="submit"]').click()
-  await expect(page.getByRole('status')).toContainText('Published snapshots retain the previous file')
+  await expect(page.getByRole('status')).toContainText('File replaced')
   await expect(page.locator('[data-media-detail] header span')).toHaveText(stableAssetID)
   await expect(page.locator('[data-media-detail] header')).toContainText('48 × 64')
   await page.reload()
   await search(page, replacementName)
+  await page.getByText('Caption, credit and tags').click()
   await expect(page.locator('[data-media-detail] header span')).toHaveText(stableAssetID)
   await expect(page.locator('[data-media-detail] header')).toContainText('48 × 64')
 
