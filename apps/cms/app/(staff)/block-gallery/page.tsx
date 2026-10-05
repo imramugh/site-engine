@@ -8,7 +8,7 @@ import { serverSessionStrategy } from '../../../src/identity'
 import { StaffShell } from '../../components/staff-shell'
 import { BlockGallery } from './block-gallery'
 import { loadAdminBranding } from '../../../src/admin-branding'
-import { loadInitialPreviewBaseline } from '../../../src/review-preview'
+import { loadPublishedPreviewBaseline } from '../../../src/review-preview'
 import { getInstalledTheme, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 
 export default async function BlockGalleryPage() {
@@ -18,7 +18,7 @@ export default async function BlockGalleryPage() {
   const [pages, sets, baseline, branding, registry] = await Promise.all([
     payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
     payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: user?.id } }, { state: { equals: 'open' } }] }, limit: 100, depth: 0, user, overrideAccess: false }),
-    loadInitialPreviewBaseline(),
+    loadPublishedPreviewBaseline(payload),
     loadAdminBranding(),
     loadThemeRegistry(),
   ])

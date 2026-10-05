@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -7,7 +7,7 @@ import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
-import { boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
+import { loadPublishedPreviewBaseline, boundedJSON, claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob, prepareReviewPreview, renewPreviewRenderLease, workerAuthorized } from '../src/review-preview'
 import { runReviewQuality } from '../src/review-quality'
 import { loadReviewModeData, loadReviewModePages, routeForReviewPreview } from '../src/review-mode'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
@@ -364,4 +364,33 @@ describe('ENG-030 immutable review preview jobs', () => {
     const response = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof }) }), { params: Promise.resolve({ action: 'approve' }) })
     expect(response.status).toBe(200)
   })
+})
+
+
+it('gallery baseline follows the published release instead of the bootstrap file', async () => {
+  const current = await fixture('gallery-current')
+  const initial = baseline()
+  const file = join(directory, 'bootstrap.json')
+  writeFileSync(file, JSON.stringify(initial))
+  const keys = ['INITIAL_PUBLISH_BASELINE_FILE', 'PREVIEW_THEME_VERSION', 'PREVIEW_ENGINE_VERSION', 'PREVIEW_CONTRACT_VERSION'] as const
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]))
+  try {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = file
+    process.env.PREVIEW_THEME_VERSION = versions.themeVersion
+    process.env.PREVIEW_ENGINE_VERSION = versions.engineVersion
+    process.env.PREVIEW_CONTRACT_VERSION = versions.contractVersion
+    const published = await loadPublishedPreviewBaseline(payload)
+    expect(published?.snapshotID).toBe(current.snapshotID)
+    expect(published?.manifest).toEqual(current.live)
+    expect(published?.manifest).not.toEqual(initial)
+    await payload.delete({ collection: 'published-releases', where: { id: { exists: true } }, overrideAccess: true, context: { editorialInternal: true } })
+    const bootstrap = await loadPublishedPreviewBaseline(payload)
+    expect(bootstrap?.sequence).toBe(0)
+    expect(bootstrap?.manifest).toEqual(initial)
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key]
+      else process.env[key] = previous[key]
+    }
+  }
 })

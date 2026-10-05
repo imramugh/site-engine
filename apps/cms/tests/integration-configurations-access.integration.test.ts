@@ -31,7 +31,7 @@ describe('ENG-023 integration configuration access', () => {
     const session = await freshSession(owner.id)
     Object.assign(process.env, {
       OIDC_GOOGLE_ISSUER_URL: 'https://issuer.example.test', OIDC_GOOGLE_CLIENT_ID: 'client', OIDC_GOOGLE_CLIENT_SECRET: 'secret',
-      OAUTH_INTERNAL_ORIGIN: 'http://oauth.internal', OAUTH_INTROSPECTION_SECRET: 'introspection-secret',
+      OAUTH_INTERNAL_ORIGIN: 'http://oauth.example.test', OAUTH_INTROSPECTION_SECRET: 'introspection-secret',
     })
     try {
       const response = await integrationRoute.GET(new Request('http://cms.test/api/integrations', { headers: { cookie: session } }))
