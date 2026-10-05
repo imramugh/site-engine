@@ -24,7 +24,6 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/applications', label: 'Careers', roles: ['owner', 'hiring'] },
   { href: '/editorial', label: 'Reviews', roles: ['owner', 'editor', 'approver'] },
   { href: '/operations', label: 'Change log', roles: ['owner'] },
-  { href: '/retention', label: 'Retention', roles: ['owner'] },
 ]
 
 export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [

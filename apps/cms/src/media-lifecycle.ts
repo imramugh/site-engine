@@ -4,11 +4,11 @@ import { assetUsage } from './media'
 
 type Actor = { id?: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 
-export async function moveAssetToBin(payload: Payload, req: PayloadRequest, actor: Actor | undefined, assetId: string, now = new Date()): Promise<{ status: 'blocked'; usages: Awaited<ReturnType<typeof assetUsage>> } | { status: 'binned'; deleteAfter: string }> {
+export async function moveAssetToBin(payload: Payload, req: PayloadRequest, actor: Actor | undefined, assetId: string, now = new Date(), retentionDays = 30): Promise<{ status: 'blocked'; usages: Awaited<ReturnType<typeof assetUsage>> } | { status: 'binned'; deleteAfter: string }> {
   if (!hasRole(actor, ['owner', 'editor'])) throw new Error('Editor role required.')
   const usages = await assetUsage(payload, req, assetId)
   if (usages.length) return { status: 'blocked', usages }
-  const deleteAfter = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const deleteAfter = new Date(now.getTime() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
   await payload.update({ collection: 'assets', id: assetId, data: { deletedAt: now.toISOString(), deleteAfter }, overrideAccess: true, req, context: { mediaLifecycle: 'bin' } })
   return { status: 'binned', deleteAfter }
 }

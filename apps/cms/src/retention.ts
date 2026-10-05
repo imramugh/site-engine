@@ -1,4 +1,5 @@
-import { open, unlink, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { Payload, PayloadRequest } from 'payload'
 import { applicationStorage } from './applications'
@@ -32,7 +33,8 @@ async function completeJob(payload: Payload, req: PayloadRequest | undefined, id
   await payload.update({ collection: 'retention-purge-jobs', id, data: { state: 'completed', completedAt: new Date().toISOString(), lastError: null, resumeKey: null }, overrideAccess: true, req })
 }
 async function failJob(payload: Payload, req: PayloadRequest | undefined, id: string, attempts: number, error: unknown) {
-  await payload.update({ collection: 'retention-purge-jobs', id, data: { state: 'failed', attempts: attempts + 1, lastError: error instanceof Error ? error.message.slice(0, 500) : 'Storage purge failed.' }, overrideAccess: true, req })
+  const code = error instanceof Error && /ledger/i.test(error.message) ? 'deletion-ledger-unavailable' : 'storage-purge-failed'
+  await payload.update({ collection: 'retention-purge-jobs', id, data: { state: 'failed', attempts: attempts + 1, lastError: code }, overrideAccess: true, req })
 }
 
 /** Only identity and time survive a purge. It intentionally has no content, file key, email, or actor name. */
@@ -41,14 +43,13 @@ export async function writeDeletionTombstone(payload: Payload, req: PayloadReque
   if (!existing.docs[0]) await payload.create({ collection: 'deletion-tombstones', data: { resourceType, resourceID, deletedAt: new Date().toISOString() }, overrideAccess: true, req })
 }
 
-async function appendExternalTombstone(resourceType: 'application' | 'inquiry' | 'media', resourceID: string, deletedAt = new Date().toISOString()) {
+export async function recordDeletionIntent(payload: Payload, req: PayloadRequest | undefined, resourceType: 'application' | 'inquiry' | 'media', resourceID: string, deletedAt = new Date().toISOString()) {
   const file = process.env.RETENTION_TOMBSTONES_FILE
   if (!file || !file.startsWith('/')) throw new Error('Retention deletion ledger is not configured.')
-  const metadata = await stat(file)
-  if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Retention deletion ledger must be a restricted regular file.')
-  const handle = await open(file, 'a')
-  try { await handle.write(`${JSON.stringify({ resourceType, resourceID, deletedAt })}\n`); await handle.sync() } finally { await handle.close() }
+  const handle = await open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW)
+  try { const metadata = await handle.stat(); if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Retention deletion ledger must be a restricted regular file.'); await handle.write(`${JSON.stringify({ resourceType, resourceID, deletedAt })}\n`); await handle.sync() } finally { await handle.close() }
   const directory = await open(resolve(file, '..'), 'r'); try { await directory.sync() } finally { await directory.close() }
+  await writeDeletionTombstone(payload, req, resourceType, resourceID)
 }
 
 async function unlinkResume(key: string) {
@@ -60,7 +61,7 @@ export async function purgeApplication(payload: Payload, id: string, actor: stri
   const application = await payload.findByID({ collection: 'applications', id, depth: 0, overrideAccess: true, req }) as { resumeKey: string }
   const record = await job(payload, req, 'application', id, { resumeKey: application.resumeKey }) as { id: string; attempts?: number }
   try {
-    await appendExternalTombstone('application', id)
+    await recordDeletionIntent(payload, req, 'application', id)
     // Storage goes first. A database record remains readable while its private object cannot be purged.
     await unlinkResume(application.resumeKey)
     await withPayloadTransaction(payload, async (transaction) => {
@@ -78,7 +79,7 @@ async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id:
   try {
     const usages = await assetUsage(payload, req as PayloadRequest, id)
     if (usages.length) return 'skipped'
-    await appendExternalTombstone('media', id)
+    await recordDeletionIntent(payload, req, 'media', id)
     await payload.delete({ collection: 'assets', id, overrideAccess: true, req, context: { retentionPurge: true } })
     await completeJob(payload, req, record.id)
     return 'completed'
@@ -93,16 +94,15 @@ export async function runRetentionCleanup(payload: Payload, now = new Date()): P
   for (const lead of spamLeads.docs) {
     try {
       await withPayloadTransaction(payload, async (req) => {
-        await appendExternalTombstone('inquiry', String(lead.id))
-        await writeDeletionTombstone(payload, req, 'inquiry', String(lead.id))
+        await recordDeletionIntent(payload, req, 'inquiry', String(lead.id))
         req.context.leadSpamDeleteLifecycle = true
         await payload.delete({ collection: 'inquiries', id: lead.id, overrideAccess: true, req })
         await payload.create({ collection: 'audit-events', data: { event: 'retention.spam_purged', detail: { inquiry: lead.id } }, overrideAccess: true, req })
       }); spam += 1
     } catch { failed += 1 }
   }
-  const binned = await payload.find({ collection: 'assets', where: { and: [{ deletedAt: { exists: true } }, { deleteAfter: { less_than_equal: now.toISOString() } }] }, limit: 200, pagination: false, depth: 0, overrideAccess: true })
-  for (const asset of binned.docs) { const outcome = await purgeMedia(payload, undefined, String(asset.id)); if (outcome === 'completed') media += 1; if (outcome === 'failed') failed += 1 }
+  const binned = await payload.find({ collection: 'assets', where: { deletedAt: { exists: true } }, limit: 200, pagination: false, depth: 0, overrideAccess: true })
+  for (const asset of binned.docs) if (retentionEligible(asset.deletedAt as string | null | undefined, now, policy.mediaBinDays)) { const outcome = await purgeMedia(payload, undefined, String(asset.id)); if (outcome === 'completed') media += 1; if (outcome === 'failed') failed += 1 }
   const retry = await payload.find({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, limit: 100, pagination: false, depth: 0, overrideAccess: true })
   for (const item of retry.docs as Array<{ id: string; resourceType: RetentionKind; resourceID: string; attempts?: number }>) {
     if (item.resourceType === 'media') { const outcome = await purgeMedia(payload, undefined, item.resourceID, item.attempts ?? 0); if (outcome === 'failed') failed += 1 }
@@ -117,7 +117,7 @@ export async function reapplyDeletionTombstones(payload: Payload): Promise<numbe
   let applied = 0
   for (const marker of tombstones.docs as Array<{ resourceType: 'application' | 'inquiry' | 'media'; resourceID: string }>) {
     try {
-      if (marker.resourceType === 'application') { await purgeApplication(payload, marker.resourceID, undefined); applied += 1 }
+      if (marker.resourceType === 'application') { const result = await purgeApplication(payload, marker.resourceID, undefined); if (result.state !== 'completed') throw new Error('Deletion replay could not purge an application.'); applied += 1 }
       else if (marker.resourceType === 'inquiry') { await withPayloadTransaction(payload, async (req) => { req.context.leadSpamDeleteLifecycle = true; await payload.delete({ collection: 'inquiries', id: marker.resourceID, overrideAccess: true, req }); applied += 1 }) }
       else { await payload.delete({ collection: 'assets', id: marker.resourceID, overrideAccess: true, context: { retentionPurge: true } }); applied += 1 }
     } catch (error: unknown) { if (!(error && typeof error === 'object' && 'status' in error && error.status === 404)) throw error }
