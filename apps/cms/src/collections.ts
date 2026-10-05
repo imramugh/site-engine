@@ -25,6 +25,15 @@ async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 
     await req.payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
   }
   await req.payload.delete({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, overrideAccess: true, req })
+  if (target === 'application') {
+    const notes = await req.payload.find({ collection: 'audit-events', where: { event: { equals: 'application.note_added' } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    for (const note of notes.docs) {
+      if ((note.detail as { applicationID?: string } | null)?.applicationID === id) {
+        // Preserve the event identity and time, removing the private hiring note.
+        await req.payload.update({ collection: 'audit-events', id: note.id, data: { detail: { applicationID: id, retentionRedacted: true } }, overrideAccess: true, req })
+      }
+    }
+  }
 }
 
 
@@ -552,7 +561,7 @@ export const MailDrafts: CollectionConfig = {
       if (Boolean(requestedLead) === Boolean(application)) throw new Error('A mail draft must belong to one lead or application.')
       if (requestedLead && req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
-      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead', 'application']
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead', 'application', 'threadID']
       // Payload update input is a patch. An omitted draft-bound field must not
       // be treated as an edit when the authorization service only changes state.
       return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data

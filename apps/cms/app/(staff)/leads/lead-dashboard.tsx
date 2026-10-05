@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './lead-workspace.module.css'
+import { PermanentDeleteDialog } from '../permanent-delete-dialog'
 import { MailReplyComposer } from '../mail-reply-composer'
 
 type Assignee = { id: string; name: string; email: string }
@@ -82,7 +83,7 @@ function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, o
       <label>Next action<textarea rows={3} maxLength={5000} value={nextAction} onChange={(event) => setNextAction(event.target.value)} /></label>
       <button className={styles.primary} disabled={saving}>Save lead details</button>
       <button type="button" className={styles.danger} disabled={saving} onClick={() => void onSpam()}>Mark as spam</button>
-      {owner&&<><button type="button" className={styles.danger} onClick={()=>setConfirm(true)}>Permanently delete inquiry</button>{confirm&&<div role="dialog" aria-modal="true" aria-label="Confirm permanent inquiry deletion"><p>Permanently delete {displayName(lead)} ({lead.email})?</p><button type="button" autoFocus onClick={()=>void onPurge()}>Confirm permanent deletion</button><button type="button" onClick={()=>setConfirm(false)}>Cancel</button></div>}</>}
+      {owner&&<><button type="button" className={styles.danger} onClick={()=>setConfirm(true)}>Permanently delete inquiry</button>{confirm && <PermanentDeleteDialog kind="inquiry" identity={`${displayName(lead)} (${lead.email})`} busy={saving} onConfirm={onPurge} onCancel={() => setConfirm(false)} />}</>}
     </form>
   </aside>
 }
@@ -170,7 +171,16 @@ export function LeadDashboard({ owner = false }: { owner?: boolean }) {
     } catch { setError('The spam submission could not be deleted. Try again.') }
     finally { setSaving(false) }
   }
-  async function purgeInquiry() { if (!active) return; setSaving(true); const response=await fetch('/api/retention',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({inquiryID:active.id,confirm:'permanent-delete'})}); if(!response.ok)setError((await response.json() as {error?:string}).error??'Inquiry could not be deleted.');else{setSelected(null);setMessage('Inquiry permanently deleted.');await load(filters,false,mode)};setSaving(false) }
+  async function purgeInquiry() {
+    if (!active) return
+    setSaving(true); setError('')
+    try {
+      const response = await fetch('/api/retention', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inquiryID: active.id, confirm: 'permanent-delete' }) })
+      if (!response.ok) throw new Error('The inquiry could not be deleted. Check your session and try again.')
+      setSelected(null); setMessage('Inquiry permanently deleted.'); await load(filters, false, mode)
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Deletion failed.') }
+    finally { setSaving(false) }
+  }
 
   return <main className={styles.workspace} aria-busy={loading || saving} data-leads-workspace>
     <h1 className={styles.srOnly}>Lead pipeline</h1>

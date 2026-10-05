@@ -122,6 +122,7 @@ export async function purgeRetainedInquiry(payload: Payload, id: string, actor: 
 async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id: string, attempts = 0): Promise<'completed' | 'failed' | 'skipped'> {
   const record = await job(payload, req, 'media', id) as { id: string; state?: string }
   try {
+    await payload.findByID({ collection: 'assets', id, depth: 0, overrideAccess: true, req })
     const references = await retentionMediaReferences(payload, req, id)
     if (references.length) return 'skipped'
     const versionIDs = await assetVersionIDsForRetention(payload, req, id)

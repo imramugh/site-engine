@@ -1,0 +1,9 @@
+.dialog { width: min(32rem, calc(100vw - 2rem)); border: 1px solid #d1d7dc; border-radius: 8px; padding: 24px; color: #172c3b; background: #fff; box-shadow: 0 16px 60px #001b3040; }
+.dialog::backdrop { background: #001b3080; }
+.dialog h2 { margin: 0 0 16px; font-size: 20px; }
+.dialog p { line-height: 1.55; overflow-wrap: anywhere; }
+.actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+.actions button { border: 1px solid #8a98a4; border-radius: 4px; padding: 10px 14px; font: inherit; cursor: pointer; background: #fff; color: #172c3b; }
+.actions .danger { background: #a52222; border-color: #a52222; color: #fff; }
+.actions button:focus-visible { outline: 3px solid #2278ad; outline-offset: 3px; }
+.actions button:disabled { cursor: wait; opacity: .65; }
