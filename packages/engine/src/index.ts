@@ -53,6 +53,62 @@ export function deriveRoutes(input: SiteSnapshot, homepageId = input.settings.ho
 
 export function childrenOf(route: PublicRoute, model: RouteModel): PublicRoute[] { return model.routes.filter((candidate) => candidate.page.parentId === route.page.id); }
 export function serviceNavigation(model: RouteModel): PublicRoute[] { return model.routes.filter((route) => route.page.template === 'service').sort((a, b) => a.page.title.localeCompare(b.page.title)); }
+
+export type ResolvedNavigationItem = { label: string; style: 'link' | 'button'; href?: string; unavailableReason?: string };
+export type ResolvedFooterColumn =
+  | { kind: 'links' | 'section-pillars'; heading: string; items: ResolvedNavigationItem[] }
+  | { kind: 'contact'; heading: string; items: Array<{ field: 'phone' | 'email' | 'address' | 'linkedIn'; label: string; value: string; href?: string }> };
+export type ResolvedSiteNavigation = { header: ResolvedNavigationItem[]; footer: { columns: ResolvedFooterColumn[]; bottomLinks: ResolvedNavigationItem[]; copyright?: string } };
+
+/** Resolves reviewed navigation without themes reimplementing ordering, missing-target,
+ * contact visibility, or current-year behavior. Unavailable entries deliberately
+ * have no href and remain present so a theme can explain their state accessibly. */
+export function resolveSiteNavigation(input: SiteSnapshot, year = new Date().getUTCFullYear()): ResolvedSiteNavigation {
+  const snapshot = SiteSnapshotSchema.parse(input);
+  const navigation = snapshot.settings.navigation;
+  if (!navigation) return { header: [], footer: { columns: [], bottomLinks: [] } };
+  const model = deriveRoutes(snapshot);
+  const routeByPage = new Map(model.routes.map(route => [route.page.id, route]));
+  const sections = new Map(snapshot.settings.sections.map(section => [section.id, section]));
+  const pages = new Map(snapshot.pages.map(page => [page.id, page]));
+  const resolveReference = (reference: (typeof navigation.header)[number] | NonNullable<typeof navigation.footer.bottomLinks>[number]): ResolvedNavigationItem => {
+    const style = 'style' in reference ? reference.style : 'link';
+    if (reference.kind === 'unavailable') return { label: reference.label, style, unavailableReason: reference.reason };
+    const pageID = reference.kind === 'page' ? reference.id : sections.get(reference.id)?.landingPageId;
+    const href = pageID ? routeByPage.get(pageID)?.path : undefined;
+    return href ? { label: reference.label, style, href } : { label: reference.label, style, unavailableReason: 'This destination is not published.' };
+  };
+  const columns: ResolvedFooterColumn[] = navigation.footer.columns.map(column => {
+    if (column.kind === 'section-pillars') {
+      const section = sections.get(column.sectionId)!;
+      const items = section.pageIds.flatMap(pageID => {
+        const page = pages.get(pageID); const route = routeByPage.get(pageID);
+        const isRootPillar = !page?.parentId || page.parentId === section.landingPageId;
+        return page?.status === 'published' && page.template === 'pillar' && isRootPillar && route ? [{ label: page.title, style: 'link' as const, href: route.path }] : [];
+      });
+      return { kind: 'section-pillars', heading: column.heading, items };
+    }
+    if (column.kind === 'contact') {
+      const address = snapshot.settings.address;
+      const values = {
+        phone: snapshot.settings.contactPhone ? { label: 'Phone', value: snapshot.settings.contactPhone, href: `tel:${snapshot.settings.contactPhone.replace(/[^+\d]/g, '')}` } : undefined,
+        email: snapshot.settings.contactEmail ? { label: 'Email', value: snapshot.settings.contactEmail, href: `mailto:${snapshot.settings.contactEmail}` } : undefined,
+        address: address ? { label: 'Address', value: [address.streetAddress, address.addressLocality, address.addressRegion, address.postalCode, address.addressCountry].filter(Boolean).join(', ') } : undefined,
+        linkedIn: snapshot.settings.linkedIn ? { label: 'LinkedIn', value: snapshot.settings.linkedIn, href: snapshot.settings.linkedIn } : undefined,
+      } as const;
+      return { kind: 'contact', heading: column.heading, items: column.fields.flatMap(field => values[field] ? [{ field, ...values[field]! }] : []) };
+    }
+    return { kind: 'links', heading: column.heading, items: column.links.map(resolveReference) };
+  });
+  return {
+    header: navigation.header.map(resolveReference),
+    footer: {
+      columns,
+      bottomLinks: (navigation.footer.bottomLinks ?? []).map(resolveReference),
+      ...(navigation.footer.copyright ? { copyright: navigation.footer.copyright.replace('{year}', String(year)) } : {}),
+    },
+  };
+}
 export {
   effectiveMotion,
   motionPreferenceKey,

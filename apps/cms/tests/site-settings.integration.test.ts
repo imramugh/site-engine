@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
-import { deriveRoutes } from '@site-engine/engine'
+import { deriveRoutes, resolveSiteNavigation } from '@site-engine/engine'
 import { buildCandidate } from '../src/publishing'
 import { snapshotMediaReference } from '../src/media'
 import sharp from 'sharp'
@@ -55,5 +55,32 @@ describe('reviewed site settings singleton', () => {
     expect(candidate.settings).toMatchObject({ siteName: 'Reviewed Settings Studio', legalName: 'Reviewed Settings Studio Incorporated', homepageId: pageID, defaultLocale: 'en-CA', organizationType: 'professional-service', logos: { primaryLight: { id: asset.id }, symbolDark: { id: asset.id } }, address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/reviewed-settings-studio', incident: { label: 'Incident in progress?' }, navigation, seoDescription: 'A reviewed synthetic description.', searchEnabled: true })
     await expect(payload.update({ collection: 'site-settings', id: settings.id, data: { navigation: { ...navigation, header: [{ kind: 'page', id: randomUUID(), label: 'Missing', style: 'link' }] } }, draft: true, user: owner, overrideAccess: false })).rejects.toThrow(/unavailable page/)
     expect(base.settings.siteName).toBe('Sample Studio')
+    await payload.update({ collection: 'change-sets', id: sets.docs[0]!.id, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.delete({ collection: 'site-settings', id: settings.id, overrideAccess: true, context: { editorialInternal: true } })
+  })
+  it('captures reordered 1.6 navigation and resolves only visible generated pillars from SQLite-backed content', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `navigation-owner-${randomUUID()}@example.test`, name: 'Navigation owner', roles: ['owner'] }, overrideAccess: true })
+    const sectionID = randomUUID(), homeID = randomUUID(), firstID = randomUUID(), secondID = randomUUID(), nestedID = randomUUID(), draftID = randomUUID()
+    const section = await payload.create({ collection: 'sections', data: { id: sectionID, name: 'Services', summary: 'Synthetic generated navigation section.', slug: `services-${sectionID.slice(0, 8)}`, allowedTemplates: ['landing', 'pillar'] }, overrideAccess: true })
+    const page = (id: string, title: string, slug: string, template: 'landing' | 'pillar', parentId?: string) => payload.create({ collection: 'pages', data: { id, sectionId: sectionID, parentId, title, summary: `${title} summary for generated navigation.`, slug, template, blocks: template === 'landing' ? structuredClone(neutralFixture.pages[0]!.blocks) : [] }, draft: true, overrideAccess: true })
+    await page(homeID, 'Home', 'home', 'landing'); await page(firstID, 'First pillar', 'first', 'pillar', homeID); await page(secondID, 'Second pillar', 'second', 'pillar', homeID); await page(nestedID, 'Nested pillar', 'nested', 'pillar', firstID); await page(draftID, 'Draft pillar', 'draft', 'pillar', homeID)
+    await payload.update({ collection: 'sections', id: section.id, data: { landingPageId: homeID, pageIds: [secondID, nestedID, draftID, firstID, homeID] }, draft: true, overrideAccess: true })
+    const base = structuredClone(neutralFixture); base.settings.contractVersion = '1.6.0'; base.settings.sections = [{ id: sectionID, name: 'Services', summary: 'Synthetic generated navigation section.', slug: `services-${sectionID.slice(0, 8)}`, allowedTemplates: ['landing', 'pillar'], landingPageId: homeID, pageIds: [secondID, nestedID, draftID, firstID, homeID] }]; base.settings.homepageId = homeID
+    const source = structuredClone(base.pages[0]!); base.pages = [
+      { ...source, id: homeID, sectionId: sectionID, title: 'Home', slug: 'home', template: 'landing', status: 'published' },
+      { ...source, id: firstID, sectionId: sectionID, parentId: homeID, title: 'First pillar', slug: 'first', template: 'pillar', status: 'published', blocks: [] },
+      { ...source, id: secondID, sectionId: sectionID, parentId: homeID, title: 'Second pillar', slug: 'second', template: 'pillar', status: 'published', blocks: [] },
+      { ...source, id: nestedID, sectionId: sectionID, parentId: firstID, title: 'Nested pillar', slug: 'nested', template: 'pillar', status: 'published', blocks: [] },
+      { ...source, id: draftID, sectionId: sectionID, parentId: homeID, title: 'Draft pillar', slug: 'draft', template: 'pillar', status: 'draft', blocks: [] },
+    ]
+    const navigation = { header: [{ kind: 'page' as const, id: secondID, label: 'Second', style: 'link' as const }, { kind: 'unavailable' as const, label: 'Insights', reason: 'Insights are not published.', style: 'link' as const }, { kind: 'page' as const, id: homeID, label: 'Home', style: 'button' as const }], footer: { columns: [{ kind: 'section-pillars' as const, heading: 'Services', sectionId: sectionID }, { kind: 'contact' as const, heading: 'Contact', fields: ['email' as const, 'address' as const] }], bottomLinks: [{ kind: 'unavailable' as const, label: 'Privacy', reason: 'Privacy is not published.' }], copyright: '© {year} Navigation Studio' } }
+    await payload.create({ collection: 'site-settings', data: { key: 'active', siteName: 'Navigation Studio', homepageId: homeID, defaultLocale: 'en-CA', contactEmail: 'hello@example.test', navigation }, draft: true, user: owner, overrideAccess: false })
+    const sets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 1, sort: '-createdAt', overrideAccess: true, depth: 0 })
+    const change = (sets.docs[0]!.changes as Array<{ collection: string; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null }>).find(item => item.collection === 'site-settings')!
+    const candidate = buildCandidate(base, [change] as never, [`site-settings:${change.id}`], { themeVersion: '1.6.0', engineVersion: 'test', contractVersion: '1.6.0' })
+    expect(candidate.settings.navigation?.header.map(item => item.label)).toEqual(['Second', 'Insights', 'Home'])
+    expect(resolveSiteNavigation(candidate, 2032).footer.columns[0]).toMatchObject({ kind: 'section-pillars', items: [{ label: 'Second pillar' }, { label: 'First pillar' }] })
+    expect(resolveSiteNavigation(candidate, 2032).footer.columns[1]).toMatchObject({ kind: 'contact', items: [{ field: 'email' }] })
+    expect(resolveSiteNavigation(candidate, 2032).footer.copyright).toBe('© 2032 Navigation Studio')
   })
 })

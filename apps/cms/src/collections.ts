@@ -897,10 +897,16 @@ export const SiteSettings: CollectionConfig = {
       const parsed = SiteSettingsDraftSchema.safeParse(editable)
       contractError(parsed, req, 'site-settings')
       if (parsed.success && parsed.data.navigation) {
-        const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => column.links)]
+        const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => 'links' in column ? column.links : []), ...(parsed.data.navigation.footer.bottomLinks ?? [])]
         for (const reference of references) {
+          if (reference.kind === 'unavailable') continue
           try { await req.payload.findByID({ collection: reference.kind === 'page' ? 'pages' : 'sections', id: reference.id, depth: 0, overrideAccess: true, req }) }
           catch { throw new Error(`Site navigation references an unavailable ${reference.kind}.`) }
+        }
+        for (const column of parsed.data.navigation.footer.columns) {
+          if (column.kind !== 'section-pillars') continue
+          try { await req.payload.findByID({ collection: 'sections', id: column.sectionId, depth: 0, overrideAccess: true, req }) }
+          catch { throw new Error('Generated site navigation references an unavailable section.') }
         }
       }
       return {
