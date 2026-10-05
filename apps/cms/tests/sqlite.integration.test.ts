@@ -9,7 +9,7 @@ import { handleOAuthSessionBridge } from '../src/oauth-session-bridge'
 import sharp from 'sharp'
 import { mediaStorageDirectory, snapshotMediaReference } from '../src/media'
 import { moveAssetToBin, restoreAssetFromBin } from '../src/media-lifecycle'
-import { transitionChangeSet } from '../src/editorial'
+import { markStaleIfNeeded, transitionChangeSet } from '../src/editorial'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 
@@ -384,8 +384,15 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     expect(replaced.currentFile).toMatchObject({ originalFilename: 'workspace-replacement.png', filename: afterReplacement.filename })
     expect(afterReplacement.filename).not.toBe(beforeReplacement.filename)
     const replacementSets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
-    const replacementChange = replacementSets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
-    expect(replacementChange?.after).toMatchObject({ id: asset.id, filename: afterReplacement.filename, sha256: afterReplacement.sha256, width: 48, height: 64 })
+    const replacementSet = replacementSets.docs.find((set) => Array.isArray(set.changes) && (set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }>).some((change) => change.collection === 'assets' && change.id === asset.id && change.after?.filename === afterReplacement.filename))
+    const replacementChange = (replacementSet?.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> | undefined)?.find((change) => change.collection === 'assets' && change.id === asset.id)
+    expect(replacementChange?.after).toMatchObject({ id: asset.id, filename: afterReplacement.filename, sha256: afterReplacement.sha256, width: 48, height: 64, focalX: 28, focalY: 72 })
+    expect(replacementSet).toBeTruthy()
+    const revalidatedReplacement = await withPayloadTransaction(payload, (req) => {
+      req.user = owner as never
+      return markStaleIfNeeded(payload, replacementSet as unknown as Record<string, unknown>, req)
+    })
+    expect(revalidatedReplacement.state).toBe('open')
     const replacementSearch = await (await mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-replacement.png', { headers: ownerHeaders }))).json() as { assets: Array<{ id: string; filename: string }> }
     expect(replacementSearch.assets).toEqual([expect.objectContaining({ id: asset.id, filename: 'workspace-replacement.png' })])
     expect(existsSync(`${mediaStorageDirectory()}/${beforeReplacement.filename}`)).toBe(true)
