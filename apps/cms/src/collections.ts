@@ -525,7 +525,7 @@ export const NotificationDeliveries: CollectionConfig = {
     { name: 'outbox', type: 'relationship', relationTo: 'notification-outbox', required: true },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true },
     { name: 'recipient', type: 'json', required: true },
-    { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'processing', 'delivered', 'retryable', 'unknown', 'unsupported'] },
+    { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'processing', 'delivered', 'retryable', 'failed', 'unknown', 'unsupported'] },
     { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0 },
     { name: 'nextAttemptAt', type: 'date', required: true },
     { name: 'leaseToken', type: 'text' }, { name: 'leaseExpiresAt', type: 'date' },
