@@ -859,6 +859,10 @@ export interface Inquiry {
   notes?: string | null;
   assignee?: (string | null) | User;
   nextAction?: string | null;
+  /**
+   * Optional follow-up due date.
+   */
+  nextActionDueAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2164,6 +2168,7 @@ export interface InquiriesSelect<T extends boolean = true> {
   notes?: T;
   assignee?: T;
   nextAction?: T;
+  nextActionDueAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }
