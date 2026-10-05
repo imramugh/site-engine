@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 import { createRequire } from 'node:module'
 
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
@@ -12,6 +12,26 @@ async function session(browser: Browser, token: string) {
 async function axe(page: Page) {
   await page.addScriptTag({ path: axeSource })
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+}
+
+async function attachThemeFontEvidence(page: Page, testInfo: TestInfo) {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    await cdp.send('DOM.enable'); await cdp.send('CSS.enable')
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true })
+    const evidence = []
+    for (const [name, selector] of [['theme heading', '[data-theme-card] h3'], ['theme body', '[data-theme-card] p']] as const) {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      expect(nodeId, `${name} font target exists`).toBeTruthy()
+      const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+      expect(fonts.length, `${name} has a rendered platform font`).toBeGreaterThan(0)
+      evidence.push({ name, selector, fonts })
+    }
+    await testInfo.attach('Theme rendered platform fonts', { body: Buffer.from(JSON.stringify(evidence, null, 2)), contentType: 'application/json' })
+    if (await page.locator('link[href="/admin-branding/admin-branding.css"]').count()) {
+      expect(evidence.every(({ fonts }) => fonts.some(font => font.isCustomFont && font.familyName.startsWith('IBM Plex Sans'))), JSON.stringify(evidence)).toBe(true)
+    }
+  } finally { await cdp.detach() }
 }
 
 test('Site workspace captures real settings, redirects, and navigation into an owned draft', async ({ browser }, testInfo) => {
@@ -187,7 +207,24 @@ test('Site workspace captures real settings, redirects, and navigation into an o
 
   await owner.page.getByRole('button', { name: 'Theme' }).click()
   await expect(owner.page.getByRole('heading', { name: 'Themes' })).toBeVisible()
+  await owner.page.setViewportSize({ width: 1440, height: 1000 })
+  const themePanel = owner.page.locator('[data-site-panel="theme"]')
+  const embeddedTheme = owner.page.locator('[data-theme-embedded="true"]')
+  for (const target of [themePanel, embeddedTheme, owner.page.locator('[data-theme-grid]')]) {
+    await expect(target).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    await expect(target).toHaveCSS('border-top-width', '0px')
+    await expect(target).toHaveCSS('border-radius', '0px')
+  }
+  await expect(themePanel).toHaveCSS('padding-left', '0px')
+  await expect(embeddedTheme).toHaveCSS('padding-left', '0px')
+  await attachThemeFontEvidence(owner.page, testInfo)
+  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
+  const themeDesktop = testInfo.outputPath('site-theme-1440.png'); await owner.page.screenshot({ path: themeDesktop, fullPage: true }); await testInfo.attach('Site Theme 1440', { path: themeDesktop, contentType: 'image/png' })
   await axe(owner.page)
+
+  await owner.page.setViewportSize({ width: 390, height: 844 })
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
+  const themeMobile = testInfo.outputPath('site-theme-390.png'); await owner.page.screenshot({ path: themeMobile, fullPage: true }); await testInfo.attach('Site Theme 390', { path: themeMobile, contentType: 'image/png' })
 
   // Clear the transient navigation save notice before the source-comparison
   // capture while retaining the populated redirect through the draft API.

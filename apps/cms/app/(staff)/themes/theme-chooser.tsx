@@ -96,7 +96,7 @@ export function ThemeChooser({ embedded = false }: { embedded?: boolean }) {
   }
 
   const Wrapper = embedded ? 'div' : 'main'
-  return <Wrapper data-theme-chooser className={styles.workspace} aria-busy={!data || busy}>
+  return <Wrapper data-theme-chooser data-theme-embedded={embedded ? 'true' : undefined} className={`${styles.workspace} ${embedded ? styles.embedded : ''}`} aria-busy={!data || busy}>
     {embedded
       ? <h2 className={styles.srOnly}>Themes</h2>
       : <header className={styles.heading}><div><h1>Themes</h1><p>Choose how the current content is presented, then review the exact result before publishing.</p></div><a href="/editorial">Editorial review</a></header>}
