@@ -320,7 +320,7 @@ describe('static snapshot renderer', () => {
     const jobID = '12121212-1212-4212-8212-121212121212';
     const inquiryID = '13131313-1313-4313-8313-131313131313';
     section.allowedTemplates.push('standard', 'job'); section.pageIds.push(inquiryID, jobID);
-    custom.pages.push({ id: inquiryID, sectionId: section.id, parentId: custom.pages.find((page) => page.slug === 'docs')!.id, title: 'Custom theme inquiry', summary: 'A host-owned inquiry form.', slug: 'custom-theme-inquiry', template: 'standard', status: 'published', blocks: [{ id: '14141414-1414-4414-8414-141414141414', type: 'contact', heading: 'Custom theme inquiry', body: 'The generic host owns this form.', inquiryForm: true, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] });
+    custom.pages.push({ id: inquiryID, sectionId: section.id, parentId: custom.pages.find((page) => page.slug === 'docs')!.id, title: 'Custom theme inquiry', summary: 'A host-owned inquiry form.', slug: 'custom-theme-inquiry', template: 'standard', status: 'published', blocks: [{ id: '14141414-1414-4414-8414-141414141414', type: 'contact', heading: 'Custom theme inquiry', body: 'The generic host owns this form.', inquiryForm: true, inquiryTopicLabel: 'Inquiry reason', inquiryTopics: [{ value: 'consultation', label: 'Synthetic consultation' }, { value: 'active-incident', label: 'Synthetic incident' }, { value: 'service', label: 'Synthetic service' }], inquiryConsentLabel: 'I agree that the organization may respond to this inquiry.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] });
     custom.pages.push({ id: jobID, sectionId: section.id, parentId: custom.pages.find((page) => page.slug === 'docs')!.id, title: 'Custom theme job', summary: 'A job rendered by the generic host.', slug: 'custom-theme-job', template: 'job', status: 'published', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' } } });
     const [customBuild, customPreviewBuild, defaultBuild] = await Promise.all([
       renderer.buildSnapshot({ input: await writeSnapshot(root, custom, 'custom-theme.json'), publicOrigin: PUBLIC_ORIGIN, basePath: '/', outputRoot: root, themeComponentsRoot: customComponents }),
@@ -338,8 +338,8 @@ describe('static snapshot renderer', () => {
     expect(await readFile(join(customComponents, 'BlockRenderer.astro'), 'utf8')).not.toContain('data-inquiry-form');
     const browser = await chromium.launch(); const publicServer = await staticServer(customBuild.output, '/'); const previewServer = await staticServer(customPreviewBuild.output, BASE_PATH, { 'content-security-policy': "default-src 'self'" });
     try {
-      const publicPage = await browser.newPage(); let publicSubmissions = 0;
-      await publicPage.route('**/api/inquiries', async (request) => { publicSubmissions += 1; await request.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
+      const publicPage = await browser.newPage(); const publicSubmissions: Record<string, unknown>[] = [];
+      await publicPage.route('**/api/inquiries', async (route) => { publicSubmissions.push(route.request().postDataJSON()); await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
       await publicPage.goto(`${publicServer.origin}/docs/custom-theme-inquiry/`, { waitUntil: 'networkidle' });
       expect(await publicPage.locator('html').getAttribute('data-custom-theme-enhancement')).toBe('active');
       await publicPage.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
@@ -354,13 +354,16 @@ describe('static snapshot renderer', () => {
       expect(await publicPage.locator('[data-inquiry-form]').count()).toBe(1);
       expect(await publicPage.locator('[data-inquiry-heading]').count()).toBe(0);
       expect(await publicPage.locator('[data-custom-theme-block="contact"], [data-inquiry-form]').evaluateAll((nodes) => nodes.map((node) => node.matches('[data-custom-theme-block="contact"]') ? 'contact' : 'form'))).toEqual(['contact', 'form']);
+      expect(await publicPage.getByLabel('Inquiry reason').locator('option').allTextContents()).toEqual(['Synthetic consultation', 'Synthetic incident', 'Synthetic service']);
       await publicPage.getByLabel('Name').fill('Custom theme visitor');
       await publicPage.getByLabel('Work email').fill('custom-theme@example.test');
+      await publicPage.getByLabel('Inquiry reason').selectOption('service');
       await publicPage.getByLabel('Message').fill('A synthetic inquiry for the custom theme.');
-      await publicPage.getByLabel(/I consent/).check();
+      await publicPage.getByLabel(/I agree that the organization/).check();
       await publicPage.getByRole('button', { name: 'Send inquiry' }).click();
       await publicPage.getByRole('status').filter({ hasText: 'received' }).waitFor();
-      expect(publicSubmissions).toBe(1);
+      expect(publicSubmissions).toHaveLength(1);
+      expect(publicSubmissions[0]).toMatchObject({ topic: 'service', consent: true, sourcePage: '/docs/custom-theme-inquiry/' });
       const previewPage = await browser.newPage(); let previewSubmissions = 0; const cspErrors: string[] = [];
       previewPage.on('console', (message) => { if (message.type() === 'error') cspErrors.push(message.text()); });
       await previewPage.route('**/api/inquiries', async (request) => { previewSubmissions += 1; await request.abort(); });

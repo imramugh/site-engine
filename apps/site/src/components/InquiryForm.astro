@@ -1,6 +1,8 @@
 ---
-interface Props { enabled: boolean; formId: string; heading?: string; headingId?: string }
-const { enabled, formId, heading, headingId } = Astro.props;
+import type { InquiryTopicValue } from '@site-engine/contract';
+type Topic = { value: InquiryTopicValue; label: string };
+interface Props { enabled: boolean; formId: string; heading?: string; headingId?: string; topicLabel?: string; topics?: Topic[]; consentLabel?: string }
+const { enabled, formId, heading, headingId, topicLabel = 'Topic', topics = [{ value: 'general', label: 'General inquiry' }, { value: 'active-incident', label: 'Active incident' }], consentLabel = 'I consent to the handling of this inquiry.' } = Astro.props;
 ---
 <form id={formId} data-inquiry-form data-preview={!enabled} method="post" action="/api/inquiries" aria-labelledby={heading && headingId ? headingId : undefined}>
   {heading && headingId && <h2 id={headingId} data-inquiry-heading>{heading}</h2>}
@@ -8,9 +10,9 @@ const { enabled, formId, heading, headingId } = Astro.props;
   <p><label>Work email <input name="email" type="email" autocomplete="email" required aria-describedby={`${formId}-email-error`} /></label><span id={`${formId}-email-error`} data-inquiry-field-error="email"></span></p>
   <p><label>Phone (optional) <input name="telephone" type="tel" autocomplete="tel" maxlength="48" aria-describedby={`${formId}-telephone-error`} /></label><span id={`${formId}-telephone-error`} data-inquiry-field-error="telephone"></span></p>
   <p><label>Company (optional) <input name="company" autocomplete="organization" maxlength="160" aria-describedby={`${formId}-company-error`} /></label><span id={`${formId}-company-error`} data-inquiry-field-error="company"></span></p>
-  <p><label>Topic <select name="topic" aria-describedby={`${formId}-topic-error`}><option value="general">General inquiry</option><option value="active-incident">Active incident</option></select></label><span id={`${formId}-topic-error`} data-inquiry-field-error="topic"></span></p>
+  <p><label>{topicLabel} <select name="topic" aria-describedby={`${formId}-topic-error`}>{topics.map((topic) => <option value={topic.value}>{topic.label}</option>)}</select></label><span id={`${formId}-topic-error`} data-inquiry-field-error="topic"></span></p>
   <p><label>Message <textarea name="message" rows="5" maxlength="5000" required aria-describedby={`${formId}-message-error`} /></label><span id={`${formId}-message-error`} data-inquiry-field-error="message"></span></p>
-  <p><label><input name="consent" type="checkbox" required aria-describedby={`${formId}-consent-error`} /> I consent to the handling of this inquiry.</label><span id={`${formId}-consent-error`} data-inquiry-field-error="consent"></span></p>
+  <p><label><input name="consent" type="checkbox" required aria-describedby={`${formId}-consent-error`} /> {consentLabel}</label><span id={`${formId}-consent-error`} data-inquiry-field-error="consent"></span></p>
   <button disabled data-inquiry-submit>Send inquiry</button>
   <p role="alert" data-inquiry-error></p>
   <p role="status" data-inquiry-status></p>

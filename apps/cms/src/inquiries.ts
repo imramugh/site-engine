@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { INQUIRY_TOPIC_VALUES, type InquiryTopicValue } from '@site-engine/contract'
 import type { Payload } from 'payload'
 import { hasRole } from './access'
 import { withPayloadTransaction } from './auth-transaction'
 
-export const inquiryTopics = ['general', 'project', 'partnership', 'active-incident'] as const
+export const inquiryTopics = INQUIRY_TOPIC_VALUES
 export const leadStages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] as const
-export type InquiryTopic = typeof inquiryTopics[number]
+export type InquiryTopic = InquiryTopicValue
 export type LeadStage = typeof leadStages[number]
 
 export type InquiryInput = {

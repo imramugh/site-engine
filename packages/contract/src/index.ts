@@ -65,6 +65,10 @@ const ContactChannelSchema = z.object({ kind: z.enum(['phone', 'email', 'address
   if (channel.kind === 'link' && channel.href && !/^https:\/\//i.test(channel.href)) ctx.addIssue({ code: 'custom', path: ['href'], message: 'Link channels require an https href.' });
 });
 const ContactDetailsSchema = z.object({ incidentCallout: z.object({ label: safeText(80), body: RichTextSchema.max(500), phoneLabel: safeText(80).optional() }).strict().optional(), channels: z.array(ContactChannelSchema).max(4).optional(), nextStepsHeading: safeText(120).optional(), nextSteps: z.array(z.object({ title: safeText(120), body: RichTextSchema.max(500) }).strict()).max(6).optional() }).strict();
+export const INQUIRY_TOPIC_VALUES = ['general', 'project', 'partnership', 'active-incident', 'consultation', 'service', 'retainer', 'careers'] as const;
+export const InquiryTopicValueSchema = z.enum(INQUIRY_TOPIC_VALUES);
+export type InquiryTopicValue = z.infer<typeof InquiryTopicValueSchema>;
+const InquiryTopicOptionSchema = z.object({ value: InquiryTopicValueSchema, label: safeText(80) }).strict();
 const BaseBlockSchema = z.object({ id, hidden: z.boolean().default(false), anchorId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), appearance: AppearanceSchema });
 export const BlockSchemas = {
   hero: BaseBlockSchema.extend({ type: z.literal('hero'), eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), secondaryCta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional(), supportPanel: z.object({ eyebrow: safeText(80).optional(), heading: safeText(120), body: RichTextSchema.max(1_000), cta: LinkSchema.optional(), phoneCta: PhoneCtaSchema.optional() }).strict().optional() }).strict(),
@@ -79,7 +83,7 @@ export const BlockSchemas = {
   relatedServices: BaseBlockSchema.extend({ type: z.literal('relatedServices'), heading: safeText(120), pageIds: z.array(id).max(3), links: z.array(LinkSchema).max(3).optional() }).strict().superRefine((block, ctx) => { if (!block.pageIds.length && !block.links?.length) ctx.addIssue({ code: 'custom', path: ['pageIds'], message: 'Related services require at least one page or link.' }); if (block.pageIds.length + (block.links?.length ?? 0) > 3) ctx.addIssue({ code: 'custom', path: ['links'], message: 'Related services allow at most three combined pages and links.' }); }),
   cta: BaseBlockSchema.extend({ type: z.literal('cta'), heading: safeText(120), body: RichTextSchema.max(500), cta: LinkSchema }).strict(),
   richText: BaseBlockSchema.extend({ type: z.literal('richText'), body: RichTextSchema }).strict(),
-  contact: BaseBlockSchema.extend({ type: z.literal('contact'), heading: safeText(120), body: RichTextSchema.max(500), inquiryForm: z.boolean().optional(), contactDetails: ContactDetailsSchema.optional() }).strict(),
+  contact: BaseBlockSchema.extend({ type: z.literal('contact'), heading: safeText(120), body: RichTextSchema.max(500), inquiryForm: z.boolean().optional(), inquiryTopicLabel: safeText(80).optional(), inquiryTopics: z.array(InquiryTopicOptionSchema).min(1).max(12).optional(), inquiryConsentLabel: safeText(500).optional(), contactDetails: ContactDetailsSchema.optional() }).strict(),
   media: BaseBlockSchema.extend({ type: z.literal('media'), mediaId: id, caption: safeText(300).optional() }).strict(),
   imageText: BaseBlockSchema.extend({ type: z.literal('imageText'), heading: safeText(120), body: RichTextSchema.max(1_000), mediaId: id }).strict(),
   gallery: BaseBlockSchema.extend({ type: z.literal('gallery'), mediaIds: z.array(id).min(1).max(12) }).strict(),
@@ -89,6 +93,10 @@ export const BlockSchemas = {
 export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, BlockSchemas.incidentBar, BlockSchemas.pillarGrid, BlockSchemas.featureGrid, BlockSchemas.splitList, BlockSchemas.chipList, BlockSchemas.testimonials, BlockSchemas.faq, BlockSchemas.callout, BlockSchemas.relatedServices, BlockSchemas.cta, BlockSchemas.richText, BlockSchemas.contact, BlockSchemas.media, BlockSchemas.imageText, BlockSchemas.gallery, BlockSchemas.logoStrip, BlockSchemas.video]).superRefine((block, ctx) => {
   if (['incidentBar', 'contact'].includes(block.type) && block.appearance.backgroundVideo) {
     ctx.addIssue({ code: 'custom', path: ['appearance', 'backgroundVideo'], message: 'Incident and contact blocks cannot use background video' });
+  }
+  if (block.type === 'contact') {
+    if (!block.inquiryForm && (block.inquiryTopicLabel || block.inquiryTopics || block.inquiryConsentLabel)) ctx.addIssue({ code: 'custom', path: ['inquiryForm'], message: 'Inquiry presentation requires the inquiry form.' });
+    if (block.inquiryTopics && new Set(block.inquiryTopics.map((topic) => topic.value)).size !== block.inquiryTopics.length) ctx.addIssue({ code: 'custom', path: ['inquiryTopics'], message: 'Inquiry topic values must be unique.' });
   }
 });
 export type Block = z.infer<typeof BlockSchema>;
