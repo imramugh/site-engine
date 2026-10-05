@@ -4,15 +4,49 @@ import { hasRole } from '../../../../src/access'
 import { serverSessionStrategy } from '../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
-type JobPage = { id: string; title: string; template: string; status: string; jobPosting?: { employmentType?: string; location?: { addressLocality?: string; addressRegion?: string; addressCountry?: string } } }
+
+type JobPage = {
+  id: string
+  sectionId: string
+  title: string
+  template: string
+  status: string
+  jobPosting?: {
+    employmentType?: string
+    validThrough?: string
+    location?: { addressLocality?: string; addressRegion?: string; addressCountry?: string }
+  }
+}
+
+const location = (page: JobPage): string => [page.jobPosting?.location?.addressLocality, page.jobPosting?.location?.addressRegion, page.jobPosting?.location?.addressCountry].filter(Boolean).join(', ')
 
 export async function GET(request: Request): Promise<Response> {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
-  const user = authenticated.user as { roles?: ('owner' | 'hiring')[]; disabled?: boolean } | null
+  const user = authenticated.user as { id?: string; roles?: ('owner' | 'hiring')[]; disabled?: boolean } | null
   if (!user || !hasRole(user, ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403 })
-  const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
-  const pages = (releases.docs[0]?.snapshot as { manifest?: { pages?: JobPage[] } } | undefined)?.manifest?.pages ?? []
-  const jobs = pages.filter((page) => page.template === 'job').map((page) => ({ id: page.id, title: page.title, status: page.status, employmentType: page.jobPosting?.employmentType, location: [page.jobPosting?.location?.addressLocality, page.jobPosting?.location?.addressRegion, page.jobPosting?.location?.addressCountry].filter(Boolean).join(', ') }))
-  return Response.json({ jobs }, { headers: { 'Cache-Control': 'no-store' } })
+  const canPostRole = hasRole(user, ['owner'])
+
+  const [sectionResult, currentResult, releases] = await Promise.all([
+    payload.find({ collection: 'sections', where: { slug: { equals: 'careers' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true }),
+    payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true }),
+  ])
+  const manifest = (releases.docs[0]?.snapshot as { manifest?: { pages?: JobPage[]; settings?: { sections?: Array<{ id: string; slug: string }> } } } | undefined)?.manifest
+  const currentSectionID = sectionResult.docs[0]?.id
+  const publishedSectionID = manifest?.settings?.sections?.find((section) => section.slug === 'careers')?.id
+  const current = (currentResult.docs as unknown as JobPage[]).filter((page) => page.template === 'job' && page.sectionId === currentSectionID)
+  const published = (manifest?.pages ?? []).filter((page) => page.template === 'job' && page.sectionId === publishedSectionID)
+  const currentByID = new Map(current.map((page) => [page.id, page]))
+  const all = [...current, ...published.filter((page) => !currentByID.has(page.id))]
+  const publishedIDs = new Set(published.filter((page) => page.status === 'published').map((page) => page.id))
+
+  const jobs = await Promise.all(all.map(async (page) => {
+    const applicationCount = await payload.count({ collection: 'applications', where: { jobId: { equals: page.id } }, user, overrideAccess: false })
+    const expired = Boolean(page.jobPosting?.validThrough && new Date(page.jobPosting.validThrough).getTime() <= Date.now())
+    const status = page.status === 'archived' || expired ? 'closed' : publishedIDs.has(page.id) ? 'open' : 'draft'
+    return { id: page.id, title: page.title, status, applicationCount: applicationCount.totalDocs, employmentType: page.jobPosting?.employmentType, location: location(page), validThrough: page.jobPosting?.validThrough, ...(canPostRole ? { editHref: `/content-editor/${encodeURIComponent(page.id)}` } : {}) }
+  }))
+  jobs.sort((left, right) => left.title.localeCompare(right.title))
+  return Response.json({ jobs, canPostRole }, { headers: { 'Cache-Control': 'no-store' } })
 }
