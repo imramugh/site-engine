@@ -517,6 +517,22 @@ export const NotificationOutbox: CollectionConfig = {
   ],
 }
 
+/** Per-recipient delivery receipts keep a provider result separate from durable intent. */
+export const NotificationDeliveries: CollectionConfig = {
+  slug: 'notification-deliveries', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'outbox', type: 'relationship', relationTo: 'notification-outbox', required: true },
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true },
+    { name: 'recipient', type: 'json', required: true },
+    { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'processing', 'delivered', 'retryable', 'unknown', 'unsupported'] },
+    { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0 },
+    { name: 'nextAttemptAt', type: 'date', required: true },
+    { name: 'leaseToken', type: 'text' }, { name: 'leaseExpiresAt', type: 'date' },
+    { name: 'providerMessageID', type: 'text' }, { name: 'failureCode', type: 'text' }, { name: 'completedAt', type: 'date' },
+  ],
+}
+
 /** Private operator settings. These collections never participate in editorial capture or publishing. */
 export const NotificationPreferences: CollectionConfig = {
   slug: 'notification-preferences', admin: { hidden: true },

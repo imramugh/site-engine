@@ -42,6 +42,7 @@ import * as migration_20261005_180000_inquiry_spam_lifecycle from './20261005_18
 import * as migration_20261005_181000_application_contact_fields from './20261005_181000_application_contact_fields';
 import * as migration_20261005_190000_retention_privacy from './20261005_190000_retention_privacy';
 import * as migration_20261005_191000_mail_replies from './20261005_191000_mail_replies';
+import * as migration_20261005_200000_notification_delivery from './20261005_200000_notification_delivery';
 
 export const migrations = [
   {
@@ -258,6 +259,11 @@ export const migrations = [
     up: migration_20261005_191000_mail_replies.up,
     down: migration_20261005_191000_mail_replies.down,
     name: '20261005_191000_mail_replies',
+  },
+  {
+    up: migration_20261005_200000_notification_delivery.up,
+    down: migration_20261005_200000_notification_delivery.down,
+    name: '20261005_200000_notification_delivery',
   },
   {
     up: migration_20261005_230000_mail_threads.up,

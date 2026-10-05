@@ -7,6 +7,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import { getPayload } from 'payload'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { prepareReply, authorizeReply, sendReply } from '../src/mail-replies'
+import { dispatchOneNotification } from '../src/notification-dispatch'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-delivery-'))
 Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-delivery-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'http://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAIL_TEST_SMTP_LOOPBACK: '1' })
@@ -87,4 +88,23 @@ test('a reviewed lead reply reaches SMTP once with the exact confirmed content',
   await expect(sendReply(payload, actor, grant.id)).rejects.toThrow('authorization_not_usable')
   expect(messages).toHaveLength(before + 1)
   expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, overrideAccess: true })).toMatchObject({ state: 'sent' })
+})
+
+test('notification delivery uses the notifications mapping once per recipient and never places private intake content on SMTP', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-owner@example.test', name: 'Notify owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification fixture mailbox', primaryAddress: 'notify@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-user', password: 'notify-password' }, owner.id)
+  await service.testSMTPMailbox(payload, mailbox.id, owner.id)
+  await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify@example.test' }, owner.id)
+  const outbox = await payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: { message: 'private inquiry body', resume: 'private-resume-key' }, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email', 'sms'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  const before = messages.length
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'delivered' })
+  expect(messages).toHaveLength(before + 1)
+  expect(messages.at(-1)).toContain(`Reference: ${outbox.id}`)
+  expect(messages.at(-1)).not.toContain('private inquiry body')
+  expect(messages.at(-1)).not.toContain('private-resume-key')
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  const deliveries = await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: outbox.id } }, limit: 0, pagination: false, overrideAccess: true })
+  expect(deliveries.docs).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'delivered' }), expect.objectContaining({ state: 'unsupported', failureCode: 'channel-unsupported' })]))
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  expect(messages).toHaveLength(before + 1)
 })

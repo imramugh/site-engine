@@ -87,6 +87,7 @@ export interface Config {
     'mailbox-test-sends': MailboxTestSend;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'notification-deliveries': NotificationDelivery;
     'notification-preferences': NotificationPreference;
     'urgent-contacts': UrgentContact;
     'mail-threads': MailThread;
@@ -131,6 +132,7 @@ export interface Config {
     'mailbox-test-sends': MailboxTestSendsSelect<false> | MailboxTestSendsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'notification-deliveries': NotificationDeliveriesSelect<false> | NotificationDeliveriesSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
     'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
@@ -905,6 +907,34 @@ export interface NotificationOutbox {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-deliveries".
+ */
+export interface NotificationDelivery {
+  id: string;
+  outbox: string | NotificationOutbox;
+  idempotencyKey: string;
+  recipient:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  state: 'queued' | 'processing' | 'delivered' | 'retryable' | 'unknown' | 'unsupported';
+  attempts: number;
+  nextAttemptAt: string;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  providerMessageID?: string | null;
+  failureCode?: string | null;
+  completedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "notification-preferences".
  */
 export interface NotificationPreference {
@@ -1468,6 +1498,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-outbox';
         value: string | NotificationOutbox;
+      } | null)
+    | ({
+        relationTo: 'notification-deliveries';
+        value: string | NotificationDelivery;
       } | null)
     | ({
         relationTo: 'notification-preferences';
@@ -2097,6 +2131,25 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
   sourceType?: T;
   sourceID?: T;
   availableAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-deliveries_select".
+ */
+export interface NotificationDeliveriesSelect<T extends boolean = true> {
+  outbox?: T;
+  idempotencyKey?: T;
+  recipient?: T;
+  state?: T;
+  attempts?: T;
+  nextAttemptAt?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  providerMessageID?: T;
+  failureCode?: T;
+  completedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }
