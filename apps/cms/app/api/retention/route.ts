@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
+import { withPayloadTransaction } from '../../../src/auth-transaction'
 import { defaultRetentionPolicy, purgeApplication, purgeRetainedInquiry, retentionPolicy } from '../../../src/retention'
 
 export const dynamic = 'force-dynamic'
@@ -32,10 +33,13 @@ export async function PUT(request: Request) {
   try { body = await request.json() } catch { return Response.json({ error: 'Send a valid policy.' }, { status: 400, headers: noStore }) }
   const valid = (value: unknown) => Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 365
   if (!valid(body.spamDays) || !valid(body.mediaBinDays) || Object.keys(body).some(key => !['spamDays', 'mediaBinDays'].includes(key))) return Response.json({ error: 'Retention periods must be whole days between 1 and 365.' }, { status: 422, headers: noStore })
-  const current = await payload.find({ collection: 'retention-settings', limit: 1, depth: 0, overrideAccess: true })
+  const saved = await withPayloadTransaction(payload, async req => {
+    const current = await payload.find({ collection: 'retention-settings', limit: 1, depth: 0, overrideAccess: true, req })
   const data = { key: 'default', spamDays: Number(body.spamDays), mediaBinDays: Number(body.mediaBinDays) }
-  const saved = current.docs[0] ? await payload.update({ collection: 'retention-settings', id: current.docs[0].id, data, overrideAccess: true }) : await payload.create({ collection: 'retention-settings', data, overrideAccess: true })
-  await payload.create({ collection: 'audit-events', data: { event: 'retention.policy_changed', user: actor.id, actor: actor.id, detail: { spamDays: data.spamDays, mediaBinDays: data.mediaBinDays } }, overrideAccess: true })
+  const saved = current.docs[0] ? await payload.update({ collection: 'retention-settings', id: current.docs[0].id, data, overrideAccess: true, req }) : await payload.create({ collection: 'retention-settings', data, overrideAccess: true, req })
+  await payload.create({ collection: 'audit-events', data: { event: 'retention.policy_changed', user: actor.id, actor: actor.id, detail: { spamDays: data.spamDays, mediaBinDays: data.mediaBinDays } }, overrideAccess: true, req })
+    return saved
+  })
   return Response.json({ policy: { ...defaultRetentionPolicy, spamDays: saved.spamDays, mediaBinDays: saved.mediaBinDays } }, { headers: noStore })
 }
 

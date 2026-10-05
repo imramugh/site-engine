@@ -60,7 +60,7 @@ export async function recordDeletionIntent(payload: Payload, req: PayloadRequest
   const file = process.env.RETENTION_TOMBSTONES_FILE
   if (!file || !file.startsWith('/')) throw new Error('Retention deletion ledger is not configured.')
   const handle = await open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW)
-  try { const metadata = await handle.stat(); if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Retention deletion ledger must be a restricted regular file.'); await handle.write(`${JSON.stringify({ resourceType, resourceID, deletedAt })}\n`); await handle.sync() } finally { await handle.close() }
+  try { const metadata = await handle.stat(); if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Retention deletion ledger must be a restricted regular file.'); await handle.writeFile(`${JSON.stringify({ resourceType, resourceID, deletedAt })}\n`); await handle.sync() } finally { await handle.close() }
   const directory = await open(resolve(file, '..'), 'r'); try { await directory.sync() } finally { await directory.close() }
   await writeDeletionTombstone(payload, req, resourceType, resourceID)
 }
@@ -72,7 +72,8 @@ async function unlinkResume(key: string) {
 
 async function purgeApplicationUnlocked(payload: Payload, id: string, actor: string | undefined, req?: PayloadRequest): Promise<{ state: 'completed' | 'failed'; jobID: string }> {
   const record = await job(payload, req, 'application', id) as { id: string; attempts?: number; state?: string }
-  if (record.state === 'completed') return { state: 'completed', jobID: record.id }
+  // Even a completed job must recheck the record: an older restored snapshot
+  // can contain data that the independent deletion ledger says to remove.
   try {
     const application = await payload.findByID({ collection: 'applications', id, depth: 0, overrideAccess: true, req }) as { resumeKey: string }
     await recordDeletionIntent(payload, req, 'application', id)
@@ -102,10 +103,10 @@ export async function purgeApplication(payload: Payload, id: string, actor: stri
 
 /** Owner-requested retained-inquiry deletion. Spam cleanup uses its separate automatic lifecycle. */
 export async function purgeRetainedInquiry(payload: Payload, id: string, actor: string | undefined): Promise<void> {
-  await recordDeletionIntent(payload, undefined, 'inquiry', id)
   await withPayloadTransaction(payload, async (req) => {
     const current = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req }) as { spam?: boolean }
     if (current.spam) throw new Error('Spam inquiries use the spam deletion lifecycle.')
+    await recordDeletionIntent(payload, req, 'inquiry', id)
     const drafts = await payload.find({ collection: 'mail-drafts', where: { lead: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
     for (const draft of drafts.docs) {
       const grants = await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
@@ -120,14 +121,15 @@ export async function purgeRetainedInquiry(payload: Payload, id: string, actor: 
 
 async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id: string, attempts = 0): Promise<'completed' | 'failed' | 'skipped'> {
   const record = await job(payload, req, 'media', id) as { id: string; state?: string }
-  if (record.state === 'completed') return 'completed'
   try {
     const references = await retentionMediaReferences(payload, req, id)
     if (references.length) return 'skipped'
     const versionIDs = await assetVersionIDsForRetention(payload, req, id)
     await recordDeletionIntent(payload, req, 'media', id)
-    await payload.delete({ collection: 'assets', id, overrideAccess: true, req, context: { retentionPurge: true } })
+    // Keep the parent relationship until every immutable file version is gone.
+    // If storage fails midway, the next attempt can still discover remaining bytes.
     for (const versionID of versionIDs) await payload.delete({ collection: 'asset-file-versions', id: versionID, overrideAccess: true, req, context: { retentionMediaGC: true } })
+    await payload.delete({ collection: 'assets', id, overrideAccess: true, req, context: { retentionPurge: true } })
     await completeJob(payload, req, record.id)
     return 'completed'
   } catch (error) {
@@ -136,25 +138,43 @@ async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id:
   }
 }
 
+async function purgeSpamInquiry(payload: Payload, id: string, cutoff: string): Promise<'completed' | 'failed' | 'skipped'> {
+  const record = await job(payload, undefined, 'spam-inquiry', id) as { id: string; attempts?: number }
+  try {
+    return await withPayloadTransaction(payload, async (req) => {
+      const lead = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req })
+      // Recheck after claiming the job: an Owner may have restored this lead.
+      if (!lead.spam || !lead.spamMarkedAt || lead.spamMarkedAt > cutoff) return 'skipped' as const
+      await recordDeletionIntent(payload, req, 'inquiry', id)
+      req.context.leadSpamDeleteLifecycle = true
+      await payload.delete({ collection: 'inquiries', id, overrideAccess: true, req })
+      await payload.create({ collection: 'audit-events', data: { event: 'retention.spam_purged', detail: { inquiry: id } }, overrideAccess: true, req })
+      await completeJob(payload, req, record.id)
+      return 'completed' as const
+    })
+  } catch (error) {
+    if (isNotFound(error) && await hasTombstone(payload, undefined, 'inquiry', id)) { await completeJob(payload, undefined, record.id); return 'completed' }
+    await failJob(payload, undefined, record.id, record.attempts ?? 0, error)
+    return 'failed'
+  }
+}
+
 /** Worker entrypoint. Call on a schedule; it never runs from an admin read request. */
 export async function runRetentionCleanup(payload: Payload, now = new Date()): Promise<{ spam: number; media: number; failed: number }> {
   const policy = await retentionPolicy(payload)
   let spam = 0; let media = 0; let failed = 0
-  const spamLeads = await payload.find({ collection: 'inquiries', where: { and: [{ spam: { equals: true } }, { spamMarkedAt: { less_than_equal: new Date(now.getTime() - policy.spamDays * day).toISOString() } }] }, limit: 200, pagination: false, depth: 0, overrideAccess: true })
+  const spamCutoff = new Date(now.getTime() - policy.spamDays * day).toISOString()
+  const spamLeads = await payload.find({ collection: 'inquiries', where: { and: [{ spam: { equals: true } }, { spamMarkedAt: { less_than_equal: spamCutoff } }] }, sort: 'spamMarkedAt', limit: 200, pagination: false, depth: 0, overrideAccess: true })
   for (const lead of spamLeads.docs) {
-    try {
-      await withPayloadTransaction(payload, async (req) => {
-        await recordDeletionIntent(payload, req, 'inquiry', String(lead.id))
-        req.context.leadSpamDeleteLifecycle = true
-        await payload.delete({ collection: 'inquiries', id: lead.id, overrideAccess: true, req })
-        await payload.create({ collection: 'audit-events', data: { event: 'retention.spam_purged', detail: { inquiry: lead.id } }, overrideAccess: true, req })
-      }); spam += 1
-    } catch { failed += 1 }
+    const outcome = await purgeSpamInquiry(payload, String(lead.id), spamCutoff)
+    if (outcome === 'completed') spam += 1
+    if (outcome === 'failed') failed += 1
   }
-  const binned = await payload.find({ collection: 'assets', where: { deletedAt: { exists: true } }, limit: 200, pagination: false, depth: 0, overrideAccess: true })
+  const binned = await payload.find({ collection: 'assets', where: { deletedAt: { less_than_equal: new Date(now.getTime() - policy.mediaBinDays * day).toISOString() } }, sort: 'deletedAt', limit: 200, pagination: false, depth: 0, overrideAccess: true })
   for (const asset of binned.docs) if (retentionEligible(asset.deletedAt as string | null | undefined, now, policy.mediaBinDays)) { const outcome = await purgeMedia(payload, undefined, String(asset.id)); if (outcome === 'completed') media += 1; if (outcome === 'failed') failed += 1 }
   const retry = await payload.find({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, limit: 100, pagination: false, depth: 0, overrideAccess: true })
   for (const item of retry.docs as Array<{ id: string; resourceType: RetentionKind; resourceID: string; attempts?: number }>) {
+    if (item.resourceType === 'spam-inquiry') { const outcome = await purgeSpamInquiry(payload, item.resourceID, spamCutoff); if (outcome === 'failed') failed += 1 }
     if (item.resourceType === 'media') { const outcome = await purgeMedia(payload, undefined, item.resourceID, item.attempts ?? 0); if (outcome === 'failed') failed += 1 }
     if (item.resourceType === 'application') { try { const outcome = await purgeApplication(payload, item.resourceID, undefined); if (outcome.state === 'failed') failed += 1 } catch { failed += 1 } }
   }
@@ -169,7 +189,7 @@ export async function reapplyDeletionTombstones(payload: Payload): Promise<numbe
     try {
       if (marker.resourceType === 'application') { const result = await purgeApplication(payload, marker.resourceID, undefined); if (result.state !== 'completed') throw new Error('Deletion replay could not purge an application.'); applied += 1 }
       else if (marker.resourceType === 'inquiry') { await withPayloadTransaction(payload, async (req) => { req.context.leadSpamDeleteLifecycle = true; await payload.delete({ collection: 'inquiries', id: marker.resourceID, overrideAccess: true, req }); applied += 1 }) }
-      else { await payload.delete({ collection: 'assets', id: marker.resourceID, overrideAccess: true, context: { retentionPurge: true } }); applied += 1 }
+      else { const result = await purgeMedia(payload, undefined, marker.resourceID); if (result !== 'completed') throw new Error('Deletion replay could not safely purge media.'); applied += 1 }
     } catch (error: unknown) { if (!(error && typeof error === 'object' && 'status' in error && error.status === 404)) throw error }
   }
   return applied

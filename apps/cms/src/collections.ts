@@ -1,8 +1,8 @@
-import { ValidationError, type CollectionConfig, type PayloadRequest } from 'payload'
+import { ValidationError, type CollectionConfig, type PayloadRequest, type AccessResult } from 'payload'
 import { randomUUID } from 'node:crypto'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { ChangeSetSchema, CmsPageFieldConfig, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
-import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from './access'
+import { bootstrapOnly, freshStaff, hasRole, ownerOrSelfOrBootstrap, roles, staff } from './access'
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
@@ -17,6 +17,16 @@ import { preserveApplicationIntake } from './applications'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
+
+async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 'application', id: string) {
+  const drafts = await req.payload.find({ collection: 'mail-drafts', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const draft of drafts.docs) {
+    await req.payload.delete({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, overrideAccess: true, req })
+    await req.payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
+  }
+  await req.payload.delete({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, overrideAccess: true, req })
+}
+
 
 const editorialAccess = {
   create: staff(['owner', 'editor']),
@@ -380,7 +390,7 @@ export const AssetFileVersions: CollectionConfig = {
     beforeValidate: [async ({ data, req }) => { if (req.file) await validateRasterUpload(req.file); return data }],
     beforeOperation: [async ({ args, operation, req }) => {
       if (operation === 'create' && !req.context.mediaReplacementVersion) throw new Error('Asset file versions are created through the media replacement service.')
-      if (operation === 'update' || operation === 'delete') throw new Error('Asset file versions are immutable.')
+      if (operation === 'update' || (operation === 'delete' && req.context.retentionMediaGC !== true)) throw new Error('Asset file versions are immutable.')
       return args
     }],
   },
@@ -450,6 +460,7 @@ export const Inquiries: CollectionConfig = {
     if (req.context.leadSpamDeleteLifecycle !== true && req.context.retentionPurge !== true) throw new Error('Lead deletion uses an audited deletion lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
+    await purgePrivateCorrespondence(req, 'lead', String(id))
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
   }] },
   fields: [
@@ -515,10 +526,18 @@ export const UrgentContacts: CollectionConfig = {
   ],
 }
 
-/** Local-only reply intent. No provider configuration or send worker exists. */
+/** Reply envelopes are written only by the authenticated workflow. */
+const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read']> = ({ req }): AccessResult => {
+  if (hasRole(req.user ?? undefined, ['owner'])) return true
+  const sales = hasRole(req.user ?? undefined, ['sales']); const hiring = hasRole(req.user ?? undefined, ['hiring'])
+  if (sales && hiring) return true
+  if (sales) return { lead: { exists: true } }
+  if (hiring) return { application: { exists: true } }
+  return false
+}
 export const MailDrafts: CollectionConfig = {
   slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
-  access: { create: staff(['owner', 'sales']), read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  access: { create: () => false, read: readMailDrafts, update: () => false, delete: () => false },
   fields: [
     { name: 'lead', type: 'relationship', relationTo: 'inquiries' },
     { name: 'application', type: 'relationship', relationTo: 'applications' },
@@ -548,7 +567,7 @@ export const MailDrafts: CollectionConfig = {
 
 /** One immutable, short-lived human authorization per exact draft revision. */
 export const MailAuthorizations: CollectionConfig = {
-  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
+  slug: 'mail-authorizations', admin: { hidden: true }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
   fields: [
     { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true },
     { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
@@ -559,7 +578,7 @@ export const MailAuthorizations: CollectionConfig = {
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: {
-    beforeDelete: [({ req }) => { if (req.context.retentionPurge !== true) throw new Error('Applications are permanently deleted through the audited retention lifecycle.') }],
+    beforeDelete: [async ({ req, id }) => { if (req.context.retentionPurge !== true) throw new Error('Applications are permanently deleted through the audited retention lifecycle.'); await purgePrivateCorrespondence(req, 'application', String(id)) }],
     beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? preserveApplicationIntake(data, originalDoc) : data],
     afterChange: [async ({ doc, operation, req }) => {
       if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
@@ -572,7 +591,7 @@ export const Applications: CollectionConfig = {
 /** Owner-controlled policy. The defaults are encoded in code so a missing row is safe. */
 export const RetentionSettings: CollectionConfig = {
   slug: 'retention-settings', admin: { useAsTitle: 'key', group: 'Administration', hidden: true },
-  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: () => false },
+  access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
   fields: [
     { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'default', admin: { readOnly: true } },
     { name: 'spamDays', type: 'number', required: true, defaultValue: 30, min: 1, max: 365 },

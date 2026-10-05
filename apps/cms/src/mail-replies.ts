@@ -6,7 +6,7 @@ import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 let replyDelivery = sendAreaMail
-export function setReplyDeliveryForTest(sender?: typeof sendAreaMail) { replyDelivery = sender ?? sendAreaMail }
+export function setReplyDeliveryForTest(sender?: typeof sendAreaMail) { if (process.env.NODE_ENV !== 'test') throw new Error('Test delivery override is disabled.'); replyDelivery = sender ?? sendAreaMail }
 
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export function sanitizeMailBody(value: unknown) { if (typeof value !== 'string') throw new Error('invalid_reply'); const body = value.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim(); if (!body || body.length > 10_000) throw new Error('invalid_reply'); return body }
@@ -22,7 +22,7 @@ export async function cancelReply(payload: Payload, actor: { id: string; session
 export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) {
   const grant = await consumeMailAuthorization(payload, actor, grantID)
   const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
-  const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
-  const application = draft.application && (typeof draft.application === 'string' ? draft.application : (draft.application as { id: string }).id)
-  try { const delivered = await replyDelivery(payload, application ? 'careers' : 'leads', { sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), threadID: String(draft.threadID) }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'consumed' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true }); return delivered } catch (error) { await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID } }, overrideAccess: true }); throw error }
+  const draft = grant.envelope
+  const application = draft.application
+  try { const delivered = await replyDelivery(payload, application ? 'careers' : 'leads', { sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), threadID: String(draft.threadID) }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true }); return delivered } catch (error) { await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID } }, overrideAccess: true }); throw error }
 }
