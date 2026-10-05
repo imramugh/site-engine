@@ -156,6 +156,8 @@ test('Site workspace captures real settings, redirects, and navigation into an o
   for (const width of [1440, 390]) {
     await owner.page.setViewportSize({ width, height: 1000 })
     await owner.page.evaluate(() => scrollTo(0, 0))
+    await expect(owner.page.locator('[data-site-navigation] fieldset').first()).toBeEnabled()
+    await owner.page.evaluate(() => document.fonts.ready.then(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))))
     await expect(owner.page.locator('[data-navigation-editor][open]')).toHaveCount(0)
     if (width === 390) {
       const summary = headerRows.first().locator('summary')
@@ -166,6 +168,16 @@ test('Site workspace captures real settings, redirects, and navigation into an o
       await expect(summary).toHaveAttribute('aria-expanded', 'false')
       await expect(summary).toBeFocused()
     }
+    const bottomAction = owner.page.getByRole('button', { name: 'Add bottom link', exact: true })
+    await expect(bottomAction).toBeEnabled()
+    await expect(bottomAction).toBeVisible()
+    expect(await bottomAction.evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, color: style.color, visibility: style.visibility } })).toEqual({ background: 'rgba(0, 0, 0, 0)', color: 'rgb(22, 76, 120)', visibility: 'visible' })
+    const disabledColumnActions = owner.page.locator('[data-site-navigation-add]:disabled').filter({ hasText: /Add (links column|generated Services|contact details)/ })
+    await expect(disabledColumnActions).toHaveCount(3)
+    expect(await disabledColumnActions.evaluateAll(elements => elements.every(element => { const style = getComputedStyle(element); return style.color === 'rgb(22, 76, 120)' && style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.visibility === 'visible' }))).toBe(true)
+    const contactLabel = owner.page.locator('[data-navigation-column-kind="contact"] label').filter({ hasText: /^Phone$/ }).first()
+    const contactControlStyle = await contactLabel.evaluate(label => { const input = label.querySelector('input')!; const labelStyle = getComputedStyle(label), inputStyle = getComputedStyle(input), labelBox = label.getBoundingClientRect(), inputBox = input.getBoundingClientRect(); return { accent: inputStyle.accentColor, display: labelStyle.display, fontWeight: labelStyle.fontWeight, height: inputBox.height, width: inputBox.width, aligned: Math.abs((inputBox.top + inputBox.height / 2) - (labelBox.top + labelBox.height / 2)) <= 1 } })
+    expect(contactControlStyle).toEqual({ accent: 'rgb(10, 58, 94)', display: 'flex', fontWeight: '400', height: 16, width: 16, aligned: true })
     expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
     await axe(owner.page)
     const navigationShot = testInfo.outputPath(`site-navigation-${width}.png`)
