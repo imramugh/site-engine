@@ -85,12 +85,14 @@ test('ENG-021 accepts a valid multipart application only for a published role an
   }
 })
 
-test('ENG-021 submits the public Astro application form to the same-origin CMS endpoint', async ({ page }) => {
+test('ENG-021 submits optional contact details through the public Astro form and keeps the protected intake immutable', async ({ browser, page }) => {
   test.setTimeout(90_000)
   await page.goto('/careers/synthetic-application-engineer')
   await expect(page.getByRole('heading', { name: 'Apply for this role' })).toBeVisible()
   await page.getByLabel('Name').fill('Browser Applicant')
   await page.getByLabel('Email').fill('browser.applicant@example.test')
+  await page.getByLabel('Phone').fill('(647) 555-0123')
+  await page.getByLabel('LinkedIn').fill(longLinkedIn)
   await page.getByLabel('Cover letter').fill('I would like to apply through the public careers page.')
   await page.getByLabel(/Resume/).setInputFiles({ name: 'browser-resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from(resume) })
   await page.getByLabel(/I consent/).check()
@@ -98,6 +100,20 @@ test('ENG-021 submits the public Astro application form to the same-origin CMS e
   await submit.click()
   await expect(page.getByRole('status')).toHaveText('Your application has been received.')
   await expect(submit).toBeDisabled()
+
+  const owner = await newPage(browser, 'owner')
+  const read = async () => {
+    const response = await owner.page.request.get('/api/hiring/applications?page=1')
+    expect(response.status()).toBe(200)
+    const application = (await response.json() as { docs: Array<{ id: string; email: string; telephone: string | null; linkedIn: string | null }> }).docs.find(item => item.email === 'browser.applicant@example.test')
+    expect(application).toMatchObject({ telephone: '(647) 555-0123', linkedIn: longLinkedIn })
+    return application!
+  }
+  const application = await read()
+  const update = await owner.page.request.patch(`/api/applications/${application.id}`, { headers: { origin: cmsOrigin }, data: { telephone: '+1 000 000 0000', linkedIn: 'https://www.linkedin.com/in/replaced', status: 'reviewing' } })
+  expect(update.status()).toBe(200)
+  await read()
+  await owner.context.close()
 })
 
 test('ENG-021 lets Owner and Hiring work the protected application dashboard while Sales and Editor are denied', async ({ browser }) => {
@@ -163,9 +179,8 @@ test('ENG-021 starts a real job draft through the normal content editor and rend
   }
   await owner.page.setViewportSize({ width: 1440, height: 1050 })
   await owner.page.getByRole('button', { name: /Applications ·/ }).click()
-  await owner.page.getByRole('button', { name: /Browser Applicant/ }).first().click()
+  await owner.page.getByRole('button', { name: /Synthetic candidate/ }).first().click()
   await expect(owner.page.getByRole('complementary', { name: 'Application details' }).getByText('Not provided')).toHaveCount(2)
-  await owner.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
   await owner.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
   const desktopDetail = owner.page.getByRole('complementary', { name: 'Application details' })
   const desktopBox = await desktopDetail.boundingBox()
