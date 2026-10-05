@@ -39,6 +39,7 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByRole('button', { name: 'Save business details' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
   await owner.page.setViewportSize({ width: 1440, height: 1000 })
+  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
   const desktop = testInfo.outputPath('site-business-details-1440.png'); await owner.page.screenshot({ path: desktop, fullPage: true }); await testInfo.attach('Site Business details 1440', { path: desktop, contentType: 'image/png' })
 
   await owner.page.getByRole('button', { name: 'Redirects' }).click()
@@ -62,7 +63,8 @@ test('Site workspace captures real settings, guidance, and redirects into an own
 
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
   await owner.page.getByRole('button', { name: 'Add header link' }).click()
-  await owner.page.getByRole('button', { name: 'Save navigation' }).click()
+  const navigationSaved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
+  await owner.page.getByRole('button', { name: 'Save navigation' }).click(); expect((await navigationSaved).status()).toBe(200)
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
   await expect(owner.page.getByRole('link', { name: 'Edit pages and structure in Content' })).toHaveAttribute('href', '/content-tree')
   await owner.page.getByRole('button', { name: 'Theme' }).click()
@@ -74,6 +76,7 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
   expect(await owner.page.locator('[data-site-panel=redirects] div').last().evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
   await owner.page.getByRole('button', { name: 'Business details', exact: true }).click()
+  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
   const mobile = testInfo.outputPath('site-business-details-390.png'); await owner.page.screenshot({ path: mobile, fullPage: true }); await testInfo.attach('Site Business details 390', { path: mobile, contentType: 'image/png' })
   await axe(owner.page)
   await owner.context.close()
