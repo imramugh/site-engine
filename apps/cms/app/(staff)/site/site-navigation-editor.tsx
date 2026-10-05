@@ -29,7 +29,7 @@ function LinkRow({ item, references, header, allowUnavailable = true, index, cou
 
 export function SiteNavigationEditor({ busy, canSave, contractVersion, references, settings, setSettings, save }: Props) {
   const navigation = settings.navigation ?? emptyNavigation
-  const supports16 = contractVersion === '1.6.0'
+  const supports16 = contractVersion === '1.6.0' || contractVersion === '1.7.0'
   const setNavigation = (next: typeof navigation) => setSettings({ ...settings, navigation: next })
   const updateHeader = (index: number, value: Reference) => { const next = structuredClone(navigation); next.header[index] = value; setNavigation(next) }
   const updateColumn = (index: number, value: FooterColumn) => { const next = structuredClone(navigation); next.footer.columns[index] = value; setNavigation(next) }
