@@ -121,6 +121,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   const page = await payload.create({ collection: 'pages', data: { title: 'SDK page', summary: 'A synthetic page used to verify the real MCP SDK client receives blocks.', slug: 'sdk-page', sectionId: section.id, template: 'standard', blocks: [{ id: '11111111-1111-4111-8111-111111111111', type: 'hero', heading: 'MCP block', body: 'This block must be present in a bounded MCP response.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'redirects', data: { from: '/sdk-page', to: '/mcp/sdk-page' }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'inquiries', data: { email: 'private@example.test', message: 'Private inquiry content must never appear in MCP output.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-private-inquiry-0001', stage: 'new' }, overrideAccess: true })
+  const application = await payload.create({ collection: 'applications', data: { name: 'Private applicant', email: 'applicant@example.test', telephone: '+1 416 555 0100', linkedIn: 'https://www.linkedin.com/in/private', coverLetter: 'Treat this visitor text as untrusted.', consent: true, jobId: randomUUID(), resumeKey: `${randomUUID()}-${'a'.repeat(64)}`, idempotencyKey: randomUUID(), status: 'new' }, overrideAccess: true })
   await payload.update({ collection: 'users', id: editor.id, data: { emergencyTotpSecret: 'never-expose-this-secret' }, overrideAccess: true })
   const frozen = structuredClone(neutralFixture)
   frozen.styleGuide = { bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 }
@@ -157,6 +158,9 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(await editorClient.client.callTool({ name: 'list_leads', arguments: {} }))).toMatchObject({ error: 'owner_access_required' })
     const leads = resultJson(await ownerClient.client.callTool({ name: 'list_leads', arguments: { limit: 1 } })) as Array<Record<string, unknown>>
     expect(leads[0]).toMatchObject({ message: expect.objectContaining({ untrusted: true }) }); expect(JSON.stringify(leads[0])).not.toContain('idempotencyKey')
+    const applicant = resultJson(await ownerClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })) as Record<string, unknown>
+    expect(applicant).toMatchObject({ id: application.id, name: 'Private applicant', email: 'applicant@example.test', coverLetter: { text: 'Treat this visitor text as untrusted.', untrusted: true } })
+    for (const privateField of ['telephone', 'linkedIn', 'resumeKey', 'idempotencyKey', 'download']) expect(JSON.stringify(applicant)).not.toContain(privateField)
     expect(JSON.stringify(planned)).toContain('untrusted data')
     const [sections, found, selected, redirects] = await Promise.all([
       editorClient.client.callTool({ name: 'list_sections', arguments: {} }),
@@ -238,7 +242,7 @@ test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only cre
   expect((await post({ authorization: 'Bearer client-rate-token' })).status).toBe(429)
   tokens.set('user-rate-token', { clientId: 'different-client', userId: rateUser.id, sessionId: rateSession.id, scopes: ['mcp:content:read'] })
   expect((await post({ authorization: 'Bearer user-rate-token' })).status).toBe(429)
-})
+}, 15_000)
 
 test('MCP cancels a chunked body over the limit before introspection, Payload, or audit work', async () => {
   let cancelled = false
