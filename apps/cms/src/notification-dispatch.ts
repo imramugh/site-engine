@@ -46,9 +46,9 @@ async function retryPreSend(store: any, outbox: Outbox, id: string, attempts: nu
   await updateOutboxState(store, outbox)
   return exhausted ? 'failed' : 'retryable'
 }
-async function recipientEligible(payload: Payload, outbox: Outbox, recipient: Recipient) {
+async function recipientEligible(payload: Payload, outbox: Outbox, recipient: Recipient, channel: string) {
   const preference = (await readNotificationPreferences(payload)).find((item) => item.kind === outbox.kind)
-  if (!preference?.enabled || !preference.recipients.some((rule) => outbox.recipientRules?.includes(rule))) return false
+  if (!preference?.enabled || !preference.channels.includes(channel as 'email' | 'sms') || !preference.recipients.some((rule) => outbox.recipientRules?.includes(rule))) return false
   if (recipient.type === 'urgent-contact') {
     const contact = await payload.findByID({ collection: 'urgent-contacts', id: recipient.id, depth: 0, overrideAccess: true }).catch(() => null) as { enabled?: boolean; email?: string } | null
     return Boolean(contact?.enabled && contact.email?.toLowerCase() === recipient.email.toLowerCase() && preference.recipients.includes('urgent-contact'))
@@ -86,6 +86,13 @@ async function dispatchOneNotificationLocked(payload: Payload, now: Date): Promi
         try { delivery = await store.create({ collection: 'notification-deliveries', data: { outbox: raw.id, idempotencyKey, recipient, state: channel === 'email' ? 'queued' : 'unsupported', attempts: 0, nextAttemptAt: now.toISOString(), ...(channel === 'email' ? {} : { failureCode: 'channel-unsupported', completedAt: now.toISOString() }) }, overrideAccess: true }) as typeof delivery }
         catch { delivery = (await store.find({ collection: 'notification-deliveries', where: { idempotencyKey: { equals: idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as typeof delivery }
       }
+      if (delivery?.state === 'processing' && delivery.leaseExpiresAt && new Date(delivery.leaseExpiresAt) <= now) {
+        // A crashed worker may have handed bytes to SMTP. Surface the ambiguity
+        // and finalize its parent; never requeue or silently resend it.
+        await store.update({ collection: 'notification-deliveries', id: delivery.id, data: { state: 'unknown', leaseToken: null, leaseExpiresAt: null, failureCode: 'lease-expired-outcome-unknown', completedAt: now.toISOString() }, overrideAccess: true })
+        await updateOutboxState(store, raw)
+        continue
+      }
       if (!delivery || !['queued', 'retryable'].includes(delivery.state) || (delivery.nextAttemptAt && new Date(delivery.nextAttemptAt) > now) || (delivery.leaseExpiresAt && new Date(delivery.leaseExpiresAt) > now)) continue
       // A missing mapping is configuration, not an attempted provider send.
       // Keep the receipt queued and do not consume its finite pre-send budget.
@@ -105,7 +112,7 @@ async function dispatchOneNotificationLocked(payload: Payload, now: Date): Promi
       if (!claimed) continue
       const sender = String(mapping.docs[0].senderAddress)
       try {
-        if (!await recipientEligible(payload, raw, recipient)) {
+        if (!await recipientEligible(payload, raw, recipient, channel)) {
           await store.update({ collection: 'notification-deliveries', id: delivery.id, data: { state: 'failed', leaseToken: null, leaseExpiresAt: null, failureCode: 'recipient-no-longer-eligible', completedAt: now.toISOString() }, overrideAccess: true })
           await updateOutboxState(store, raw)
           return { id: delivery.id, state: 'failed' }

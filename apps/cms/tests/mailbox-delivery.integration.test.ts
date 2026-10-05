@@ -131,7 +131,7 @@ test('notification claims are idempotent, stale leases never resend, and definit
   await (payload as any).create({ collection: 'notification-deliveries', data: { outbox: stale.id, idempotencyKey: `${stale.id}:staff:${owner.id}:email`, recipient: { type: 'staff', id: owner.id, email: owner.email }, state: 'processing', attempts: 1, nextAttemptAt: new Date().toISOString(), leaseToken: 'crashed-before-result', leaseExpiresAt: new Date(Date.now() - 60_000).toISOString() }, overrideAccess: true })
   await expect(dispatchOneNotification(payload)).resolves.toBeNull()
   expect(messages).toHaveLength(before + 1)
-  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: stale.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ state: 'processing' })] })
+  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: stale.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ state: 'unknown', failureCode: 'lease-expired-outcome-unknown' })] })
 
   const unavailable = await createOutbox()
   // Reconfiguration deliberately resets audited transport health to unknown;
@@ -176,4 +176,17 @@ test('terminal parents do not starve a later queued event and a revoked recipien
   await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'failed' })
   expect(messages).toHaveLength(before + 26)
   expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: unsent.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ failureCode: 'recipient-no-longer-eligible' })] })
+})
+
+test('expired processing receipts become unknown and release the first-25 window', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-stale-owner@example.test', name: 'Notify stale owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification stale mailbox', primaryAddress: 'notify-stale@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-stale-user', password: 'notify-stale-password' }, owner.id); await service.testSMTPMailbox(payload, mailbox.id, owner.id); await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify-stale@example.test' }, owner.id)
+  const make = () => payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: {}, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  for (let index = 0; index < 25; index += 1) { const outbox = await make(); await (payload as any).create({ collection: 'notification-deliveries', data: { outbox: outbox.id, idempotencyKey: `${outbox.id}:staff:${owner.id}:email`, recipient: { type: 'staff', id: owner.id, email: owner.email }, state: 'processing', attempts: 1, nextAttemptAt: new Date().toISOString(), leaseToken: 'crashed', leaseExpiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true }) }
+  const later = await make(); const before = messages.length
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'delivered' })
+  expect(messages).toHaveLength(before + 1)
+  expect(await payload.findByID({ collection: 'notification-outbox', id: later.id, overrideAccess: true })).toMatchObject({ state: 'delivered' })
+  const unknown = await (payload as any).find({ collection: 'notification-deliveries', where: { failureCode: { equals: 'lease-expired-outcome-unknown' } }, limit: 0, pagination: false, overrideAccess: true }); expect(unknown.totalDocs).toBeGreaterThanOrEqual(25)
 })
