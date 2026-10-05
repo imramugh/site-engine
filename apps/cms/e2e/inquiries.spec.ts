@@ -30,7 +30,7 @@ test('public inquiry survives retries and enters the protected staff workflow', 
     expect(listed.status()).toBe(200)
     expect((await listed.json()).docs).toEqual(expect.arrayContaining([expect.objectContaining({ id, urgent: true, stage: 'new' })]))
     await page.goto('/leads')
-    await page.locator('[data-lead-card][data-urgent="true"]').filter({ hasText: 'Example Company' }).click()
+    await page.locator('[data-lead-card][data-urgent="true"]').filter({ hasText: 'Example Company' }).filter({ hasText: 'Synthetic visitor' }).click()
     await expect(page.getByText(input.message, { exact: true })).toBeVisible()
     const detail = page.getByRole('complementary', { name: 'Lead details' })
     await expect(detail.getByRole('heading', { name: 'Example Company', exact: true })).toBeVisible()

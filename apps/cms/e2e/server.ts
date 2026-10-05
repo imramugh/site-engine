@@ -94,7 +94,7 @@ const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
-const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
+const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact', 'richText'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
 writeFileSync(themeRegistry, JSON.stringify({ themes: [
