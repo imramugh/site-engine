@@ -51,6 +51,10 @@ function publicSelection(value: ThemeSelection | null) {
   return value && { id: value.id, version: value.version, contract: value.contract }
 }
 
+function sameSelection(left: ThemeSelection | null, right: ThemeSelection | null): boolean {
+  return left === null ? right === null : Boolean(right && left.id === right.id && left.version === right.version && left.contract === right.contract && left.manifestDigest === right.manifestDigest)
+}
+
 /** A selection is reviewed as a candidate snapshot. This is the sole path
  * that may advance a contract pin; ordinary editorial changes retain theirs. */
 function selectionCandidate(manifest: unknown, selection: ThemeSelection) {
@@ -86,7 +90,8 @@ async function currentState(payload: Awaited<ReturnType<typeof getPayload>>) {
 async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>, actor: Actor) {
   const [registry, state] = await Promise.all([loadThemeRegistry(), currentState(payload)])
   const published = selectionOf((state.manifest as { settings?: { theme?: unknown } }).settings?.theme)
-  const draft = state.setting?.selection ?? null
+  const persisted = state.setting?.selection ?? null
+  const draft = sameSelection(persisted, published) ? null : persisted
   return {
     themes: installedThemes(registry).map((installed) => ({
       id: installed.manifest.name,
@@ -139,8 +144,10 @@ export async function POST(request: Request): Promise<Response> {
     if (!compatibility.compatible) throw new Error('This theme cannot render the current published content.')
     const existing = await ownedThemeDraft(payload, authenticated.user, selection)
     if (existing) return Response.json({ changeSet: existing, selection: publicSelection(selection), compatibility, reused: true }, { status: 200, headers: { 'Cache-Control': 'no-store' } })
-    const reusable = await ownedThemeDraft(payload, authenticated.user)
-    if (state.setting?.selection && (!reusable || !['open', 'changes-requested'].includes(reusable.state))) throw new Error('Another reviewed draft controls the pending theme selection. Resolve or discard it before creating a different theme preview.')
+    const published = selectionOf((state.manifest as { settings?: { theme?: unknown } }).settings?.theme)
+    const pending = state.setting?.selection && !sameSelection(state.setting.selection, published) ? state.setting.selection : null
+    const reusable = pending ? await ownedThemeDraft(payload, authenticated.user, pending) : null
+    if (pending && (!reusable || !['open', 'changes-requested'].includes(reusable.state))) throw new Error('Another reviewed draft controls the pending theme selection. Resolve or discard it before creating a different theme preview.')
 
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
