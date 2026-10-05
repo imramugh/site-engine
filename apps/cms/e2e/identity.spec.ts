@@ -478,11 +478,11 @@ test('a locally provisioned owner uses the authenticator without OIDC, browses c
   page.on('request', (request) => {
     if (request.url().includes('logout')) logoutRequests.push(`${request.method()} ${new URL(request.url()).pathname}`)
   })
-  const logout = page.locator('[data-admin-account] a[href="/admin/logout"]')
+  const logout = page.getByRole('group', { name: 'Account menu' }).getByRole('menuitem', { name: 'Sign out', exact: true })
   const accountMenu = page.getByRole('group', { name: 'Account menu' })
   await accountMenu.getByText('Synthetic Emergency Owner').click()
   await expect(accountMenu.getByRole('menuitem', { name: 'My connected assistants' })).toHaveAttribute('href', '/integrations?tab=assistants')
-  await expect(accountMenu.getByRole('menuitem', { name: 'Sign out' })).toBeVisible()
+  await expect(accountMenu.getByRole('menuitem', { name: 'Sign out', exact: true })).toBeVisible()
   await logout.click()
   await page.waitForURL(/\/admin\/login/)
   expect(logoutRequests).toContain('POST /api/auth/logout')
