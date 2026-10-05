@@ -250,8 +250,9 @@ export async function handleMcp(request: Request): Promise<Response> {
     const variants = digits && digits.length === 11 && digits.startsWith('1') ? [digits, digits.slice(1)] : digits ? [digits] : []
     return variants.length ? new RegExp(`(?<!\\d)(?:${variants.map((value) => `\\+?\\s*${value.split('').join('[\\s().-]*')}`).join('|')})(?!\\d)`, 'g') : undefined
   }
-  const redacted = (value: string, phone: string) => { const pattern = phonePattern(phone); return pattern ? value.replace(pattern, '[redacted phone]') : value }
-  const includesPhone = (value: string, phone: string) => { const pattern = phonePattern(phone); return Boolean(pattern?.test(value)) }
+  const escapedPhone = (phone: string) => phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const redacted = (value: string, phone: string) => { const literal = phone ? new RegExp(escapedPhone(phone), 'g') : undefined; const pattern = phonePattern(phone); return pattern ? (literal ? value.replace(literal, '[redacted phone]') : value).replace(pattern, '[redacted phone]') : literal ? value.replace(literal, '[redacted phone]') : value }
+  const includesPhone = (value: string, phone: string) => Boolean(phone && (value.includes(phone) || phonePattern(phone)?.test(value)))
   // The policy is read for every tool call. Missing or unreadable state hides
   // private data, so a database failure cannot disclose phone information.
   const leadPrivacy = async () => { try { const settings = await payload.find({ collection: 'mcp-privacy-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, overrideAccess: true }); return (settings.docs[0] as { hidePhone?: boolean } | undefined)?.hidePhone !== false } catch { return true } }
