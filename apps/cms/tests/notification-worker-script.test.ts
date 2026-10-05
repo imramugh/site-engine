@@ -16,4 +16,14 @@ describe('notification worker HTTP poller', () => {
     await runNotificationWorker({ api: async () => { calls += 1; running += 1; maximum = Math.max(maximum, running); await Promise.resolve(); running -= 1; if (calls === 3) controller.abort(); return null }, signal: controller.signal, idleMs: 100, errorMs: 100, log: vi.fn() })
     expect(calls).toBe(3); expect(maximum).toBe(1)
   })
+
+  it('writes a heartbeat only after a successful CMS poll', async () => {
+    const controller = new AbortController(); const heartbeat = vi.fn(async () => controller.abort())
+    await runNotificationWorker({ api: async () => null, signal: controller.signal, idleMs: 100, errorMs: 100, heartbeat, log: vi.fn() })
+    expect(heartbeat).toHaveBeenCalledOnce()
+    const failed = vi.fn(async () => { throw new Error('offline') }); const noHeartbeat = vi.fn(async () => undefined)
+    const failedController = new AbortController(); setTimeout(() => failedController.abort(), 110)
+    await runNotificationWorker({ api: failed, signal: failedController.signal, idleMs: 100, errorMs: 100, heartbeat: noHeartbeat, log: vi.fn() })
+    expect(noHeartbeat).not.toHaveBeenCalled()
+  })
 })
