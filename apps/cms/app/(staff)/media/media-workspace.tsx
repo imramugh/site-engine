@@ -4,14 +4,15 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import type { MediaAsset } from '../../../src/media-workspace'
 import styles from './media-workspace.module.css'
 
-type Data = { assets: MediaAsset[]; total: number; truncated: boolean; page: number; totalPages: number; pageSize: number; focalEditingAvailable: boolean }
+type Counts = { all: number; missingAlt: number; unused: number; large: number; bin: number }
+type Data = { assets: MediaAsset[]; total: number; counts: Counts; truncated: boolean; page: number; totalPages: number; pageSize: number; focalEditingAvailable: boolean }
 type Filter = 'all' | 'missing-alt' | 'unused' | 'large' | 'bin'
 type Metadata = { alt: string; decorative: boolean; caption: string; credit: string; tags: string[]; focalX: number; focalY: number }
 type View = { filter: Filter; query: string; page: number }
-const filters: Array<{ value: Filter; label: string }> = [
-  { value: 'all', label: 'All' }, { value: 'missing-alt', label: 'Missing alt text' },
-  { value: 'unused', label: 'Unused' }, { value: 'large', label: 'Large files' },
-  { value: 'bin', label: 'Deletion bin' },
+const filters: Array<{ value: Filter; label: string; count: keyof Counts }> = [
+  { value: 'all', label: 'All', count: 'all' }, { value: 'missing-alt', label: 'Missing alt text', count: 'missingAlt' },
+  { value: 'unused', label: 'Unused', count: 'unused' }, { value: 'large', label: 'Large files', count: 'large' },
+  { value: 'bin', label: 'Deletion bin', count: 'bin' },
 ]
 const focal = (value?: number | null) => typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.min(100, Math.max(0, value))) : 50
 const metadata = (asset?: MediaAsset): Metadata => ({ alt: asset?.alt ?? '', decorative: Boolean(asset?.decorative), caption: asset?.caption ?? '', credit: asset?.credit ?? '', tags: asset?.tags ?? [], focalX: focal(asset?.focalX), focalY: focal(asset?.focalY) })
@@ -35,7 +36,6 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
   const [saving, setSaving] = useState(false)
   const [lifecycleBusy, setLifecycleBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadAlt, setUploadAlt] = useState('')
   const [uploadDecorative, setUploadDecorative] = useState(false)
@@ -46,7 +46,6 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
   const request = useRef(0)
   const abort = useRef<AbortController | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
-  const uploadPanel = useRef<HTMLDivElement>(null)
   const selected = useMemo(() => data.assets.find((asset) => asset.id === selectedID), [data.assets, selectedID])
   const dirty = Boolean(selected) && !sameMetadata(draft, baseline)
   const confirmDiscard = () => !dirty || window.confirm('Discard unsaved media metadata?')
@@ -178,14 +177,11 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
       if (!response.ok) throw new Error(body.error ?? 'Unable to replace this asset file.')
       setReplacementFile(null); replacementKey.current = ''; if (replacementInput.current) replacementInput.current.value = ''
       await load({ filter: 'all', query: '', page: 1 }, selected.id)
-      setMessage('Asset file replaced. Published snapshots retain the previous file.')
+      setMessage('File replaced.')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to replace this asset file.') } finally { setReplacing(false) }
   }
 
-  const openUpload = () => {
-    setUploadOpen(true)
-    window.requestAnimationFrame(() => { uploadPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); fileInput.current?.focus() })
-  }
+  const openUpload = () => fileInput.current?.click()
 
   return <main className={styles.workspace} data-media-workspace>
     <h1 className={styles.srOnly}>Media</h1>
@@ -193,19 +189,18 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
     {message ? <p className={styles.feedback} role="status" aria-live="polite">{message}</p> : null}
     <div className={styles.layout} data-media-layout>
       <section className={styles.library} data-media-library aria-label="Media library" aria-busy={loading}>
-        <div className={styles.toolbar} data-media-toolbar><div className={styles.filters} role="group" aria-label="Media filters">{filters.map(({ value, label }) => <button type="button" key={value} aria-pressed={view.filter === value} disabled={loading} onClick={() => changeView({ filter: value, query: view.query, page: 1 })}>{label}</button>)}</div><div className={styles.toolbarEnd}><span className={styles.count}>{data.total} {data.total === 1 ? 'asset' : 'assets'}</span><button type="button" className={styles.primary} data-media-primary onClick={openUpload}>Upload new asset</button></div></div>
+        <div className={styles.toolbar} data-media-toolbar><div className={styles.filters} role="group" aria-label="Media filters">{filters.map(({ value, label, count }) => <button type="button" key={value} aria-pressed={view.filter === value} disabled={loading} onClick={() => changeView({ filter: value, query: view.query, page: 1 })}>{label} <span aria-hidden="true">·</span> {data.counts[count]}</button>)}</div><button type="button" className={styles.primary} data-media-primary onClick={openUpload}>Upload</button></div>
         <form className={styles.search} role="search" onSubmit={submitSearch}><label htmlFor="media-search">Search media</label><div><input id="media-search" value={search} maxLength={80} onChange={(event) => setSearch(event.target.value)} /><button type="submit">Search</button></div></form>
-        {uploadOpen ? <div ref={uploadPanel} className={styles.uploadPanel} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) setUploadFile(file) }}>
+        <div className={styles.uploadPanel} data-media-upload onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) setUploadFile(file) }}>
           <form onSubmit={submitUpload}>
-            <div className={styles.uploadIntro}><div><strong>Upload a new image</strong><span>PNG, JPEG, WebP, or AVIF up to 15 MiB</span></div><label className={styles.fileButton}>Choose image<input ref={fileInput} type="file" accept="image/avif,image/jpeg,image/png,image/webp" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} /></label></div>
-            <p className={styles.chosenFile}>{uploadFile ? uploadFile.name : 'Drop an image here or choose a file.'}</p>
-            <div className={styles.uploadMetadata}>
+            <div className={styles.uploadIntro}><div><strong>{uploadFile ? uploadFile.name : 'Drop an image here'}</strong><span>PNG, JPEG, WebP, or AVIF up to 15 MiB. Image sizes are generated automatically.</span></div><label className={styles.fileButton}>Choose image<input ref={fileInput} type="file" accept="image/avif,image/jpeg,image/png,image/webp" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} /></label></div>
+            {uploadFile ? <div className={styles.uploadMetadata}>
               <label htmlFor="upload-alt">Alt text<input id="upload-alt" value={uploadAlt} maxLength={240} disabled={uploadDecorative || uploading} onChange={(event) => setUploadAlt(event.target.value)} /></label>
               <label className={styles.checkLabel}><input type="checkbox" checked={uploadDecorative} disabled={uploading} onChange={(event) => setUploadDecorative(event.target.checked)} />Decorative image</label>
               <button className={styles.primary} data-media-primary type="submit" disabled={!uploadFile || uploading || (!uploadDecorative && !uploadAlt.trim())}>{uploading ? 'Uploading…' : 'Upload image'}</button>
-            </div><small>{uploadDecorative ? 'Decorative images have no alt text.' : 'Describe the image’s purpose. Do not use its filename as alt text.'}</small>
+            </div> : null}{uploadFile ? <small>{uploadDecorative ? 'Decorative images have no alt text.' : 'Describe the image’s purpose. Do not use its filename as alt text.'}</small> : null}
           </form>
-        </div> : null}
+        </div>
         <div className={styles.grid} data-media-grid>{data.assets.map((asset) => <button type="button" key={asset.id} className={styles.card} data-media-asset aria-pressed={selectedID === asset.id} onClick={() => select(asset)}><span className={styles.thumb}>{asset.url ? <img src={asset.url} alt="" /> : <span>Preview unavailable</span>}</span><span className={styles.cardCopy}><strong>{asset.filename}</strong><small>{dimensions(asset)} · {size(asset.filesize)}</small>{!asset.decorative && !asset.alt?.trim() ? <em>Missing alt text</em> : null}{(asset.filesize ?? 0) > 3 * 1024 * 1024 ? <em className={styles.warning}>Large file</em> : null}</span></button>)}</div>
         {!data.assets.length ? <div className={styles.empty} data-media-empty><strong>No matching media</strong><span>Try another search or filter.</span></div> : null}
         <nav className={styles.pagination} aria-label="Media pages"><button type="button" disabled={loading || view.page <= 1} onClick={() => changeView({ ...view, page: view.page - 1 })}>Previous</button><span>Page {view.page} of {data.totalPages}</span><button type="button" disabled={loading || view.page >= data.totalPages} onClick={() => changeView({ ...view, page: view.page + 1 })}>Next</button></nav>
@@ -213,31 +208,32 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
       <aside className={styles.detail} aria-label="Selected media" data-media-detail>{selected ? <>
         <header className={styles.detailHeading}><div><h2>{selected.filename}</h2><span>{selected.id}</span></div><p>{selected.mimeType} · {dimensions(selected)} · {size(selected.filesize)}</p></header>
         <div className={styles.detailBody}>
-          <section className={styles.focalEditor} aria-labelledby="focal-heading">
-            <div><h3 id="focal-heading">Focal point</h3><p>{data.focalEditingAvailable ? 'Choose the most important part of the image. Use arrow keys for precise changes; hold Shift for larger steps.' : 'Focal-point editing becomes available when the active site theme supports contract 1.4.'}</p></div>
+          <section className={styles.focalEditor} data-media-focal-editor aria-labelledby="focal-heading">
+            <div className={styles.focalHeading}><h3 id="focal-heading">Focal point</h3><p>{data.focalEditingAvailable ? 'Click the important part of the image. Use arrow keys for precise changes.' : 'Focal-point editing is unavailable for the active site design.'}</p></div>
             <div className={styles.preview} data-media-preview data-media-focal data-media-focal-available={data.focalEditingAvailable} tabIndex={selected.url && data.focalEditingAvailable ? 0 : -1} role="group" aria-label={`Focal point ${draft.focalX}% from the left and ${draft.focalY}% from the top`} aria-disabled={!data.focalEditingAvailable} onPointerDown={pointFromPointer} onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) pointFromPointer(event) }} onKeyDown={moveFocalPoint}>
               {selected.url ? <><img src={selected.url} alt="" draggable={false} /><span className={styles.focalMarker} data-media-focal-marker style={{ left: `${draft.focalX}%`, top: `${draft.focalY}%` }} aria-hidden="true" /></> : <span>Preview unavailable</span>}
             </div>
-            <div className={styles.focalInputs}>
+            <div className={styles.focalInputs} aria-label="Focal point coordinates">
               <label htmlFor="asset-focal-x">Horizontal (%)<input id="asset-focal-x" type="number" min="0" max="100" step="1" value={draft.focalX} disabled={saving || !data.focalEditingAvailable} onChange={(event) => setFocalPoint(event.currentTarget.valueAsNumber, draft.focalY)} /></label>
               <label htmlFor="asset-focal-y">Vertical (%)<input id="asset-focal-y" type="number" min="0" max="100" step="1" value={draft.focalY} disabled={saving || !data.focalEditingAvailable} onChange={(event) => setFocalPoint(draft.focalX, event.currentTarget.valueAsNumber)} /></label>
             </div>
             {selected.url ? <div className={styles.cropPreviews} aria-label="Crop previews">
-              <figure><div className={styles.cropHero} data-media-crop-preview="hero"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Wide · 16:9</figcaption></figure>
-              <figure><div className={styles.cropCard} data-media-crop-preview="card"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Portrait · 4:5</figcaption></figure>
-              <figure><div className={styles.cropSquare} data-media-crop-preview="square"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Square · 1:1</figcaption></figure>
+              <figure><div className={styles.cropHero} data-media-crop-preview="hero"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Hero 16:9</figcaption></figure>
+              <figure><div className={styles.cropCard} data-media-crop-preview="card"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Card 4:5</figcaption></figure>
+              <figure><div className={styles.cropSquare} data-media-crop-preview="square"><img src={selected.url} alt="" style={{ objectPosition: `${draft.focalX}% ${draft.focalY}%` }} /></div><figcaption>Square</figcaption></figure>
             </div> : null}
           </section>
           <label htmlFor="asset-alt">Alt text<textarea id="asset-alt" rows={3} value={draft.alt} maxLength={240} disabled={draft.decorative || saving} onChange={(event) => setDraft((current) => ({ ...current, alt: event.target.value }))} /><small>{draft.decorative ? 'Decorative images do not need alt text.' : 'Describe the image’s purpose and relevant content.'}</small></label>
           <label className={styles.checkLabel}><input type="checkbox" checked={draft.decorative} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, decorative: event.target.checked }))} />Decorative image</label>
-          <label htmlFor="asset-caption">Caption<textarea id="asset-caption" rows={2} value={draft.caption} maxLength={300} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, caption: event.target.value }))} /></label>
-          <label htmlFor="asset-credit">Credit<input id="asset-credit" value={draft.credit} maxLength={240} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, credit: event.target.value }))} /></label>
-          <label htmlFor="asset-tags">Tags<input id="asset-tags" value={tagText} disabled={saving} onChange={(event) => { setTagText(event.target.value); setDraft((current) => ({ ...current, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12) })) }} /><small>Separate up to 12 tags with commas.</small></label>
-          <button type="button" className={styles.primary} data-media-primary onClick={() => void save()} disabled={saving || !dirty || (!draft.decorative && !draft.alt.trim())}>{saving ? 'Saving…' : 'Save metadata'}</button>
           <section className={styles.usage}><h3>Used in</h3>{selected.usages.length ? <ul>{selected.usages.map((usage) => <li key={usage.pageId}><a href={`/content-editor/${encodeURIComponent(usage.pageId)}`}>{usage.pageTitle}</a></li>)}</ul> : <p>Not used on any page.</p>}</section>
-          <p className={styles.immutable}>File replacements create an immutable version. Existing published snapshots keep their original file.</p>
-          <form className={styles.replaceFile} data-media-replacement onSubmit={replaceFile}><label htmlFor="asset-replacement">Replace file<input ref={replacementInput} id="asset-replacement" type="file" accept="image/avif,image/jpeg,image/png,image/webp" disabled={replacing} onChange={(event) => { setReplacementFile(event.target.files?.[0] ?? null); replacementKey.current = crypto.randomUUID() }} /></label><button type="submit" disabled={!replacementFile || replacing}>{replacing ? 'Replacing…' : 'Replace file'}</button><small>The asset ID stays the same. Published snapshots retain the previous file.</small></form>
-          <div className={styles.actions} data-media-actions><button type="button" onClick={openUpload}>Upload new asset</button>{selected.deletedAt ? <button type="button" disabled={lifecycleBusy} onClick={() => void updateLifecycle('restore')}>{lifecycleBusy ? 'Restoring…' : 'Restore'}</button> : <button type="button" className={styles.danger} disabled={lifecycleBusy || selected.usages.length > 0} title={selected.usages.length ? 'Remove this asset from every page before deleting it.' : 'Move this asset to the deletion bin.'} onClick={() => void updateLifecycle('bin')}>{lifecycleBusy ? 'Moving…' : 'Move to bin'}</button>}</div>
+          <details className={styles.secondary} data-media-secondary><summary>Caption, credit and tags</summary><div>
+            <label htmlFor="asset-caption">Caption<textarea id="asset-caption" rows={2} value={draft.caption} maxLength={300} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, caption: event.target.value }))} /></label>
+            <label htmlFor="asset-credit">Credit<input id="asset-credit" value={draft.credit} maxLength={240} disabled={saving} onChange={(event) => setDraft((current) => ({ ...current, credit: event.target.value }))} /></label>
+            <label htmlFor="asset-tags">Tags<input id="asset-tags" value={tagText} disabled={saving} onChange={(event) => { setTagText(event.target.value); setDraft((current) => ({ ...current, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12) })) }} /><small>Separate up to 12 tags with commas.</small></label>
+          </div></details>
+          <button type="button" className={styles.primary} data-media-primary onClick={() => void save()} disabled={saving || !dirty || (!draft.decorative && !draft.alt.trim())}>{saving ? 'Saving…' : 'Save metadata'}</button>
+          <div data-media-replacement><label className={styles.srOnly} htmlFor="asset-replacement">Replace file</label><input className={styles.srOnly} ref={replacementInput} id="asset-replacement" type="file" accept="image/avif,image/jpeg,image/png,image/webp" disabled={replacing} onChange={(event) => { setReplacementFile(event.target.files?.[0] ?? null); replacementKey.current = crypto.randomUUID() }} />{replacementFile ? <form className={styles.replaceFile} onSubmit={replaceFile}><span title={replacementFile.name}>{replacementFile.name}</span><button type="submit" disabled={replacing}>{replacing ? 'Replacing…' : 'Confirm replacement'}</button></form> : null}</div>
+          <div className={styles.actions} data-media-actions><button type="button" onClick={() => replacementInput.current?.click()}>Replace file</button>{selected.deletedAt ? <button type="button" disabled={lifecycleBusy} onClick={() => void updateLifecycle('restore')}>{lifecycleBusy ? 'Restoring…' : 'Restore'}</button> : <button type="button" className={styles.danger} disabled={lifecycleBusy || selected.usages.length > 0} title={selected.usages.length ? 'Remove this asset from every page before deleting it.' : 'Move this asset to the deletion bin.'} onClick={() => void updateLifecycle('bin')}>{lifecycleBusy ? 'Moving…' : 'Move to bin'}</button>}</div>
         </div></> : <div className={styles.empty} data-media-empty><strong>Select an asset</strong><span>Choose an item to inspect its metadata and usage.</span></div>}</aside>
     </div>
   </main>
