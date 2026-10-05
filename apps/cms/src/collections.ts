@@ -837,19 +837,55 @@ export const SiteSettings: CollectionConfig = {
       if ((data.contractVersion !== undefined && data.contractVersion !== null) || data.sections !== undefined || data.theme !== undefined || data.themeSettings !== undefined) throw new Error('Contract, sections, and theme settings are not editable through site settings.')
       const editable = { ...originalDoc, ...data }
       for (const key of ['id', 'key', 'createdAt', 'updatedAt', '_status', 'contractVersion']) delete editable[key]
-      contractError(SiteSettingsDraftSchema.safeParse(editable), req, 'site-settings')
-      return { ...originalDoc, ...data, key: originalDoc?.key ?? 'active' }
+      const address = editable.address as Record<string, unknown> | undefined
+      const clearAddress = Boolean(data.address && typeof data.address === 'object' && ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode'].every(field => !(data.address as Record<string, unknown>)[field]))
+      if (address && ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode'].every(field => !address[field])) delete editable.address
+      const incident = editable.incident as Record<string, unknown> | undefined
+      const clearIncident = Boolean(data.incident && typeof data.incident === 'object' && !(data.incident as Record<string, unknown>).label && !(data.incident as Record<string, unknown>).guidance)
+      if (incident && !incident.label && !incident.guidance) delete editable.incident
+      const clearLogos = Boolean(data.logos && typeof data.logos === 'object' && Object.values(data.logos as Record<string, unknown>).every(value => !value))
+      if (clearLogos) delete editable.logos
+      const parsed = SiteSettingsDraftSchema.safeParse(editable)
+      contractError(parsed, req, 'site-settings')
+      if (parsed.success && parsed.data.navigation) {
+        const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => column.links)]
+        for (const reference of references) {
+          try { await req.payload.findByID({ collection: reference.kind === 'page' ? 'pages' : 'sections', id: reference.id, depth: 0, overrideAccess: true, req }) }
+          catch { throw new Error(`Site navigation references an unavailable ${reference.kind}.`) }
+        }
+      }
+      return {
+        ...parsed.data,
+        ...(clearAddress ? { address: { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null } } : {}),
+        ...(clearIncident ? { incident: { label: null, guidance: null } } : {}),
+        ...(clearLogos ? { logos: { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null } } : {}),
+        key: originalDoc?.key ?? 'active',
+      }
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'site-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
   },
   fields: [
     { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active', admin: { readOnly: true } },
     { name: 'siteName', type: 'text', required: true, maxLength: 100, admin: { description: 'Public site name.' } },
+    { name: 'legalName', type: 'text', maxLength: 160 },
     { name: 'homepageId', type: 'relationship', relationTo: 'pages', admin: { description: 'Published landing page to use as the homepage.' } },
     { name: 'defaultLocale', type: 'select', required: true, options: ['en', 'en-CA'] },
     { name: 'organizationType', type: 'select', options: ['organization', 'professional-service'] },
     { name: 'logo', type: 'relationship', relationTo: 'assets' },
+    { name: 'logos', type: 'group', fields: [
+      { name: 'primaryLight', type: 'relationship', relationTo: 'assets' }, { name: 'primaryDark', type: 'relationship', relationTo: 'assets' },
+      { name: 'fullLockupLight', type: 'relationship', relationTo: 'assets' }, { name: 'fullLockupDark', type: 'relationship', relationTo: 'assets' },
+      { name: 'symbolLight', type: 'relationship', relationTo: 'assets' }, { name: 'symbolDark', type: 'relationship', relationTo: 'assets' },
+    ] },
     { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 160 },
+    { name: 'address', type: 'group', fields: [
+      { name: 'streetAddress', type: 'text', maxLength: 240 }, { name: 'addressLocality', type: 'text', maxLength: 100 },
+      { name: 'addressRegion', type: 'text', maxLength: 100 }, { name: 'postalCode', type: 'text', maxLength: 24 },
+      { name: 'addressCountry', type: 'text', maxLength: 2, defaultValue: 'CA' },
+    ] },
+    { name: 'linkedIn', type: 'text', maxLength: 300 },
+    { name: 'incident', type: 'group', fields: [{ name: 'label', type: 'text', maxLength: 80 }, { name: 'guidance', type: 'textarea', maxLength: 1000 }] },
+    { name: 'navigation', type: 'json', admin: { description: 'Validated ordered header and footer references.' } },
     { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
     { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
   ],

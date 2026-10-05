@@ -587,6 +587,7 @@ export interface SiteSetting {
    * Public site name.
    */
   siteName: string;
+  legalName?: string | null;
   /**
    * Published landing page to use as the homepage.
    */
@@ -594,9 +595,41 @@ export interface SiteSetting {
   defaultLocale: 'en' | 'en-CA';
   organizationType?: ('organization' | 'professional-service') | null;
   logo?: (string | null) | Asset;
+  logos?: {
+    primaryLight?: (string | null) | Asset;
+    primaryDark?: (string | null) | Asset;
+    fullLockupLight?: (string | null) | Asset;
+    fullLockupDark?: (string | null) | Asset;
+    symbolLight?: (string | null) | Asset;
+    symbolDark?: (string | null) | Asset;
+  };
   contactEmail?: string | null;
   contactPhone?: string | null;
   seoDescription?: string | null;
+  address?: {
+    streetAddress?: string | null;
+    addressLocality?: string | null;
+    addressRegion?: string | null;
+    postalCode?: string | null;
+    addressCountry?: string | null;
+  };
+  linkedIn?: string | null;
+  incident?: {
+    label?: string | null;
+    guidance?: string | null;
+  };
+  /**
+   * Validated ordered header and footer references.
+   */
+  navigation?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   /**
    * Expose the static public search page and include it in the primary navigation after this change is reviewed and published.
    */
@@ -1572,13 +1605,41 @@ export interface ThemeSettingsSelect<T extends boolean = true> {
 export interface SiteSettingsSelect<T extends boolean = true> {
   key?: T;
   siteName?: T;
+  legalName?: T;
   homepageId?: T;
   defaultLocale?: T;
   organizationType?: T;
   logo?: T;
+  logos?:
+    | T
+    | {
+        primaryLight?: T;
+        primaryDark?: T;
+        fullLockupLight?: T;
+        fullLockupDark?: T;
+        symbolLight?: T;
+        symbolDark?: T;
+      };
   contactEmail?: T;
   contactPhone?: T;
   seoDescription?: T;
+  address?:
+    | T
+    | {
+        streetAddress?: T;
+        addressLocality?: T;
+        addressRegion?: T;
+        postalCode?: T;
+        addressCountry?: T;
+      };
+  linkedIn?: T;
+  incident?:
+    | T
+    | {
+        label?: T;
+        guidance?: T;
+      };
+  navigation?: T;
   searchEnabled?: T;
   contractVersion?: T;
   updatedAt?: T;

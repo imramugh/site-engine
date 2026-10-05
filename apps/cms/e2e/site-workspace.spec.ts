@@ -25,7 +25,17 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await expect(owner.page.getByRole('status')).toContainText('is ready')
 
   await owner.page.getByLabel('Business name').fill('Synthetic Site Workspace')
-  await owner.page.getByLabel('Contact phone').fill('+1 555 010 0260')
+  await owner.page.getByLabel('Legal name').fill('Synthetic Site Workspace Incorporated')
+  await owner.page.getByLabel(/Phone/).fill('+1 555 010 0260')
+  await owner.page.getByLabel('Street address').fill('100 Example Road')
+  await owner.page.getByLabel('City').fill('Toronto')
+  await owner.page.getByLabel('Province or region').fill('ON')
+  await owner.page.getByLabel('Postal code').fill('M5V 2T6')
+  await owner.page.getByLabel('LinkedIn URL').fill('https://www.linkedin.com/company/synthetic-site-workspace')
+  await owner.page.getByLabel('Label').fill('Incident in progress?')
+  await owner.page.getByLabel('Guidance').fill('Call the incident line and preserve affected systems.')
+  const firstLogo = owner.page.locator('[data-site-details-card=logos] select').first()
+  if (await firstLogo.locator('option').count() > 1) await firstLogo.selectOption({ index: 1 })
   await owner.page.getByRole('button', { name: 'Save business details' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
 
@@ -49,6 +59,9 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   expect(await owner.page.request.get('/__e2e/publish-state').then(response => response.json())).toMatchObject({ releaseCount: 1 })
 
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
+  await owner.page.getByRole('button', { name: 'Add header link' }).click()
+  await owner.page.getByRole('button', { name: 'Save navigation' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
   await expect(owner.page.getByRole('link', { name: 'Edit pages and structure in Content' })).toHaveAttribute('href', '/content-tree')
   await owner.page.getByRole('button', { name: 'Theme' }).click()
   await expect(owner.page.getByRole('heading', { name: 'Themes' })).toBeVisible()

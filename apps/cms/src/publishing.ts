@@ -162,9 +162,16 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     if (!logo) throw new Error('Site settings logo must reference an included asset.')
     siteSettings.logo = logo
   }
+  if (siteSettings.logos && typeof siteSettings.logos === 'object') {
+    siteSettings.logos = Object.fromEntries(Object.entries(siteSettings.logos as Record<string, unknown>).map(([field, value]) => {
+      if (typeof value !== 'string') throw new Error(`Site settings semantic logo ${field} must reference an included asset.`)
+      const asset = media.get(value); if (!asset) throw new Error(`Site settings semantic logo ${field} must reference an included asset.`)
+      return [field, asset]
+    }))
+  }
   // Payload represents omitted optional singleton fields as null. The public
   // snapshot contract intentionally represents omission, not nullability.
-  for (const field of ['homepageId', 'logo', 'organizationType', 'contactEmail', 'contactPhone', 'seoDescription']) {
+  for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription']) {
     if (siteSettings[field] === null) delete siteSettings[field]
   }
   // Keep editor-maintained navigation distinct from derived section membership.

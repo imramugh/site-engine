@@ -1,12 +1,3 @@
-import * as migration_20261003_220000_style_guides from './20261003_220000_style_guides';
-import * as migration_20261003_230000_section_landing_page from './20261003_230000_section_landing_page';
-import * as migration_20261003_240000_integration_configurations from './20261003_240000_integration_configurations';
-import * as migration_20261004_000000_mail_authorizations from './20261004_000000_mail_authorizations';
-import * as migration_20261004_010000_provider_ledger from './20261004_010000_provider_ledger';
-import * as migration_20261004_020000_configured_ai_jobs from './20261004_020000_configured_ai_jobs';
-import * as migration_20261004_030000_page_type_metadata from './20261004_030000_page_type_metadata';
-import * as migration_20261004_031000_page_creation_receipts from './20261004_031000_page_creation_receipts';
-import * as migration_20261004_235511_media_immutable_versions from './20261004_235511_media_immutable_versions';
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
@@ -29,9 +20,19 @@ import * as migration_20261003_181059 from './20261003_181059';
 import * as migration_20261003_191650_theme_settings_selection from './20261003_191650_theme_settings_selection';
 import * as migration_20261003_200100_site_settings from './20261003_200100_site_settings';
 import * as migration_20261003_210000_search_controls from './20261003_210000_search_controls';
+import * as migration_20261003_220000_style_guides from './20261003_220000_style_guides';
+import * as migration_20261003_230000_section_landing_page from './20261003_230000_section_landing_page';
 import * as migration_20261003_230100_scheduled_publications from './20261003_230100_scheduled_publications';
 import * as migration_20261003_230200_scheduled_publication_dispatch from './20261003_230200_scheduled_publication_dispatch';
 import * as migration_20261003_230300_business_case_metadata from './20261003_230300_business_case_metadata';
+import * as migration_20261003_240000_integration_configurations from './20261003_240000_integration_configurations';
+import * as migration_20261004_000000_mail_authorizations from './20261004_000000_mail_authorizations';
+import * as migration_20261004_010000_provider_ledger from './20261004_010000_provider_ledger';
+import * as migration_20261004_020000_configured_ai_jobs from './20261004_020000_configured_ai_jobs';
+import * as migration_20261004_030000_page_type_metadata from './20261004_030000_page_type_metadata';
+import * as migration_20261004_031000_page_creation_receipts from './20261004_031000_page_creation_receipts';
+import * as migration_20261004_235511_media_immutable_versions from './20261004_235511_media_immutable_versions';
+import * as migration_20261005_114210_site_identity_navigation_1_5 from './20261005_114210_site_identity_navigation_1_5';
 
 export const migrations = [
   {
@@ -132,20 +133,81 @@ export const migrations = [
   {
     up: migration_20261003_191650_theme_settings_selection.up,
     down: migration_20261003_191650_theme_settings_selection.down,
-    name: '20261003_191650_theme_settings_selection'
+    name: '20261003_191650_theme_settings_selection',
   },
-  { up: migration_20261003_200100_site_settings.up, down: migration_20261003_200100_site_settings.down, name: '20261003_200100_site_settings' },
-  { up: migration_20261003_210000_search_controls.up, down: migration_20261003_210000_search_controls.down, name: '20261003_210000_search_controls' },
-  { up: migration_20261003_220000_style_guides.up, down: migration_20261003_220000_style_guides.down, name: '20261003_220000_style_guides' },
-  { up: migration_20261003_230000_section_landing_page.up, down: migration_20261003_230000_section_landing_page.down, name: '20261003_230000_section_landing_page' },
-  { up: migration_20261003_230100_scheduled_publications.up, down: migration_20261003_230100_scheduled_publications.down, name: '20261003_230100_scheduled_publications' },
-  { up: migration_20261003_230200_scheduled_publication_dispatch.up, down: migration_20261003_230200_scheduled_publication_dispatch.down, name: '20261003_230200_scheduled_publication_dispatch' },
-  { up: migration_20261003_230300_business_case_metadata.up, down: migration_20261003_230300_business_case_metadata.down, name: '20261003_230300_business_case_metadata' },
-  { up: migration_20261003_240000_integration_configurations.up, down: migration_20261003_240000_integration_configurations.down, name: '20261003_240000_integration_configurations' },
-  { up: migration_20261004_000000_mail_authorizations.up, down: migration_20261004_000000_mail_authorizations.down, name: '20261004_000000_mail_authorizations' },
-  { up: migration_20261004_010000_provider_ledger.up, down: migration_20261004_010000_provider_ledger.down, name: '20261004_010000_provider_ledger' },
-  { up: migration_20261004_020000_configured_ai_jobs.up, down: migration_20261004_020000_configured_ai_jobs.down, name: '20261004_020000_configured_ai_jobs' },
-  { up: migration_20261004_030000_page_type_metadata.up, down: migration_20261004_030000_page_type_metadata.down, name: '20261004_030000_page_type_metadata' },
-  { up: migration_20261004_031000_page_creation_receipts.up, down: migration_20261004_031000_page_creation_receipts.down, name: '20261004_031000_page_creation_receipts' },
-  { up: migration_20261004_235511_media_immutable_versions.up, down: migration_20261004_235511_media_immutable_versions.down, name: '20261004_235511_media_immutable_versions' },
+  {
+    up: migration_20261003_200100_site_settings.up,
+    down: migration_20261003_200100_site_settings.down,
+    name: '20261003_200100_site_settings',
+  },
+  {
+    up: migration_20261003_210000_search_controls.up,
+    down: migration_20261003_210000_search_controls.down,
+    name: '20261003_210000_search_controls',
+  },
+  {
+    up: migration_20261003_220000_style_guides.up,
+    down: migration_20261003_220000_style_guides.down,
+    name: '20261003_220000_style_guides',
+  },
+  {
+    up: migration_20261003_230000_section_landing_page.up,
+    down: migration_20261003_230000_section_landing_page.down,
+    name: '20261003_230000_section_landing_page',
+  },
+  {
+    up: migration_20261003_230100_scheduled_publications.up,
+    down: migration_20261003_230100_scheduled_publications.down,
+    name: '20261003_230100_scheduled_publications',
+  },
+  {
+    up: migration_20261003_230200_scheduled_publication_dispatch.up,
+    down: migration_20261003_230200_scheduled_publication_dispatch.down,
+    name: '20261003_230200_scheduled_publication_dispatch',
+  },
+  {
+    up: migration_20261003_230300_business_case_metadata.up,
+    down: migration_20261003_230300_business_case_metadata.down,
+    name: '20261003_230300_business_case_metadata',
+  },
+  {
+    up: migration_20261003_240000_integration_configurations.up,
+    down: migration_20261003_240000_integration_configurations.down,
+    name: '20261003_240000_integration_configurations',
+  },
+  {
+    up: migration_20261004_000000_mail_authorizations.up,
+    down: migration_20261004_000000_mail_authorizations.down,
+    name: '20261004_000000_mail_authorizations',
+  },
+  {
+    up: migration_20261004_010000_provider_ledger.up,
+    down: migration_20261004_010000_provider_ledger.down,
+    name: '20261004_010000_provider_ledger',
+  },
+  {
+    up: migration_20261004_020000_configured_ai_jobs.up,
+    down: migration_20261004_020000_configured_ai_jobs.down,
+    name: '20261004_020000_configured_ai_jobs',
+  },
+  {
+    up: migration_20261004_030000_page_type_metadata.up,
+    down: migration_20261004_030000_page_type_metadata.down,
+    name: '20261004_030000_page_type_metadata',
+  },
+  {
+    up: migration_20261004_031000_page_creation_receipts.up,
+    down: migration_20261004_031000_page_creation_receipts.down,
+    name: '20261004_031000_page_creation_receipts',
+  },
+  {
+    up: migration_20261004_235511_media_immutable_versions.up,
+    down: migration_20261004_235511_media_immutable_versions.down,
+    name: '20261004_235511_media_immutable_versions',
+  },
+  {
+    up: migration_20261005_114210_site_identity_navigation_1_5.up,
+    down: migration_20261005_114210_site_identity_navigation_1_5.down,
+    name: '20261005_114210_site_identity_navigation_1_5'
+  },
 ];

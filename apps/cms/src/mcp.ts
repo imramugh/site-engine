@@ -140,7 +140,7 @@ export async function handleMcp(request: Request): Promise<Response> {
     const result = await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
     const setting = result.docs[0] as unknown as Record<string, unknown> | undefined
     if (!setting) return { status: 'not-configured' }
-    return { siteName: setting.siteName, homepageId: setting.homepageId, defaultLocale: setting.defaultLocale, organizationType: setting.organizationType, contactEmail: setting.contactEmail, contactPhone: setting.contactPhone, seoDescription: setting.seoDescription, searchEnabled: setting.searchEnabled }
+    return { siteName: setting.siteName, legalName: setting.legalName, homepageId: setting.homepageId, defaultLocale: setting.defaultLocale, organizationType: setting.organizationType, logo: setting.logo, logos: setting.logos, contactEmail: setting.contactEmail, contactPhone: setting.contactPhone, address: setting.address, linkedIn: setting.linkedIn, incident: setting.incident, navigation: setting.navigation, seoDescription: setting.seoDescription, searchEnabled: setting.searchEnabled }
   }
   const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' ? value.id : undefined
   /** Published releases only retain a relationship ID at depth 0. Resolve the
