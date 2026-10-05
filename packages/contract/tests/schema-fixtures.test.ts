@@ -91,4 +91,23 @@ describe('ENG-002 site data semantic fixtures', () => {
     const legacy = structuredClone(value); legacy.settings.contractVersion = '1.4.0'; expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(false)
     const missing = structuredClone(value); missing.settings.navigation!.header[0]!.id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'; expect(SiteSnapshotSchema.safeParse(missing).success).toBe(false)
   })
+  it('gates unavailable, generated, contact, and bottom navigation to 1.6 while retaining literal copyright', () => {
+    const value = snapshot(); value.settings.contractVersion = '1.6.0'
+    value.settings.navigation = {
+      header: [{ kind: 'unavailable', label: 'Insights', reason: 'Insights are planned but not published.', style: 'link' }],
+      footer: {
+        columns: [
+          { kind: 'section-pillars', heading: 'Services', sectionId: value.settings.sections[0]!.id },
+          { kind: 'contact', heading: 'Contact', fields: ['email', 'address', 'linkedIn'] },
+        ],
+        bottomLinks: [{ kind: 'unavailable', label: 'Privacy', reason: 'The privacy page is not published.' }],
+        copyright: 'Copyright Synthetic Studio',
+      },
+    }
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(true)
+    const automatic = structuredClone(value); automatic.settings.navigation!.footer.copyright = '© {year} Synthetic Studio'; expect(SiteSnapshotSchema.safeParse(automatic).success).toBe(true)
+    const unknownToken = structuredClone(value); unknownToken.settings.navigation!.footer.copyright = '© {date} Synthetic Studio'; expect(SiteSnapshotSchema.safeParse(unknownToken).success).toBe(false)
+    const duplicateContact = structuredClone(value); duplicateContact.settings.navigation!.footer.columns[1] = { kind: 'contact', heading: 'Contact', fields: ['email', 'email'] }; expect(SiteSnapshotSchema.safeParse(duplicateContact).success).toBe(false)
+    const old = structuredClone(value); old.settings.contractVersion = '1.5.0'; expect(SiteSnapshotSchema.safeParse(old).success).toBe(false)
+  })
 })

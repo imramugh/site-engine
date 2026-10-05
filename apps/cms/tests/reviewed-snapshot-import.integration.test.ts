@@ -15,7 +15,8 @@ const directory = mkdtempSync(join(tmpdir(), 'site-engine-reviewed-import-'))
 const registryFile = join(directory, 'theme-registry.json')
 const oldThemeManifest = { name: 'synthetic-import-theme', version: '1.4.0', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const newThemeManifest = { ...oldThemeManifest, version: '1.5.0', contract: '1.5.0' }
-const themeRegistry = { themes: [{ manifest: oldThemeManifest, installedAt: '2026-10-04T00:00:00.000Z' }, { manifest: newThemeManifest, installedAt: '2026-10-05T00:00:00.000Z' }] }
+const navigationThemeManifest = { ...oldThemeManifest, version: '1.6.0', contract: '1.6.0' }
+const themeRegistry = { themes: [{ manifest: oldThemeManifest, installedAt: '2026-10-04T00:00:00.000Z' }, { manifest: newThemeManifest, installedAt: '2026-10-05T00:00:00.000Z' }, { manifest: navigationThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' }] }
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-reviewed-import'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
@@ -116,6 +117,22 @@ describe('reviewed snapshot reconciliation', () => {
     expect(candidate.pages[0]).toMatchObject({ summary: desired.pages[0]!.summary })
     await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'discard' }))
     expect((await payload.findByID({ collection: 'theme-settings', id: current.id, draft: true, overrideAccess: true })).selection).toEqual(baseline.settings.theme)
+  })
+
+  it('imports contract 1.6 generated, contact, unavailable, and bottom navigation with its installed theme', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `navigation-import-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.5.0'; baseline.settings.theme = selection(newThemeManifest); baseline.settings.themeSettings = { [newThemeManifest.name]: {} }
+    const desired = structuredClone(baseline); desired.settings.contractVersion = '1.6.0'; desired.settings.theme = selection(navigationThemeManifest)
+    desired.settings.contactEmail = 'hello@example.test'
+    desired.settings.navigation = { header: [{ kind: 'unavailable', label: 'Insights', reason: 'Insights are not published.', style: 'link' }], footer: { columns: [{ kind: 'section-pillars', heading: 'Services', sectionId: desired.settings.sections[0]!.id }, { kind: 'contact', heading: 'Contact', fields: ['email', 'address'] }], bottomLinks: [{ kind: 'unavailable', label: 'Privacy', reason: 'Privacy is not published.' }], copyright: '© {year} Imported Site' } }
+    const records = await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true })
+    if (records.docs[0]) await payload.update({ collection: 'theme-settings', id: records.docs[0].id, data: { selection: baseline.settings.theme, settings: baseline.settings.themeSettings }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    else await payload.create({ collection: 'theme-settings', data: { key: 'active', selection: baseline.settings.theme, settings: baseline.settings.themeSettings }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Import reviewed navigation', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as Array<{ collection: string; id: string; after: Record<string, unknown> }>
+    const candidate = buildCandidate(baseline, changes as never, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: navigationThemeManifest.version, engineVersion: 'test', contractVersion: '1.6.0' })
+    expect(candidate.settings).toMatchObject({ contractVersion: '1.6.0', theme: desired.settings.theme, navigation: desired.settings.navigation })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'discard' }))
   })
 
   it('rejects unavailable or contract-mismatched selections before writing drafts', async () => {

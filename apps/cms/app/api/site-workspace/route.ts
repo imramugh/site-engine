@@ -5,6 +5,7 @@ import { hasRole } from '../../../src/access'
 import { buildContentTree, canonicalContentPath, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
 import { serverSessionStrategy } from '../../../src/identity'
 import { canonicalHash } from '../../../src/publishing'
+import { loadInitialPreviewBaseline, previewThemeContext } from '../../../src/review-preview'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -69,10 +70,11 @@ async function context(payload: Awaited<ReturnType<typeof getPayload>>, actor: A
   const settingsDoc = settingsResult.docs[0] as unknown as Document | undefined
   const guideDoc = guideResult.docs[0] as unknown as Document | undefined
   const settings = settingsValue(settingsDoc); const guide = guideValue(guideDoc)
-  const sections = sectionsResult.docs as unknown as ContentTreeSection[]
+  const sections = sectionsResult.docs as unknown as Array<ContentTreeSection & { pageIds?: Array<string | { id?: string }> }>
   const pages = pagesResult.docs as unknown as ContentTreePage[]
   const homepageID = settings.homepageId ?? undefined
   const tree = buildContentTree(sections, pages)
+  const themeContext = await previewThemeContext({ payload, changeSets: sets.docs as unknown as Document[], initialBaseline: await loadInitialPreviewBaseline() })
   const flatten = (nodes: ContentTreeNode[], depth = 0): Array<{ id: string; title: string; path: string | null; depth: number }> => nodes.flatMap(node => [{ id: node.page.id, title: node.page.title, path: canonicalContentPath(node.page, pages, sections, homepageID) ?? null, depth }, ...flatten(node.children, depth + 1)])
   const navigation = tree.sections.map(group => ({
     id: group.section.id, name: group.section.name,
@@ -80,10 +82,10 @@ async function context(payload: Awaited<ReturnType<typeof getPayload>>, actor: A
   }))
   return {
     settings, settingsHash: canonicalHash(settings), guide, guideHash: canonicalHash(guide),
-    changeSets: sets.docs.map(set => ({ id: set.id, name: set.name, state: set.state, revision: set.revision })),
+    changeSets: sets.docs.map(set => ({ id: set.id, name: set.name, state: set.state, revision: set.revision, contractVersion: themeContext.changeSetContractVersions[String(set.id)] ?? null })),
     redirects: (redirects.docs as unknown as Document[]).map(doc => ({ id: doc.id, ...redirectValue(doc), hitCount: Number(doc.hitCount ?? 0), lastHitAt: doc.lastHitAt ?? null, hash: canonicalHash(redirectValue(doc)) })),
     navigation,
-    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name })), assets: assetsResult.docs.filter(asset => !asset.deletedAt).map(asset => { const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as { url?: string } : asset; return { id: asset.id, label: asset.alt || asset.filename || asset.id, url: file.url ?? null } }) },
+    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name, pillars: (section.pageIds ?? []).map(idOf).map(id => pages.find(page => page.id === id)).filter(page => page?._status !== 'archived' && page?.template === 'pillar' && (!idOf(page?.parentId) || idOf(page?.parentId) === idOf(section.landingPageId))).map(page => ({ id: page!.id, title: page!.title })) })), assets: assetsResult.docs.filter(asset => !asset.deletedAt).map(asset => { const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as { url?: string } : asset; return { id: asset.id, label: asset.alt || asset.filename || asset.id, url: file.url ?? null } }) },
   }
 }
 
@@ -124,6 +126,12 @@ export async function POST(request: Request) {
         if (input.expectedHash !== canonicalHash(settingsValue(current))) throw new Error('Site details changed. Reload before saving.')
         const value = input.value as Record<string, unknown>
         if (!value || Object.keys(value).some(key => !['siteName','legalName','homepageId','defaultLocale','organizationType','logo','logos','contactEmail','contactPhone','address','linkedIn','incident','navigation','seoDescription','searchEnabled'].includes(key))) throw new Error('Unsupported site setting.')
+        const navigation = value.navigation as { header?: Array<{ kind?: string }>; footer?: { columns?: Array<{ kind?: string }>; bottomLinks?: Array<{ kind?: string }> } } | null | undefined
+        const uses16 = Boolean(navigation && (navigation.header?.some(item => item.kind === 'unavailable') || navigation.footer?.bottomLinks || navigation.footer?.columns?.some(column => ['section-pillars', 'contact'].includes(column.kind ?? ''))))
+        if (uses16) {
+          const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
+          if (preview.changeSetContractVersions[String(set.id)] !== '1.6.0') throw new Error('This Navigation design requires a selected contract 1.6 theme in the same change set.')
+        }
         const data = { ...value, logos: value.logos ?? { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }, address: value.address ?? { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }, incident: value.incident ?? { label: null, guidance: null }, key: 'active' }
         if (current) await payload.update({ collection: 'site-settings', id: current.id, data, draft: true, overrideAccess: false, user: actor as never, req })
         else await payload.create({ collection: 'site-settings', data, draft: true, overrideAccess: false, user: actor as never, req })

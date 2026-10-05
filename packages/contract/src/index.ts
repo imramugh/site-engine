@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.5.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.6.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -197,10 +197,17 @@ export const SemanticLogosSchema = z.object({
   fullLockupLight: MediaReferenceSchema.optional(), fullLockupDark: MediaReferenceSchema.optional(),
   symbolLight: MediaReferenceSchema.optional(), symbolDark: MediaReferenceSchema.optional(),
 }).strict();
-export const NavigationReferenceSchema = z.object({ kind: z.enum(['page', 'section']), id, label: safeText(80), style: z.enum(['link', 'button']).default('link') }).strict();
+const AvailableNavigationReferenceSchema = z.object({ kind: z.enum(['page', 'section']), id, label: safeText(80), style: z.enum(['link', 'button']).default('link') }).strict();
+const UnavailableNavigationReferenceSchema = z.object({ kind: z.literal('unavailable'), label: safeText(80), reason: safeText(160), style: z.enum(['link', 'button']).default('link') }).strict();
+export const NavigationReferenceSchema = z.discriminatedUnion('kind', [AvailableNavigationReferenceSchema, UnavailableNavigationReferenceSchema]);
+const FooterNavigationReferenceSchema = z.discriminatedUnion('kind', [AvailableNavigationReferenceSchema.omit({ style: true }), UnavailableNavigationReferenceSchema.omit({ style: true })]);
+const FooterLinksColumnSchema = z.object({ kind: z.literal('links').optional(), heading: safeText(80), links: z.array(FooterNavigationReferenceSchema).max(12) }).strict();
+const FooterPillarsColumnSchema = z.object({ kind: z.literal('section-pillars'), heading: safeText(80), sectionId: id }).strict();
+const FooterContactColumnSchema = z.object({ kind: z.literal('contact'), heading: safeText(80), fields: z.array(z.enum(['phone', 'email', 'address', 'linkedIn'])).max(4).refine(fields => new Set(fields).size === fields.length, 'Contact fields must be unique.') }).strict();
+const CopyrightSchema = safeText(240).refine(value => (value.match(/\{year\}/g) ?? []).length <= 1 && !/\{[^}]+\}/.test(value.replace('{year}', '')), 'Copyright supports only one optional {year} token.');
 export const SiteNavigationSchema = z.object({
   header: z.array(NavigationReferenceSchema).max(6).default([]),
-  footer: z.object({ columns: z.array(z.object({ heading: safeText(80), links: z.array(NavigationReferenceSchema.omit({ style: true })).max(12) }).strict()).max(3).default([]), copyright: safeText(240).optional() }).strict(),
+  footer: z.object({ columns: z.array(z.union([FooterLinksColumnSchema, FooterPillarsColumnSchema, FooterContactColumnSchema])).max(3).default([]), bottomLinks: z.array(FooterNavigationReferenceSchema).max(6).optional(), copyright: CopyrightSchema.optional() }).strict(),
 }).strict().superRefine((navigation, ctx) => {
   const buttons = navigation.header.filter((item) => item.style === 'button');
   if (buttons.length > 1) ctx.addIssue({ code: 'custom', path: ['header'], message: 'Header navigation allows at most one button.' });
@@ -249,13 +256,19 @@ export const SiteSnapshotSchema = z.object({
   if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
   const assets = new Map(snapshot.media.map((asset) => [asset.id, asset]));
   if (assets.size !== snapshot.media.length) issue(['media'], 'Media IDs must be unique');
-  const supports14 = ['1.4.0', '1.5.0'].includes(snapshot.settings.contractVersion);
+  const supports14 = ['1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion);
   if (!supports14) snapshot.media.forEach((asset, index) => { if (asset.focalX !== undefined || asset.focalY !== undefined) issue(['media', index], 'Media focal points require contract version 1.4.0.'); });
   const site15Fields = ['legalName', 'logos', 'address', 'linkedIn', 'incident', 'navigation'] as const;
-  if (snapshot.settings.contractVersion !== '1.5.0' && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
+  if (!['1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
   if (snapshot.settings.logos) Object.entries(snapshot.settings.logos).forEach(([field, asset]) => { if (!assets.has(asset.id)) issue(['settings', 'logos', field], 'Semantic logos must reference included media.'); });
-  const navigationRefs = [...(snapshot.settings.navigation?.header ?? []), ...(snapshot.settings.navigation?.footer.columns.flatMap(column => column.links) ?? [])];
-  navigationRefs.forEach((reference, index) => { if (reference.kind === 'page' ? !pages.has(reference.id) : !sections.has(reference.id)) issue(['settings', 'navigation', index], `Navigation references an unknown ${reference.kind}.`); });
+  const navigation = snapshot.settings.navigation;
+  const navigationRefs = [...(navigation?.header ?? []), ...(navigation?.footer.columns.flatMap(column => 'links' in column ? column.links : []) ?? []), ...(navigation?.footer.bottomLinks ?? [])];
+  navigationRefs.forEach((reference, index) => { if (reference.kind !== 'unavailable' && (reference.kind === 'page' ? !pages.has(reference.id) : !sections.has(reference.id))) issue(['settings', 'navigation', index], `Navigation references an unknown ${reference.kind}.`); });
+  navigation?.footer.columns.forEach((column, index) => {
+    if (column.kind === 'section-pillars' && !sections.has(column.sectionId)) issue(['settings', 'navigation', 'footer', 'columns', index, 'sectionId'], 'Generated navigation references an unknown section.');
+  });
+  const uses16Navigation = Boolean(navigation && (navigationRefs.some(reference => reference.kind === 'unavailable') || navigation.footer.bottomLinks || navigation.footer.columns.some(column => column.kind === 'section-pillars' || column.kind === 'contact')));
+  if (uses16Navigation && snapshot.settings.contractVersion !== '1.6.0') issue(['settings', 'navigation'], 'Generated, contact, bottom, and unavailable navigation require contract version 1.6.0.');
   const siblingSlugs = new Set<string>();
   for (const [index, page] of snapshot.pages.entries()) {
     if (!supports14 && (page.kicker || page.lede || page.lastReviewed)) issue(['pages', index], 'Service introduction and last-reviewed metadata require contract version 1.4.0.');
@@ -282,9 +295,9 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
-      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
-      if (!['1.3.0', '1.4.0', '1.5.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
-      if (snapshot.settings.contractVersion !== '1.5.0' && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
+      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (!['1.3.0', '1.4.0', '1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
+      if (!['1.5.0', '1.6.0'].includes(snapshot.settings.contractVersion) && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);
