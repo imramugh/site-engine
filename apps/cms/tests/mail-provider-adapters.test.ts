@@ -31,7 +31,7 @@ describe('provider-shaped threaded reads', () => {
   it('uses Graph reply and permits opaque Graph identifiers', async () => {
     let url = ''
     const adapter = microsoftAdapter(async value => { url = value; return new Response(null, { status: 202 }) }, 'staff@example.test')
-    await adapter.send('token', { sender: 'staff@example.test', recipient: 'visitor@example.test', subject: 'Re', body: 'Reply', threadID: 'AQMkAD+=/opaque' })
+    await adapter.send('token', { sender: 'staff@example.test', recipient: 'visitor@example.test', subject: 'Re', body: 'Reply', threadID: 'conversation-1', replyMessageID: 'AQMkAD+=/opaque' })
     expect(url).toContain('/messages/AQMkAD%2B%3D%2Fopaque/reply')
   })
   it('normalizes Gmail MIME body, date and attachment metadata', async () => {

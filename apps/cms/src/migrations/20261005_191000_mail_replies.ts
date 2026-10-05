@@ -26,8 +26,9 @@ export async function up({ db }: MigrateUpArgs): Promise<void> {
   await db.run(sql`CREATE INDEX mail_authorizations_created_at_idx ON mail_authorizations (created_at);`)
 }
 export async function down({ db }: MigrateDownArgs): Promise<void> {
-  await db.run(sql`DELETE FROM mail_authorizations WHERE draft_id IN (SELECT id FROM mail_drafts WHERE application_id IS NOT NULL);`)
-  await db.run(sql`DELETE FROM mail_drafts WHERE application_id IS NOT NULL;`)
+  const result = await db.run(sql`SELECT COUNT(*) AS count FROM mail_drafts WHERE application_id IS NOT NULL;`)
+  const count = Number((result.rows[0] as { count?: unknown } | undefined)?.count ?? 0)
+  if (count > 0) throw new Error('Cannot roll back mail replies while career reply data exists. Restore the expanded schema instead; no data was changed.')
   await db.run(sql`CREATE TEMP TABLE retention_mail_locks_down AS SELECT * FROM payload_locked_documents_rels WHERE mail_drafts_id IS NOT NULL OR mail_authorizations_id IS NOT NULL;`)
   await db.run(sql`CREATE TABLE mail_drafts_previous (id text(36) PRIMARY KEY NOT NULL, lead_id text(36) NOT NULL REFERENCES inquiries(id), thread_i_d text NOT NULL, recipient text NOT NULL, sender text NOT NULL, subject text NOT NULL, body text NOT NULL, attachment_hashes text DEFAULT '[]', revision numeric NOT NULL DEFAULT 1, state text NOT NULL DEFAULT 'prepared', updated_at text NOT NULL, created_at text NOT NULL);`)
   await db.run(sql`INSERT INTO mail_drafts_previous (id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at) SELECT id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at FROM mail_drafts;`)
