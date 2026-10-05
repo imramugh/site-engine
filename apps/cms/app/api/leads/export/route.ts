@@ -18,6 +18,7 @@ export async function GET(request: Request): Promise<Response> {
     if (error instanceof LeadFilterError) return Response.json({ error: error.message }, { status: 400, headers: noStore })
     throw error
   }
+  filters.spam = false
   const result = await payload.find({ collection: 'inquiries', where: leadWhere(filters, true), sort: '-urgent,-updatedAt', limit: 10_000, depth: 0, overrideAccess: true })
   const columns = ['id', 'email', 'name', 'telephone', 'company', 'topic', 'sourcePage', 'message', 'stage', 'urgent', 'notes', 'nextAction', 'assignee', 'createdAt']
   const csv = [columns.join(','), ...result.docs.map((lead) => columns.map((column) => csvEscape((lead as unknown as Record<string, unknown>)[column])).join(','))].join('\r\n')

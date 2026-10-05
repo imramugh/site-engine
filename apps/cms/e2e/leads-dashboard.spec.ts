@@ -1,7 +1,7 @@
 import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const tokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' }
+const tokens = { owner: 'synthetic-lead-owner-session-token', staleOwner: 'synthetic-lead-stale-owner-session-token', sales: 'synthetic-application-sales-session-token', editor: 'synthetic-lead-editor-session-token' }
 
 async function signedIn(browser: Browser, role: keyof typeof tokens) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -40,7 +40,9 @@ test('ENG-019 owner uses the real pipeline, manual intake, controlled detail for
   await attachRenderedFonts(owner.page, testInfo)
   await expect(owner.page.getByRole('heading', { name: 'Lead pipeline', level: 1 })).toBeAttached()
   await expect(owner.page.getByRole('button', { name: 'Pipeline' })).toHaveAttribute('aria-pressed', 'true')
-  const proposal = owner.page.getByRole('region', { name: 'Proposal' })
+  const stageHeadings = await owner.page.locator('[data-leads-pipeline] h2').allTextContents()
+  expect(stageHeadings).toEqual(['New', 'Contacted', 'Qualified', 'Proposal sent', 'Won', 'Lost'])
+  const proposal = owner.page.getByRole('region', { name: 'Proposal sent' })
   await expect(proposal.locator('header')).toContainText('51')
   await expect(proposal).toContainText('Showing 6 of 51')
   await owner.page.screenshot({ path: testInfo.outputPath('leads-pipeline-desktop.png'), fullPage: true })
@@ -70,7 +72,7 @@ test('ENG-019 owner uses the real pipeline, manual intake, controlled detail for
   await detail.getByLabel('Next action').fill('Send a scoped proposal.')
   await detail.getByRole('button', { name: 'Save lead details' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Lead details saved')
-  await expect(owner.page.getByRole('region', { name: 'Proposal' }).locator('header')).toContainText('52')
+  await expect(owner.page.getByRole('region', { name: 'Proposal sent' }).locator('header')).toContainText('52')
   const audit = await owner.page.request.get('/api/audit-events?where[event][equals]=lead.updated&sort=-createdAt&limit=1&depth=0')
   expect(audit.ok()).toBeTruthy()
   expect((await audit.json()).docs[0]).toMatchObject({ event: 'lead.updated', actor: expect.any(String), detail: { fields: expect.arrayContaining(['stage', 'assignee', 'notes', 'nextAction']) } })
@@ -87,7 +89,7 @@ test('ENG-019 owner uses the real pipeline, manual intake, controlled detail for
   expect(csvText).toContain('notes-b.synthetic@example.test')
   expect(csvText).not.toContain('proposal-0@synthetic.example.test')
   await owner.page.getByRole('button', { name: 'Pipeline' }).click()
-  await expect(owner.page.getByRole('region', { name: 'Proposal' }).locator('header')).toContainText('1')
+  await expect(owner.page.getByRole('region', { name: 'Proposal sent' }).locator('header')).toContainText('1')
 
   await owner.page.getByRole('button', { name: 'List' }).click()
   await owner.page.getByLabel('Lead filters').getByLabel('Stage').selectOption('')
@@ -120,6 +122,24 @@ test('ENG-019 owner uses the real pipeline, manual intake, controlled detail for
   expect(invalid.status()).toBe(422)
   expect(invalid.headers()['cache-control']).toBe('no-store')
 
+  await owner.page.getByRole('button', { name: /Spam · 2/ }).click()
+  await expect(owner.page.locator('[data-leads-view="spam"]')).toBeVisible()
+  await expect(owner.page.locator('[data-spam-row]')).toHaveCount(2)
+  await owner.page.screenshot({ path: testInfo.outputPath('leads-spam-desktop.png'), fullPage: true })
+  const restoreRow = owner.page.locator('[data-spam-row]').filter({ hasText: 'Restore spam fixture' })
+  await restoreRow.getByRole('button', { name: 'Not spam' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('moved to New leads')
+  await expect(owner.page.getByRole('button', { name: /Spam · 1/ })).toBeVisible()
+  const deleteRow = owner.page.locator('[data-spam-row]').filter({ hasText: 'Delete spam fixture' })
+  owner.page.once('dialog', (dialog) => dialog.accept())
+  await deleteRow.getByRole('button', { name: 'Delete' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('permanently deleted')
+  await expect(owner.page.getByText('No spam.')).toBeVisible()
+  const restored = await owner.page.request.get('/api/leads?stage=new&received=all')
+  expect((await restored.json()).leads).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.any(String), email: 'restore-spam.synthetic@example.test', stage: 'new' })]))
+  const deleted = await owner.page.request.get('/api/inquiries?where[email][equals]=delete-spam.synthetic@example.test&depth=0')
+  expect((await deleted.json()).totalDocs).toBe(0)
+
   expect(await axe(owner.page)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('leads-list-desktop.png'), fullPage: true })
   await owner.context.close()
@@ -143,7 +163,7 @@ test('ENG-019 remains keyboard-readable at 390px and recovers from a load error'
   const column = await owner.page.getByRole('region', { name: 'New' }).evaluate((element) => ({ height: element.getBoundingClientRect().height, overflow: getComputedStyle(element).overflowY }))
   expect(column.height).toBeLessThanOrEqual(392)
   expect(column.overflow).toBe('auto')
-  expect(await owner.page.getByRole('region', { name: 'Proposal' }).evaluate((element) => { element.scrollTop = element.scrollHeight; return element.scrollTop > 0 })).toBe(true)
+  expect(await owner.page.getByRole('region', { name: 'Proposal sent' }).evaluate((element) => { element.scrollTop = element.scrollHeight; return element.scrollTop > 0 })).toBe(true)
   await owner.page.getByRole('button', { name: /new-lead.synthetic@example.test/ }).focus()
   await owner.page.keyboard.press('Enter')
   await expect(owner.page.getByRole('complementary', { name: 'Lead details' })).toBeVisible()
@@ -156,6 +176,15 @@ test('ENG-019 remains keyboard-readable at 390px and recovers from a load error'
   expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
   expect(await axe(owner.page)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('leads-pipeline-390.png'), fullPage: true })
+  const activeResponse = await owner.page.request.get('/api/leads?received=all')
+  const activeLead = (await activeResponse.json()).leads[0]
+  expect((await owner.page.request.patch(`/api/leads/${activeLead.id}`, { headers: { origin }, data: { action: 'mark-spam' } })).status()).toBe(200)
+  await owner.page.getByRole('button', { name: /Spam ·/ }).click()
+  await expect(owner.page.locator('[data-leads-view="spam"]')).toBeVisible()
+  await expect(owner.page.locator('[data-spam-row]')).toHaveCount(1)
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
+  expect(await axe(owner.page)).toEqual([])
+  await owner.page.screenshot({ path: testInfo.outputPath('leads-spam-390.png'), fullPage: true })
   await owner.context.close()
 })
 
@@ -171,4 +200,21 @@ test('ENG-019 denies anonymous and non-sales staff without exposing lead data', 
   await editor.page.goto('/leads')
   await expect(editor.page).toHaveURL(/\/admin\/login/)
   await editor.context.close()
+
+  const sales = await signedIn(browser, 'sales')
+  const listed = await sales.page.request.get('/api/leads?received=all')
+  expect(listed.ok()).toBeTruthy()
+  const lead = (await listed.json()).leads[0]
+  const noOrigin = await sales.page.request.patch(`/api/leads/${lead.id}`, { data: { action: 'mark-spam' } })
+  expect(noOrigin.status()).toBe(403)
+  const classified = await sales.page.request.patch(`/api/leads/${lead.id}`, { headers: { origin }, data: { action: 'mark-spam' } })
+  expect(classified.status()).toBe(200)
+  const deniedDelete = await sales.page.request.delete(`/api/leads/${lead.id}`, { headers: { origin } })
+  expect(deniedDelete.status()).toBe(403)
+  await sales.context.close()
+  const staleOwner = await signedIn(browser, 'staleOwner')
+  const staleDelete = await staleOwner.page.request.delete(`/api/leads/${lead.id}`, { headers: { origin } })
+  expect(staleDelete.status()).toBe(403)
+  expect(await staleDelete.json()).toMatchObject({ error: expect.stringContaining('Fresh Owner') })
+  await staleOwner.context.close()
 })

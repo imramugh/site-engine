@@ -4,8 +4,9 @@ import { LeadFilterError, leadFilterClauses, parseLeadFilters } from '../src/lea
 describe('lead filters', () => {
   it('parses source and received range into shared list, pipeline, and export clauses', () => {
     const filters = parseLeadFilters(new URL('https://cms.test/api/leads?stage=proposal&urgent=true&sourcePage=%2Fservices%2Fa&received=90&page=2'))
-    expect(filters).toEqual({ stage: 'proposal', urgent: true, sourcePage: '/services/a', received: '90', page: 2 })
+    expect(filters).toEqual({ stage: 'proposal', urgent: true, sourcePage: '/services/a', received: '90', page: 2, spam: false })
     expect(leadFilterClauses(filters, true, new Date('2026-10-04T12:00:00.000Z'))).toEqual([
+      { or: [{ spam: { equals: false } }, { spam: { exists: false } }] },
       { stage: { equals: 'proposal' } },
       { urgent: { equals: true } },
       { sourcePage: { equals: '/services/a' } },
@@ -20,6 +21,7 @@ describe('lead filters', () => {
     ['sourcePage=https%3A%2F%2Fevil.test', 'valid source page'],
     ['received=quarter', 'last 7, 30, 90, or 365 days'],
     ['page=0', 'positive whole number'],
+    ['spam=yes', 'true or false'],
   ])('rejects invalid query %s with useful guidance', (query, guidance) => {
     expect(() => parseLeadFilters(new URL(`https://cms.test/api/leads?${query}`))).toThrowError(new RegExp(guidance))
     expect(() => parseLeadFilters(new URL(`https://cms.test/api/leads?${query}`))).toThrow(LeadFilterError)

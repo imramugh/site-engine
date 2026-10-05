@@ -432,17 +432,20 @@ export const Inquiries: CollectionConfig = {
   admin: { useAsTitle: 'email', group: 'Private', defaultColumns: ['email', 'topic', 'stage', 'urgent', 'assignee', 'nextAction', 'updatedAt'] },
   // Public submissions enter only through the server-owned intake route. This
   // keeps the form entirely outside editorial and ordinary Payload REST create.
-  access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: freshStaff(['owner']) },
   hooks: { beforeChange: [async ({ data, originalDoc, operation, req }) => {
     if (operation !== 'update') return data
+    if (originalDoc.spam && req.context.leadSpamLifecycle !== true) throw new Error('Restore spam before editing lead details.')
+    if (['spam', 'spamMarkedAt', 'spamPreviousStage'].some((field) => data[field] !== undefined && data[field] !== originalDoc[field]) && req.context.leadSpamLifecycle !== true) throw new Error('Spam classification uses the audited lead lifecycle.')
     for (const field of ['email', 'name', 'telephone', 'company', 'message', 'topic', 'sourcePage', 'consentedAt', 'consentBasis', 'idempotencyKey', 'urgent']) {
       if (data[field] !== undefined && data[field] !== originalDoc[field]) throw new Error('Original inquiry and consent evidence cannot be changed.')
     }
-    if (data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
+    if (req.context.leadSpamLifecycle !== true && data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
     for (const field of ['notes', 'nextAction']) if (data[field] !== undefined && data[field] !== null && (typeof data[field] !== 'string' || data[field].length > 5_000)) throw new Error(`Invalid ${field}.`)
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
+    if (req.context.leadSpamDeleteLifecycle !== true) throw new Error('Lead deletion uses the audited spam lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
@@ -458,7 +461,10 @@ export const Inquiries: CollectionConfig = {
     { name: 'consentedAt', type: 'date', required: true, admin: { readOnly: true } },
     { name: 'consentBasis', type: 'select', required: true, options: ['visitor-confirmed', 'staff-recorded', 'unknown'], admin: { readOnly: true } },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
-    { name: 'stage', type: 'select', defaultValue: 'new', required: true, options: ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] },
+    { name: 'stage', type: 'select', defaultValue: 'new', required: true, options: ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'] },
+    { name: 'spam', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
+    { name: 'spamMarkedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'spamPreviousStage', type: 'select', options: ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'], admin: { readOnly: true } },
     { name: 'urgent', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
     { name: 'notes', type: 'textarea' },
     { name: 'assignee', type: 'relationship', relationTo: 'users' },
