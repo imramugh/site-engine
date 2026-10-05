@@ -2,7 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
-import { defaultRetentionPolicy, purgeApplication, retentionPolicy } from '../../../src/retention'
+import { defaultRetentionPolicy, purgeApplication, purgeRetainedInquiry, retentionPolicy } from '../../../src/retention'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -43,8 +43,10 @@ export async function DELETE(request: Request) {
   if (!originOK(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const { payload, actor } = await actorFor(request)
   if (!actor?.id || !(await freshStaff(['owner'])({ req: { payload, user: actor, headers: request.headers } as never }))) return Response.json({ error: 'Fresh Owner authentication is required.' }, { status: 403, headers: noStore })
-  let body: { applicationID?: unknown }; try { body = await request.json() } catch { return Response.json({ error: 'Send a valid deletion request.' }, { status: 400, headers: noStore }) }
-  if (typeof body.applicationID !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.applicationID)) return Response.json({ error: 'A valid application is required.' }, { status: 422, headers: noStore })
-  const result = await purgeApplication(payload, body.applicationID, actor.id)
+  let body: { applicationID?: unknown; inquiryID?: unknown; confirm?: unknown }; try { body = await request.json() } catch { return Response.json({ error: 'Send a valid deletion request.' }, { status: 400, headers: noStore }) }
+  const id = typeof body.applicationID === 'string' ? body.applicationID : typeof body.inquiryID === 'string' ? body.inquiryID : undefined
+  if (!id || !/^[0-9a-f-]{36}$/i.test(id) || body.confirm !== 'permanent-delete' || Boolean(body.applicationID) === Boolean(body.inquiryID)) return Response.json({ error: 'Choose one record and confirm permanent deletion.' }, { status: 422, headers: noStore })
+  if (body.inquiryID) { await purgeRetainedInquiry(payload, id, actor.id); return Response.json({ state: 'completed' }, { headers: noStore }) }
+  const result = await purgeApplication(payload, id, actor.id)
   return Response.json(result, { status: result.state === 'completed' ? 200 : 503, headers: noStore })
 }

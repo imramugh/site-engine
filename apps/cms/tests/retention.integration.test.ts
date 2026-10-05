@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { applicationStorage, storeResume } from '../src/applications'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
-import { purgeApplication, reapplyDeletionTombstones, retentionEligible, runRetentionCleanup, writeDeletionTombstone } from '../src/retention'
+import { purgeApplication, purgeRetainedInquiry, reapplyDeletionTombstones, retentionEligible, runRetentionCleanup, writeDeletionTombstone } from '../src/retention'
 
 const directory = mkdtempSync(join(tmpdir(), 'retention-sqlite-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -85,5 +85,13 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     const active = await payload.create({ collection: 'inquiries', data: { email: `${crypto.randomUUID()}@example.test`, message: 'Active inquiry retained despite the cleanup clock.', topic: 'general', sourcePage: '/', consentedAt: old.toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: crypto.randomUUID(), spam: false, stage: 'new' }, draft: false, overrideAccess: true })
     await runRetentionCleanup(payload, now)
     await expect(payload.findByID({ collection: 'inquiries', id: active.id, overrideAccess: true })).resolves.toMatchObject({ id: active.id, spam: false })
+  })
+
+  it('permanently purges a retained non-spam inquiry only through the retention lifecycle', async () => {
+    writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
+    const inquiry = await payload.create({ collection: 'inquiries', data: { email: `${crypto.randomUUID()}@example.test`, message: 'Manual deletion proof.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: crypto.randomUUID(), spam: false, stage: 'new' }, draft: false, overrideAccess: true })
+    await expect(purgeRetainedInquiry(payload, inquiry.id, undefined)).resolves.toBeUndefined()
+    await expect(payload.findByID({ collection: 'inquiries', id: inquiry.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    expect((await payload.find({ collection: 'deletion-tombstones', where: { resourceID: { equals: inquiry.id } }, overrideAccess: true })).docs[0]).toMatchObject({ resourceType: 'inquiry' })
   })
 })

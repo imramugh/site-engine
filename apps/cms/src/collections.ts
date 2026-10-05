@@ -447,7 +447,7 @@ export const Inquiries: CollectionConfig = {
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
-    if (req.context.leadSpamDeleteLifecycle !== true) throw new Error('Lead deletion uses the audited spam lifecycle.')
+    if (req.context.leadSpamDeleteLifecycle !== true && req.context.retentionPurge !== true) throw new Error('Lead deletion uses an audited deletion lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })

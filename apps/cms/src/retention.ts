@@ -74,6 +74,24 @@ export async function purgeApplication(payload: Payload, id: string, actor: stri
   } catch (error) { await failJob(payload, req, record.id, record.attempts ?? 0, error); return { state: 'failed', jobID: record.id } }
 }
 
+/** Owner-requested retained-inquiry deletion. Spam cleanup uses its separate automatic lifecycle. */
+export async function purgeRetainedInquiry(payload: Payload, id: string, actor: string | undefined): Promise<void> {
+  await recordDeletionIntent(payload, undefined, 'inquiry', id)
+  await withPayloadTransaction(payload, async (req) => {
+    const current = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req }) as { spam?: boolean }
+    if (current.spam) throw new Error('Spam inquiries use the spam deletion lifecycle.')
+    const drafts = await payload.find({ collection: 'mail-drafts', where: { lead: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
+    for (const draft of drafts.docs) {
+      const grants = await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
+      for (const grant of grants.docs) await payload.delete({ collection: 'mail-authorizations', id: grant.id, overrideAccess: true, req })
+      await payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
+    }
+    req.context.retentionPurge = true
+    await payload.delete({ collection: 'inquiries', id, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'retention.inquiry_purged', user: actor, actor, detail: { inquiry: id } }, overrideAccess: true, req })
+  })
+}
+
 async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id: string, attempts = 0): Promise<'completed' | 'failed' | 'skipped'> {
   const record = await job(payload, req, 'media', id) as { id: string }
   try {
