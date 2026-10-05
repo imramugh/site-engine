@@ -92,12 +92,25 @@ export function snapshot(collection: CapturedCollection, document: Record<string
 function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
   // Payload applies partial updates. Explicit nulls clear fields that were absent
   // from the baseline rather than leaving a later editor's addition behind.
-  return Object.fromEntries(mutableFields[collection].map((field) => {
+  // Asset bytes and generated variants are immutable. A discard restores only
+  // the editable public metadata represented by the capture; sending null for
+  // generated `sizes` corrupts Payload's upload-field validation.
+  const fields = collection === 'assets'
+    ? ['alt', 'decorative', ...(capturedAssetHasFocalPoint(value) ? ['focalX', 'focalY'] : [])]
+    : mutableFields[collection]
+  return Object.fromEntries(fields.map((field) => {
     // Draft persistence cannot accept the snapshot-only published status.
     // Restoring an archived draft returns it to the ordinary draft workflow.
     if (collection === 'pages' && field === 'status') return [field, 'draft']
     return [field, field in value ? value[field] : null]
   }))
+}
+
+/** Media focal points entered the portable contract after existing captured
+ * changes were already durable. The capture itself is therefore the source of
+ * truth for which projection must be compared and restored. */
+function capturedAssetHasFocalPoint(value: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(value && (Object.prototype.hasOwnProperty.call(value, 'focalX') || Object.prototype.hasOwnProperty.call(value, 'focalY')))
 }
 
 function equivalent(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
@@ -167,7 +180,7 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 }
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
-  const current = snapshot(collection, value)
+  const current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
   return collection === 'pages' ? normalizePageOptionalNulls(current, expected) : current
 }
 
