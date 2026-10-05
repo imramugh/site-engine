@@ -876,6 +876,19 @@ export const IntegrationConfigurations: CollectionConfig = {
   ],
 }
 
+/** Private operational control for the information MCP tools may disclose. */
+export const McpPrivacySettings: CollectionConfig = {
+  slug: 'mcp-privacy-settings',
+  admin: { hidden: true },
+  // This singleton is deliberately separate from editorial SiteSettings. Only
+  // the audited route may change it; generic Payload CRUD must not bypass it.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' },
+    { name: 'hidePhone', type: 'checkbox', required: true, defaultValue: true },
+  ],
+}
+
 /** Immutable, private per-request provider cost reservations. */
 export const ProviderUsageReservations: CollectionConfig = {
   slug: "provider-usage-reservations",

@@ -81,6 +81,7 @@ export interface Config {
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
+    'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
     'mailbox-area-mappings': MailboxAreaMapping;
@@ -91,9 +92,9 @@ export interface Config {
     'notification-preferences': NotificationPreference;
     'notification-user-preferences': NotificationUserPreference;
     'urgent-contacts': UrgentContact;
+    'mail-drafts': MailDraft;
     'mail-threads': MailThread;
     'mail-thread-messages': MailThreadMessage;
-    'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
     'retention-settings': RetentionSetting;
@@ -127,6 +128,7 @@ export interface Config {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
+    'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
     'mailbox-area-mappings': MailboxAreaMappingsSelect<false> | MailboxAreaMappingsSelect<true>;
@@ -137,9 +139,9 @@ export interface Config {
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'notification-user-preferences': NotificationUserPreferencesSelect<false> | NotificationUserPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
+    'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
     'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
-    'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'retention-settings': RetentionSettingsSelect<false> | RetentionSettingsSelect<true>;
@@ -732,6 +734,17 @@ export interface IntegrationConfiguration {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-privacy-settings".
+ */
+export interface McpPrivacySetting {
+  id: string;
+  key: string;
+  hidePhone: boolean;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "provider-usage-reservations".
  */
 export interface ProviderUsageReservation {
@@ -989,15 +1002,28 @@ export interface UrgentContact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "mail-threads".
+ * via the `definition` "mail-drafts".
  */
-export interface MailThread {
+export interface MailDraft {
   id: string;
   lead?: (string | null) | Inquiry;
   application?: (string | null) | Application;
-  mailbox: string | MailboxConfiguration;
-  provider: 'smtp' | 'microsoft' | 'google';
-  providerConversationID: string;
+  threadID: string;
+  recipient: string;
+  sender: string;
+  subject: string;
+  body: string;
+  attachmentHashes?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  revision: number;
+  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
   updatedAt: string;
   createdAt: string;
 }
@@ -1017,6 +1043,20 @@ export interface Application {
   resumeKey: string;
   idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-threads".
+ */
+export interface MailThread {
+  id: string;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
+  mailbox: string | MailboxConfiguration;
+  provider: 'smtp' | 'microsoft' | 'google';
+  providerConversationID: string;
   updatedAt: string;
   createdAt: string;
 }
@@ -1046,33 +1086,6 @@ export interface MailThreadMessage {
     | number
     | boolean
     | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "mail-drafts".
- */
-export interface MailDraft {
-  id: string;
-  lead?: (string | null) | Inquiry;
-  application?: (string | null) | Application;
-  threadID: string;
-  recipient: string;
-  sender: string;
-  subject: string;
-  body: string;
-  attachmentHashes?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
-  revision: number;
-  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
   updatedAt: string;
   createdAt: string;
 }
@@ -1497,6 +1510,10 @@ export interface PayloadLockedDocument {
         value: string | IntegrationConfiguration;
       } | null)
     | ({
+        relationTo: 'mcp-privacy-settings';
+        value: string | McpPrivacySetting;
+      } | null)
+    | ({
         relationTo: 'provider-usage-reservations';
         value: string | ProviderUsageReservation;
       } | null)
@@ -1537,16 +1554,16 @@ export interface PayloadLockedDocument {
         value: string | UrgentContact;
       } | null)
     | ({
+        relationTo: 'mail-drafts';
+        value: string | MailDraft;
+      } | null)
+    | ({
         relationTo: 'mail-threads';
         value: string | MailThread;
       } | null)
     | ({
         relationTo: 'mail-thread-messages';
         value: string | MailThreadMessage;
-      } | null)
-    | ({
-        relationTo: 'mail-drafts';
-        value: string | MailDraft;
       } | null)
     | ({
         relationTo: 'mail-authorizations';
@@ -2045,6 +2062,16 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-privacy-settings_select".
+ */
+export interface McpPrivacySettingsSelect<T extends boolean = true> {
+  key?: T;
+  hidePhone?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "provider-usage-reservations_select".
  */
 export interface ProviderUsageReservationsSelect<T extends boolean = true> {
@@ -2213,6 +2240,24 @@ export interface UrgentContactsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-drafts_select".
+ */
+export interface MailDraftsSelect<T extends boolean = true> {
+  lead?: T;
+  application?: T;
+  threadID?: T;
+  recipient?: T;
+  sender?: T;
+  subject?: T;
+  body?: T;
+  attachmentHashes?: T;
+  revision?: T;
+  state?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mail-threads_select".
  */
 export interface MailThreadsSelect<T extends boolean = true> {
@@ -2241,24 +2286,6 @@ export interface MailThreadMessagesSelect<T extends boolean = true> {
   body?: T;
   receivedAt?: T;
   attachmentMetadata?: T;
-  updatedAt?: T;
-  createdAt?: T;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "mail-drafts_select".
- */
-export interface MailDraftsSelect<T extends boolean = true> {
-  lead?: T;
-  application?: T;
-  threadID?: T;
-  recipient?: T;
-  sender?: T;
-  subject?: T;
-  body?: T;
-  attachmentHashes?: T;
-  revision?: T;
-  state?: T;
   updatedAt?: T;
   createdAt?: T;
 }
