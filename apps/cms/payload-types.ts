@@ -977,6 +977,8 @@ export interface MailThreadMessage {
   id: string;
   thread: string | MailThread;
   mailbox: string | MailboxConfiguration;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
   providerMessageID: string;
   direction: 'inbound' | 'outbound';
   sender: string;
@@ -2141,6 +2143,8 @@ export interface MailThreadsSelect<T extends boolean = true> {
 export interface MailThreadMessagesSelect<T extends boolean = true> {
   thread?: T;
   mailbox?: T;
+  lead?: T;
+  application?: T;
   providerMessageID?: T;
   direction?: T;
   sender?: T;
