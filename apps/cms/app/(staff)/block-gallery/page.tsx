@@ -16,7 +16,7 @@ export default async function BlockGalleryPage() {
   const user = (await serverSessionStrategy.authenticate({ headers: await headers(), payload })).user
   if (!hasRole(user as never, ['owner', 'editor'])) redirect('/admin/login')
   const [pages, sets, baseline, branding, registry] = await Promise.all([
-    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
+    payload.find({ collection: 'pages', where: { status: { not_equals: 'archived' } }, limit: 0, pagination: false, depth: 0, draft: true, user, overrideAccess: false }),
     payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: user?.id } }, { state: { equals: 'open' } }] }, limit: 100, depth: 0, user, overrideAccess: false }),
     loadPublishedPreviewBaseline(payload),
     loadAdminBranding(),
