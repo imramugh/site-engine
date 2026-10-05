@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 import { hasFreshAuthentication, hashOpaqueToken, sessionIsUsable } from './identity'
+import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 export type MailGrant = { recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; lead: string; revision: number }
 export const normalizeBody = (body: string) => body.replace(/\r\n/g, '\n').trim()
@@ -48,6 +49,7 @@ export async function authorizeMailDraft(payload: Payload, actor: Actor, draftID
   return withPayloadTransaction(payload, async (req) => {
     if (!await freshOwner(payload, actor, req)) throw new Error('owner_authorization_required')
     const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+    await assertLeadAcceptsOutbound(payload, draft.lead, req)
     const digest = authorizationDigest(draft)
     const active = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draft.id } }, { revokedAt: { exists: false } }, { consumedAt: { exists: false } }] }, depth: 0, overrideAccess: true, req })
     await Promise.all(active.docs.map((existing) => payload.update({ collection: 'mail-authorizations', id: existing.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req })))
@@ -64,6 +66,7 @@ export async function consumeMailAuthorization(payload: Payload, actor: Actor, g
     const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
     const draftID = typeof grant.draft === 'string' ? grant.draft : String((grant.draft as { id?: string })?.id)
     const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+    await assertLeadAcceptsOutbound(payload, draft.lead, req)
     if (draft.state !== 'authorized' || !authorizationUsable(grant as never, draft, now)) throw new Error('authorization_not_usable')
     const consumed = await payload.update({ collection: 'mail-authorizations', id: grantID, data: { consumedAt: now.toISOString() }, overrideAccess: true, req })
     await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'consumed' }, overrideAccess: true, req })

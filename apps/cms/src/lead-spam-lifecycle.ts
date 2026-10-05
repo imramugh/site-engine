@@ -17,7 +17,15 @@ export async function classifyLeadAsSpam(payload: Payload, id: string, actor: st
     for (const intent of queued.docs) await payload.delete({ collection: 'notification-outbox', id: intent.id, overrideAccess: true, req })
     req.context.leadSpamLifecycle = true
     const updated = await payload.update({ collection: 'inquiries', id, data: { spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: prior }, overrideAccess: true, req })
-    await payload.create({ collection: 'audit-events', data: { event: 'lead.spam_classified', user: actor, actor, detail: { lead: id, previousStage: prior, cancelledNotifications: queued.totalDocs } }, overrideAccess: true, req })
+    const drafts = await payload.find({ collection: 'mail-drafts', where: { lead: { equals: id } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
+    let revokedGrants = 0
+    let revokedDrafts = 0
+    for (const draft of drafts.docs) {
+      const grants = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draft.id } }, { consumedAt: { exists: false } }, { revokedAt: { exists: false } }] }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
+      for (const grant of grants.docs) { await payload.update({ collection: 'mail-authorizations', id: grant.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req }); revokedGrants += 1 }
+      if (draft.state !== 'consumed' && draft.state !== 'revoked') { await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'revoked' }, overrideAccess: true, req }); revokedDrafts += 1 }
+    }
+    await payload.create({ collection: 'audit-events', data: { event: 'lead.spam_classified', user: actor, actor, detail: { lead: id, previousStage: prior, cancelledNotifications: queued.totalDocs, revokedDrafts, revokedGrants } }, overrideAccess: true, req })
     return updated
   })
 }
