@@ -932,7 +932,8 @@ export interface UrgentContact {
  */
 export interface MailDraft {
   id: string;
-  lead: string | Inquiry;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
   threadID: string;
   recipient: string;
   sender: string;
@@ -948,23 +949,7 @@ export interface MailDraft {
     | boolean
     | null;
   revision: number;
-  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed';
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "mail-authorizations".
- */
-export interface MailAuthorization {
-  id: string;
-  draft: string | MailDraft;
-  digest: string;
-  draftRevision: number;
-  authorizedBy: string | User;
-  expiresAt: string;
-  revokedAt?: string | null;
-  consumedAt?: string | null;
+  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed';
   updatedAt: string;
   createdAt: string;
 }
@@ -984,6 +969,22 @@ export interface Application {
   resumeKey: string;
   idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-authorizations".
+ */
+export interface MailAuthorization {
+  id: string;
+  draft: string | MailDraft;
+  digest: string;
+  draftRevision: number;
+  authorizedBy: string | User;
+  expiresAt: string;
+  revokedAt?: string | null;
+  consumedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2015,6 +2016,7 @@ export interface UrgentContactsSelect<T extends boolean = true> {
  */
 export interface MailDraftsSelect<T extends boolean = true> {
   lead?: T;
+  application?: T;
   threadID?: T;
   recipient?: T;
   sender?: T;
