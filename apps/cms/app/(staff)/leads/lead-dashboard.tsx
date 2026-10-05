@@ -160,7 +160,8 @@ export function LeadDashboard() {
           <label>Assignee<select value={filters.assignee} onChange={(event) => changeFilters({ assignee: event.target.value })}><option value="">Anyone</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
           <label className={styles.check}><input type="checkbox" checked={filters.urgent} onChange={(event) => changeFilters({ urgent: event.target.checked })} /> Urgent only</label>
         </div>
-        {loading && !allLeads.length ? <p className={styles.empty}>Loading leads…</p> : mode === 'pipeline' ? <div className={styles.pipeline} data-leads-pipeline>
+        {loading && !allLeads.length ? <p className={styles.empty}>Loading leads…</p> : mode === 'pipeline' ? <div className={styles.pipeline} data-leads-pipeline tabIndex={0} role="region" aria-label="Lead pipeline board" aria-describedby="lead-pipeline-instructions">
+          <p id="lead-pipeline-instructions" className={styles.srOnly}>Use the arrow keys to scroll through pipeline stages.</p>
           {stages.map((stage) => <section className={styles.column} key={stage} aria-labelledby={`stage-${stage}`}>
             <header><h2 id={`stage-${stage}`}>{stageLabels[stage]}</h2><span>{data.pipeline[stage].totalDocs}</span></header>
             <div>{data.pipeline[stage].leads.map((lead) => <LeadCard key={lead.id} lead={lead} active={active?.id === lead.id} onOpen={() => setSelected(lead.id)} />)}{!data.pipeline[stage].leads.length && <p>No leads</p>}</div>
