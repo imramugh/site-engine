@@ -693,7 +693,8 @@ export interface Inquiry {
   telephone?: string | null;
   company?: string | null;
   message: string;
-  topic: 'general' | 'project' | 'partnership' | 'active-incident';
+  topic:
+    'general' | 'project' | 'partnership' | 'active-incident' | 'consultation' | 'service' | 'retainer' | 'careers';
   sourcePage: string;
   consentedAt: string;
   consentBasis: 'visitor-confirmed' | 'staff-recorded' | 'unknown';

@@ -6,7 +6,7 @@ import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from 
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
-import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
+import { canTransitionLead, inquiryTopics, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
@@ -428,7 +428,7 @@ export const Inquiries: CollectionConfig = {
     { name: 'telephone', type: 'text' },
     { name: 'company', type: 'text' },
     { name: 'message', type: 'textarea', required: true },
-    { name: 'topic', type: 'select', required: true, options: ['general', 'project', 'partnership', 'active-incident'] },
+    { name: 'topic', type: 'select', required: true, options: [...inquiryTopics] },
     { name: 'sourcePage', type: 'text', required: true },
     { name: 'consentedAt', type: 'date', required: true, admin: { readOnly: true } },
     { name: 'consentBasis', type: 'select', required: true, options: ['visitor-confirmed', 'staff-recorded', 'unknown'], admin: { readOnly: true } },
