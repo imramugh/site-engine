@@ -16,6 +16,7 @@ import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
 import { canonicalHash } from '../src/publishing.js'
 import { deriveRoutes } from '@site-engine/engine'
+import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
@@ -105,13 +106,15 @@ const navigationThemeManifest = { ...browserThemeManifest, name: 'navigation-bro
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const galleryTheme = process.env.BLOCK_GALLERY_E2E_THEME_ID && process.env.BLOCK_GALLERY_E2E_THEME_VERSION ? { name: process.env.BLOCK_GALLERY_E2E_THEME_ID, version: process.env.BLOCK_GALLERY_E2E_THEME_VERSION, contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } } : undefined
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null'
-writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
-writeFileSync(themeRegistry, JSON.stringify({ themes: [
+const themeInstalls = [
   { manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   { manifest: navigationThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   ...(galleryTheme ? [{ manifest: galleryTheme, installedAt: '2026-10-05T00:00:00.000Z' }] : []),
-] }))
+]
+writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
+writeFileSync(themeRegistry, JSON.stringify({ themes: themeInstalls }))
+const previewThemeRegistry = parseThemeRegistry({ themes: themeInstalls })
 const initialBaseline = structuredClone(neutralFixture)
 initialBaseline.settings.contractVersion = '1.4.0'
 if (galleryTheme) initialBaseline.settings.theme = { id: galleryTheme.name, version: galleryTheme.version, contract: galleryTheme.contract, manifestDigest: createHash('sha256').update(stable(galleryTheme)).digest('hex') }
@@ -467,7 +470,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         throw new Error('Unsupported preview worker action.')
       }
       const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
-      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
       return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return

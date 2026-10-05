@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic'
 
 type ThemeSelection = { id: string; version: string; contract: string; manifestDigest: string }
 type ThemeSettings = Record<string, Record<string, string | number | boolean>>
+type Actor = { id: string; roles?: string[] }
 
 function sameOrigin(request: Request): boolean {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
@@ -17,8 +18,25 @@ function sameOrigin(request: Request): boolean {
   return Boolean(configured && origin && origin === new URL(configured).origin)
 }
 
-function isOwner(user: unknown): user is { id: string; roles?: string[] } {
+function isOwner(user: unknown): user is Actor {
   return Boolean(user && typeof user === 'object' && (user as { roles?: string[] }).roles?.includes('owner'))
+}
+
+function selectedBy(change: unknown, selection: ThemeSelection): boolean {
+  if (!change || typeof change !== 'object') return false
+  const value = change as { collection?: unknown; after?: { selection?: unknown } }
+  const selected = selectionOf(value.after?.selection)
+  return value.collection === 'theme-settings' && selected?.id === selection.id && selected.version === selection.version && selected.manifestDigest === selection.manifestDigest
+}
+
+async function ownedThemeDraft(payload: Awaited<ReturnType<typeof getPayload>>, actor: Actor, selection?: ThemeSelection) {
+  const result = await payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: actor.id } }, { state: { in: ['open', 'changes-requested', 'submitted'] } }] }, sort: '-updatedAt', limit: 50, depth: 0, overrideAccess: true })
+  const set = result.docs.find(item => Array.isArray(item.changes) && item.changes.length > 0 && item.changes.every(change => change && typeof change === 'object' && (change as { collection?: unknown }).collection === 'theme-settings') && (!selection || item.changes.some(change => selectedBy(change, selection))))
+  if (!set) return null
+  return {
+    id: String(set.id), name: String(set.name), state: String(set.state),
+    includedChangeKeys: (set.changes as Array<{ collection?: unknown; id?: unknown }>).filter(change => change.collection === 'theme-settings' && typeof change.id === 'string').map(change => `theme-settings:${change.id}`),
+  }
 }
 
 function selectionOf(value: unknown): ThemeSelection | null {
@@ -31,6 +49,10 @@ function selectionOf(value: unknown): ThemeSelection | null {
 
 function publicSelection(value: ThemeSelection | null) {
   return value && { id: value.id, version: value.version, contract: value.contract }
+}
+
+function sameSelection(left: ThemeSelection | null, right: ThemeSelection | null): boolean {
+  return left === null ? right === null : Boolean(right && left.id === right.id && left.version === right.version && left.contract === right.contract && left.manifestDigest === right.manifestDigest)
 }
 
 /** A selection is reviewed as a candidate snapshot. This is the sole path
@@ -65,9 +87,11 @@ async function currentState(payload: Awaited<ReturnType<typeof getPayload>>) {
   }
 }
 
-async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>) {
+async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>, actor: Actor) {
   const [registry, state] = await Promise.all([loadThemeRegistry(), currentState(payload)])
   const published = selectionOf((state.manifest as { settings?: { theme?: unknown } }).settings?.theme)
+  const persisted = state.setting?.selection ?? null
+  const draft = sameSelection(persisted, published) ? null : persisted
   return {
     themes: installedThemes(registry).map((installed) => ({
       id: installed.manifest.name,
@@ -79,7 +103,8 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>) {
       compatibility: compatibilityFor(state.manifest, installed),
     })),
     publishedSelection: publicSelection(published),
-    draftSelection: publicSelection(state.setting?.selection ?? null),
+    draftSelection: publicSelection(draft),
+    draftChangeSet: draft ? await ownedThemeDraft(payload, actor, draft) : null,
   }
 }
 
@@ -88,7 +113,7 @@ export async function GET(request: Request): Promise<Response> {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!isOwner(authenticated.user)) return Response.json({ error: 'Owner access required.' }, { status: 403 })
-    return Response.json(await chooserData(payload), { headers: { 'Cache-Control': 'no-store' } })
+    return Response.json(await chooserData(payload, authenticated.user), { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to load themes.' }, { status: 400 })
   }
@@ -117,12 +142,19 @@ export async function POST(request: Request): Promise<Response> {
     const candidate = selectionCandidate(state.manifest, selection)
     const compatibility = compatibilityReport(candidate, installed.manifest)
     if (!compatibility.compatible) throw new Error('This theme cannot render the current published content.')
-    if (state.setting?.selection?.id === selection.id && state.setting.selection.version === selection.version && state.setting.selection.manifestDigest === selection.manifestDigest) throw new Error('This theme version is already the pending selection.')
+    const existing = await ownedThemeDraft(payload, authenticated.user, selection)
+    if (existing) return Response.json({ changeSet: existing, selection: publicSelection(selection), compatibility, reused: true }, { status: 200, headers: { 'Cache-Control': 'no-store' } })
+    const published = selectionOf((state.manifest as { settings?: { theme?: unknown } }).settings?.theme)
+    const pending = state.setting?.selection && !sameSelection(state.setting.selection, published) ? state.setting.selection : null
+    const reusable = pending ? await ownedThemeDraft(payload, authenticated.user, pending) : null
+    if (pending && (!reusable || !['open', 'changes-requested'].includes(reusable.state))) throw new Error('Another reviewed draft controls the pending theme selection. Resolve or discard it before creating a different theme preview.')
 
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
       req.headers = new Headers(request.headers)
-      const changeSet = await createNamedChangeSet(payload, req, authenticated.user as never, name)
+      const changeSet = reusable
+        ? await payload.findByID({ collection: 'change-sets', id: reusable.id, depth: 0, overrideAccess: true, req })
+        : await createNamedChangeSet(payload, req, authenticated.user as never, name)
       req.headers.set('x-site-engine-change-set', String(changeSet.id))
       req.context = { ...req.context, editorialInternal: false }
       const settings = { ...(state.setting?.settings ?? {}), [selection.id]: state.setting?.settings?.[selection.id] ?? {} }
@@ -131,7 +163,7 @@ export async function POST(request: Request): Promise<Response> {
         : await payload.create({ collection: 'theme-settings', data: { selection, settings }, draft: true, overrideAccess: false, req })
       return { changeSet, doc }
     })
-    return Response.json({ changeSet: { id: result.changeSet.id, name: result.changeSet.name }, selection: publicSelection(selection), compatibility }, { status: 201, headers: { 'Cache-Control': 'no-store' } })
+    return Response.json({ changeSet: { id: result.changeSet.id, name: result.changeSet.name, state: result.changeSet.state, includedChangeKeys: [`theme-settings:${result.doc.id}`] }, selection: publicSelection(selection), compatibility, reused: Boolean(reusable) }, { status: reusable ? 200 : 201, headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to draft a theme selection.' }, { status: 400 })
   }
