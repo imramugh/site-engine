@@ -153,7 +153,7 @@ export function LeadDashboard() {
     {error && <div className={styles.error} role="alert"><span>{error}</span><button type="button" onClick={() => void load()}>Try again</button></div>}
     <div className={`${styles.layout} ${active ? styles.withDetail : ''}`}>
       <section className={styles.content} aria-label={mode === 'pipeline' ? 'Lead pipeline' : 'Lead list'}>
-        <div className={styles.filters} aria-label="Lead filters">
+        <div className={styles.filters} aria-label="Lead filters" data-lead-filters>
           {mode === 'list' && <label>Stage<select value={filters.stage} onChange={(event) => changeFilters({ stage: event.target.value })}><option value="">All stages</option>{stages.map((stage) => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}</select></label>}
           <label>Source<select value={filters.sourcePage} onChange={(event) => changeFilters({ sourcePage: event.target.value })}><option value="">All sources</option>{data.sourcePages.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
           <label>Received<select value={filters.received} onChange={(event) => changeFilters({ received: event.target.value })}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All time</option></select></label>
