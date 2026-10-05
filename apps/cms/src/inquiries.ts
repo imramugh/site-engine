@@ -102,7 +102,7 @@ export async function validateLeadAssignee(payload: Payload, value: unknown): Pr
   }
 }
 
-async function persistAcceptedInquiry(payload: Payload, input: InquiryInput) {
+async function persistAcceptedInquiry(payload: Payload, input: InquiryInput, actor?: { id: string }) {
   if (input.honeypot?.trim()) return { suppressed: true as const }
   return withPayloadTransaction(payload, async (req) => {
     const duplicate = await payload.find({ collection: 'inquiries', where: { idempotencyKey: { equals: input.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req })
@@ -126,6 +126,7 @@ async function persistAcceptedInquiry(payload: Payload, input: InquiryInput) {
       data: { email: input.email, message: input.message, topic: input.topic, sourcePage: input.sourcePage, consentedAt: new Date().toISOString(), consentBasis: input.consentBasis, idempotencyKey: input.idempotencyKey, name: input.name, telephone: input.telephone, company: input.company, stage: 'new', urgent },
       overrideAccess: true, req,
     })
+    if (actor) await payload.create({ collection: 'audit-events', data: { event: 'lead.created', user: actor.id, actor: actor.id, detail: { lead: inquiry.id, consentBasis: input.consentBasis } }, overrideAccess: true, req })
     const event = { inquiry: inquiry.id, topic: input.topic, sourcePage: input.sourcePage, urgent }
     await payload.create({ collection: 'notification-outbox', data: { inquiry: inquiry.id, kind: 'lead-received', idempotencyKey: `lead-received:${input.idempotencyKey}`, state: 'queued', payload: event, availableAt: new Date().toISOString() }, overrideAccess: true, req })
     if (urgent) await payload.create({ collection: 'notification-outbox', data: { inquiry: inquiry.id, kind: 'urgent-lead-alert', idempotencyKey: `urgent-lead-alert:${input.idempotencyKey}`, state: 'queued', payload: event, availableAt: new Date().toISOString() }, overrideAccess: true, req })
@@ -134,14 +135,14 @@ async function persistAcceptedInquiry(payload: Payload, input: InquiryInput) {
 }
 
 /** Serialize same-key retries inside this CMS process before opening SQLite's immediate transaction. */
-export async function createAcceptedInquiry(payload: Payload, input: InquiryInput) {
+export async function createAcceptedInquiry(payload: Payload, input: InquiryInput, actor?: { id: string }) {
   if (input.honeypot?.trim()) return { suppressed: true as const }
   const active = inFlightIdempotency.get(input.idempotencyKey)
   if (active) {
     await active
-    return createAcceptedInquiry(payload, input)
+    return createAcceptedInquiry(payload, input, actor)
   }
-  const operation = persistAcceptedInquiry(payload, input)
+  const operation = persistAcceptedInquiry(payload, input, actor)
   inFlightIdempotency.set(input.idempotencyKey, operation)
   try { return await operation } finally { if (inFlightIdempotency.get(input.idempotencyKey) === operation) inFlightIdempotency.delete(input.idempotencyKey) }
 }

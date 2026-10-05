@@ -7,8 +7,8 @@ type Assignee = { id: string; name: string; email: string }
 type Stage = 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost'
 type Lead = { id: string; email: string; name?: string; telephone?: string; company?: string; topic: string; message: string; stage: Stage; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; assignee?: string | null; consentBasis?: string; consentedAt?: string; createdAt?: string; updatedAt?: string }
 type PipelineGroup = { leads: Lead[]; totalDocs: number; hasMore: boolean }
-type Data = { leads: Lead[]; pipeline: Record<Stage, PipelineGroup>; assignees: Assignee[]; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
-type Filters = { stage: string; urgent: boolean; assignee: string; page: number }
+type Data = { leads: Lead[]; pipeline: Record<Stage, PipelineGroup>; assignees: Assignee[]; sourcePages: string[]; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
+type Filters = { stage: string; urgent: boolean; assignee: string; sourcePage: string; received: string; page: number }
 
 const stages: Stage[] = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost']
 const stageLabels: Record<Stage, string> = { new: 'New', qualified: 'Qualified', contacted: 'Contacted', proposal: 'Proposal', won: 'Won', lost: 'Lost' }
@@ -19,13 +19,15 @@ const transitions: Record<Stage, Stage[]> = {
 const topics = ['general', 'project', 'partnership', 'active-incident']
 const blank = { email: '', name: '', topic: 'general', sourcePage: '/manual', message: '', consent: false }
 const emptyPipeline = (): Record<Stage, PipelineGroup> => ({ new: { leads: [], totalDocs: 0, hasMore: false }, qualified: { leads: [], totalDocs: 0, hasMore: false }, contacted: { leads: [], totalDocs: 0, hasMore: false }, proposal: { leads: [], totalDocs: 0, hasMore: false }, won: { leads: [], totalDocs: 0, hasMore: false }, lost: { leads: [], totalDocs: 0, hasMore: false } })
-const emptyData = (): Data => ({ leads: [], pipeline: emptyPipeline(), assignees: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })
+const emptyData = (): Data => ({ leads: [], pipeline: emptyPipeline(), assignees: [], sourcePages: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })
 
 function parameters(filters: Filters) {
   const params = new URLSearchParams()
   if (filters.stage) params.set('stage', filters.stage)
   if (filters.urgent) params.set('urgent', 'true')
   if (filters.assignee) params.set('assignee', filters.assignee)
+  if (filters.sourcePage) params.set('sourcePage', filters.sourcePage)
+  params.set('received', filters.received)
   params.set('page', String(filters.page))
   return params.toString()
 }
@@ -82,7 +84,7 @@ function LeadDetail({ lead, assignees, saving, onClose, onSave }: { lead: Lead; 
 export function LeadDashboard() {
   const [data, setData] = useState<Data>(emptyData)
   const [mode, setMode] = useState<'pipeline' | 'list'>('pipeline')
-  const [filters, setFilters] = useState<Filters>({ stage: '', urgent: false, assignee: '', page: 1 })
+  const [filters, setFilters] = useState<Filters>({ stage: '', urgent: false, assignee: '', sourcePage: '', received: '90', page: 1 })
   const [selected, setSelected] = useState<string | null>(null)
   const [manual, setManual] = useState(blank)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -106,7 +108,7 @@ export function LeadDashboard() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Leads could not be loaded.') }
     finally { setLoading(false) }
   }
-  useEffect(() => { void load({ stage: '', urgent: false, assignee: '', page: 1 }, false) }, [])
+  useEffect(() => { void load({ stage: '', urgent: false, assignee: '', sourcePage: '', received: '90', page: 1 }, false) }, [])
   useEffect(() => {
     if (!dialogOpen) return
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') closeDialog() }
@@ -153,6 +155,8 @@ export function LeadDashboard() {
       <section className={styles.content} aria-label={mode === 'pipeline' ? 'Lead pipeline' : 'Lead list'}>
         <div className={styles.filters} aria-label="Lead filters">
           {mode === 'list' && <label>Stage<select value={filters.stage} onChange={(event) => changeFilters({ stage: event.target.value })}><option value="">All stages</option>{stages.map((stage) => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}</select></label>}
+          <label>Source<select value={filters.sourcePage} onChange={(event) => changeFilters({ sourcePage: event.target.value })}><option value="">All sources</option>{data.sourcePages.map((source) => <option key={source} value={source}>{source}</option>)}</select></label>
+          <label>Received<select value={filters.received} onChange={(event) => changeFilters({ received: event.target.value })}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All time</option></select></label>
           <label>Assignee<select value={filters.assignee} onChange={(event) => changeFilters({ assignee: event.target.value })}><option value="">Anyone</option>{data.assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
           <label className={styles.check}><input type="checkbox" checked={filters.urgent} onChange={(event) => changeFilters({ urgent: event.target.checked })} /> Urgent only</label>
         </div>

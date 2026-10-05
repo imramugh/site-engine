@@ -3,6 +3,7 @@ import config from '../../../payload.config'
 import { hasRole } from '../../../src/access'
 import { createAcceptedInquiry, leadStages, manualInquiryInput } from '../../../src/inquiries'
 import { serverSessionStrategy } from '../../../src/identity'
+import { LeadFilterError, leadWhere, parseLeadFilters, type LeadFilters } from '../../../src/lead-filters'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -60,24 +61,11 @@ function view(inquiry: Record<string, unknown>) {
   }
 }
 
-function filterClauses(url: URL, includeStage: boolean) {
-  const stage = url.searchParams.get('stage')
-  const urgent = url.searchParams.get('urgent')
-  const assignee = url.searchParams.get('assignee')
-  const clauses: Record<string, unknown>[] = []
-  if (includeStage && stage && leadStages.includes(stage as never)) clauses.push({ stage: { equals: stage } })
-  if (urgent === 'true') clauses.push({ urgent: { equals: true } })
-  if (assignee) clauses.push({ assignee: { equals: assignee } })
-  return clauses
-}
-
-function where(clauses: Record<string, unknown>[]) { return clauses.length ? { and: clauses } as never : undefined }
-function pageOf(value: string | null) { const parsed = Number(value ?? '1'); return Number.isInteger(parsed) && parsed > 0 ? parsed : 1 }
-
-async function pipelineFor(payload: Payload, url: URL) {
-  const common = filterClauses(url, false)
+async function pipelineFor(payload: Payload, filters: LeadFilters) {
   const entries = await Promise.all(leadStages.map(async (stage) => {
-    const result = await payload.find({ collection: 'inquiries', where: where([...common, { stage: { equals: stage } }]), sort: '-urgent,-updatedAt', limit: 6, page: 1, depth: 0, overrideAccess: true })
+    const common = leadWhere(filters, false)
+    const clauses = common ? [...(common as { and: Record<string, unknown>[] }).and, { stage: { equals: stage } }] : [{ stage: { equals: stage } }]
+    const result = await payload.find({ collection: 'inquiries', where: { and: clauses } as never, sort: '-urgent,-updatedAt', limit: 6, page: 1, depth: 0, overrideAccess: true })
     return [stage, { leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), totalDocs: result.totalDocs, hasMore: result.hasNextPage }] as const
   }))
   return Object.fromEntries(entries)
@@ -87,14 +75,20 @@ export async function GET(request: Request): Promise<Response> {
   const { payload, user } = await staff(request)
   if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
   const url = new URL(request.url)
-  const page = pageOf(url.searchParams.get('page'))
-  const [result, users, pipeline] = await Promise.all([
-    payload.find({ collection: 'inquiries', where: where(filterClauses(url, true)), sort: '-urgent,-updatedAt', limit: 50, page, depth: 0, overrideAccess: true }),
+  let filters: LeadFilters
+  try { filters = parseLeadFilters(url) } catch (error) {
+    if (error instanceof LeadFilterError) return Response.json({ error: error.message }, { status: 400, headers: noStore })
+    throw error
+  }
+  const [result, users, pipeline, sources] = await Promise.all([
+    payload.find({ collection: 'inquiries', where: leadWhere(filters, true), sort: '-urgent,-updatedAt', limit: 50, page: filters.page, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'users', where: { disabled: { not_equals: true } }, limit: 200, depth: 0, overrideAccess: true }),
-    pipelineFor(payload, url),
+    pipelineFor(payload, filters),
+    payload.find({ collection: 'inquiries', limit: 0, pagination: false, depth: 0, select: { sourcePage: true }, overrideAccess: true }),
   ])
   const assignees = users.docs.filter((candidate) => hasRole(candidate as never, ['owner', 'sales'])).map((candidate) => ({ id: candidate.id, name: candidate.name || candidate.email, email: candidate.email }))
-  return Response.json({ leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), pipeline, assignees, page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: noStore })
+  const sourcePages = [...new Set(sources.docs.map((lead) => lead.sourcePage).filter((source): source is string => typeof source === 'string'))].sort()
+  return Response.json({ leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), pipeline, assignees, sourcePages, page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: noStore })
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -108,7 +102,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   const { input, errors } = manualInquiryInput(body)
   if (!input) return Response.json({ errors }, { status: 422, headers: noStore })
-  const result = await createAcceptedInquiry(payload, input)
+  const result = await createAcceptedInquiry(payload, input, user)
   if ('suppressed' in result) return Response.json({ error: 'Manual leads cannot use spam fields.' }, { status: 400, headers: noStore })
   return Response.json({ lead: view(result.inquiry as unknown as Record<string, unknown>) }, { status: 201, headers: noStore })
 }
