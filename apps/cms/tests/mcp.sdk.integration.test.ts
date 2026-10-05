@@ -182,6 +182,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(secondLeadPage).toMatchObject({ page: 2 }); expect(secondLeadPage.items[0]?.id).not.toBe(firstLeadPage.items[0]?.id)
     expect(leads).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: spamLead.id })]))
     expect(leads[0]).toMatchObject({ visitor: expect.objectContaining({ untrusted: true }), consent: { basis: 'visitor-confirmed', at: expect.any(String) }, message: expect.objectContaining({ untrusted: true }) }); expect(JSON.stringify(leads[0])).not.toContain('idempotencyKey')
+    await expect(ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id: spamLead.id } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'not_found' }) })] })
     await expect(ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 26 } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: expect.stringContaining('expected number to be <=25') })] })
     const applicantResult = await ownerPersonalClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })
     const applicant = structuredJson(applicantResult) as Record<string, unknown>
