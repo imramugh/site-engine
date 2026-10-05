@@ -145,6 +145,28 @@ describe('static snapshot renderer', () => {
     server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true });
   });
 
+  it('rebuilds related service cards from current referenced page data and omits permitted empty list markup', async () => {
+    const snapshot = fixture('Related rebuild');
+    const appearance = { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const };
+    snapshot.settings.contractVersion = '1.2.0';
+    const source = snapshot.pages[0]!;
+    const related = snapshot.pages.find((page) => page.slug === 'install')!;
+    source.blocks.push(
+      { id: '99999999-0000-4000-8000-000000000001', type: 'relatedServices', heading: 'Live related', pageIds: [related.id], hidden: false, appearance } as never,
+      { id: '99999999-0000-4000-8000-000000000003', type: 'callout', heading: 'Empty callout', body: 'No items should create no list.', items: [], hidden: false, appearance } as never,
+      { id: '99999999-0000-4000-8000-000000000004', type: 'callout', heading: 'Hidden list marker', body: 'Must not render.', hidden: true, appearance } as never,
+    );
+    related.title = 'Renamed related service';
+    const input = await writeSnapshot(root, snapshot, 'related-rebuild.json');
+    const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    expect(html).toContain('Renamed related service');
+    expect(html).not.toContain('Hidden list marker');
+    for (const id of ['99999999-0000-4000-8000-000000000003']) {
+      expect(html.match(new RegExp(`<section[^>]+data-block-id="${id}"[\\s\\S]*?</section>`))?.[0]).not.toMatch(/<ul(?:\s|>)/);
+    }
+  }, 120_000);
+
   it('builds two concurrent, content-distinct snapshots without sharing Astro intermediates', async () => {
     const alpha = fixture('Alpha'); const beta = fixture('Beta');
     const alphaInput = await writeSnapshot(root, alpha, 'alpha.json'); const betaInput = await writeSnapshot(root, beta, 'beta.json');

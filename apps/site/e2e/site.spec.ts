@@ -15,6 +15,9 @@ test('ENG-028 neutral fixture renders accessible semantic content', async ({ pag
 test('ENG-004 and ENG-005 derive routes and render the complete neutral block gallery', async ({ page }) => {
   await page.goto('/general/gallery');
   await expect(page.locator('[data-block]')).toHaveCount(17);
+  expect(await page.locator('[data-block]').evaluateAll((blocks) => blocks.map((block) => block.getAttribute('data-block')))).toEqual(expect.arrayContaining([
+    'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video',
+  ]));
   await expect(page.getByText('Hidden fixture')).toHaveCount(0);
   await expect(page.getByText('This unconfirmed quote must not render.')).toHaveCount(0);
   const video = page.locator('video');
