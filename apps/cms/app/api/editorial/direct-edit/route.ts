@@ -6,7 +6,7 @@ import { serverSessionStrategy } from '../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
-const maxBodyBytes = 4_096
+const maxBodyBytes = 65_536
 
 function sameOrigin(request: Request): boolean {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL

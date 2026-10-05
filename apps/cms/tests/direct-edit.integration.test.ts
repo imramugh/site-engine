@@ -23,6 +23,7 @@ let releaseSequence = 10_000
 
 const heroID = '10000000-0000-4000-8000-000000000001'
 const calloutID = '10000000-0000-4000-8000-000000000002'
+const richTextID = '10000000-0000-4000-8000-000000000003'
 async function actor(role: 'owner' | 'editor' | 'approver' = 'editor') {
   return payload.create({ collection: 'users', data: { email: `${role}-${newOpaqueToken()}@example.test`, name: role, roles: [role] }, overrideAccess: true })
 }
@@ -38,6 +39,7 @@ async function fixture(user: { id: string; roles?: string[] }) {
   const page = await payload.create({ collection: 'pages', data: { title: 'Direct edit page', summary: 'A synthetic page with enough summary text for direct edit tests.', slug: `page-${unique}`, sectionId: section.id, template: 'landing', blocks: [
     { id: heroID, type: 'hero', eyebrow: 'Original eyebrow', heading: 'Original heading', body: 'Original hero body.', cta: { label: 'Generated link', href: '/contact' }, hidden: false, appearance },
     { id: calloutID, type: 'callout', heading: 'Original callout', body: 'Original callout body.', items: ['Nested item must stay protected.'], cta: { label: 'Generated callout link', href: '/contact' }, hidden: false, appearance },
+    { id: richTextID, type: 'richText', body: 'Original rich text.', hidden: false, appearance },
   ] }, overrideAccess: true, context: { editorialInternal: true } })
   const set = await payload.create({ collection: 'change-sets', data: { name: 'Direct edit set', state: 'open', actor: user.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   return { section, page, set }
@@ -65,6 +67,7 @@ describe('ENG-026 draft-only direct rendered-text edits', () => {
     expect(page?.blocks).toEqual([
       { id: heroID, type: 'hero', fields: { eyebrow: 'Original eyebrow', heading: 'Original heading', body: 'Original hero body.' } },
       { id: calloutID, type: 'callout', fields: { heading: 'Original callout', body: 'Original callout body.' } },
+      { id: richTextID, type: 'richText', fields: { body: 'Original rich text.' } },
     ])
     expect(JSON.stringify(result)).not.toContain('Generated link')
     expect(JSON.stringify(result)).not.toContain('Nested item')
@@ -84,6 +87,15 @@ describe('ENG-026 draft-only direct rendered-text edits', () => {
     expect((updated.blocks as Array<Record<string, unknown>>)[1]).toMatchObject({ heading: 'Original callout', body: 'Updated callout body.', items: ['Nested item must stay protected.'] })
   })
 
+  it('accepts a valid 10,000-character multibyte field within the 65,536-byte route bound', async () => {
+    const editor = await actor(); const current = await fixture(editor); const cookie = await session(editor)
+    const value = '界'.repeat(10_000)
+    const response = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify({ pageID: current.page.id, blockID: richTextID, field: 'body', value, expectedValueHash: directEditValueHash('Original rich text.'), expectedRevision: 0, changeSetID: current.set.id }) }))
+    expect(response.status, await response.text()).toBe(200)
+    const updated = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    expect((updated.blocks as Array<Record<string, unknown>>)[2]?.body).toBe(value)
+  })
+
   it('rejects a Service Hero owned by metadata when override text is equal or different', async () => {
     const editor = await actor(); const current = await fixture(editor)
     const parent = await payload.create({ collection: 'pages', data: { title: 'Service pillar', summary: 'Synthetic parent for generated Service Hero ownership tests.', slug: `pillar-${randomUUID().slice(0, 8)}`, sectionId: current.section.id, template: 'pillar', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
@@ -94,7 +106,7 @@ describe('ENG-026 draft-only direct rendered-text edits', () => {
     const cookie = await session(editor)
     const response = await contextRoute.GET(new Request('http://cms.test/api/editorial/direct-edit/context', { headers: { cookie } }))
     const context = await response.json() as { pages: Array<{ id: string; blocks: Array<{ type: string }> }> }
-    expect(context.pages.find((page) => page.id === current.page.id)?.blocks.map((block) => block.type)).toEqual(['callout'])
+    expect(context.pages.find((page) => page.id === current.page.id)?.blocks.map((block) => block.type)).toEqual(['callout', 'richText'])
   })
 
   it('uses the same working-draft path as ordinary editing, captures an allowed hero field, and replays safely', async () => {
@@ -179,10 +191,10 @@ describe('ENG-026 draft-only direct rendered-text edits', () => {
     expect(deniedOrigin.status).toBe(403)
     const unauthenticated = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id)) }))
     expect(unauthenticated.status).toBe(401)
-    const tooLarge = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify({ padding: 'x'.repeat(5_000) }) }))
+    const tooLarge = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify({ padding: 'x'.repeat(70_000) }) }))
     expect(tooLarge.status).toBe(413)
     let cancelled = false
-    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ padding: 'x'.repeat(5_000) }))) }, cancel() { cancelled = true } })
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ padding: 'x'.repeat(70_000) }))) }, cancel() { cancelled = true } })
     const cancelledOverflow = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: stream, duplex: 'half' } as RequestInit))
     expect(cancelledOverflow.status).toBe(413); expect(cancelled).toBe(true)
     const cookie = await session(approver)

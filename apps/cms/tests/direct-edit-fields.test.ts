@@ -42,6 +42,8 @@ describe('ENG-026 rendered-field mapping', () => {
     expect(validDirectEditValue('hero', 'heading', 'x'.repeat(121))).toBe(false)
     expect(validDirectEditValue('hero', 'body', 'A body with\nplain text.')).toBe(true)
     expect(validDirectEditValue('video', 'transcript', 'A transcript with\nplain text.')).toBe(true)
+    expect(validDirectEditValue('video', 'transcript', 'x'.repeat(10_000))).toBe(true)
+    expect(validDirectEditValue('video', 'transcript', 'x'.repeat(10_001))).toBe(false)
     expect(validDirectEditValue('media', 'caption', 'bad\ncaption')).toBe(false)
     expect(validDirectEditValue('hero', 'body', ' control ')).toBe(false)
     expect(directEditChecks('hero', 'heading', 'bad\nheading').find((check) => check.id === 'plain-text')?.passed).toBe(false)
