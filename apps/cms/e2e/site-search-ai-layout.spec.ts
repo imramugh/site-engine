@@ -63,6 +63,9 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   expect(Math.abs(boxes[0]!.width - boxes[1]!.width)).toBeLessThan(2)
   expect(boxes[0]!.height).toBeLessThanOrEqual(250)
   const crawlerRows = workspace.locator('[data-site-crawler-control]')
+  await expect(workspace.locator('form')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(workspace.locator('fieldset')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(workspace.getByLabel('Search engines')).toHaveCSS('accent-color', 'rgb(10, 58, 94)')
   for (const row of await crawlerRows.all()) {
     const positions = await row.locator(':scope > span, :scope > input').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x))
     expect(positions[1]).toBeGreaterThan(positions[0]!)
