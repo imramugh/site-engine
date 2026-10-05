@@ -68,8 +68,9 @@ export default async function ContentTreePage({ searchParams }: { searchParams: 
     const stateOf = (page: ContentTreePage) => workingPageState(page as unknown as Record<string, unknown>, releasedPages.get(page.id))
     const matchesDraft = (page: ContentTreePage) => ['draft', 'draft-changes'].includes(stateOf(page))
     const allRows = rowsFor(contentSections, allPages, homepageID, checks, buildContentTree(contentSections, allPages))
-    const counts = { all: allRows.length, draft: allRows.filter((row) => matchesDraft(row.page)).length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
-    const visible = allRows.filter((row) => (filter === 'all' || (filter === 'draft' ? matchesDraft(row.page) : stateOf(row.page) === filter)) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
+    const activeRows = allRows.filter((row) => stateOf(row.page) !== 'archived')
+    const counts = { all: activeRows.length, draft: allRows.filter((row) => matchesDraft(row.page)).length, archived: allRows.filter((row) => stateOf(row.page) === 'archived').length }
+    const visible = allRows.filter((row) => ((filter === 'all' && stateOf(row.page) !== 'archived') || (filter === 'draft' ? matchesDraft(row.page) : stateOf(row.page) === filter)) && (!search || `${row.page.title} ${row.page.slug} ${row.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())))
     const canCreate = hasRole(user as never, ['owner', 'editor'])
     const canEdit = hasRole(user as never, ['owner', 'approver', 'editor'])
     const pageHref = (id: string) => canEdit ? `/content-editor/${id}` : `/admin/collections/pages/${id}`
