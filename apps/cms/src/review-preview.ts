@@ -82,23 +82,40 @@ export async function previewThemeContext(input: {
 }) {
   const live = await latestPublished(input.payload, input.req) ?? input.initialBaseline
   const base = await queueHead(input.payload, input.req) ?? live
-  if (!live || !base) return { liveManifest: undefined, activeTheme: null, changeSetThemes: {} as Record<string, PreviewThemeIdentity | null> }
+  if (!live || !base) return {
+    liveManifest: undefined,
+    activeTheme: null,
+    activeContractVersion: null,
+    changeSetThemes: {} as Record<string, PreviewThemeIdentity | null>,
+    changeSetContractVersions: {} as Record<string, string | null>,
+  }
   const activeTheme = themeIdentity(base.manifest) ?? null
   const changeSetThemes: Record<string, PreviewThemeIdentity | null> = {}
+  const changeSetContractVersions: Record<string, string | null> = {}
   for (const set of input.changeSets) {
     const changes = Array.isArray(set.changes) ? set.changes as Change[] : []
     if (!changes.some((change) => change.collection === 'theme-settings')) {
       changeSetThemes[String(set.id)] = activeTheme
+      changeSetContractVersions[String(set.id)] = base.manifest.settings.contractVersion
       continue
     }
     const included = changes.map((change) => `${change.collection}:${change.id}`)
     try {
-      changeSetThemes[String(set.id)] = themeIdentity(buildCandidate(base.manifest, changes, included, base.versions)) ?? null
+      const candidate = buildCandidate(base.manifest, changes, included, base.versions)
+      changeSetThemes[String(set.id)] = themeIdentity(candidate) ?? null
+      changeSetContractVersions[String(set.id)] = candidate.settings.contractVersion
     } catch {
       changeSetThemes[String(set.id)] = null
+      changeSetContractVersions[String(set.id)] = null
     }
   }
-  return { liveManifest: live.manifest, activeTheme, changeSetThemes }
+  return {
+    liveManifest: live.manifest,
+    activeTheme,
+    activeContractVersion: base.manifest.settings.contractVersion,
+    changeSetThemes,
+    changeSetContractVersions,
+  }
 }
 
 /** Prepares exact immutable worker inputs; callers load the configured file before opening SQLite. */
