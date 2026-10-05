@@ -39,6 +39,7 @@ import * as migration_20261005_164500_crawler_policy_1_7 from './20261005_164500
 import * as migration_20261005_170000_redirect_creator_attribution from './20261005_170000_redirect_creator_attribution';
 import * as migration_20261005_180000_inquiry_spam_lifecycle from './20261005_180000_inquiry_spam_lifecycle';
 import * as migration_20261005_181000_application_contact_fields from './20261005_181000_application_contact_fields';
+import * as migration_20261005_190000_retention_privacy from './20261005_190000_retention_privacy';
 
 export const migrations = [
   {
@@ -245,5 +246,10 @@ export const migrations = [
     up: migration_20261005_181000_application_contact_fields.up,
     down: migration_20261005_181000_application_contact_fields.down,
     name: '20261005_181000_application_contact_fields',
+  },
+  {
+    up: migration_20261005_190000_retention_privacy.up,
+    down: migration_20261005_190000_retention_privacy.down,
+    name: '20261005_190000_retention_privacy',
   },
 ];
