@@ -31,32 +31,43 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
   await expect(owner.page.getByText('More tools', { exact: true })).toHaveCount(0)
   await expect(owner.page).toHaveURL(/\/themes$/)
   await expect(owner.page.getByRole('heading', { name: 'Themes' })).toBeVisible()
-  await expect(owner.page.getByLabel('Current theme selections')).toContainText('Published: None selected')
-  await owner.page.getByLabel('Theme', { exact: true }).selectOption({ label: 'browser-theme 2.4.6' })
-  await expect(owner.page.getByLabel('Theme compatibility')).toContainText('Compatible with the current published content.')
-  await owner.page.getByLabel('Change set name').fill('Switch synthetic browser theme')
+  await expect(owner.page.getByLabel('Current theme selections')).toContainText('No explicit theme')
+  const card = owner.page.locator('[data-theme-card][data-theme-family="browser-theme"]')
+  await expect(card).toHaveAttribute('data-theme-status', 'available')
+  await card.getByRole('button', { name: 'Create reviewed preview' }).click()
+  await card.getByLabel('Reviewed draft name').fill('Switch synthetic browser theme')
+  let failPreparation = true
+  await owner.page.route('**/api/editorial/prepare-preview', async route => {
+    if (failPreparation) { failPreparation = false; await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic renderer queue interruption.' }) }); return }
+    await route.continue()
+  })
   const created = owner.page.waitForResponse((response) => response.url().endsWith('/api/themes') && response.request().method() === 'POST')
-  await owner.page.getByRole('button', { name: 'Create draft selection' }).click()
+  await card.getByRole('button', { name: 'Create reviewed draft and preview' }).click()
   const createdResponse = await created
   expect(createdResponse.status()).toBe(201)
-  const createdBody = await createdResponse.json() as { changeSet: { id: string; name: string }; selection: { id: string; version: string } }
+  const createdBody = await createdResponse.json() as { changeSet: { id: string; name: string }; selection: { id: string; version: string }; reused: boolean }
   expect(createdBody).toMatchObject({ changeSet: { name: 'Switch synthetic browser theme' }, selection: { id: 'browser-theme', version: '2.4.6' } })
-  await expect(owner.page.getByRole('status')).toContainText('Draft theme selection captured')
-  await expect(owner.page.getByLabel('Current theme selections')).toContainText('Draft: browser-theme 2.4.6')
-
-  const lifecycle = await owner.page.evaluate(async (id) => {
-    const submitted = await fetch('/api/editorial/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) })
-    const submittedBody = await submitted.json() as { changes?: Array<{ collection: string; id: string }> }
-    const includedChangeKeys = submittedBody.changes?.filter((change) => change.collection === 'theme-settings').map((change) => `${change.collection}:${change.id}`) ?? []
-    const prepared = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, includedChangeKeys }) })
-    return { submitted: submitted.status, submittedBody, prepared: prepared.status, job: await prepared.json() as { job?: { proposedManifest?: { settings?: { theme?: unknown } } } } }
-  }, createdBody.changeSet.id)
-  expect(lifecycle.submitted, JSON.stringify(lifecycle.submittedBody)).toBe(200)
-  expect(lifecycle.prepared, JSON.stringify(lifecycle.job)).toBe(200)
-  expect(lifecycle.job.job?.proposedManifest?.settings?.theme).toMatchObject({ id: 'browser-theme', version: '2.4.6' })
+  await expect(owner.page.getByRole('status')).toContainText('Synthetic renderer queue interruption')
+  await owner.page.unroute('**/api/editorial/prepare-preview')
+  const reused = owner.page.waitForResponse((response) => response.url().endsWith('/api/themes') && response.request().method() === 'POST')
+  await card.getByRole('button', { name: 'Create reviewed draft and preview' }).click()
+  const reusedResponse = await reused
+  expect(reusedResponse.status()).toBe(200)
+  expect(await reusedResponse.json()).toMatchObject({ changeSet: { id: createdBody.changeSet.id }, reused: true })
+  await expect(owner.page.getByRole('status')).toContainText('protected preview is queued')
+  const worker = await owner.page.request.post('/__e2e/direct-preview-worker')
+  expect(worker.status(), await worker.text()).toBe(200)
+  await expect(card.getByRole('link', { name: 'Open protected preview' })).toHaveAttribute('href', `/review/${createdBody.changeSet.id}`, { timeout: 10_000 })
+  await expect(owner.page.getByLabel('Current theme selections')).toContainText('Reviewed draft Browser Theme 2.4.6')
   expect(await owner.page.request.get(`${cmsOrigin}/__e2e/publish-state`).then(async (response) => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
-  await owner.page.addScriptTag({ path: axeSource })
-  expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  for (const width of [1440, 390]) {
+    await owner.page.setViewportSize({ width, height: 900 })
+    await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
+    expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await owner.page.addScriptTag({ path: axeSource })
+    expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+    await owner.page.screenshot({ path: test.info().outputPath(`themes-${width}.png`), fullPage: true })
+  }
   await owner.context.close()
 })
 
@@ -70,9 +81,10 @@ test('ENG-035 reports incompatibility and limits theme selection to installed ow
   expect(body.themes.find((theme) => theme.id === 'incomplete-browser-theme')?.compatibility.compatible).toBe(false)
   expect(JSON.stringify(body)).not.toContain('./dist/')
   await owner.page.goto('/themes')
-  await owner.page.getByLabel('Theme', { exact: true }).selectOption({ label: 'incomplete-browser-theme 1.0.0' })
-  await expect(owner.page.getByLabel('Theme compatibility')).toContainText('This theme cannot render the current published content.')
-  await expect(owner.page.getByRole('button', { name: 'Create draft selection' })).toBeDisabled()
+  const incompatible = owner.page.locator('[data-theme-card][data-theme-family="incomplete-browser-theme"]')
+  await expect(incompatible).toContainText('Current content is not compatible.')
+  await expect(incompatible).toHaveAttribute('data-theme-status', 'needs-upgrade')
+  await expect(incompatible.getByRole('button', { name: 'Create reviewed preview' })).toBeDisabled()
   const hostile = await owner.page.request.post('/api/themes', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { id: '<img src=x onerror=alert(1)>', version: '1.0.0', changeSetName: '<script>alert(1)</script>' } })
   expect(hostile.status()).toBe(400)
   expect(JSON.stringify(await hostile.json())).not.toContain('<script>')
