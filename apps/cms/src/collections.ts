@@ -92,6 +92,21 @@ export const Users: CollectionConfig = {
     delete: freshStaff(['owner']),
   },
   hooks: {
+    beforeDelete: [async ({ id, req }) => {
+      const target = await req.payload.findByID({ collection: 'users', id, depth: 0, overrideAccess: true, req })
+      if (!target.roles?.includes('owner') || target.disabled) return
+      const owners = await req.payload.find({ collection: 'users', where: { roles: { contains: 'owner' } }, limit: 200, depth: 0, overrideAccess: true, req })
+      if (owners.docs.filter((user) => !user.disabled).length <= 1) throw new ValidationError({ collection: 'users', errors: [{ path: 'roles', message: 'At least one active Owner is required.' }], req })
+    }],
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      if (operation !== 'update' || !originalDoc?.roles?.includes('owner') || originalDoc.disabled) return data
+      const proposedRoles = Array.isArray(data.roles) ? data.roles : originalDoc.roles
+      const proposedDisabled = data.disabled === undefined ? Boolean(originalDoc.disabled) : Boolean(data.disabled)
+      if (!proposedDisabled && proposedRoles.includes('owner')) return data
+      const owners = await req.payload.find({ collection: 'users', where: { roles: { contains: 'owner' } }, limit: 200, depth: 0, overrideAccess: true, req })
+      if (owners.docs.filter((user) => !user.disabled).length <= 1) throw new ValidationError({ collection: 'users', errors: [{ path: 'roles', message: 'At least one active Owner is required.' }], req })
+      return data
+    }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       const disabledNow = doc.disabled === true && previousDoc?.disabled !== true
       const rolesChanged = operation === 'update' && JSON.stringify(doc.roles) !== JSON.stringify(previousDoc?.roles)

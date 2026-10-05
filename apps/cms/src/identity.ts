@@ -61,7 +61,7 @@ export const serverSessionStrategy: AuthStrategy = {
     }
     // Authenticated user objects can reach admin client props. Never include
     // credential material fetched with the trusted Local API.
-    return { user: { id: user.id, email: user.email, name: user.name, roles: user.roles, disabled: user.disabled, createdAt: user.createdAt, updatedAt: user.updatedAt, collection: 'users', _strategy: 'server-session' } }
+    return { user: { id: user.id, email: user.email, name: user.name, roles: user.roles, provider: user.provider, disabled: user.disabled, createdAt: user.createdAt, updatedAt: user.updatedAt, collection: 'users', _strategy: 'server-session' } }
   },
 }
 

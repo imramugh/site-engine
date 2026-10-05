@@ -62,7 +62,8 @@ export async function POST(request: Request): Promise<Response> {
         return payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as Promise<{ id: string; blocks?: unknown }>
       }
       if (set.revision !== expectedRevision) throw new Error('The selected change set changed. Reload and try again.')
-      const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown; blocks?: unknown }
+      const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown; blocks?: unknown; status?: unknown }
+      if (page.status === 'archived') throw new Error('Restore this page before inserting recipe blocks.')
       const blocks = recipeBlocks(String(page.template ?? ''), body.blocks ?? body.blockTypes, page.blocks)
       req.headers.set('x-site-engine-change-set', changeSetID)
       const result = await payload.update({ collection: 'pages', id: pageID, data: { blocks: [...(Array.isArray(page.blocks) ? page.blocks : []), ...blocks] }, draft: true, user, overrideAccess: false, req }) as { id: string; blocks?: unknown }
