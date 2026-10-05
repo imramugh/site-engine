@@ -54,11 +54,12 @@ function LeadCard({ lead, active, onOpen }: { lead: Lead; active: boolean; onOpe
   </button>
 }
 
-function LeadDetail({ lead, assignees, saving, onClose, onSave, onSpam }: { lead: Lead; assignees: Assignee[]; saving: boolean; onClose: () => void; onSave: (update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) => Promise<void>; onSpam: () => Promise<void> }) {
+function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, onPurge }: { lead: Lead; assignees: Assignee[]; saving: boolean; owner: boolean; onClose: () => void; onSave: (update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) => Promise<void>; onSpam: () => Promise<void>; onPurge: () => Promise<void> }) {
   const [stage, setStage] = useState(lead.stage)
   const [assignee, setAssignee] = useState(lead.assignee ?? '')
   const [notes, setNotes] = useState(lead.notes ?? '')
   const [nextAction, setNextAction] = useState(lead.nextAction ?? '')
+  const [confirm, setConfirm] = useState(false)
   return <aside className={styles.detail} aria-label="Lead details" data-lead-detail>
     <header className={styles.detailHeader}>
       <div><h2>{displayName(lead)}</h2><p>{lead.name && lead.company ? lead.name : lead.email}</p></div>
@@ -81,11 +82,12 @@ function LeadDetail({ lead, assignees, saving, onClose, onSave, onSpam }: { lead
       <label>Next action<textarea rows={3} maxLength={5000} value={nextAction} onChange={(event) => setNextAction(event.target.value)} /></label>
       <button className={styles.primary} disabled={saving}>Save lead details</button>
       <button type="button" className={styles.danger} disabled={saving} onClick={() => void onSpam()}>Mark as spam</button>
+      {owner&&<><button type="button" className={styles.danger} onClick={()=>setConfirm(true)}>Permanently delete inquiry</button>{confirm&&<div role="dialog" aria-modal="true" aria-label="Confirm permanent inquiry deletion"><p>Permanently delete {displayName(lead)} ({lead.email})?</p><button type="button" autoFocus onClick={()=>void onPurge()}>Confirm permanent deletion</button><button type="button" onClick={()=>setConfirm(false)}>Cancel</button></div>}</>}
     </form>
   </aside>
 }
 
-export function LeadDashboard() {
+export function LeadDashboard({ owner = false }: { owner?: boolean }) {
   const [data, setData] = useState<Data>(emptyData)
   const [mode, setMode] = useState<'pipeline' | 'list' | 'spam'>('pipeline')
   const [filters, setFilters] = useState<Filters>({ stage: '', urgent: false, assignee: '', sourcePage: '', received: '90', page: 1 })
@@ -168,6 +170,7 @@ export function LeadDashboard() {
     } catch { setError('The spam submission could not be deleted. Try again.') }
     finally { setSaving(false) }
   }
+  async function purgeInquiry() { if (!active) return; setSaving(true); const response=await fetch('/api/retention',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({inquiryID:active.id,confirm:'permanent-delete'})}); if(!response.ok)setError((await response.json() as {error?:string}).error??'Inquiry could not be deleted.');else{setSelected(null);setMessage('Inquiry permanently deleted.');await load(filters,false,mode)};setSaving(false) }
 
   return <main className={styles.workspace} aria-busy={loading || saving} data-leads-workspace>
     <h1 className={styles.srOnly}>Lead pipeline</h1>
@@ -213,7 +216,7 @@ export function LeadDashboard() {
           {!data.leads.length && <p className={styles.empty}>No spam.</p>}
         </section>}
       </section>
-      {active && mode !== 'spam' && <LeadDetail key={active.id} lead={active} assignees={data.assignees} saving={saving} onClose={() => setSelected(null)} onSave={saveLead} onSpam={() => spamAction(active.id, 'mark-spam')} />}
+      {active && mode !== 'spam' && <LeadDetail key={active.id} lead={active} assignees={data.assignees} saving={saving} owner={owner} onClose={() => setSelected(null)} onSave={saveLead} onSpam={() => spamAction(active.id, 'mark-spam')} onPurge={purgeInquiry} />}
     </div>
     {dialogOpen && <div className={styles.dialogBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog() }}>
       <section role="dialog" aria-modal="true" aria-labelledby="add-lead-title" className={styles.dialog}>
