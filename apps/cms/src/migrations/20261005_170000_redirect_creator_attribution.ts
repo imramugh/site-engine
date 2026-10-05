@@ -1,7 +1,7 @@
 import { MigrateUpArgs, MigrateDownArgs, sql } from '@payloadcms/db-sqlite'
 
 export async function up({ db, payload, req }: MigrateUpArgs): Promise<void> {
-  await db.run(sql`ALTER TABLE \`redirects\` ADD \`created_by_id\` text(36) REFERENCES users(id);`)
+  await db.run(sql`ALTER TABLE \`redirects\` ADD \`created_by_id\` text(36) REFERENCES users(id) ON DELETE set null;`)
   await db.run(sql`ALTER TABLE \`redirects\` ADD \`created_by_label\` text;`)
   await db.run(sql`CREATE INDEX \`redirects_created_by_idx\` ON \`redirects\` (\`created_by_id\`);`)
 }
