@@ -30,6 +30,31 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
   await page.goto('/unknown-route');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
 });
+
+test('ENG-038 starter fixture matrix renders every declared surface at desktop and mobile', async ({ page }, testInfo) => {
+  const standardBlocks = ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'];
+  await page.goto('/');
+  await expect(page.locator('[data-block="hero"]')).toHaveCount(1);
+  await page.goto('/general/gallery');
+  expect(await page.locator('[data-block]').evaluateAll(blocks => blocks.map(block => block.getAttribute('data-block')))).toEqual(expect.arrayContaining(standardBlocks.filter(type => type !== 'hero')));
+  await expect(page.getByText('Short copy.')).toBeVisible();
+  await expect(page.getByText('Longer synthetic copy demonstrates a resilient card layout without depending on a real client message.')).toBeVisible();
+  await expect(page.locator('[data-block="media"] img, [data-block="imageText"] img, [data-block="gallery"] img, [data-block="logoStrip"] img')).toHaveCount(5);
+  await expect(page.locator('video')).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('starter-gallery-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('starter-gallery-mobile.png'), fullPage: true });
+  await page.addScriptTag({ path: axeSource });
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('[data-motion-effect]').first()).toHaveAttribute('data-motion-paused', 'true');
+  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "Starter Sans"'))).toBe(true);
+  for (const [path, heading] of [['/general/guide', 'Guide'], ['/general/article', 'Article'], ['/insights/all', 'Insights'], ['/services/operations', 'Operations'], ['/services/operations/detail', 'Service detail'], ['/careers/example-role', 'Example role']] as const) { await page.goto(path); await expect(page.getByRole('heading', { level: 1 })).toContainText(heading); }
+  await page.goto('/unknown-fixture');
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+});
 test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {
   await page.goto('/motion/one');
   await page.getByRole('button', { name: 'Reduce motion' }).click();

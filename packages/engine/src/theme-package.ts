@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, realpath } from 'node:fs/promises'
-import { resolve, relative, sep } from 'node:path'
+import { join, resolve, relative, sep } from 'node:path'
 import { BackgroundSchema, LogoToneSchema, TemplateSchema, ThemeInstallSchema, ThemeManifestSchema } from '@site-engine/contract'
 import { manifestDigest } from './theme-registry.js'
 
@@ -10,7 +10,9 @@ const fileDigest = (value: Buffer) => createHash('sha256').update(value).digest(
 async function regular(root: string, path: string) {
   if (!path.startsWith('./') || path.includes('..') || path.includes('\\')) throw new Error(`Unsafe package path: ${path}`)
   const file = resolve(root, path); if (relative(root, file).startsWith(`..${sep}`)) throw new Error(`Package path escapes root: ${path}`)
-  const info = await lstat(file); if (!info.isFile() || info.isSymbolicLink() || info.size > 5_000_000) throw new Error(`Package artifact is not a safe regular file: ${path}`)
+  let component = root
+  for (const segment of path.slice(2).split('/')) { component = join(component, segment); if ((await lstat(component)).isSymbolicLink()) throw new Error(`Package artifact contains a symbolic link: ${path}`) }
+  const info = await lstat(file); if (!info.isFile() || info.size > 5_000_000) throw new Error(`Package artifact is not a safe regular file: ${path}`)
   const resolved = await realpath(file); if (relative(root, resolved).startsWith(`..${sep}`)) throw new Error(`Package artifact resolves outside root: ${path}`)
   const bytes = await readFile(file)
   return { path, bytes, digest: fileDigest(bytes) }
