@@ -21,8 +21,12 @@ async function actor(request: Request) { const payload = await getPayload({ conf
 export async function GET(request: Request) {
   const { payload, user } = await actor(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
-  const events = await readNotificationPreferences(payload)
-  return privateJSON({ events, defaults: defaultNotificationPreferences, capabilities: { emailDelivery: false, smsDelivery: false, producers: { 'new-lead': true, 'active-incident-lead': true, 'new-job-application': true, 'change-set-submitted': true, 'follow-ups-due': false, 'publish-or-integration-failed': true } } })
+  const [events, mapping] = await Promise.all([readNotificationPreferences(payload), payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true })])
+  const mailboxID = typeof mapping.docs[0]?.mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0]?.mailbox?.id
+  const mailbox = mailboxID ? await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }).catch(() => null) : null
+  const workerConfigured = Boolean(process.env.NOTIFICATION_WORKER_TOKEN && Buffer.byteLength(process.env.NOTIFICATION_WORKER_TOKEN) >= 32)
+  const emailDelivery = workerConfigured && mailbox?.health === 'connected'
+  return privateJSON({ events, defaults: defaultNotificationPreferences, capabilities: { emailDelivery, smsDelivery: false, producers: { 'new-lead': true, 'active-incident-lead': true, 'new-job-application': true, 'change-set-submitted': true, 'follow-ups-due': false, 'publish-or-integration-failed': true } } })
 }
 
 export async function POST(request: Request) {
