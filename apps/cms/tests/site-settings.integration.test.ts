@@ -58,6 +58,17 @@ describe('reviewed site settings singleton', () => {
     await payload.update({ collection: 'change-sets', id: sets.docs[0]!.id, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
     await payload.delete({ collection: 'site-settings', id: settings.id, overrideAccess: true, context: { editorialInternal: true } })
   })
+  it('treats database nulls as portable omissions when an imported singleton gains its first optional value', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `settings-import-owner-${randomUUID()}@example.test`, name: 'Imported settings owner', roles: ['owner'] }, overrideAccess: true })
+    const base = structuredClone(neutralFixture); base.settings.contractVersion = '1.5.0'
+    const settings = await payload.create({ collection: 'site-settings', data: { key: 'active', siteName: base.settings.siteName, defaultLocale: base.settings.defaultLocale }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'site-settings', id: settings.id, data: { legalName: 'First reviewed legal name' }, draft: true, user: owner, overrideAccess: false })
+    const sets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 1, overrideAccess: true, depth: 0 })
+    const change = (sets.docs[0]!.changes as Array<{ collection: string; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }>).find(item => item.collection === 'site-settings')!
+    expect(change.before).not.toHaveProperty('legalName')
+    expect(buildCandidate(base, [change] as never, [`site-settings:${change.id}`], { themeVersion: '1.5.0', engineVersion: '1.0.0', contractVersion: '1.5.0' }).settings.legalName).toBe('First reviewed legal name')
+    await payload.delete({ collection: 'site-settings', id: settings.id, overrideAccess: true, context: { editorialInternal: true } })
+  })
   it('captures reordered 1.6 navigation and resolves only visible generated pillars from SQLite-backed content', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: `navigation-owner-${randomUUID()}@example.test`, name: 'Navigation owner', roles: ['owner'] }, overrideAccess: true })
     const sectionID = randomUUID(), homeID = randomUUID(), firstID = randomUUID(), secondID = randomUUID(), nestedID = randomUUID(), draftID = randomUUID()

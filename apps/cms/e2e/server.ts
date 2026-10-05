@@ -83,7 +83,6 @@ const usersOwnerSessionToken = 'synthetic-users-owner-session-token'
 const usersOwnerOtherSessionToken = 'synthetic-users-owner-other-session-token'
 const galleryPageID = 'face0000-0000-4000-8000-000000000001'
 const gallerySetID = 'face0000-0000-4000-8000-000000000002'
-const navigationSetID = 'face0000-0000-4000-8000-000000000016'
 const shellSessionTokens = {
   owner: 'synthetic-shell-owner-session-token',
   editor: 'synthetic-shell-editor-session-token',
@@ -342,9 +341,6 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(operationsSessionToken), user: operationsOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(galleryOwnerSessionToken), user: galleryOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(siteOwnerSessionToken), user: siteOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
-  const navigationSelection = { id: navigationThemeManifest.name, version: navigationThemeManifest.version, contract: navigationThemeManifest.contract, manifestDigest: createHash('sha256').update(stable(navigationThemeManifest)).digest('hex') }
-  const navigationThemeAfter = { selection: navigationSelection, settings: {} }
-  await payload.create({ collection: 'change-sets', data: { id: navigationSetID, name: 'Navigation 1.6 browser draft', state: 'open', actor: siteOwner.id, revision: 0, changes: [{ collection: 'theme-settings', id: 'face0000-0000-4000-8000-000000000017', before: null, after: navigationThemeAfter, beforeHash: null, afterHash: canonicalHash(navigationThemeAfter) }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(usersOwnerSessionToken), user: usersOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(usersOwnerOtherSessionToken), user: usersOwner.id, authenticatedAt: sessionNow, lastSeenAt: new Date(Date.now() - 60_000).toISOString(), expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken('synthetic-users-target-session-token'), user: usersTarget.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
