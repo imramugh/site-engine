@@ -209,7 +209,7 @@ test('ENG-014 remains readable and accessible at desktop and narrow mobile width
   const branding = await page.request.get('/admin-branding/admin-branding.css')
   if (branding.ok()) {
     expect(await branding.text()).toContain('[data-media-workspace]')
-    const selectors = ['[data-media-detail] h2', '[data-media-asset] strong', 'label[for="asset-alt"]', '[data-media-toolbar] button']
+    const selectors = ['label[for="media-search"]', '[data-media-asset] strong', '#focal-heading', 'label[for="asset-focal-x"]', '[data-media-detail] h2', 'label[for="asset-alt"]', '[data-media-toolbar] button']
     const fonts = await renderedFonts(page, selectors)
     await test.info().attach('media-rendered-fonts.json', { body: Buffer.from(JSON.stringify(fonts, null, 2)), contentType: 'application/json' })
     for (const selector of selectors) {
