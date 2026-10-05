@@ -18,7 +18,7 @@ export async function enqueueDueFollowUps(payload: Payload, now = new Date(), li
   const local = parts(now, followUpTimezone())
   if (local.hour < 8) return 0
   const result = await payload.find({ collection: 'inquiries', where: { and: [
-    { nextActionDueAt: { less_than_equal: now.toISOString() } }, { nextAction: { exists: true } }, { assignee: { exists: true } },
+    { nextActionDueAt: { less_than_equal: now.toISOString() } }, { nextAction: { exists: true } }, { nextAction: { not_equals: '' } }, { assignee: { exists: true } },
     { spam: { not_equals: true } }, { stage: { not_in: ['won', 'lost'] } },
   ] }, sort: 'nextActionDueAt', limit, pagination: false, depth: 0, overrideAccess: true })
   let queued = 0

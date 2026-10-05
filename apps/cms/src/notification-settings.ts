@@ -86,13 +86,16 @@ export async function enqueueNotification(payload: Payload, req: PayloadRequest 
     }
     const preference = (await readNotificationPreferences(payload, transaction)).find((entry) => entry.kind === input.kind)
     if (!preference?.enabled) return undefined
+    const existing = await payload.find({ collection: 'notification-outbox', where: { idempotencyKey: { equals: input.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req: transaction })
+    if (existing.docs[0]) return existing.docs[0]
     const recipients = await resolveRecipients(payload, transaction, preference.recipients, input.leadOwnerID)
-    return payload.create({
-      collection: 'notification-outbox',
-      data: { inquiry: input.inquiry, kind: input.kind, idempotencyKey: input.idempotencyKey, state: 'queued', payload: input.payload, recipientRules: preference.recipients, recipients, channels: preference.channels, sourceType: input.sourceType, sourceID: input.sourceID, availableAt: new Date().toISOString() },
-      overrideAccess: true,
-      req: transaction,
-    })
+    try { return await payload.create({
+      collection: 'notification-outbox', data: { inquiry: input.inquiry, kind: input.kind, idempotencyKey: input.idempotencyKey, state: 'queued', payload: input.payload, recipientRules: preference.recipients, recipients, channels: preference.channels, sourceType: input.sourceType, sourceID: input.sourceID, availableAt: new Date().toISOString() }, overrideAccess: true, req: transaction,
+    }) } catch (error) {
+      const raced = await payload.find({ collection: 'notification-outbox', where: { idempotencyKey: { equals: input.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req: transaction })
+      if (raced.docs[0]) return raced.docs[0]
+      throw error
+    }
   }
   return req?.transactionID ? enqueue(req) : withPayloadTransaction(payload, enqueue)
 }
