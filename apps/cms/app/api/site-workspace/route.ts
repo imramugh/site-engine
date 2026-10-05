@@ -163,6 +163,10 @@ export async function POST(request: Request) {
         const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
         if (preview.changeSetContractVersions[String(set.id)] !== '1.7.0') throw new Error('Search and AI crawler preferences require a selected contract 1.7 theme in the same change set.')
         await payload.update({ collection: 'site-settings', id: settingsDoc.id, data: { seoDescription: typeof description === 'string' ? description.trim() : null, searchEnabled: value.settings.searchEnabled, crawlerPolicy: policy }, draft: true, overrideAccess: false, user: actor as never, req })
+        // The capture hook performs its own internal change-set update using
+        // this request. Restore the caller's capture context before writing
+        // the second document in this atomic operation.
+        req.context = { ...req.context, editorialInternal: false }
         const guideData = { key: 'active', bannedPhrases: cleanStrings(value.guide.bannedPhrases), preferredTerms: cleanPreferredTerms(value.guide.preferredTerms), canadianSpelling: value.guide.canadianSpelling as 'off' | 'warn', maximumSentenceWords: Number(value.guide.maximumSentenceWords), minimumReadingEase: Number(value.guide.minimumReadingEase) }
         if (guideDoc) await payload.update({ collection: 'style-guides', id: guideDoc.id, data: guideData, draft: true, overrideAccess: false, user: actor as never, req })
         else await payload.create({ collection: 'style-guides', data: guideData, draft: true, overrideAccess: false, user: actor as never, req })
