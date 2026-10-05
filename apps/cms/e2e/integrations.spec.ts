@@ -70,9 +70,10 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   }
   for (const tab of ['Email', 'Sign-in', 'Connected assistants', 'Notifications', 'AI providers']) { await owner.page.getByRole('tab', { name: tab, exact: true }).click(); await expect(owner.page.getByRole('tabpanel')).toBeVisible() }
   await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
+  await expect(owner.page.locator('[data-integrations-status][role="alert"]')).toHaveCount(0)
   const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(3)
   await expect(signin.locator('[data-signin-method="google"]')).toContainText('Invitation only'); await expect(signin.locator('[data-signin-method="google"]')).toContainText('Assigned manually')
-  await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last actual use'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
+  await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last used'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-1440.png'), fullPage: true })
   await owner.page.setViewportSize({ width: 390, height: 844 }); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
@@ -88,9 +89,9 @@ test('ENG-022 Owner persists notification routing and private urgent contacts', 
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications')
   const panel = owner.page.locator('[data-notification-preferences]'); await expect(panel).toBeVisible(); await expect(panel.locator('fieldset')).toHaveCount(6)
-  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('messages remain queued until an operator connects delivery.')
+  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('Notification messages are queued.')
   await expect(panel.getByRole('link', { name: 'Email tab' })).toHaveAttribute('href', '/integrations?tab=email'); await expect(panel.getByRole('link', { name: 'Site › Business details' })).toHaveAttribute('href', '/site')
-  await expect(panel.locator('[data-notification-sidebar="sms"]')).toContainText('Not connected'); await expect(panel.locator('[data-notification-sidebar="templates"]')).toContainText('Template editing is not available yet')
+  await expect(panel.locator('[data-notification-sidebar="sms"]')).toContainText('Not connected'); await expect(panel.locator('[data-notification-sidebar="templates"]')).toContainText('Templates are not yet configurable')
   const lead = panel.locator('fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }); await lead.locator('summary').first().click(); await lead.getByLabel('Sales').uncheck()
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/notification-settings') && response.request().method() === 'POST')
   await panel.getByRole('button', { name: 'Save preferences' }).click(); expect((await saved).status()).toBe(200); await expect(panel.getByRole('status')).toContainText('Notification preferences saved.')
