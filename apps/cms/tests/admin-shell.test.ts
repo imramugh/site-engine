@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadAdminBranding, parseAdminBranding } from '../src/admin-branding'
-import { navigationForRoles } from '../src/admin-navigation'
+import { adminSiteNavigationItems, navigationForRoles } from '../src/admin-navigation'
 
 describe('ENG-006 / ENG-022 admin shell contracts', () => {
   it('keeps role discovery separate from route authorization', () => {
@@ -12,6 +12,10 @@ describe('ENG-006 / ENG-022 admin shell contracts', () => {
     expect(navigationForRoles(['approver']).map((item) => item.href)).not.toContain('/block-gallery')
     expect(navigationForRoles(['sales']).map((item) => item.href)).toEqual(['/admin', '/leads'])
     expect(navigationForRoles(['hiring']).map((item) => item.href)).toEqual(['/admin', '/applications'])
+    expect(navigationForRoles(['owner'], adminSiteNavigationItems).map((item) => [item.label, item.href])).toEqual([
+      ['Site', '/admin/collections/site-settings'], ['Integrations', '/integrations'], ['Users', '/admin/collections/users'],
+    ])
+    expect(navigationForRoles(['editor'], adminSiteNavigationItems)).toEqual([])
   })
 
   it('uses neutral branding for missing or unsafe manifests', async () => {

@@ -452,11 +452,11 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
 
 test('a locally provisioned owner uses the authenticator without OIDC, browses collections, and is disabled authoritatively', async ({ page }) => {
   await signInLocalOwner(page)
-  const collections = page.locator('details').filter({ has: page.locator('summary', { hasText: 'More tools' }) })
-  await collections.locator('summary').click()
-  const collectionNavigation = collections.getByRole('navigation', { name: 'More tools' })
-  await expect(collectionNavigation.getByRole('link', { name: 'Pages', exact: true })).toBeVisible()
-  await expect(collectionNavigation.getByRole('link', { name: 'Sections', exact: true })).toBeVisible()
+  await expect(page.getByText('More tools', { exact: true })).toHaveCount(0)
+  const siteNavigation = page.getByRole('navigation', { name: 'Site' })
+  await expect(siteNavigation.getByRole('link')).toHaveText(['Site', 'Integrations', 'Users'])
+  await expect(siteNavigation.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('href', '/admin/collections/site-settings')
+  await expect(siteNavigation.getByRole('link', { name: 'Users', exact: true })).toHaveAttribute('href', '/admin/collections/users')
 
   const me = await page.request.get('/api/users/me')
   expect(me.ok()).toBeTruthy()
@@ -481,6 +481,8 @@ test('a locally provisioned owner uses the authenticator without OIDC, browses c
   const logout = page.locator('[data-admin-account] a[href="/admin/logout"]')
   const accountMenu = page.getByRole('group', { name: 'Account menu' })
   await accountMenu.getByText('Synthetic Emergency Owner').click()
+  await expect(accountMenu.getByRole('menuitem', { name: 'My connected assistants' })).toHaveAttribute('href', '/integrations?tab=assistants')
+  await expect(accountMenu.getByRole('menuitem', { name: 'Sign out' })).toBeVisible()
   await logout.click()
   await page.waitForURL(/\/admin\/login/)
   expect(logoutRequests).toContain('POST /api/auth/logout')

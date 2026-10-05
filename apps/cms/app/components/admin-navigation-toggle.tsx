@@ -9,8 +9,6 @@ import styles from './staff-shell.module.css'
 type Props = {
   primary: readonly AdminNavigationItem[]
   site: readonly AdminNavigationItem[]
-  tools: readonly AdminNavigationItem[]
-  collections: readonly AdminNavigationItem[]
   displayName: string
   roles: readonly AdminRole[]
   badges: AdminNavigationBadges
@@ -138,7 +136,7 @@ export function AdminWorkspaceHeader() {
   return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<div className={styles.headerActions}><AdminGlobalSearch /><a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></div></header>
 }
 
-export function AdminNavigationToggle({ primary, site, tools, collections, displayName, roles, badges }: Props) {
+export function AdminNavigationToggle({ primary, site, displayName, roles, badges }: Props) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const button = useRef<HTMLButtonElement>(null)
@@ -151,7 +149,10 @@ export function AdminNavigationToggle({ primary, site, tools, collections, displ
   }, [open])
   const link = (item: AdminNavigationItem) => {
     const badge = badges[item.label as keyof AdminNavigationBadges]
-    const current = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) || (item.href === '/content-tree' && pathname.startsWith('/content-editor/'))
+    const grouped = (item.href === '/content-tree' && pathname.startsWith('/content-editor/'))
+      || (item.label === 'Site' && (pathname === '/themes' || pathname.startsWith('/admin/collections/redirects')))
+      || (item.href === '/integrations' && pathname === '/ai-jobs')
+    const current = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) || grouped
     return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={current ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
   }
 
@@ -165,15 +166,11 @@ export function AdminNavigationToggle({ primary, site, tools, collections, displ
         <div className={styles.navDivider} data-admin-nav-separator aria-hidden="true" />
         <nav className={styles.adminLinks} data-admin-secondary aria-label="Site">{site.map(link)}</nav>
       </> : null}
-      {(tools.length || collections.length) ? <details className={styles.collectionLinks}>
-        <summary>More tools</summary>
-        <nav className={styles.adminLinks} aria-label="More tools">{tools.map(link)}{collections.map(link)}</nav>
-      </details> : null}
       <details className={styles.adminAccount} data-admin-account aria-label="Account menu">
         <summary data-admin-account-button><span className={styles.accountInitials} data-admin-account-avatar aria-hidden="true">{displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'S'}</span><span><strong data-admin-account-name>{displayName}</strong><small data-admin-account-role>{roles.join(', ') || 'staff'}</small></span><svg className={styles.accountChevron} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg></summary>
         <div className={styles.accountMenu} role="menu">
-          <a role="menuitem" href="/admin/account">Account</a>
-          <a role="menuitem" href="/admin/logout">Log out</a>
+          {roles.includes('owner') ? <a role="menuitem" href="/integrations?tab=assistants">My connected assistants</a> : null}
+          <a role="menuitem" href="/admin/logout">Sign out</a>
         </div>
       </details>
     </div>
