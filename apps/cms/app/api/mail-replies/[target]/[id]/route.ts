@@ -6,6 +6,18 @@ import { authorizeReply, cancelReply, prepareReply, sendReply } from '../../../.
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
+export async function GET(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
+  const { target, id } = await context.params; if (target !== 'lead' && target !== 'application') return Response.json({ error: 'Unknown mail target.' }, { status: 404, headers: noStore })
+  const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); const user = auth.user as { id: string; roles?: string[] } | null
+  if (!user || !hasRole(user as never, target === 'lead' ? ['owner', 'sales'] : ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403, headers: noStore })
+  try { await payload.findByID({ collection: target === 'lead' ? 'inquiries' : 'applications', id, depth: 0, overrideAccess: false, user: user as never }) } catch { return Response.json({ error: 'Record not found.' }, { status: 404, headers: noStore }) }
+  const area = target === 'lead' ? 'leads' : 'careers'; const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
+  if (!mapping.docs[0]) return Response.json({ senders: [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  const mailboxID = typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id
+  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true })
+  const address = String(mapping.docs[0].senderAddress).toLowerCase(); const verified = String(mailbox.primaryAddress).toLowerCase() === address || (Array.isArray(mailbox.verifiedAliases) && mailbox.verifiedAliases.map(String).includes(address))
+  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+}
 export async function POST(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
   if (!configured || request.headers.get('origin') !== new URL(configured).origin) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
