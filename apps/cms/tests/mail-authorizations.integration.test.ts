@@ -7,6 +7,7 @@ import { getPayload, type Payload } from 'payload'
 import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
+import { prepareReply } from '../src/mail-replies'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mail-authorizations-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -45,6 +46,12 @@ async function draft(): Promise<Draft> {
 const future = () => new Date(Date.now() + 60_000)
 
 describe('local mail authorization transactions', () => {
+  it('refuses preparation for a spam lead before persisting a reply', async () => {
+    const user = await actor('owner')
+    const lead = await payload.create({ collection: 'inquiries', data: { email: `spam-prepare-${randomUUID()}@example.test`, message: 'Spam.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new' }, overrideAccess: true })
+    await expect(prepareReply(payload, 'lead', lead.id, user.id, { sender: 'team@example.test', subject: 'No send', body: 'No send' })).rejects.toThrow('lead_is_spam')
+    expect((await payload.find({ collection: 'mail-drafts', where: { lead: { equals: lead.id } }, overrideAccess: true })).totalDocs).toBe(0)
+  })
   it('consumes a grant exactly once when two SQLite transactions race', async () => {
     const owner = await actor('owner')
     const prepared = await draft()
