@@ -23,6 +23,30 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Editorial workflow request failed.'
 }
 
+const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
+
+function reviewPresentation(set: Record<string, unknown>, names: Map<string, string>, viewerID: string) {
+  const actorID = relationID(set.actor)
+  const changes = Array.isArray(set.changes) ? set.changes as Array<Record<string, unknown>> : []
+  const affectedPageCount = new Set(changes.filter(change => change.collection === 'pages' && typeof change.id === 'string').map(change => change.id as string)).size
+  const quality = set.quality && typeof set.quality === 'object' ? set.quality as Record<string, unknown> : undefined
+  const checks = Array.isArray(quality?.checks) ? quality.checks as Array<Record<string, unknown>> : []
+  const proof = quality?.proof && typeof quality.proof === 'object' ? quality.proof as Record<string, unknown> : undefined
+  const report = proof?.report && typeof proof.report === 'object' ? proof.report as Record<string, unknown> : undefined
+  const blockers = Array.isArray(report?.blockers) ? report.blockers.length : 0
+  const warnings = Array.isArray(report?.warnings) ? report.warnings.length : 0
+  const failedChecks = checks.filter(check => check.status !== 'passed').length
+  const checkSummary = blockers ? `${blockers} blocking ${blockers === 1 ? 'issue' : 'issues'}` : failedChecks ? `${failedChecks} ${failedChecks === 1 ? 'check needs' : 'checks need'} attention` : report?.publishable === true || checks.length ? 'Checks passed' : 'Checks not run'
+  return {
+    actorLabel: actorID === viewerID ? 'You' : actorID ? names.get(actorID) ?? 'Former staff account' : 'System',
+    sourceLabel: 'Source not recorded',
+    occurredAt: typeof set.submittedAt === 'string' ? set.submittedAt : typeof set.updatedAt === 'string' ? set.updatedAt : typeof set.createdAt === 'string' ? set.createdAt : null,
+    affectedPageCount,
+    checkSummary,
+    warningCount: warnings,
+  }
+}
+
 type ApprovalProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string; liveThemeVersion?: string; liveContractVersion?: string } }
 
 function approvalProof(value: unknown): ApprovalProof | undefined {
@@ -127,7 +151,19 @@ export async function GET(request: Request, context: { params: Promise<{ action:
       return Response.json({ path: routeForReviewPreview(job.proposedManifest, job.includedChangeKeys).path }, { headers: { 'Cache-Control': 'no-store' } })
     }
     const result = await payload.find({ collection: 'change-sets', limit: 100, depth: 0, user: authenticated.user, overrideAccess: false })
-    return Response.json({ sets: result.docs, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
+    const actorIDs = [...new Set(result.docs.map(set => relationID(set.actor)).filter((id): id is string => Boolean(id)))]
+    const users = actorIDs.length ? await payload.find({ collection: 'users', where: { id: { in: actorIDs } }, limit: actorIDs.length, depth: 0, overrideAccess: true }) : { docs: [] }
+    const names = new Map(users.docs.flatMap(user => typeof user.name === 'string' && user.name.trim() ? [[String(user.id), user.name.trim()] as const] : []))
+    const sets = result.docs.map(raw => {
+      const set = raw as unknown as Record<string, unknown>
+      return {
+        id: set.id, name: set.name, state: set.state, revision: set.revision, actor: relationID(set.actor), changes: set.changes,
+        quality: set.quality, preview: set.preview, reviewComments: set.reviewComments, submittedAt: set.submittedAt, reviewedAt: set.reviewedAt,
+        staleAt: set.staleAt, summary: set.summary, createdAt: set.createdAt, updatedAt: set.updatedAt,
+        presentation: reviewPresentation(set, names, actor.id),
+      }
+    })
+    return Response.json({ sets, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
   } catch {
     return Response.json({ error: 'Unable to load change sets.' }, { status: 403 })
   }
