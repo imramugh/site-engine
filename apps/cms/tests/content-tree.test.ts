@@ -37,6 +37,25 @@ test('canonical content paths match engine routes for the homepage and section l
   expect(canonicalContentPath(snapshot.pages.find((item) => item.id === detailID)!, snapshot.pages, sections, snapshot.settings.homepageId)).toBe('/services/respond')
 })
 
+test('ENG-004 matches public routes for a root section homepage and sibling page', () => {
+  const snapshot = structuredClone(neutralFixture)
+  const rootSectionID = '99999999-9999-4999-8999-999999999991'
+  const homepageID = '99999999-9999-4999-8999-999999999992'
+  const contactID = '99999999-9999-4999-8999-999999999993'
+  snapshot.settings.homepageId = homepageID
+  snapshot.settings.sections = [{ id: rootSectionID, name: 'Root', slug: '', allowedTemplates: ['landing', 'standard'], pageIds: [homepageID, contactID] }]
+  snapshot.pages = [
+    { id: homepageID, sectionId: rootSectionID, title: 'Homepage', summary: 'A synthetic root homepage used to prove route parity.', slug: 'home', template: 'landing', status: 'published', blocks: structuredClone(neutralFixture.pages[0]!.blocks) },
+    { id: contactID, sectionId: rootSectionID, title: 'Contact', summary: 'A synthetic root sibling used to prove route parity.', slug: 'contact', template: 'standard', status: 'published', blocks: [] },
+  ]
+  const sections = snapshot.settings.sections.map(({ id, name, slug, landingPageId }) => ({ id, name, slug, landingPageId }))
+  const routes = new Map(deriveRoutes(snapshot).routes.map((route) => [route.page.id, route.path]))
+  expect(canonicalContentPath(snapshot.pages[0]!, snapshot.pages, sections, homepageID)).toBe(routes.get(homepageID))
+  expect(canonicalContentPath(snapshot.pages[1]!, snapshot.pages, sections, homepageID)).toBe(routes.get(contactID))
+  expect(routes.get(homepageID)).toBe('/')
+  expect(routes.get(contactID)).toBe('/contact')
+})
+
 test('published checks are current-only and reject an invalid image reference', async () => {
   const { checkForWorkingPage, publishedPageChecks } = await import('../src/content-readiness')
   const valid = structuredClone(neutralFixture)
