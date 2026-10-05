@@ -42,6 +42,9 @@ describe('production migrations (ENG-036)', () => {
     expect(emptySchema.rows.map((row) => row.name)).toEqual(['baseline_snapshot_id', 'baseline_sequence'])
     const emptyIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
     expect(emptyIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
+    // The production-mode verifier above creates the singleton row. Replace it
+    // with the historical fixture before reconstructing the pre-identity schema.
+    await sqlite.execute('DELETE FROM site_settings')
     await sqlite.execute("INSERT INTO site_settings (id, key, site_name, default_locale, search_enabled, updated_at, created_at) VALUES ('15000000-0000-4000-8000-000000000001', 'active', 'Legacy identity', 'en-CA', 1, '2026-10-04T00:00:00.000Z', '2026-10-04T00:00:00.000Z')")
     for (const statement of [
       'DROP INDEX site_settings_logos_logos_primary_light_idx', 'DROP INDEX site_settings_logos_logos_primary_dark_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_light_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_dark_idx', 'DROP INDEX site_settings_logos_logos_symbol_light_idx', 'DROP INDEX site_settings_logos_logos_symbol_dark_idx',
