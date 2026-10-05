@@ -23,6 +23,35 @@ describe('publish worker', () => {
     finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
     expect(calls).toEqual(['claim', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
   }, 60_000);
+  it('serves an approved archived-page redirect from the worker-built immutable artifact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
+    vi.stubEnv('SITE_THEME_VERSION', pins.themeVersion); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
+    const snapshot = structuredClone(neutralFixture);
+    const section = snapshot.settings.sections[0]!;
+    section.allowedTemplates = [...section.allowedTemplates, 'standard'];
+    const retired = { ...structuredClone(snapshot.pages[0]!), id: 'f0000000-0000-4000-8000-000000000001', sectionId: section.id, title: 'Retired public page', summary: 'A published page removed by an approved archive change.', slug: 'retired-public-page', template: 'standard' as const, status: 'archived' as const, blocks: [] };
+    snapshot.pages.push(retired); section.pageIds.push(retired.id);
+    const oldPath = `/${section.slug}/${retired.slug}`;
+    // This is the frozen approved manifest: the archived record is absent from
+    // rendered routes and its approval-created redirect remains in the release.
+    snapshot.redirects = [{ from: oldPath, to: '/', status: 301 }];
+    const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot);
+    const calls: string[] = [];
+    const api = async (action: string) => { calls.push(action); return action === 'claim' ? { job, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job } : { job: { status: 'completed' } }; };
+    const releasesRoot = join(root, 'releases');
+    const server = createPublicServer({ releasesRoot });
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('Test server did not listen.');
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: origin, versionPins: pins })).resolves.toBe(true);
+      const response = await fetch(`${origin}${oldPath}`, { redirect: 'manual' });
+      expect(response.status).toBe(301);
+      expect(response.headers.get('location')).toBe('/');
+      expect(await readFile(join(releasesRoot, 'current', 'redirects.json'), 'utf8')).toContain(oldPath);
+    } finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
+    expect(calls).toEqual(['claim', 'renew', 'complete']);
+  }, 60_000);
   it('publishes a selected upgrade with its job pin while the worker has an older configured theme', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); vi.stubEnv('SITE_THEME_VERSION', '1.0.0'); vi.stubEnv('SITE_ENGINE_VERSION', pins.engineVersion);
     const older = { ...themeManifest, version: '1.0.0' }; const newer = { ...themeManifest, version: '1.0.1' };

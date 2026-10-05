@@ -191,7 +191,7 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     parent.id = randomUUID(); parent.sectionId = section.id; parent.slug = `parent-${suffix}`
     section.pageIds = [parent.id]; base.settings.homepageId = parent.id
     const targetID = randomUUID()
-    const target = { ...structuredClone(parent), id: targetID, parentId: parent.id, title: 'Archive by HTTP', summary: 'A synthetic published child that must remain archivable after its first release.', slug: `archive-http-${targetID.slice(0, 8)}`, template: 'standard' as const, blocks: [] }
+    const target = { ...structuredClone(parent), id: targetID, parentId: undefined, title: 'Archive by HTTP', summary: 'A synthetic published footer page that must remain archivable after its first release.', slug: `archive-http-${targetID.slice(0, 8)}`, template: 'standard' as const, blocks: [] }
     base.pages.push(target)
     const published = buildCandidate(base, [], [], versions)
     expect(published.settings.sections[0]!.pageIds).not.toContain(targetID)
@@ -200,6 +200,10 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     for (const page of [...published.pages].sort((left, right) => Number(Boolean(left.parentId)) - Number(Boolean(right.parentId)))) await payload.create({ collection: 'pages', data: { ...page, status: undefined }, overrideAccess: true })
     const baselineSet = await payload.create({ collection: 'change-sets', data: { name: 'Published archive baseline', actor: editor.id, state: 'published', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
     const legacyPublished = structuredClone(published); legacyPublished.settings.sections[0]!.pageIds.push(targetID)
+    // The public footer derives this column from the section's page list. The
+    // same list is the protected editorial navigation reference below.
+    legacyPublished.settings.contractVersion = '1.6.0'
+    legacyPublished.settings.navigation = { header: [], footer: { columns: [{ kind: 'section-pillars', heading: 'Footer services', sectionId: section.id }], bottomLinks: [] } }
     const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(legacyPublished), changeSet: baselineSet.id, reviewRevision: 0, changeHash: 'baseline', manifest: legacyPublished, ...versions, approvedBy: editor.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
     const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `archive-http:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: baselineSet.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
     await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, ...versions, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
@@ -208,8 +212,13 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     const selected = await payload.create({ collection: 'change-sets', data: { name: 'Archive selected set', actor: editor.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
     const untouched = await payload.create({ collection: 'change-sets', data: { name: 'Archive untouched set', actor: editor.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
     const request = (action: string, body: object) => archiveRoute.POST(new Request(`http://cms.test/api/editorial/${action}`, { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `${cookieName(SESSION_COOKIE)}=${token}`, 'x-site-engine-change-set': selected.id }, body: JSON.stringify(body) }), { params: Promise.resolve({ action }) })
-    expect((await request('archive', { id: targetID })).status).toBe(400)
-    const response = await request('archive', { id: targetID, removeNavigationReference: true })
+    const rejected = await request('archive', { id: targetID, target: '/' })
+    expect(rejected.status).toBe(400)
+    expect((await rejected.json()).error).toContain(`navigation:${section.id}:pageIds.1`)
+    expect((await payload.findByID({ collection: 'pages', id: targetID, draft: true, overrideAccess: true })).status).toBe('draft')
+    expect((await payload.findByID({ collection: 'change-sets', id: selected.id, overrideAccess: true })).changes).toEqual([])
+    expect((await payload.find({ collection: 'redirects', where: { from: { equals: `/${section.slug}/${target.slug}` } }, overrideAccess: true })).totalDocs).toBe(0)
+    const response = await request('archive', { id: targetID, target: '/', removeNavigationReference: true })
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ redirect: { to: '/' } })
     const archiveSet = await payload.findByID({ collection: 'change-sets', id: selected.id, overrideAccess: true })
