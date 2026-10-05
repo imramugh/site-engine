@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
 import { hasRole } from './access'
-import { snapshotMediaReference } from './media'
+import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 
 export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings' | 'style-guides'
@@ -100,6 +100,19 @@ function restoration(collection: CapturedCollection, value: Record<string, unkno
   }))
 }
 
+async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY'].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
+  if (before.filename === current.filename) return { ...metadata, currentFileVersion: null, currentFile: null }
+  const versions = await payload.find({
+    collection: 'asset-file-versions',
+    where: { and: [{ parentAsset: { equals: current.id } }, { filename: { equals: before.filename } }] },
+    limit: 1, depth: 0, overrideAccess: true, req,
+  })
+  const version = versions.docs[0] as unknown as Record<string, unknown> | undefined
+  if (!version) throw new Error('Cannot discard because the prior immutable asset file version is unavailable.')
+  return { ...metadata, currentFileVersion: String(version.id), currentFile: mediaFileIdentity(version) }
+}
+
 function equivalent(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
   return stable(left) === stable(right)
 }
@@ -167,7 +180,7 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 }
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
-  const current = snapshot(collection, value)
+  const current = snapshot(collection, value, collection === 'assets' && Boolean(expected && ('focalX' in expected || 'focalY' in expected)))
   return collection === 'pages' ? normalizePageOptionalNulls(current, expected) : current
 }
 
@@ -240,7 +253,10 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
       if (change.before === null) {
         await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
       } else {
-        await payload.update({ collection: change.collection, id: change.id, data: restoration(change.collection, change.before), draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+        const data = change.collection === 'assets' && current
+          ? await assetRestoration(payload, req, current, change.before)
+          : restoration(change.collection, change.before)
+        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
       }
     }
   }

@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -6,9 +7,10 @@ import { getPayload } from 'payload'
 import { cookieName, hashOpaqueToken, newOpaqueToken, serverSessionStrategy, SESSION_COOKIE } from '../src/identity'
 import { handleOAuthSessionBridge } from '../src/oauth-session-bridge'
 import sharp from 'sharp'
-import { existsSync } from 'node:fs'
 import { mediaStorageDirectory, snapshotMediaReference } from '../src/media'
 import { moveAssetToBin, restoreAssetFromBin } from '../src/media-lifecycle'
+import { transitionChangeSet } from '../src/editorial'
+import { withPayloadTransaction } from '../src/auth-transaction'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
@@ -29,11 +31,12 @@ process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = tokenFile
 
 const { default: config } = await import('../payload.config.js')
 const { GET: mediaWorkspaceGET, PATCH: mediaWorkspacePATCH } = await import('../app/api/media/workspace/route.js')
+const { POST: mediaReplacementPOST } = await import('../app/api/media/replacement/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => {
   payload = await getPayload({ config })
-})
+}, 120_000)
 
 afterAll(async () => {
   await payload?.destroy()
@@ -280,6 +283,8 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     expect(asset.height).toBe(800)
     expect(asset.sizes?.heroAvif?.filename).toBeTruthy()
     expect(asset.sizes?.cardWebp?.filename).toBeTruthy()
+    expect(Number(asset.sizes?.heroAvif?.width) / Number(asset.sizes?.heroAvif?.height)).toBeCloseTo(asset.width! / asset.height!, 2)
+    expect(Number(asset.sizes?.cardWebp?.width) / Number(asset.sizes?.cardWebp?.height)).toBeCloseTo(asset.width! / asset.height!, 2)
     expect(existsSync(`${mediaStorageDirectory()}/${asset.sizes?.heroAvif?.filename}`)).toBe(true)
     const captured = snapshotMediaReference(asset)
     const legacyCaptured = snapshotMediaReference(asset, false)
@@ -322,6 +327,7 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
 
 
   it('authorizes the bounded media workspace read and metadata routes without leaking asset usage', async () => {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
     process.env.PAYLOAD_PUBLIC_SERVER_URL = 'https://cms.example.test'
     const owner = await payload.create({ collection: 'users', data: { email: 'workspace-owner@example.test', name: 'Workspace Owner', roles: ['owner'] }, overrideAccess: true })
     const editor = await payload.create({ collection: 'users', data: { email: 'workspace-editor@example.test', name: 'Workspace Editor', roles: ['editor'] }, overrideAccess: true })
@@ -330,7 +336,7 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     const raster = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#155e75' } }).png().toBuffer()
     const asset = await payload.create({ collection: 'assets', data: { alt: 'Private synthetic usage image' }, file: { data: raster, mimetype: 'image/png', name: 'workspace-private.png', size: raster.length }, user: owner, overrideAccess: false })
     const section = await payload.create({ collection: 'sections', data: { name: 'Workspace use', summary: 'Synthetic section for media route safety.', slug: 'workspace-use', allowedTemplates: ['standard'] }, user: owner, overrideAccess: false })
-    await payload.create({ collection: 'pages', data: { title: 'Private usage page', summary: 'Synthetic page with an asset reference.', slug: 'workspace-private-use', sectionId: section.id, template: 'standard', blocks: [{ id: 'd1000000-0000-4000-8000-000000000001', type: 'media', mediaId: asset.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: owner, overrideAccess: false })
+    const usagePage = await payload.create({ collection: 'pages', data: { title: 'Private usage page', summary: 'Synthetic page with an asset reference.', slug: 'workspace-private-use', sectionId: section.id, template: 'standard', blocks: [{ id: 'd1000000-0000-4000-8000-000000000001', type: 'media', mediaId: asset.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: owner, overrideAccess: false })
     const token = async (user: { id: string }) => { const value = newOpaqueToken(); const now = new Date().toISOString(); await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(value), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true }); return value }
     const headers = async (user: { id: string }) => new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${await token(user)}` })
     const ownerHeaders = await headers(owner); const editorHeaders = await headers(editor); const status = async (response: Promise<Response>) => { const result = await response; await result.text(); return result.status }
@@ -349,9 +355,87 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     expect(await status(patch({ id: asset.id, alt: 'x'.repeat(9_000), decorative: false }, ownerHeaders))).toBe(413)
     expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'], focalX: 27.6, focalY: 72.2 }, editorHeaders))).toBe(200)
     expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated safe description', focalX: 28, focalY: 72 })
-  })
+
+    const replacement = await sharp({ create: { width: 48, height: 64, channels: 3, background: '#9333ea' } }).png().toBuffer()
+    const replacementKey = '99999999-9999-4999-8999-999999999999'
+    const replace = (key = replacementKey, bytes = replacement, requestHeaders = ownerHeaders) => { const form = new FormData(); form.set('assetId', asset.id); form.set('idempotencyKey', key); form.set('file', new File([bytes], 'workspace-replacement.png', { type: 'image/png' })); return mediaReplacementPOST(new Request('https://cms.example.test/api/media/replacement', { method: 'POST', headers: new Headers({ ...Object.fromEntries(requestHeaders), origin: 'https://cms.example.test' }), body: form })) }
+    expect(await status(mediaReplacementPOST(new Request('https://cms.example.test/api/media/replacement', { method: 'POST', headers: ownerHeaders })))).toBe(403)
+    expect(await status(replace('88888888-8888-4888-8888-888888888888', replacement, await headers(denied[0]!)))).toBe(403)
+    const beforeReplacement = snapshotMediaReference(asset)
+    const originalHash = createHash('sha256').update(readFileSync(`${mediaStorageDirectory()}/${beforeReplacement.filename}`)).digest('hex')
+    expect(await status(replace(replacementKey, Buffer.from('not an image')))).toBe(400)
+    expect((await payload.find({ collection: 'asset-file-versions', where: { parentAsset: { equals: asset.id } }, limit: 10, depth: 0, overrideAccess: true })).totalDocs).toBe(0)
+    const concurrentReplacements = await Promise.all([replace(), replace()])
+    expect(concurrentReplacements.map(({ status }) => status)).toEqual([200, 200])
+    expect(await Promise.all(concurrentReplacements.map((response) => response.json()))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ asset: expect.objectContaining({ id: asset.id, width: 48, height: 64 }) }),
+      expect.objectContaining({ asset: expect.objectContaining({ id: asset.id, width: 48, height: 64 }) }),
+    ]))
+    const replay = await replace()
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toMatchObject({ asset: { id: asset.id }, replayed: true })
+    expect(await status(replace(replacementKey, await sharp(replacement).negate().png().toBuffer()))).toBe(409)
+    expect((await payload.find({ collection: 'asset-file-versions', where: { parentAsset: { equals: asset.id } }, limit: 10, depth: 0, overrideAccess: true })).totalDocs).toBe(1)
+    const replaced = await payload.findByID({ collection: 'assets', id: asset.id, depth: 0, overrideAccess: true })
+    expect(replaced.currentFileVersion).toBeTruthy()
+    const afterReplacement = snapshotMediaReference(replaced)
+    expect(afterReplacement).toMatchObject({ id: asset.id, width: 48, height: 64 })
+    expect(afterReplacement.filename).toMatch(new RegExp(`^${asset.id}-[0-9a-f-]{36}\\.png$`))
+    expect(replaced.currentFile).toMatchObject({ originalFilename: 'workspace-replacement.png', filename: afterReplacement.filename })
+    expect(afterReplacement.filename).not.toBe(beforeReplacement.filename)
+    const replacementSets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+    const replacementChange = replacementSets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+    expect(replacementChange?.after).toMatchObject({ id: asset.id, filename: afterReplacement.filename, sha256: afterReplacement.sha256, width: 48, height: 64 })
+    const replacementSearch = await (await mediaWorkspaceGET(new Request('https://cms.example.test/api/media/workspace?q=workspace-replacement.png', { headers: ownerHeaders }))).json() as { assets: Array<{ id: string; filename: string }> }
+    expect(replacementSearch.assets).toEqual([expect.objectContaining({ id: asset.id, filename: 'workspace-replacement.png' })])
+    expect(existsSync(`${mediaStorageDirectory()}/${beforeReplacement.filename}`)).toBe(true)
+    expect(createHash('sha256').update(readFileSync(`${mediaStorageDirectory()}/${beforeReplacement.filename}`)).digest('hex')).toBe(originalHash)
+    expect(snapshotMediaReference(asset)).toEqual(beforeReplacement)
+    expect(await payload.findByID({ collection: 'pages', id: usagePage.id, depth: 0, overrideAccess: true })).toMatchObject({ id: usagePage.id, blocks: [expect.objectContaining({ mediaId: asset.id })] })
+    const secondKey = '55555555-5555-4555-8555-555555555555'
+    expect(await status(replace(secondKey))).toBe(200)
+    expect((await payload.find({ collection: 'asset-file-versions', where: { parentAsset: { equals: asset.id } }, limit: 10, depth: 0, overrideAccess: true })).totalDocs).toBe(2)
+    expect(await status(replace(secondKey, await sharp(replacement).negate().png().toBuffer()))).toBe(409)
+    await expect(payload.create({ collection: 'asset-file-versions', data: { parentAsset: asset.id, digest: '0'.repeat(64), versionKey: `${asset.id}:blocked`, idempotencyKey: '77777777-7777-4777-8777-777777777777', originalFilename: 'blocked-direct-version.png' }, file: { data: replacement, mimetype: 'image/png', name: 'blocked-direct-version.png', size: replacement.length }, user: owner, overrideAccess: false })).rejects.toThrow('media replacement service')
+    expect(existsSync(`${mediaStorageDirectory()}/blocked-direct-version.png`)).toBe(false)
+    await expect(payload.find({ collection: 'asset-file-versions', limit: 10, depth: 0, user: denied[0], overrideAccess: false })).rejects.toThrow('not allowed')
+
+    const crashBytes = await sharp({ create: { width: 60, height: 30, channels: 3, background: '#16a34a' } }).png().toBuffer()
+    const crashDigest = createHash('sha256').update(crashBytes).digest('hex')
+    const crashKey = '66666666-6666-4666-8666-666666666666'
+    const orphan = await payload.create({ collection: 'asset-file-versions', data: { parentAsset: asset.id, digest: crashDigest, versionKey: `${asset.id}:${crashDigest}:${crashKey}`, idempotencyKey: crashKey, originalFilename: 'crash-safe-replacement.png' }, file: { data: crashBytes, mimetype: 'image/png', name: `${asset.id}-${crashKey}.png`, size: crashBytes.length }, user: owner, overrideAccess: true, context: { mediaReplacementVersion: true } })
+    expect(String(replaced.currentFileVersion)).not.toBe(orphan.id)
+    const crashRetry = await replace(crashKey, crashBytes)
+    expect(crashRetry.status).toBe(200)
+    expect(await crashRetry.json()).toMatchObject({ asset: { id: asset.id, width: 60, height: 30 }, replayed: true })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, depth: 0, overrideAccess: true })).toMatchObject({ id: asset.id, currentFileVersion: orphan.id })
+
+    const discardOwner = await payload.create({ collection: 'users', data: { email: 'replacement-discard@example.test', name: 'Replacement Discard', roles: ['owner'] }, overrideAccess: true })
+    const discardSource = await sharp({ create: { width: 40, height: 20, channels: 3, background: '#dc2626' } }).png().toBuffer()
+    const discardAsset = await payload.create({ collection: 'assets', data: { alt: 'Replacement discard source' }, file: { data: discardSource, mimetype: 'image/png', name: 'replacement-discard-source.png', size: discardSource.length }, overrideAccess: true })
+    const discardBefore = snapshotMediaReference(discardAsset)
+    const discardBaseline = join(directory, 'replacement-discard-baseline.json')
+    writeFileSync(discardBaseline, JSON.stringify({ ...neutralFixture, settings: { ...neutralFixture.settings, contractVersion: '1.4.0' }, media: [...neutralFixture.media, discardBefore] }))
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = discardBaseline
+    const discardHeaders = await headers(discardOwner)
+    const discardKey = '44444444-4444-4444-8444-444444444444'
+    const discardForm = new FormData(); discardForm.set('assetId', discardAsset.id); discardForm.set('idempotencyKey', discardKey); discardForm.set('file', new File([replacement], 'discarded-replacement.png', { type: 'image/png' }))
+    expect(await status(mediaReplacementPOST(new Request('https://cms.example.test/api/media/replacement', { method: 'POST', headers: new Headers({ ...Object.fromEntries(discardHeaders), origin: 'https://cms.example.test' }), body: discardForm })))).toBe(200)
+    const discardChanged = await payload.findByID({ collection: 'assets', id: discardAsset.id, depth: 0, overrideAccess: true })
+    const discardedVersionFilename = snapshotMediaReference(discardChanged).filename
+    expect(discardedVersionFilename).not.toBe(discardBefore.filename)
+    const discardSets = await payload.find({ collection: 'change-sets', where: { actor: { equals: discardOwner.id } }, limit: 10, depth: 0, overrideAccess: true })
+    expect(discardSets.docs).toHaveLength(1)
+    await withPayloadTransaction(payload, (req) => { req.user = discardOwner as never; return transitionChangeSet({ payload, req, actor: discardOwner as never, id: discardSets.docs[0]!.id, action: 'discard' }) })
+    const discardRestored = await payload.findByID({ collection: 'assets', id: discardAsset.id, depth: 0, overrideAccess: true })
+    expect(discardRestored).toMatchObject({ id: discardAsset.id, currentFileVersion: null, currentFile: null })
+    expect(snapshotMediaReference(discardRestored)).toEqual(discardBefore)
+    expect(existsSync(`${mediaStorageDirectory()}/${discardedVersionFilename}`)).toBe(true)
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
+  }, 60_000)
 
   it('allows a decorative image and bins an unused asset for exactly thirty days', async () => {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
     const owner = await payload.create({ collection: 'users', data: { email: 'media-bin-owner@example.test', name: 'Media Bin Owner', roles: ['owner'] }, overrideAccess: true })
     const data = await raster()
     const asset = await payload.create({ collection: 'assets', data: { decorative: true }, file: { data, mimetype: 'image/png', name: 'decorative.png', size: data.length }, user: owner, overrideAccess: false })

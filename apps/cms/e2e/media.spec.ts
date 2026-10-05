@@ -6,6 +6,8 @@ const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const sessionToken = 'synthetic-media-owner-session-token'
 const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#2563eb' } }).png().toBuffer()
+const replacementName = 'replacement-purple.png'
+const replacementPng = await sharp({ create: { width: 48, height: 64, channels: 3, background: '#9333ea' } }).png().toBuffer()
 
 async function mediaPage(browser: Browser) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } })
@@ -152,6 +154,16 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   await expect(page.getByLabel('Horizontal (%)')).toHaveValue('28')
   await expect(page.getByLabel('Vertical (%)')).toHaveValue('72')
   for (const crop of ['hero', 'card', 'square']) await expect(page.locator(`[data-media-crop-preview="${crop}"] img`)).toHaveCSS('object-position', '28% 72%')
+  const stableAssetID = await page.locator('[data-media-detail] header span').innerText()
+  await page.getByLabel('Replace file').setInputFiles({ name: replacementName, mimeType: 'image/png', buffer: replacementPng })
+  await page.locator('[data-media-replacement] button[type="submit"]').click()
+  await expect(page.getByRole('status')).toContainText('Published snapshots retain the previous file')
+  await expect(page.locator('[data-media-detail] header span')).toHaveText(stableAssetID)
+  await expect(page.locator('[data-media-detail] header')).toContainText('48 × 64')
+  await page.reload()
+  await search(page, replacementName)
+  await expect(page.locator('[data-media-detail] header span')).toHaveText(stableAssetID)
+  await expect(page.locator('[data-media-detail] header')).toContainText('48 × 64')
 
   await search(page, '')
   await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
@@ -177,15 +189,15 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   expect(denial.status).toBe(200)
   expect(denial.body).toMatchObject({ status: 'blocked' })
 
-  await search(page, uploadName)
+  await search(page, replacementName)
   await page.getByRole('button', { name: 'Move to bin' }).click()
   await expect(page.getByRole('status')).toContainText('Asset moved to the deletion bin')
   await page.getByRole('button', { name: 'Deletion bin' }).click()
-  await expect(page.getByRole('button', { name: new RegExp(uploadName) })).toBeVisible()
-  await page.getByRole('button', { name: new RegExp(uploadName) }).click()
+  await expect(page.getByRole('button', { name: new RegExp(replacementName) })).toBeVisible()
+  await page.getByRole('button', { name: new RegExp(replacementName) }).click()
   await page.getByRole('button', { name: 'Restore' }).click()
   await expect(page.getByRole('status')).toContainText('Asset restored')
-  await expect(page.getByRole('button', { name: new RegExp(uploadName) })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: new RegExp(replacementName) })).toHaveCount(0)
   await session.context.close()
 })
 

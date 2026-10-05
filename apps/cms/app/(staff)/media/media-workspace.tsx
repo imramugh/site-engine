@@ -39,6 +39,10 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadAlt, setUploadAlt] = useState('')
   const [uploadDecorative, setUploadDecorative] = useState(false)
+  const [replacementFile, setReplacementFile] = useState<File | null>(null)
+  const [replacing, setReplacing] = useState(false)
+  const replacementKey = useRef('')
+  const replacementInput = useRef<HTMLInputElement>(null)
   const request = useRef(0)
   const abort = useRef<AbortController | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -65,6 +69,9 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
     setBaseline(next)
     setDraft(next)
     setTagText(next.tags.join(', '))
+    setReplacementFile(null)
+    replacementKey.current = ''
+    if (replacementInput.current) replacementInput.current.value = ''
   }
 
   async function load(next: View, preferredID?: string) {
@@ -159,6 +166,22 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Upload failed. Use a supported raster image under 15 MiB.') } finally { setUploading(false) }
   }
 
+  async function replaceFile(event: FormEvent) {
+    event.preventDefault()
+    if (!selected || !replacementFile || replacing || !confirmDiscard()) return
+    setReplacing(true); setError(''); setMessage('')
+    try {
+      if (!replacementKey.current) replacementKey.current = crypto.randomUUID()
+      const form = new FormData(); form.set('assetId', selected.id); form.set('idempotencyKey', replacementKey.current); form.set('file', replacementFile)
+      const response = await fetch('/api/media/replacement', { method: 'POST', body: form })
+      const body = await response.json().catch(() => ({})) as { error?: string }
+      if (!response.ok) throw new Error(body.error ?? 'Unable to replace this asset file.')
+      setReplacementFile(null); replacementKey.current = ''; if (replacementInput.current) replacementInput.current.value = ''
+      await load({ filter: 'all', query: '', page: 1 }, selected.id)
+      setMessage('Asset file replaced. Published snapshots retain the previous file.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to replace this asset file.') } finally { setReplacing(false) }
+  }
+
   const openUpload = () => {
     setUploadOpen(true)
     window.requestAnimationFrame(() => { uploadPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); fileInput.current?.focus() })
@@ -212,7 +235,8 @@ export function MediaWorkspace({ initial }: { initial: Data }) {
           <label htmlFor="asset-tags">Tags<input id="asset-tags" value={tagText} disabled={saving} onChange={(event) => { setTagText(event.target.value); setDraft((current) => ({ ...current, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12) })) }} /><small>Separate up to 12 tags with commas.</small></label>
           <button type="button" className={styles.primary} data-media-primary onClick={() => void save()} disabled={saving || !dirty || (!draft.decorative && !draft.alt.trim())}>{saving ? 'Saving…' : 'Save metadata'}</button>
           <section className={styles.usage}><h3>Used in</h3>{selected.usages.length ? <ul>{selected.usages.map((usage) => <li key={usage.pageId}><a href={`/content-editor/${encodeURIComponent(usage.pageId)}`}>{usage.pageTitle}</a></li>)}</ul> : <p>Not used on any page.</p>}</section>
-          <p className={styles.immutable}>Upload a new asset when the image file changes. Existing published snapshots keep their original file.</p>
+          <p className={styles.immutable}>File replacements create an immutable version. Existing published snapshots keep their original file.</p>
+          <form className={styles.replaceFile} data-media-replacement onSubmit={replaceFile}><label htmlFor="asset-replacement">Replace file<input ref={replacementInput} id="asset-replacement" type="file" accept="image/avif,image/jpeg,image/png,image/webp" disabled={replacing} onChange={(event) => { setReplacementFile(event.target.files?.[0] ?? null); replacementKey.current = crypto.randomUUID() }} /></label><button type="submit" disabled={!replacementFile || replacing}>{replacing ? 'Replacing…' : 'Replace file'}</button><small>The asset ID stays the same. Published snapshots retain the previous file.</small></form>
           <div className={styles.actions} data-media-actions><button type="button" onClick={openUpload}>Upload new asset</button>{selected.deletedAt ? <button type="button" disabled={lifecycleBusy} onClick={() => void updateLifecycle('restore')}>{lifecycleBusy ? 'Restoring…' : 'Restore'}</button> : <button type="button" className={styles.danger} disabled={lifecycleBusy || selected.usages.length > 0} title={selected.usages.length ? 'Remove this asset from every page before deleting it.' : 'Move this asset to the deletion bin.'} onClick={() => void updateLifecycle('bin')}>{lifecycleBusy ? 'Moving…' : 'Move to bin'}</button>}</div>
         </div></> : <div className={styles.empty} data-media-empty><strong>Select an asset</strong><span>Choose an item to inspect its metadata and usage.</span></div>}</aside>
     </div>
