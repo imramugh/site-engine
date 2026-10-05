@@ -51,9 +51,9 @@ export function IntegrationConfiguration({ canManageAll }: { canManageAll: boole
   const moveTab = (event: React.KeyboardEvent<HTMLButtonElement>, current: Tab) => {
     const index = visibleTabs.findIndex((tab) => tab.id === current); let next = index
     if (event.key === 'ArrowRight') next = (index + 1) % visibleTabs.length
-    else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % visibleTabs.length
+    else if (event.key === 'ArrowLeft') next = (index - 1 + visibleTabs.length) % visibleTabs.length
     else if (event.key === 'Home') next = 0
-    else if (event.key === 'End') next = tabs.length - 1
+    else if (event.key === 'End') next = visibleTabs.length - 1
     else return
     event.preventDefault(); const selected = visibleTabs[next]!.id; activateTab(selected); requestAnimationFrame(() => tabRefs.current[selected]?.focus())
   }

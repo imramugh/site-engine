@@ -94,7 +94,7 @@ export function ThemeChooser({ embedded = false }: { embedded?: boolean }) {
       : <header className={styles.heading}><div><h1>Themes</h1><p>Choose how the current content is presented, then review the exact result before publishing.</p></div><a href="/editorial">Editorial review</a></header>}
     <p className={styles.message} role="status" aria-live="polite">{message || (!data ? 'Loading installed themes…' : '')}</p>
     {data && <>
-      <p className={styles.selectionSummary} aria-label="Current theme selections"><span><strong>Published</strong> {data.publishedSelection ? `${displayName(data.publishedSelection.id)} ${data.publishedSelection.version}` : 'No explicit theme'}</span>{data.draftSelection && <span><strong>Reviewed draft</strong> {displayName(data.draftSelection.id)} {data.draftSelection.version}</span>}</p>
+      {!embedded && <p className={styles.selectionSummary} aria-label="Current theme selections"><span><strong>Published</strong> {data.publishedSelection ? `${displayName(data.publishedSelection.id)} ${data.publishedSelection.version}` : 'No explicit theme'}</span>{data.draftSelection && <span><strong>Reviewed draft</strong> {displayName(data.draftSelection.id)} {data.draftSelection.version}</span>}</p>}
       {data.draftSelection && !data.draftChangeSet && <p className={styles.pendingConflict} role="note">Another reviewed draft controls the pending theme selection. Resolve or discard that draft before creating a different theme preview.</p>}
       <section className={styles.grid} aria-label="Installed theme families" data-theme-grid>
         {families.map(family => {
@@ -104,12 +104,15 @@ export function ThemeChooser({ embedded = false }: { embedded?: boolean }) {
           return <article key={family.id} className={styles.card} data-theme-card data-theme-family={family.id} data-theme-status={status.toLowerCase().replaceAll(' ', '-')}>
             <div className={styles.preview} data-theme-preview aria-hidden="true"><span /><span /><span /></div>
             <div className={styles.cardBody}>
-              <header><div><h3>{displayName(family.id)}</h3><p>Version {theme.version} · Contract {theme.contract}</p></div><span className={styles.status}>{status}</span></header>
+              <header><div><h3>{displayName(family.id)}</h3><p>Installed presentation · Version {theme.version}</p></div><span className={styles.status}>{status}</span></header>
               {family.themes.length > 1 && <label>Installed version<select value={theme.version} onChange={event => setVersions(current => ({ ...current, [family.id]: event.target.value }))}>{family.themes.map(item => <option key={item.version} value={item.version}>{item.version}</option>)}</select></label>}
               {!theme.compatibility.compatible && <div className={styles.compatibility} role="note"><strong>Current content is not compatible.</strong><ul>{theme.compatibility.actions.map((action, index) => <li key={`${action.action}-${action.pageID}-${action.blockID}-${index}`}>{action.reason.replaceAll('-', ' ')}</li>)}</ul></div>}
               {active && theme.settingKeys.length === 0 && <p className={styles.settings}>No theme-specific settings.</p>}
-              {theme.settingKeys.length > 0 && <p className={styles.settings}>This theme declares settings, but typed controls are not installed for them.</p>}
-              <button type="button" data-theme-primary disabled={!theme.compatibility.compatible || busy || Boolean(data.draftSelection && !data.draftChangeSet)} aria-expanded={expanded} onClick={() => setOpenFamily(expanded ? null : family.id)}>{drafted ? 'Prepare reviewed preview' : 'Create reviewed preview'}</button>
+              {theme.settingKeys.length > 0 && <p className={styles.settings}>Theme-specific settings are not available in this workspace.</p>}
+              <details className={styles.technical}><summary>Technical details</summary><p>Contract {theme.contract}</p></details>
+              {active
+                ? <a className={styles.currentPreview} href="/" target="_blank" rel="noreferrer">Preview current site <span aria-hidden="true">↗</span></a>
+                : <button type="button" data-theme-primary disabled={!theme.compatibility.compatible || busy || Boolean(data.draftSelection && !data.draftChangeSet)} aria-expanded={expanded} onClick={() => setOpenFamily(expanded ? null : family.id)}>{drafted ? 'Prepare reviewed preview' : 'Create reviewed preview'}</button>}
               {expanded && theme.compatibility.compatible && <div className={styles.reviewDraft} data-theme-review-draft><label htmlFor={`theme-change-set-${family.id}`}>Reviewed draft name</label><input id={`theme-change-set-${family.id}`} value={changeSetName} maxLength={120} required onChange={event => setChangeSetName(event.target.value)} /><button type="button" data-theme-primary disabled={busy || !changeSetName.trim()} onClick={() => void createPreview(theme)}>{busy ? 'Preparing…' : 'Create reviewed draft and preview'}</button><small>This creates or reuses your reviewed draft, submits it, and queues a protected preview. It does not publish the theme.</small></div>}
               {preview?.setID && expanded && <div className={styles.previewResult}>{preview.status === 'ready' ? <a data-theme-protected-preview href={`/review/${preview.setID}`}>Open protected preview</a> : <span>Protected preview queued</span>}<a href={`/editorial?changeSet=${preview.setID}`}>View reviewed draft</a></div>}
             </div>
