@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, Inquiries, IntegrationConfigurations, ProviderUsageReservations, MailAuthorizations, MailDrafts, NotificationOutbox, NotificationPreferences, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
 import { databaseURI } from './src/sqlite'
+import { MailboxAreaMappings, MailboxConfigurations, MailboxTestSends } from './src/mailbox-collections'
 
 const secret = process.env.PAYLOAD_SECRET
 const migrationDir = resolve(dirname(fileURLToPath(import.meta.url)), 'src/migrations')
@@ -24,7 +25,7 @@ export default buildConfig({
     },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
-  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, ProviderUsageReservations, Inquiries, NotificationOutbox, NotificationPreferences, UrgentContacts, MailDrafts, MailAuthorizations, Applications, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
+  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, ProviderUsageReservations, MailboxConfigurations, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationPreferences, UrgentContacts, MailDrafts, MailAuthorizations, Applications, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
     client: { url: databaseURI() },
     // The Payload CLI otherwise resolves migrations from the caller's cwd. Keep
