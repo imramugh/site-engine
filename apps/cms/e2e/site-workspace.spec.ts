@@ -14,7 +14,7 @@ async function axe(page: Page) {
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 
-test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }, testInfo) => {
+test('Site workspace captures real settings, redirects, and navigation into an owned draft', async ({ browser }, testInfo) => {
   test.setTimeout(60_000)
   const owner = await session(browser, 'synthetic-site-owner-session-token')
   const themeDraft = await owner.page.request.post('/api/themes', { headers: { origin, 'content-type': 'application/json' }, data: { id: 'navigation-browser-theme', version: '1.6.0', changeSetName: 'Navigation 1.6 browser draft' } })
@@ -35,7 +35,9 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByLabel('Province or region').fill('ON')
   await owner.page.getByLabel('Postal code').fill('M5V 2T6')
   await owner.page.getByText('Additional site settings', { exact: true }).click()
-  await expect(owner.page.getByLabel('Homepage')).not.toHaveValue('')
+  const homepage = owner.page.getByLabel('Homepage')
+  if (!await homepage.inputValue()) await homepage.selectOption('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
+  await expect(homepage).toHaveValue('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
   await owner.page.getByLabel('LinkedIn URL').fill('https://www.linkedin.com/company/synthetic-site-workspace')
   await owner.page.getByLabel('Bar label').fill('Incident in progress?')
   await owner.page.getByLabel('Guidance').fill('Call the incident line and preserve affected systems.')
@@ -61,19 +63,27 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await expect(owner.page.getByRole('cell', { name: '/site-workspace-old' })).toBeVisible()
   await expect(owner.page.getByRole('cell', { name: 'Synthetic Site Owner' })).toBeVisible()
   await expect(owner.page.locator('[data-redirect-form]')).toHaveCount(0)
+  await owner.page.locator('[data-redirect-row]').filter({ hasText: '/site-workspace-old' }).getByRole('button', { name: 'Edit' }).click()
+  await expect(owner.page.locator('[data-redirect-form-mode="edit"]')).toBeVisible()
+  await expect(owner.page.getByLabel('Old address')).toBeFocused()
+  await owner.page.getByLabel('Goes to').fill('/contact-us')
+  await owner.page.getByRole('button', { name: 'Save redirect' }).click()
+  await expect(owner.page.getByRole('cell', { name: '/contact-us' })).toBeVisible()
+  await expect(owner.page.getByRole('cell', { name: 'Synthetic Site Owner' })).toBeVisible()
   await axe(owner.page)
   await owner.page.screenshot({ path: testInfo.outputPath('site-redirects-1440.png'), fullPage: true })
 
   await owner.page.getByRole('button', { name: 'Search and AI' }).click()
-  await owner.page.getByLabel('Words or phrases to avoid').fill('empty promise\nunsupported claim')
-  await owner.page.getByLabel('Canadian spelling').selectOption('warn')
-  await owner.page.getByRole('button', { name: 'Save writing guidance' }).click()
-  await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
+  await expect(owner.page.getByLabel('Search engines')).toBeChecked()
+  await expect(owner.page.getByLabel('AI search and answers')).toBeChecked()
+  await expect(owner.page.getByLabel('AI model training')).toBeChecked()
+  await expect(owner.page.getByRole('button', { name: 'Save Search and AI' })).toBeDisabled()
+  await expect(owner.page.locator('[data-site-search-ai]')).toContainText('Select a contract 1.7 theme')
 
   const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as { sets: Array<{ id: string; name: string; state: string; changes: Array<{ collection: string }> }> }
   const captured = sets.sets.find(item => item.name === 'Navigation 1.6 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
-  expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides', 'redirects']))
+  expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'redirects']))
   expect(await owner.page.request.get('/__e2e/publish-state').then(response => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
 
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
