@@ -10,6 +10,8 @@ type Props = {
   primary: readonly AdminNavigationItem[]
   site: readonly AdminNavigationItem[]
   displayName: string
+  email: string
+  provider: string | null
   roles: readonly AdminRole[]
   badges: AdminNavigationBadges
 }
@@ -18,7 +20,7 @@ const titleForPath = (pathname: string) => {
   const titles: Record<string, string> = {
     '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/media': 'Media', '/leads': 'Leads',
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Change log', '/integrations': 'Integrations',
-    '/site': 'Site', '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
+    '/site': 'Site', '/themes': 'Themes', '/users': 'Users', '/account': 'Account', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
   }
   const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events', 'site-settings': 'Site' }
   const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]
@@ -136,11 +138,19 @@ export function AdminWorkspaceHeader() {
   return <header className={styles.header} data-admin-header>{pathname === '/admin' ? <h1 data-admin-page-title>{titleForPath(pathname)}</h1> : <p data-admin-page-title>{titleForPath(pathname)}</p>}<div className={styles.headerActions}><AdminGlobalSearch /><a href="/" data-admin-view-site>View site <span aria-hidden="true">↗</span></a></div></header>
 }
 
-export function AdminNavigationToggle({ primary, site, displayName, roles, badges }: Props) {
+export function AdminNavigationToggle({ primary, site, displayName, email, provider, roles, badges }: Props) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const button = useRef<HTMLButtonElement>(null)
   const pathname = usePathname()
+  const [signingOut, setSigningOut] = useState(false)
+  const signOut = async (all = false) => {
+    if (all && !window.confirm('Sign out every session, including this one?')) return
+    setSigningOut(true)
+    const response = await fetch(all ? '/api/account/sessions' : '/api/auth/logout', all ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'revoke-all' }) } : { method: 'POST' })
+    if (response.ok) window.location.assign('/admin/login')
+    else setSigningOut(false)
+  }
   const close = () => { setOpen(false); button.current?.focus() }
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && open) close() }
@@ -169,8 +179,11 @@ export function AdminNavigationToggle({ primary, site, displayName, roles, badge
       <details className={styles.adminAccount} data-admin-account aria-label="Account menu">
         <summary data-admin-account-button><span className={styles.accountInitials} data-admin-account-avatar aria-hidden="true">{displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'S'}</span><span><strong data-admin-account-name>{displayName}</strong><small data-admin-account-role>{roles.join(', ') || 'staff'}</small></span><svg className={styles.accountChevron} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg></summary>
         <div className={styles.accountMenu} role="menu">
+          <div><strong>{email}</strong><small>{provider ? `Signed in with ${provider}` : 'Emergency access'}</small></div>
+          <a role="menuitem" href="/account">Account and sessions</a>
           {roles.includes('owner') ? <a role="menuitem" href="/integrations?tab=assistants">My connected assistants</a> : null}
-          <a role="menuitem" href="/admin/logout">Sign out</a>
+          <button role="menuitem" type="button" disabled={signingOut} onClick={() => void signOut()}>Sign out</button>
+          <button role="menuitem" type="button" disabled={signingOut} onClick={() => void signOut(true)}>Sign out everywhere</button>
         </div>
       </details>
     </div>

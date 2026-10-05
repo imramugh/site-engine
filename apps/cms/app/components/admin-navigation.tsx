@@ -8,7 +8,7 @@ import styles from './staff-shell.module.css'
 
 type AdminNavProps = { user?: WorkspaceUser | null }
 
-export type WorkspaceUser = { id?: string | number | null; name?: string | null; email?: string | null; roles?: string[] | null; disabled?: boolean | null }
+export type WorkspaceUser = { id?: string | number | null; name?: string | null; email?: string | null; roles?: string[] | null; provider?: string | null; disabled?: boolean | null }
 
 export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | null }) {
   const roles = user?.roles ?? []
@@ -28,7 +28,7 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
         {branding.logoUrl ? <img src={branding.logoUrl} alt={branding.name} /> : <span aria-hidden="true">{branding.initials}</span>}
         <strong>{branding.name}</strong>
       </a>
-      <AdminNavigationToggle primary={primary} site={site} displayName={displayName} roles={acceptedRoles} badges={badges} />
+      <AdminNavigationToggle primary={primary} site={site} displayName={displayName} email={user?.email ?? ''} provider={user?.provider ?? null} roles={acceptedRoles} badges={badges} />
     </aside>
     <AdminWorkspaceHeader />
   </>

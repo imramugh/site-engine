@@ -28,7 +28,7 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
 export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/site', label: 'Site', roles: ['owner'] },
   { href: '/integrations', label: 'Integrations', roles: ['owner'] },
-  { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
+  { href: '/users', label: 'Users', roles: ['owner'] },
 ]
 
 export function navigationForRoles(roles: readonly string[] | null | undefined, items = adminNavigationItems): AdminNavigationItem[] {

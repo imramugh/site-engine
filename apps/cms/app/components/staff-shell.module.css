@@ -46,8 +46,11 @@
 .accountChevron { width: 16px; height: 16px; color: color-mix(in srgb, var(--admin-sidebar-foreground) 65%, transparent); }
 .adminAccount[open] .accountChevron { transform: rotate(180deg); }
 .accountMenu { position: absolute; inset: auto .625rem calc(100% + .375rem); padding: .375rem; display: grid; background: #fff; border: 1px solid var(--admin-border); border-radius: .5rem; box-shadow: 0 10px 30px rgb(0 0 0 / .22); }
-.accountMenu a { min-height: 36px; padding: .5rem .625rem; border-radius: .25rem; color: var(--admin-text); font-size: .875rem; }
-.accountMenu a:hover, .accountMenu a:focus-visible { background: var(--admin-surface); }
+.accountMenu a, .accountMenu button { min-height: 36px; padding: .5rem .625rem; border: 0; border-radius: .25rem; background: transparent; color: var(--admin-text); font: inherit; font-size: .875rem; text-align: left; cursor: pointer; }
+.accountMenu a:hover, .accountMenu a:focus-visible, .accountMenu button:hover, .accountMenu button:focus-visible { background: var(--admin-surface); }
+.accountMenu > div { display: grid; gap: .125rem; padding: .5rem .625rem; border-bottom: 1px solid var(--admin-border); color: var(--admin-text); font-size: .75rem; }
+.accountMenu > div strong { overflow: hidden; text-overflow: ellipsis; }
+.accountMenu > div small { color: var(--admin-muted); text-transform: capitalize; }
 .skipNavigation { position: fixed; z-index: 100; }
 .skipLink { position: fixed; z-index: 100; top: .5rem; left: -10000px; padding: .5rem .75rem; background: #fff; color: var(--admin-text); border: 2px solid var(--admin-accent); border-radius: .25rem; }
 .skipLink:focus { left: .5rem; }
