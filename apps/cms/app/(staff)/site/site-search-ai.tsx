@@ -48,26 +48,25 @@ export function SiteSearchAI({ settings, guide, busy, canSave, contractVersion, 
         <legend className={styles.srOnly}>Search and AI settings</legend>
         <div className={styles.searchCards}>
           <section className={styles.searchCard} data-site-search-card="crawlers">
-            <header><h2>Crawler access</h2><p>Choose which automated services the published robots.txt asks to crawl this site.</p></header>
+            <header><h2>Crawler access</h2></header>
             <label className={styles.crawlerControl} data-site-crawler-control="search">
-              <input type="checkbox" checked={policy.searchEngines} onChange={event => updatePolicy('searchEngines', event.target.checked)} />
               <span><strong>Search engines</strong><small>Google, Bing</small></span>
+              <input type="checkbox" checked={policy.searchEngines} onChange={event => updatePolicy('searchEngines', event.target.checked)} />
             </label>
             <label className={styles.crawlerControl} data-site-crawler-control="answers">
-              <input type="checkbox" checked={policy.aiSearchAndAnswers} onChange={event => updatePolicy('aiSearchAndAnswers', event.target.checked)} />
               <span><strong>AI search and answers</strong><small>ChatGPT search, Claude, Perplexity</small></span>
+              <input type="checkbox" checked={policy.aiSearchAndAnswers} onChange={event => updatePolicy('aiSearchAndAnswers', event.target.checked)} />
             </label>
             <label className={styles.crawlerControl} data-site-crawler-control="training">
-              <input type="checkbox" checked={policy.aiModelTraining} onChange={event => updatePolicy('aiModelTraining', event.target.checked)} />
               <span><strong>AI model training</strong><small>GPTBot, ClaudeBot, Google-Extended</small></span>
+              <input type="checkbox" checked={policy.aiModelTraining} onChange={event => updatePolicy('aiModelTraining', event.target.checked)} />
             </label>
-            <p className={styles.crawlerNote}>Robots.txt is a request to supported crawlers, not access enforcement. User-requested visits from some AI services may not follow it.</p>
           </section>
 
           <section className={styles.searchCard} data-site-search-card="description-style">
-            <header><h2>Site description and style</h2><p>Describe the published site and set the core language checks used during review.</p></header>
-            <label>Short description<textarea maxLength={160} value={settings.seoDescription ?? ''} onChange={event => setSettings({ ...settings, seoDescription: event.target.value || null })} /><small>{(settings.seoDescription ?? '').length}/160 · used in llms.txt and organization profiles</small></label>
-            <label>Words to avoid<input value={bannedText} onChange={event => setBannedText(event.target.value)} placeholder="Enter words or phrases, separated by commas" /></label>
+            <header><h2>Site description and style</h2></header>
+            <label><span className={styles.fieldLabel}><strong>Short description</strong><small aria-hidden="true">used for llms.txt and profiles</small></span><textarea maxLength={160} value={settings.seoDescription ?? ''} onChange={event => setSettings({ ...settings, seoDescription: event.target.value || null })} /></label>
+            <label><span className={styles.fieldLabel}><strong>Words to avoid</strong><small aria-hidden="true">style warnings</small></span><input value={bannedText} onChange={event => setBannedText(event.target.value)} placeholder="Enter words or phrases, separated by commas" /></label>
             <label>Spelling<select value={guide.canadianSpelling} onChange={event => setGuide({ ...guide, canadianSpelling: event.target.value as Guide['canadianSpelling'] })}><option value="warn">Canadian English (en-CA)</option><option value="off">No spelling preference</option></select></label>
           </section>
         </div>
@@ -75,6 +74,7 @@ export function SiteSearchAI({ settings, guide, busy, canSave, contractVersion, 
         <details className={styles.searchAdditional} data-site-search-additional>
           <summary>Additional search and writing checks</summary>
           <div className={styles.searchAdditionalGrid}>
+            <p className={styles.crawlerNote}>Robots.txt is a request to supported crawlers, not access enforcement. User-requested visits from some AI services may not follow it.</p>
             <label className={styles.check}><input type="checkbox" checked={settings.searchEnabled} onChange={event => setSettings({ ...settings, searchEnabled: event.target.checked })} />Include the public site search page after review and publication</label>
             <label>Preferred terms<textarea value={preferredText} onChange={event => setPreferredText(event.target.value)} placeholder={'utilize → use\ncenter → centre'} /><small>One “avoid → prefer” pair per line</small></label>
             <label>Maximum words per sentence<input type="number" min={5} max={100} value={guide.maximumSentenceWords} onChange={event => setGuide({ ...guide, maximumSentenceWords: Number(event.target.value) })} /></label>

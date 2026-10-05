@@ -23,7 +23,7 @@ export function SiteRedirects({ redirects, busy, canSave, onSave }: {
     if (await onSave({ from: draft.from, to: draft.to }, { ...(draft.id ? { id: draft.id } : {}), ...(draft.hash ? { expectedHash: draft.hash } : {}) })) close()
   }
   return <section className={styles.redirects} data-site-panel="redirects">
-    <header><h2>Redirects</h2><p>Send an old public address to its current destination through the reviewed release.</p></header>
+    <h2 className={styles.srOnly}>Redirects</h2>
     <div className={styles.tableWrap} tabIndex={0} role="region" aria-label="Current redirects" data-redirects-table>
       <table><caption className={styles.srOnly}>Current redirects</caption><thead><tr><th>Old address</th><th>Goes to</th><th>Created by</th><th>Hits</th><th><span className={styles.srOnly}>Actions</span></th></tr></thead>
         <tbody>{redirects.length ? redirects.map(item => <tr key={item.id} data-redirect-row><td><code>{item.from}</code></td><td><code>{item.to}</code></td><td>{item.createdBy ?? 'Not recorded'}</td><td>{item.hitCount}</td><td><button type="button" data-redirect-action="edit" onClick={() => setDraft({ id: item.id, from: item.from, to: item.to, hash: item.hash })}>Edit</button></td></tr>) : <tr><td colSpan={5} className={styles.empty}>No redirects have been added.</td></tr>}</tbody>
