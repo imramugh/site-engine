@@ -36,7 +36,7 @@ test('Site workspace captures real settings, redirects, and navigation into an o
   await owner.page.getByLabel('Postal code').fill('M5V 2T6')
   await owner.page.getByText('Additional site settings', { exact: true }).click()
   const homepage = owner.page.getByLabel('Homepage')
-  if (!await homepage.inputValue()) await homepage.selectOption('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
+  await homepage.selectOption('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
   await expect(homepage).toHaveValue('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
   await owner.page.getByLabel('LinkedIn URL').fill('https://www.linkedin.com/company/synthetic-site-workspace')
   await owner.page.getByLabel('Bar label').fill('Incident in progress?')
