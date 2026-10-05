@@ -68,6 +68,10 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
     expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     await owner.page.screenshot({ path: test.info().outputPath(`themes-${width}.png`), fullPage: true })
   }
+  const changesRequested = await owner.page.request.post('/api/editorial/request-changes', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { id: createdBody.changeSet.id } })
+  expect(changesRequested.status(), await changesRequested.text()).toBe(200)
+  const discarded = await owner.page.request.post('/api/editorial/discard', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { id: createdBody.changeSet.id } })
+  expect(discarded.status(), await discarded.text()).toBe(200)
   await owner.context.close()
 })
 
@@ -102,5 +106,17 @@ test('ENG-035 denies non-Owners and rejects cross-origin theme selection request
   const owner = await signedInOwner(browser)
   const csrf = await owner.page.request.post('/api/themes', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { id: 'browser-theme', version: '2.4.6', changeSetName: 'Blocked cross-origin selection' } })
   expect(csrf.status()).toBe(403)
+  const foreign = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
+  await foreign.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-site-owner-session-token', url: cmsOrigin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const foreignPage = await foreign.newPage()
+  const foreignDraft = await foreignPage.request.post('/api/themes', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { id: 'navigation-browser-theme', version: '1.6.0', changeSetName: 'Foreign theme selection' } })
+  expect(foreignDraft.status(), await foreignDraft.text()).toBe(201)
+  const foreignBody = await foreignDraft.json() as { changeSet: { id: string } }
+  await owner.page.goto('/themes')
+  await expect(owner.page.getByText('Another reviewed draft controls the pending theme selection.')).toBeVisible()
+  await expect(owner.page.locator('[data-theme-card][data-theme-family="browser-theme"]').getByRole('button', { name: 'Create reviewed preview' })).toBeDisabled()
+  const foreignDiscard = await foreignPage.request.post('/api/editorial/discard', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { id: foreignBody.changeSet.id } })
+  expect(foreignDiscard.status(), await foreignDiscard.text()).toBe(200)
+  await foreign.close()
   await owner.context.close()
 })
