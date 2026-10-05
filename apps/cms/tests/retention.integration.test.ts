@@ -67,6 +67,17 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     expect((await payload.find({ collection: 'retention-purge-jobs', where: { resourceID: { equals: record.id } }, overrideAccess: true })).docs[0]).toMatchObject({ state: 'failed', lastError: 'storage-purge-failed' })
   })
 
+  it('makes concurrent application purge calls one completed idempotent job', async () => {
+    writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
+    const record = await application()
+    const outcomes = await Promise.all([purgeApplication(payload, record.id, undefined), purgeApplication(payload, record.id, undefined)])
+    expect(outcomes).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'completed' })]))
+    const jobs = await payload.find({ collection: 'retention-purge-jobs', where: { and: [{ resourceType: { equals: 'application' } }, { resourceID: { equals: record.id } }] }, overrideAccess: true })
+    expect(jobs.docs).toHaveLength(1)
+    expect(jobs.docs[0]).toMatchObject({ state: 'completed' })
+    await expect(payload.findByID({ collection: 'applications', id: record.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+  })
+
   it('replays a minimal deletion marker before restored data is served', async () => {
     await (payload.db as unknown as { client: { execute: (sql: string) => Promise<unknown> } }).client.execute('DELETE FROM deletion_tombstones')
     const owner = await user('owner'); const record = await application();

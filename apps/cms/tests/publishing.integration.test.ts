@@ -238,7 +238,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await withPayloadTransaction(payload, (req) => completePublishJob(payload, req, String(job!.id), String(job!.leaseToken), artifact(snapshot.contentHash)))
 
     const release = (await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })).docs[0]!
-    const releasedManifest = (release.snapshot as { manifest: typeof current.baseline }).manifest
+    const releasedManifest = (release.snapshot as unknown as { manifest: typeof current.baseline }).manifest
     expect(releasedManifest.pages.find((page) => page.id === current.changes[0]!.id)).toMatchObject({ title: approvedPage.title })
     expect(JSON.stringify(releasedManifest)).not.toContain('Edited after approval')
   })
