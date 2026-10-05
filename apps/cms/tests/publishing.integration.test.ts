@@ -347,6 +347,8 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(failed).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED', attempts: 1 })
     const alerts = await payload.find({ collection: 'notification-outbox', where: { sourceID: { equals: String(lease!.id) } }, limit: 1, depth: 0, overrideAccess: true })
     expect(alerts.docs[0]).toMatchObject({ kind: 'publish-or-integration-failed', recipientRules: ['owner'], channels: ['email'], state: 'queued' })
+    const failureAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'publish.failed' } }, limit: 1, sort: '-createdAt', depth: 0, overrideAccess: true })
+    expect(failureAudit.docs[0]).toMatchObject({ detail: { publishJob: String(lease!.id), errorCode: 'LEASE_EXPIRED', buildLink: `/operations?publish=${String(lease!.id)}` } })
     const other = await fixture('invalid-health')
     const failedSnapshot = typeof failed.snapshot === 'object' ? failed.snapshot as unknown as { id: string; manifest: ReturnType<typeof baseline> } : await payload.findByID({ collection: 'publish-snapshots', id: String(failed.snapshot), overrideAccess: true }) as unknown as { id: string; manifest: ReturnType<typeof baseline> }
     const prepared = await prepareRedirectApproval(other, failedSnapshot.manifest, failedSnapshot.id, 1, '/invalid-health')
