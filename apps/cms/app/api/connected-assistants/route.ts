@@ -30,6 +30,7 @@ export async function POST(request: Request) {
     const body = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
     if (Object.keys(body).sort().join(',') !== 'action,managementId' || body.action !== 'revoke' || typeof body.managementId !== 'string') return json({ error: 'Invalid assistant request.' }, 400)
     await revokeAssistantGrant(body.managementId, hasRole(user as never, ['owner']) ? undefined : user!.id)
+    await payload.create({ collection: 'audit-events', data: { event: 'identity.assistant_revoked', actor: user!.id, detail: { managementId: body.managementId, scope: hasRole(user as never, ['owner']) ? 'owner' : 'own' } }, overrideAccess: true })
     return json({ revoked: true })
   } catch (error) { return json({ error: error instanceof Error ? error.message : 'Connected assistant could not be revoked.' }, 400) }
 }

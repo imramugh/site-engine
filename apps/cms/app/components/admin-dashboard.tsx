@@ -21,7 +21,6 @@ export async function AdminDashboard() {
   const reviews = data.pendingReviews
   const pageIssues = data.pages?.withIssues
   const has = (href: string) => data.shortcuts.some(link => link.href === href)
-  const endpoint = new URL('/mcp', process.env.PAYLOAD_PUBLIC_SERVER_URL || 'http://localhost:3000').href
   const summary = [reviews ? `${reviews.total} review${reviews.total === 1 ? '' : 's'} waiting` : '', data.leads ? `${data.leads.new} new lead${data.leads.new === 1 ? '' : 's'}${data.leads.urgent ? `, including ${data.leads.urgent} urgent` : ''}` : ''].filter(Boolean).join(' · ')
 
   return <main className={`admin-dashboard ${styles.dashboard}`} aria-labelledby="admin-dashboard-title">
