@@ -2,6 +2,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { freshStaff, type Role } from './access'
 import { withPayloadTransaction } from './auth-transaction'
 import { importReviewedSnapshot } from './reviewed-snapshot-import'
+import { fieldDiffs } from './field-diffs'
 
 type Actor = { id: string; name?: string | null; email?: string | null; roles?: Role[] | null; disabled?: boolean | null }
 const relationID=(value:unknown)=>typeof value==='string'?value:value&&typeof value==='object'&&'id'in value?String((value as {id:unknown}).id):undefined
@@ -24,7 +25,30 @@ const presentation=(event:string,detail:Record<string,unknown>,setName?:string)=
   const source=event.startsWith('mcp.')||event.startsWith('ai.')?'assistant':detail.actor?'person':'system'
   return{title,status,source,category:category(event)}
 }
-const changedFields=(before:unknown,after:unknown)=>{const a=record(before),b=record(after);return [...new Set([...Object.keys(a),...Object.keys(b)])].filter(key=>!['id','updatedAt','createdAt'].includes(key)&&JSON.stringify(a[key])!==JSON.stringify(b[key]))}
+const privateField = /(?:password|credential|token|secret|cookie|seed|privatekey|apikey)/i
+const technicalFields = new Set(['updatedAt', 'createdAt', 'beforeHash', 'afterHash'])
+function contentValues(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(contentValues)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !privateField.test(key) && !technicalFields.has(key)).map(([key, item]) => [key, contentValues(item)]))
+  return value
+}
+const displayValue = (value: unknown): string => {
+  if (value == null || value === '') return '—'
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  return text.length > 4000 ? `${text.slice(0, 4000)}…` : text
+}
+function reviewedDiff(changes: Array<Record<string, unknown>>) {
+  const allowed = changes.filter(change => ['pages', 'sections', 'site-settings', 'theme-settings', 'assets', 'redirects'].includes(String(change.collection)))
+  let truncated = false
+  const entries = allowed.flatMap(change => {
+    const title = record(change.after).title ?? record(change.before).title ?? words(String(change.collection))
+    const differences = fieldDiffs(contentValues(change.before), contentValues(change.after), 200)
+    if (differences.some(([field]) => field === 'Additional changes (complete values)')) truncated = true
+    return differences.filter(([field]) => field !== 'Additional changes (complete values)' && field !== 'id' && !field.endsWith(' › id'))
+      .map(([field, before, after]) => ({ record: String(title), field: words(field), before: displayValue(before), after: displayValue(after) }))
+  })
+  return entries.length ? { label: 'Reviewed changes', entries: entries.slice(0, 200), truncated: truncated || entries.length > 200, pages: allowed.filter(change => change.collection === 'pages').length } : null
+}
 const rollbackSupported=(set:Record<string,unknown>|undefined)=>Array.isArray(set?.changes)&&set.changes.length>0&&(set.changes as Array<Record<string,unknown>>).every(change=>['pages','sections','redirects','site-settings'].includes(String(change.collection))&&Boolean(change.before)&&Boolean(change.after))
 
 export async function projectChangeLog(payload:Payload,events:Array<Record<string,any>>){
@@ -41,9 +65,9 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const detail=record(item.detail),setID=relationID(detail.changeSet),set=setID?bySet.get(setID):undefined
     const actor=record(item.actor),event=String(item.event),view=presentation(event,{...detail,actor:relationID(item.actor)},typeof set?.name==='string'?set.name:undefined)
     const changes=Array.isArray(set?.changes)?set.changes as Array<Record<string,unknown>>:[]
-    const safeChanges=changes.filter(change=>['pages','sections','site-settings','theme-settings','assets','redirects'].includes(String(change.collection))).map(change=>({collection:String(change.collection),fields:changedFields(change.before,change.after)})).filter(change=>change.fields.length)
+    const diff=reviewedDiff(changes)
     const release=setID?releaseBySet.get(setID):undefined;const supported=rollbackSupported(set as unknown as Record<string,unknown>|undefined);const canRollback=Boolean(release&&Number(release.sequence)===latestSequence&&latestSequence>1&&supported)
-    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:safeChanges.length?`${safeChanges.length} ${safeChanges.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff:safeChanges.length?{label:'Reviewed changes',before:'Previous values',after:`Updated ${safeChanges.flatMap(change=>change.fields).slice(0,5).map(words).join(', ')}`,pages:safeChanges.filter(change=>change.collection==='pages').length}:null,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':!supported?'This release added, removed, or changed records that require a manual reviewed change.':'A newer release exists or no earlier release is available.'}:null}
+    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:diff?`${changes.length} ${changes.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':!supported?'This release added, removed, or changed records that require a manual reviewed change.':'A newer release exists or no earlier release is available.'}:null}
   })
 }
 

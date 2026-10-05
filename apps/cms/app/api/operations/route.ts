@@ -1,5 +1,6 @@
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
+import { changeLogFilters } from '../../../src/change-log-query'
 import { hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
 import { prepareReviewedRollback, projectChangeLog } from '../../../src/change-log'
@@ -47,11 +48,7 @@ export async function GET(request: Request) {
     clauses.push({ actor: { equals: matches.docs[0]?.id ?? actor } })
   }
   if (since && !Number.isNaN(Date.parse(since))) clauses.push({ createdAt: { greater_than_equal: since } })
-  if (target) clauses.push({ or: [{ 'detail.page': { equals: target } }, { 'detail.id': { equals: target } }, { 'detail.target': { equals: target } }] })
-  if (type && ['editorial', 'identity', 'integration', 'assistant', 'media', 'lead', 'career', 'site'].includes(type)) clauses.push(type === 'assistant' ? { or: [{ event: { contains: 'mcp.' } }, { event: { contains: 'ai.' } }] } : { event: { contains: type === 'career' ? 'application.' : `${type}.` } })
-  if (source === 'assistant') clauses.push({ or: [{ event: { contains: 'mcp.' } }, { event: { contains: 'ai.' } }] })
-  if (source === 'person') clauses.push({ actor: { exists: true } })
-  if (source === 'system') clauses.push({ actor: { exists: false } })
+  clauses.push(...await changeLogFilters(payload, { type, source, target }))
 
   const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages] = await Promise.all([
     payload.count({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: true }),
