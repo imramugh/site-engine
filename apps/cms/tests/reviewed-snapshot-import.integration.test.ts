@@ -74,6 +74,22 @@ describe('reviewed snapshot reconciliation', () => {
     await payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
   })
 
+  it('imports contract 1.5 public identity and ordered navigation through the ordinary draft capture', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `site-15-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.5.0'; const desired = structuredClone(baseline)
+    desired.settings.legalName = 'Imported Public Identity Incorporated'
+    desired.settings.address = { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }
+    desired.settings.linkedIn = 'https://www.linkedin.com/company/imported-public-identity'
+    desired.settings.incident = { label: 'Incident in progress?', guidance: 'Use the public incident line.' }
+    desired.settings.navigation = { header: [{ kind: 'page', id: desired.pages[0]!.id, label: 'Home', style: 'link' }], footer: { columns: [{ heading: 'Company', links: [{ kind: 'section', id: desired.settings.sections[0]!.id, label: 'Company' }] }] } }
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Import public identity', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as Array<{ collection: string; after: Record<string, unknown> | null }>
+    expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'site-settings', after: expect.objectContaining({ legalName: 'Imported Public Identity Incorporated', address: expect.objectContaining({ addressCountry: 'CA' }), navigation: desired.settings.navigation }) })]))
+    const persisted = (await payload.find({ collection: 'site-settings', limit: 1, draft: true, overrideAccess: true })).docs[0]
+    expect(persisted).toMatchObject({ legalName: 'Imported Public Identity Incorporated', linkedIn: desired.settings.linkedIn, incident: { label: 'Incident in progress?' }, navigation: desired.settings.navigation })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'discard' }))
+  })
+
   it('rejects an Editor and rolls back draft writes when a valid manifest collides with persisted content', async () => {
     const editor = await payload.create({ collection: 'users', data: { email: `editor-${randomUUID()}@example.test`, name: 'Editor', roles: ['editor'] }, overrideAccess: true })
     await expect(withPayloadTransaction(payload, req => { req.user = editor as never; return importReviewedSnapshot({ payload, req, actor: editor, name: 'Denied', manifest: neutralFixture, baseline: neutralFixture }) })).rejects.toThrow('Owner role required')

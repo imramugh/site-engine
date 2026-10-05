@@ -886,7 +886,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const selectedContractVersion = selectedSet
     ? selectedSet.contractVersion
     : data?.activeContractVersion
-  const supportsPageMetadata = selectedContractVersion === '1.4.0'
+  const supportsPageMetadata = selectedContractVersion === '1.4.0' || selectedContractVersion === '1.5.0'
   const dirty = Boolean(
     draft && saved && JSON.stringify(draft) !== JSON.stringify(saved),
   )

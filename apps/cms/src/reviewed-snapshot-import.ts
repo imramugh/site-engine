@@ -26,6 +26,11 @@ function capture(changes: Captured[], collection: CapturedCollection, id: string
       if (after?.[field] === null && !(before && field in before)) { const normalized = { ...after }; delete normalized[field]; after = normalized }
     }
   }
+  if (collection === 'site-settings') {
+    for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription']) {
+      if (after?.[field] === null && !(before && field in before)) { const normalized = { ...after }; delete normalized[field]; after = normalized }
+    }
+  }
   const existing = changes.findIndex(change => change.collection === collection && change.id === id)
   if (same(before, after)) {
     // A later relationship write can restore the frozen value after an
@@ -99,7 +104,7 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
     const saved = existing ? await payload.update({ collection: 'redirects', id: existing.id, data: redirect, draft: true, overrideAccess: true, req, context: { editorialInternal: true } }) : await payload.create({ collection: 'redirects', data: redirect, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
     capture(changes, 'redirects', String(saved.id), baselineFor('redirects', baseline, redirect.from), saved as unknown as Record<string, unknown>)
   }
-  const data = { siteName: manifest.settings.siteName, homepageId: manifest.settings.homepageId, defaultLocale: manifest.settings.defaultLocale, organizationType: manifest.settings.organizationType, logo: manifest.settings.logo?.id, contactEmail: manifest.settings.contactEmail, contactPhone: manifest.settings.contactPhone, seoDescription: manifest.settings.seoDescription, searchEnabled: manifest.settings.searchEnabled }
+  const data = { siteName: manifest.settings.siteName, legalName: manifest.settings.legalName ?? null, homepageId: manifest.settings.homepageId ?? null, defaultLocale: manifest.settings.defaultLocale, organizationType: manifest.settings.organizationType ?? null, logo: manifest.settings.logo?.id ?? null, logos: manifest.settings.logos ? Object.fromEntries(Object.entries(manifest.settings.logos).map(([field, asset]) => [field, asset.id])) : { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }, contactEmail: manifest.settings.contactEmail ?? null, contactPhone: manifest.settings.contactPhone ?? null, address: manifest.settings.address ?? { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }, linkedIn: manifest.settings.linkedIn ?? null, incident: manifest.settings.incident ?? { label: null, guidance: null }, navigation: manifest.settings.navigation ?? null, seoDescription: manifest.settings.seoDescription ?? null, searchEnabled: manifest.settings.searchEnabled }
   const saved = siteSettings.docs[0] ? await payload.update({ collection: 'site-settings', id: siteSettings.docs[0].id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true } }) : await payload.create({ collection: 'site-settings', data, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
   capture(changes, 'site-settings', String(saved.id), baseline.settings as unknown as Record<string, unknown>, saved as unknown as Record<string, unknown>)
   buildCandidate(baseline, changes as never, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: manifest.settings.theme?.version ?? '0.0.0', engineVersion: 'snapshot-import', contractVersion: manifest.settings.contractVersion })

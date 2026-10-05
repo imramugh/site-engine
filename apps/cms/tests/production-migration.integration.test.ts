@@ -17,6 +17,7 @@ const siteSettingsMigration = '20261003_200100_site_settings'
 const searchControlsMigration = '20261003_210000_search_controls'
 const styleGuidesMigration = '20261003_220000_style_guides'
 const sectionLandingMigration = '20261003_230000_section_landing_page'
+const siteIdentityMigration = '20261005_114210_site_identity_navigation_1_5'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -35,6 +36,24 @@ describe('production migrations (ENG-036)', () => {
     expect(emptySchema.rows.map((row) => row.name)).toEqual(['baseline_snapshot_id', 'baseline_sequence'])
     const emptyIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
     expect(emptyIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
+    await sqlite.execute("INSERT INTO site_settings (id, key, site_name, default_locale, search_enabled, updated_at, created_at) VALUES ('15000000-0000-4000-8000-000000000001', 'active', 'Legacy identity', 'en-CA', 1, '2026-10-04T00:00:00.000Z', '2026-10-04T00:00:00.000Z')")
+    for (const statement of [
+      'DROP INDEX site_settings_logos_logos_primary_light_idx', 'DROP INDEX site_settings_logos_logos_primary_dark_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_light_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_dark_idx', 'DROP INDEX site_settings_logos_logos_symbol_light_idx', 'DROP INDEX site_settings_logos_logos_symbol_dark_idx',
+      'ALTER TABLE site_settings DROP COLUMN legal_name', 'ALTER TABLE site_settings DROP COLUMN logos_primary_light_id', 'ALTER TABLE site_settings DROP COLUMN logos_primary_dark_id', 'ALTER TABLE site_settings DROP COLUMN logos_full_lockup_light_id', 'ALTER TABLE site_settings DROP COLUMN logos_full_lockup_dark_id', 'ALTER TABLE site_settings DROP COLUMN logos_symbol_light_id', 'ALTER TABLE site_settings DROP COLUMN logos_symbol_dark_id',
+      'ALTER TABLE site_settings DROP COLUMN address_street_address', 'ALTER TABLE site_settings DROP COLUMN address_address_locality', 'ALTER TABLE site_settings DROP COLUMN address_address_region', 'ALTER TABLE site_settings DROP COLUMN address_postal_code', 'ALTER TABLE site_settings DROP COLUMN address_address_country', 'ALTER TABLE site_settings DROP COLUMN linked_in', 'ALTER TABLE site_settings DROP COLUMN incident_label', 'ALTER TABLE site_settings DROP COLUMN incident_guidance', 'ALTER TABLE site_settings DROP COLUMN navigation',
+      `DELETE FROM payload_migrations WHERE name = '${siteIdentityMigration}'`,
+    ]) await sqlite.execute(statement)
+    const removedIdentityColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('legal_name', 'address_street_address', 'incident_label', 'navigation', 'logos_primary_light_id')")
+    expect(removedIdentityColumns.rows).toHaveLength(0)
+    const retainedLegacyIdentity = await sqlite.execute("SELECT site_name, default_locale, search_enabled FROM site_settings WHERE id = '15000000-0000-4000-8000-000000000001'")
+    expect(retainedLegacyIdentity.rows[0]).toMatchObject({ site_name: 'Legacy identity', default_locale: 'en-CA', search_enabled: 1 })
+    const identityUp = migrate()
+    expect(identityUp.status, identityUp.stderr || identityUp.stdout).toBe(0)
+    const restoredIdentityColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('legal_name', 'address_street_address', 'incident_label', 'navigation', 'logos_primary_light_id')")
+    expect(restoredIdentityColumns.rows.map(row => row.name).sort()).toEqual(['address_street_address', 'incident_label', 'legal_name', 'logos_primary_light_id', 'navigation'])
+    const upgradedLegacyIdentity = await sqlite.execute("SELECT site_name, legal_name, navigation FROM site_settings WHERE id = '15000000-0000-4000-8000-000000000001'")
+    expect(upgradedLegacyIdentity.rows[0]).toMatchObject({ site_name: 'Legacy identity', legal_name: null, navigation: null })
+    expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${siteIdentityMigration}'`)).rows).toHaveLength(1)
     // Reconstruct the state immediately before the newest migration: all prior
     // migrations are recorded, an existing row uses the old global slug index,
     // and the latest migration has not been recorded yet.
@@ -147,6 +166,7 @@ describe('production migrations (ENG-036)', () => {
       'ALTER TABLE payload_locked_documents_rels DROP COLUMN site_settings_id',
       'DROP TABLE site_settings',
       `DELETE FROM payload_migrations WHERE name = '${siteSettingsMigration}'`,
+      `DELETE FROM payload_migrations WHERE name = '${siteIdentityMigration}'`,
     ]) await sqlite.execute(statement)
     const siteSettingsForward = migrate()
     expect(siteSettingsForward.status, siteSettingsForward.stderr || siteSettingsForward.stdout).toBe(0)

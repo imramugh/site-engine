@@ -25,14 +25,23 @@ function ownedSet(set: Document, actor: Actor, expectedRevision: unknown) {
   return editableStates.includes(String(set.state)) && idOf(set.actor) === actor.id && Number(set.revision) === expectedRevision
 }
 function settingsValue(doc?: Document) {
+  const object = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  const address = object(doc?.address); const incident = object(doc?.incident); const logos = object(doc?.logos); const navigation = object(doc?.navigation)
+  const logoIDs = Object.fromEntries(['primaryLight','primaryDark','fullLockupLight','fullLockupDark','symbolLight','symbolDark'].map(field => [field, idOf(logos?.[field]) ?? null]))
   return {
     siteName: String(doc?.siteName ?? ''),
+    legalName: typeof doc?.legalName === 'string' ? doc.legalName : null,
     homepageId: idOf(doc?.homepageId) ?? null,
     defaultLocale: doc?.defaultLocale === 'en-CA' ? 'en-CA' : 'en',
     organizationType: doc?.organizationType === 'professional-service' ? 'professional-service' : doc?.organizationType === 'organization' ? 'organization' : null,
     logo: idOf(doc?.logo) ?? null,
+    logos: Object.values(logoIDs).some(Boolean) ? logoIDs : null,
     contactEmail: typeof doc?.contactEmail === 'string' ? doc.contactEmail : null,
     contactPhone: typeof doc?.contactPhone === 'string' ? doc.contactPhone : null,
+    address: address && typeof address.streetAddress === 'string' ? { streetAddress: address.streetAddress, addressLocality: address.addressLocality, addressRegion: address.addressRegion, postalCode: address.postalCode, addressCountry: address.addressCountry } : null,
+    linkedIn: typeof doc?.linkedIn === 'string' ? doc.linkedIn : null,
+    incident: incident && typeof incident.label === 'string' ? { label: incident.label, guidance: incident.guidance } : null,
+    navigation: navigation ?? null,
     seoDescription: typeof doc?.seoDescription === 'string' ? doc.seoDescription : null,
     searchEnabled: doc?.searchEnabled === true,
   }
@@ -74,7 +83,7 @@ async function context(payload: Awaited<ReturnType<typeof getPayload>>, actor: A
     changeSets: sets.docs.map(set => ({ id: set.id, name: set.name, state: set.state, revision: set.revision })),
     redirects: (redirects.docs as unknown as Document[]).map(doc => ({ id: doc.id, ...redirectValue(doc), hitCount: Number(doc.hitCount ?? 0), lastHitAt: doc.lastHitAt ?? null, hash: canonicalHash(redirectValue(doc)) })),
     navigation,
-    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), assets: assetsResult.docs.map(asset => ({ id: asset.id, label: asset.alt || asset.filename || asset.id })) },
+    references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name })), assets: assetsResult.docs.map(asset => ({ id: asset.id, label: asset.alt || asset.filename || asset.id })) },
   }
 }
 
@@ -114,8 +123,8 @@ export async function POST(request: Request) {
         const current = (await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Document | undefined
         if (input.expectedHash !== canonicalHash(settingsValue(current))) throw new Error('Site details changed. Reload before saving.')
         const value = input.value as Record<string, unknown>
-        if (!value || Object.keys(value).some(key => !['siteName','homepageId','defaultLocale','organizationType','logo','contactEmail','contactPhone','seoDescription','searchEnabled'].includes(key))) throw new Error('Unsupported site setting.')
-        const data = { ...value, key: 'active' }
+        if (!value || Object.keys(value).some(key => !['siteName','legalName','homepageId','defaultLocale','organizationType','logo','logos','contactEmail','contactPhone','address','linkedIn','incident','navigation','seoDescription','searchEnabled'].includes(key))) throw new Error('Unsupported site setting.')
+        const data = { ...value, logos: value.logos ?? { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }, address: value.address ?? { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }, incident: value.incident ?? { label: null, guidance: null }, key: 'active' }
         if (current) await payload.update({ collection: 'site-settings', id: current.id, data, draft: true, overrideAccess: false, user: actor as never, req })
         else await payload.create({ collection: 'site-settings', data, draft: true, overrideAccess: false, user: actor as never, req })
       } else if (input.action === 'guide') {
