@@ -297,12 +297,19 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     const capturedAsset = focalSets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
     expect(capturedAsset?.after).toMatchObject({ focalX: 80, focalY: 20 })
     process.env.INITIAL_PUBLISH_BASELINE_FILE = contract13Baseline
-    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Legacy-contract metadata edit' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Legacy-contract metadata edit' })
-    const legacySets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
-    const legacyCapturedAsset = legacySets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
-    expect(legacyCapturedAsset?.after).not.toHaveProperty('focalX')
-    await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 81, focalY: 20 }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
-    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
+    try {
+      const oldDefault = await payload.create({ collection: 'assets', data: { alt: 'Old contract centred image' }, file: { ...file, name: 'old-contract-centred.png' }, user: owner, overrideAccess: false })
+      expect(oldDefault).toMatchObject({ focalX: 50, focalY: 50 })
+      await expect(payload.create({ collection: 'assets', data: { alt: 'Old contract custom focal image', focalX: 25, focalY: 75 }, file: { ...file, name: 'old-contract-custom-focal.png' }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
+      expect(existsSync(`${mediaStorageDirectory()}/old-contract-custom-focal.png`)).toBe(false)
+      await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Legacy-contract metadata edit' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Legacy-contract metadata edit' })
+      const legacySets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+      const legacyCapturedAsset = legacySets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+      expect(legacyCapturedAsset?.after).not.toHaveProperty('focalX')
+      await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 81, focalY: 20 }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
+    } finally {
+      process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
+    }
     await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Replacement' }, file, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
     await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Updated description' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Updated description' })
     expect(captured.variants?.heroAvif).toMatchObject({ filename: asset.sizes?.heroAvif?.filename, width: asset.sizes?.heroAvif?.width, height: asset.sizes?.heroAvif?.height, mimeType: 'image/avif', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
