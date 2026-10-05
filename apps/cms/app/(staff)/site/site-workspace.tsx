@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react'
 import { ThemeChooser } from '../themes/theme-chooser'
 import { SiteDetailsForm } from './site-details-form'
 import { SiteNavigationEditor } from './site-navigation-editor'
+import { SiteRedirects } from './site-redirects'
 import { SiteSearchAI } from './site-search-ai'
-import type { Guide, References, Settings } from './site-types'
+import type { Guide, Redirect, References, Settings } from './site-types'
 import styles from './site-workspace.module.css'
 
 type SetSummary = { id: string; name: string; state: string; revision: number; contractVersion: string | null }
-type Redirect = { id: string; from: string; to: string; hitCount: number; lastHitAt: string | null; hash: string }
 type Data = { settings: Settings; settingsHash: string; guide: Guide; guideHash: string; changeSets: SetSummary[]; redirects: Redirect[]; navigation: Array<{ id: string; name: string; pages: Array<{ id: string; title: string; path: string | null; depth: number }> }>; references: References }
 type Tab = 'details' | 'navigation' | 'theme' | 'redirects' | 'search'
 const tabs: Array<{ id: Tab; label: string }> = [{ id: 'details', label: 'Business details' }, { id: 'navigation', label: 'Navigation' }, { id: 'theme', label: 'Theme' }, { id: 'redirects', label: 'Redirects' }, { id: 'search', label: 'Search and AI' }]
@@ -20,7 +20,6 @@ export function SiteWorkspace() {
   const [selectedSet, setSelectedSet] = useState('')
   const [settings, setSettings] = useState<Settings | null>(null)
   const [guide, setGuide] = useState<Guide | null>(null)
-  const [redirectDraft, setRedirectDraft] = useState({ id: '', from: '', to: '', hash: '' })
   const [setName, setSetName] = useState('Update site settings')
   const [message, setMessage] = useState('Loading Site…')
   const [busy, setBusy] = useState(false)
@@ -47,17 +46,18 @@ export function SiteWorkspace() {
       await load(); setSelectedSet(body.id); setMessage(`Change set “${body.name ?? setName}” is ready.`)
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to create a change set.') } finally { setBusy(false) }
   }
-  async function save(action: 'settings' | 'guide' | 'redirect', value: unknown, extra: Record<string, unknown> = {}) {
+  async function save(action: 'settings' | 'guide' | 'redirect', value: unknown, extra: Record<string, unknown> = {}): Promise<boolean> {
     const set = data?.changeSets.find(item => item.id === selectedSet)
-    if (!set) { setMessage('Choose or create an owned change set first.'); return }
+    if (!set) { setMessage('Choose or create an owned change set first.'); return false }
     setBusy(true)
     try {
-      const expectedHash = action === 'settings' ? data!.settingsHash : action === 'guide' ? data!.guideHash : redirectDraft.hash || undefined
+      const expectedHash = action === 'settings' ? data!.settingsHash : action === 'guide' ? data!.guideHash : extra.expectedHash
       const response = await fetch('/api/site-workspace', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, value, changeSetID: set.id, expectedRevision: set.revision, expectedHash, ...extra }) })
       const body = await response.json(); if (!response.ok) throw new Error(body.error)
-      apply(body); if (action === 'redirect') setRedirectDraft({ id: '', from: '', to: '', hash: '' })
+      apply(body)
       setMessage('Saved to the selected draft change set. Public content is unchanged until review and publication.')
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Site update failed.') } finally { setBusy(false) }
+      return true
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Site update failed.'); return false } finally { setBusy(false) }
   }
   async function saveSearch(nextGuide: Guide) {
     const set = data?.changeSets.find(item => item.id === selectedSet)
@@ -83,7 +83,7 @@ export function SiteWorkspace() {
       {tab === 'details' && settings ? <SiteDetailsForm footer={draftControls} busy={busy} canSave={Boolean(selectedSet)} references={data.references} settings={settings} setSettings={setSettings} onSubmit={event => { event.preventDefault(); void save('settings', settings) }} /> : null}
       {tab === 'navigation' && settings ? <><SiteNavigationEditor busy={busy} canSave={Boolean(selectedSet)} contractVersion={data.changeSets.find(item => item.id === selectedSet)?.contractVersion ?? null} references={data.references} settings={settings} setSettings={setSettings} save={() => void save('settings', settings)} /><details className={styles.structure}><summary>Current content structure</summary>{data.navigation.map(section => <section key={section.id}><h4>{section.name}</h4>{section.pages.length ? <ul>{section.pages.map(page => <li key={page.id} style={{ paddingLeft: `${page.depth}rem` }}><a href={`/content-editor/${page.id}`}>{page.title}</a><span>{page.path ?? 'Route unavailable'}</span></li>)}</ul> : <p>No active pages in this section.</p>}</section>)}<a className={styles.primaryLink} data-site-primary-action href="/content-tree">Edit pages and structure in Content</a></details></> : null}
       {tab === 'theme' ? <section className={styles.panel} data-site-panel="theme"><ThemeChooser embedded /></section> : null}
-      {tab === 'redirects' ? <section className={styles.panel} data-site-panel="redirects"><header><h2>Redirects</h2><p>Send an old public path to its current destination through the reviewed release.</p></header><form onSubmit={event => { event.preventDefault(); void save('redirect', { from: redirectDraft.from, to: redirectDraft.to }, redirectDraft.id ? { id: redirectDraft.id } : {}) }}><fieldset disabled={busy}><label>Old address<input required pattern="/.*" value={redirectDraft.from} onChange={event => setRedirectDraft({ ...redirectDraft, from: event.target.value })} placeholder="/old-page" /></label><label>Goes to<input required pattern="/.*" value={redirectDraft.to} onChange={event => setRedirectDraft({ ...redirectDraft, to: event.target.value })} placeholder="/new-page" /></label><button disabled={!selectedSet}>{redirectDraft.id ? 'Save redirect' : 'Add redirect'}</button>{redirectDraft.id ? <button type="button" onClick={() => setRedirectDraft({ id: '', from: '', to: '', hash: '' })}>Cancel editing</button> : null}</fieldset></form><div className={styles.tableWrap} tabIndex={0}><table><caption>Current redirects</caption><thead><tr><th>Old address</th><th>Goes to</th><th>Hits</th><th>Last used</th><th><span className={styles.srOnly}>Actions</span></th></tr></thead><tbody>{data.redirects.map(item => <tr key={item.id}><td>{item.from}</td><td>{item.to}</td><td>{item.hitCount}</td><td>{item.lastHitAt ? new Date(item.lastHitAt).toLocaleDateString('en-CA') : 'Not recorded'}</td><td><button type="button" onClick={() => setRedirectDraft({ id: item.id, from: item.from, to: item.to, hash: item.hash })}>Edit</button></td></tr>)}</tbody></table></div></section> : null}
+      {tab === 'redirects' ? <SiteRedirects redirects={data.redirects} busy={busy} canSave={Boolean(selectedSet)} onSave={(value, extra) => save('redirect', value, extra)} /> : null}
       {tab === 'search' && guide && settings ? <SiteSearchAI settings={settings} guide={guide} busy={busy} canSave={Boolean(selectedSet)} contractVersion={data.changeSets.find(item => item.id === selectedSet)?.contractVersion ?? null} revisionKey={data.guideHash} setSettings={setSettings} setGuide={setGuide} save={next => void saveSearch(next)} /> : null}
       {tab !== 'details' ? draftControls : null}
     </>}
