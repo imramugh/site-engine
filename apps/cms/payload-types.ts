@@ -550,6 +550,8 @@ export interface Redirect {
   from: string;
   to: string;
   status?: number | null;
+  createdBy?: (string | null) | User;
+  createdByLabel?: string | null;
   /**
    * Updated by the edge log ingestion adapter.
    */
@@ -1761,6 +1763,8 @@ export interface RedirectsSelect<T extends boolean = true> {
   from?: T;
   to?: T;
   status?: T;
+  createdBy?: T;
+  createdByLabel?: T;
   hitCount?: T;
   lastHitAt?: T;
   updatedAt?: T;

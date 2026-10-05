@@ -34,6 +34,7 @@ export type Guide = {
   maximumSentenceWords: number
   minimumReadingEase: number
 }
+export type Redirect = { id: string; from: string; to: string; createdBy: string | null; hitCount: number; hash: string }
 export type References = {
   pages: Array<{ id: string; title: string }>
   sections: Array<{ id: string; title: string; pillars: Array<{ id: string; title: string }> }>
