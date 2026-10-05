@@ -82,6 +82,9 @@ export interface Config {
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
     'provider-usage-reservations': ProviderUsageReservation;
+    'mailbox-configurations': MailboxConfiguration;
+    'mailbox-area-mappings': MailboxAreaMapping;
+    'mailbox-test-sends': MailboxTestSend;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
     'notification-preferences': NotificationPreference;
@@ -118,6 +121,9 @@ export interface Config {
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
+    'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
+    'mailbox-area-mappings': MailboxAreaMappingsSelect<false> | MailboxAreaMappingsSelect<true>;
+    'mailbox-test-sends': MailboxTestSendsSelect<false> | MailboxTestSendsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
@@ -721,6 +727,74 @@ export interface ProviderUsageReservation {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-configurations".
+ */
+export interface MailboxConfiguration {
+  id: string;
+  name: string;
+  provider: 'smtp';
+  primaryAddress: string;
+  aliases:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  verifiedAliases:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  host: string;
+  port: number;
+  security: 'starttls' | 'tls';
+  username: string;
+  encryptedCredential?: string | null;
+  credentialRevision: string;
+  health: 'unknown' | 'connected' | 'rejected' | 'unavailable' | 'revoked';
+  testedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-area-mappings".
+ */
+export interface MailboxAreaMapping {
+  id: string;
+  area: 'leads' | 'careers' | 'notifications';
+  mailbox: string | MailboxConfiguration;
+  senderAddress: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-test-sends".
+ */
+export interface MailboxTestSend {
+  id: string;
+  requestKey: string;
+  requestHash: string;
+  mailbox: string | MailboxConfiguration;
+  senderAddress: string;
+  recipientAddress: string;
+  authorizedBy: string | User;
+  state: 'sending' | 'sent' | 'failed';
+  providerMessageID?: string | null;
+  failureCode?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "inquiries".
  */
 export interface Inquiry {
@@ -1263,6 +1337,18 @@ export interface PayloadLockedDocument {
         value: string | ProviderUsageReservation;
       } | null)
     | ({
+        relationTo: 'mailbox-configurations';
+        value: string | MailboxConfiguration;
+      } | null)
+    | ({
+        relationTo: 'mailbox-area-mappings';
+        value: string | MailboxAreaMapping;
+      } | null)
+    | ({
+        relationTo: 'mailbox-test-sends';
+        value: string | MailboxTestSend;
+      } | null)
+    | ({
         relationTo: 'inquiries';
         value: string | Inquiry;
       } | null)
@@ -1781,6 +1867,55 @@ export interface ProviderUsageReservationsSelect<T extends boolean = true> {
   pricingAsOf?: T;
   requestInputTokens?: T;
   maxOutputTokens?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-configurations_select".
+ */
+export interface MailboxConfigurationsSelect<T extends boolean = true> {
+  name?: T;
+  provider?: T;
+  primaryAddress?: T;
+  aliases?: T;
+  verifiedAliases?: T;
+  host?: T;
+  port?: T;
+  security?: T;
+  username?: T;
+  encryptedCredential?: T;
+  credentialRevision?: T;
+  health?: T;
+  testedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-area-mappings_select".
+ */
+export interface MailboxAreaMappingsSelect<T extends boolean = true> {
+  area?: T;
+  mailbox?: T;
+  senderAddress?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-test-sends_select".
+ */
+export interface MailboxTestSendsSelect<T extends boolean = true> {
+  requestKey?: T;
+  requestHash?: T;
+  mailbox?: T;
+  senderAddress?: T;
+  recipientAddress?: T;
+  authorizedBy?: T;
+  state?: T;
+  providerMessageID?: T;
+  failureCode?: T;
   updatedAt?: T;
   createdAt?: T;
 }

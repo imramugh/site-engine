@@ -1,5 +1,12 @@
-export type Reference = { kind: 'page' | 'section'; id: string; label: string; style?: 'link' | 'button' }
-export type Navigation = { header: Reference[]; footer: { columns: Array<{ heading: string; links: Omit<Reference, 'style'>[] }>; copyright?: string } }
+export type AvailableReference = { kind: 'page' | 'section'; id: string; label: string; style?: 'link' | 'button' }
+export type UnavailableReference = { kind: 'unavailable'; label: string; reason: string; style?: 'link' | 'button' }
+export type Reference = AvailableReference | UnavailableReference
+export type FooterReference = Omit<AvailableReference, 'style'> | Omit<UnavailableReference, 'style'>
+export type FooterColumn =
+  | { kind?: 'links'; heading: string; links: FooterReference[] }
+  | { kind: 'section-pillars'; heading: string; sectionId: string }
+  | { kind: 'contact'; heading: string; fields: Array<'phone' | 'email' | 'address' | 'linkedIn'> }
+export type Navigation = { header: Reference[]; footer: { columns: FooterColumn[]; bottomLinks?: FooterReference[]; copyright?: string } }
 export type Logos = { primaryLight: string | null; primaryDark: string | null; fullLockupLight: string | null; fullLockupDark: string | null; symbolLight: string | null; symbolDark: string | null }
 export type Address = { streetAddress: string; addressLocality: string; addressRegion: string; postalCode: string; addressCountry: string }
 export type Settings = {
@@ -21,7 +28,7 @@ export type Settings = {
 }
 export type References = {
   pages: Array<{ id: string; title: string }>
-  sections: Array<{ id: string; title: string }>
+  sections: Array<{ id: string; title: string; pillars: Array<{ id: string; title: string }> }>
   assets: Array<{ id: string; label: string; url?: string | null }>
 }
 

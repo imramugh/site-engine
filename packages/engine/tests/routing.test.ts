@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SiteSnapshotSchema } from '@site-engine/contract';
-import { deriveRoutes } from '../src/index.js';
+import { deriveRoutes, resolveSiteNavigation } from '../src/index.js';
 
 const ids = { section: '10000000-0000-4000-8000-000000000000', root: '20000000-0000-4000-8000-000000000000', pillar: '30000000-0000-4000-8000-000000000000', service: '40000000-0000-4000-8000-000000000000' };
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const;
@@ -24,6 +24,27 @@ describe('ENG-004 generic routing', () => {
     hiddenHome.pages[0].parentId = ids.pillar;
     hiddenHome.pages[1].status = 'draft';
     expect(() => deriveRoutes(hiddenHome, ids.root)).toThrow('Homepage cannot be hidden');
+  });
+  it('resolves reviewed navigation ordering, unavailable states, contact visibility, and UTC year', () => {
+    const value = structuredClone(snapshot);
+    value.settings.contractVersion = '1.6.0'; value.settings.homepageId = ids.root;
+    value.settings.sections[0]!.landingPageId = ids.root; value.pages[1]!.parentId = ids.root;
+    value.settings.contactEmail = 'hello@example.test'; value.settings.contactPhone = '+1 555 0100';
+    value.settings.navigation = {
+      header: [{ kind: 'page', id: ids.root, label: 'Home', style: 'link' }, { kind: 'unavailable', label: 'Insights', reason: 'Insights are not published.', style: 'button' }],
+      footer: { columns: [
+        { kind: 'section-pillars', heading: 'Services', sectionId: ids.section },
+        { kind: 'contact', heading: 'Contact', fields: ['email', 'address', 'phone'] },
+      ], bottomLinks: [{ kind: 'unavailable', label: 'Privacy', reason: 'Privacy is not published.' }], copyright: '© {year} Sample' },
+    };
+    const draftPillar = { ...structuredClone(value.pages[1]), id: '70000000-0000-4000-8000-000000000000', title: 'Draft pillar', slug: 'draft-pillar', status: 'draft' as const };
+    const nestedPillar = { ...structuredClone(value.pages[1]), id: '80000000-0000-4000-8000-000000000000', title: 'Nested pillar', slug: 'nested-pillar', parentId: ids.pillar };
+    value.pages.push(draftPillar, nestedPillar); value.settings.sections[0]!.pageIds = [draftPillar.id, ids.pillar, nestedPillar.id, ids.service];
+    const resolved = resolveSiteNavigation(value, 2031);
+    expect(resolved.header).toEqual([{ label: 'Home', style: 'link', href: '/' }, { label: 'Insights', style: 'button', unavailableReason: 'Insights are not published.' }]);
+    expect(resolved.footer.columns[0]).toEqual({ kind: 'section-pillars', heading: 'Services', items: [{ label: 'Area', style: 'link', href: '/services/area' }] });
+    expect(resolved.footer.columns[1]).toMatchObject({ kind: 'contact', items: [{ field: 'email', value: 'hello@example.test' }, { field: 'phone', value: '+1 555 0100' }] });
+    expect(resolved.footer.bottomLinks[0]).not.toHaveProperty('href'); expect(resolved.footer.copyright).toBe('© 2031 Sample');
   });
 
 });

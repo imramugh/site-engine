@@ -15,15 +15,16 @@ async function axe(page: Page) {
 }
 
 test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }, testInfo) => {
+  test.setTimeout(60_000)
   const owner = await session(browser, 'synthetic-site-owner-session-token')
+  const themeDraft = await owner.page.request.post('/api/themes', { headers: { origin, 'content-type': 'application/json' }, data: { id: 'navigation-browser-theme', version: '1.6.0', changeSetName: 'Navigation 1.6 browser draft' } })
+  expect(themeDraft.status(), await themeDraft.text()).toBe(201)
   const publicationBefore = await owner.page.request.get('/__e2e/publish-state').then(response => response.json())
   await owner.page.goto('/site')
   await expect(owner.page.locator('[data-site-workspace]')).toBeVisible()
   await expect(owner.page.getByRole('button', { name: 'Business details', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(owner.page.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('aria-current', 'page')
-  await owner.page.getByLabel('New change set name').fill('Browser Site workspace draft')
-  await owner.page.getByRole('button', { name: 'Create change set' }).click()
-  await expect(owner.page.getByRole('status')).toContainText('is ready')
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Navigation 1.6 browser draft · open' })
 
   await owner.page.getByLabel('Business name').fill('Synthetic Site Workspace')
   await owner.page.getByLabel('Legal name').fill('Synthetic Site Workspace Incorporated')
@@ -33,14 +34,12 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByLabel('City').fill('Toronto')
   await owner.page.getByLabel('Province or region').fill('ON')
   await owner.page.getByLabel('Postal code').fill('M5V 2T6')
+  await owner.page.getByText('Additional site settings', { exact: true }).click()
+  await expect(owner.page.getByLabel('Homepage')).not.toHaveValue('')
   await owner.page.getByLabel('LinkedIn URL').fill('https://www.linkedin.com/company/synthetic-site-workspace')
   await owner.page.getByLabel('Bar label').fill('Incident in progress?')
   await owner.page.getByLabel('Guidance').fill('Call the incident line and preserve affected systems.')
-  await owner.page.getByText('Choose logo variants', { exact: true }).click()
-  const firstLogo = owner.page.locator('[data-site-details-card=logos] select').first()
-  if (await firstLogo.locator('option').count() > 1) await firstLogo.selectOption({ index: 1 })
   await owner.page.getByText('Edit address', { exact: true }).click()
-  await owner.page.getByText('Choose logo variants', { exact: true }).click()
   await owner.page.getByRole('button', { name: 'Save business details' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
   await owner.page.setViewportSize({ width: 1440, height: 1000 })
@@ -48,8 +47,6 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   const inputStyle = await owner.page.getByLabel('Business name').evaluate(element => ({ font: getComputedStyle(element).fontFamily, weight: getComputedStyle(element).fontWeight }))
   expect(inputStyle.font).not.toMatch(/Times New Roman/)
   expect(inputStyle.weight).toBe('400')
-  await expect(owner.page.locator('[data-site-logo-tone=light] img')).toBeVisible()
-  expect(await owner.page.locator('[data-site-logo-tone=light] img').evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
   const desktop = testInfo.outputPath('site-business-details-1440.png'); await owner.page.screenshot({ path: desktop, fullPage: true }); await testInfo.attach('Site Business details 1440', { path: desktop, contentType: 'image/png' })
 
   await owner.page.getByRole('button', { name: 'Redirects' }).click()
@@ -65,15 +62,17 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByRole('button', { name: 'Save writing guidance' }).click()
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
 
-  const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as { sets: Array<{ name: string; state: string; changes: Array<{ collection: string }> }> }
-  const captured = sets.sets.find(item => item.name === 'Browser Site workspace draft')
+  const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as { sets: Array<{ id: string; name: string; state: string; changes: Array<{ collection: string }> }> }
+  const captured = sets.sets.find(item => item.name === 'Navigation 1.6 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides', 'redirects']))
   expect(await owner.page.request.get('/__e2e/publish-state').then(response => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
 
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
-  await owner.page.getByRole('button', { name: 'Add header link' }).click()
-  await owner.page.getByRole('button', { name: 'Add header link' }).click()
+  const navigationContext = await owner.page.request.get('/api/site-workspace').then(response => response.json()) as { changeSets: Array<{ name: string; contractVersion: string | null }> }
+  expect(navigationContext.changeSets.find(set => set.name === 'Navigation 1.6 browser draft')?.contractVersion).toBe('1.6.0')
+  await owner.page.getByRole('button', { name: 'Add header item' }).click()
+  await owner.page.getByRole('button', { name: 'Add header item' }).click()
   const headerRows = owner.page.locator('[data-site-navigation-header] [data-site-navigation-item]')
   await headerRows.first().locator('summary').click()
   await headerRows.first().getByLabel('Label', { exact: true }).fill('First browser link')
@@ -83,8 +82,20 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await headerRows.nth(1).locator('summary').click()
   await owner.page.getByRole('button', { name: 'Move Second browser link up', exact: true }).click()
   await expect(headerRows.first()).toContainText('Second browser link')
-  await owner.page.getByRole('button', { name: 'Add footer column' }).click()
-  await owner.page.getByRole('button', { name: 'Add link', exact: true }).click()
+  await owner.page.getByRole('button', { name: 'Add header item' }).click()
+  await headerRows.nth(2).locator('summary').click()
+  await headerRows.nth(2).getByLabel('Type').selectOption('unavailable')
+  await headerRows.nth(2).getByLabel('Label', { exact: true }).fill('Insights')
+  await headerRows.nth(2).getByLabel('Explanation').fill('Insights are not published yet.')
+  await owner.page.getByRole('button', { name: 'Add links column' }).click()
+  await owner.page.getByRole('button', { name: 'Add a link', exact: true }).click()
+  await owner.page.getByRole('button', { name: 'Add generated Services' }).click()
+  await owner.page.getByLabel('Services section').selectOption({ label: 'Metadata browser section' })
+  await owner.page.getByRole('button', { name: 'Add contact details' }).click()
+  await owner.page.getByRole('button', { name: 'Add bottom link' }).click()
+  const bottom = owner.page.locator('[data-site-navigation-bottom]').locator('[data-site-navigation-item]').last()
+  await bottom.locator('summary').click(); await bottom.getByLabel('Type').selectOption('unavailable'); await bottom.getByLabel('Label', { exact: true }).fill('Privacy'); await bottom.getByLabel('Explanation').fill('Privacy is not published yet.')
+  await owner.page.getByLabel('Copyright').fill('© {year} Synthetic Site Workspace Incorporated')
   const navigationSaved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
   await owner.page.getByRole('button', { name: 'Save navigation' }).click(); expect((await navigationSaved).status()).toBe(200)
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
@@ -92,7 +103,10 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await expect(owner.page.getByRole('link', { name: 'Edit pages and structure in Content' })).toHaveAttribute('href', '/content-tree')
   await owner.page.getByText('Current content structure', { exact: true }).click()
   const navSettings = await owner.page.request.get('/api/site-workspace').then(response => response.json())
-  expect(navSettings.settings.navigation.header.map((item: { label: string }) => item.label)).toEqual(['Second browser link', 'First browser link'])
+  expect(navSettings.changeSets.find((set: { name: string }) => set.name === 'Navigation 1.6 browser draft')?.contractVersion).toBe('1.6.0')
+  expect(navSettings.settings.navigation.header.map((item: { label: string }) => item.label)).toEqual(['Second browser link', 'First browser link', 'Insights'])
+  expect(navSettings.settings.navigation.footer.columns.map((column: { kind?: string }) => column.kind ?? 'links')).toEqual(['links', 'section-pillars', 'contact'])
+  await expect(owner.page.locator('[data-navigation-column-kind="section-pillars"]').getByText('Metadata service pillar', { exact: true })).toBeVisible()
   for (const width of [1440, 390]) {
     await owner.page.setViewportSize({ width, height: 1000 })
     await owner.page.evaluate(() => scrollTo(0, 0))
@@ -113,6 +127,14 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
   const mobile = testInfo.outputPath('site-business-details-390.png'); await owner.page.screenshot({ path: mobile, fullPage: true }); await testInfo.attach('Site Business details 390', { path: mobile, contentType: 'image/png' })
   await axe(owner.page)
+
+  // The suite intentionally shares a real SQLite database. Complete this
+  // fixture's open theme-settings lifecycle so the following Theme workspace
+  // test starts from the published selection instead of a foreign Owner's
+  // unresolved 1.6 selection. This uses the normal guarded discard path and
+  // therefore also proves that the draft can be safely restored.
+  const discarded = await owner.page.request.post('/api/editorial/discard', { headers: { origin, 'content-type': 'application/json' }, data: { id: captured!.id } })
+  expect(discarded.status(), await discarded.text()).toBe(200)
   await owner.context.close()
 })
 

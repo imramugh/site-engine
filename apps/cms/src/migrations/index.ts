@@ -34,6 +34,7 @@ import * as migration_20261004_031000_page_creation_receipts from './20261004_03
 import * as migration_20261004_235511_media_immutable_versions from './20261004_235511_media_immutable_versions';
 import * as migration_20261005_114210_site_identity_navigation_1_5 from './20261005_114210_site_identity_navigation_1_5';
 import * as migration_20261005_133859 from './20261005_133859';
+import * as migration_20261005_145826_mailbox_workspace from './20261005_145826_mailbox_workspace';
 
 export const migrations = [
   {
@@ -214,6 +215,11 @@ export const migrations = [
   {
     up: migration_20261005_133859.up,
     down: migration_20261005_133859.down,
-    name: '20261005_133859'
+    name: '20261005_133859',
+  },
+  {
+    up: migration_20261005_145826_mailbox_workspace.up,
+    down: migration_20261005_145826_mailbox_workspace.down,
+    name: '20261005_145826_mailbox_workspace'
   },
 ];

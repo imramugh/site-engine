@@ -281,7 +281,7 @@ export async function applyPageEditorSave(input: {
       req,
     })
     if (
-      !['1.4.0', '1.5.0'].includes(previewContext.changeSetContractVersions[save.changeSetID] ?? '')
+      !['1.4.0', '1.5.0', '1.6.0'].includes(previewContext.changeSetContractVersions[save.changeSetID] ?? '')
     )
       throw new Error('PAGE_METADATA_UNSUPPORTED')
   }
