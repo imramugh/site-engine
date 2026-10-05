@@ -77,4 +77,18 @@ describe('ENG-002 site data semantic fixtures', () => {
     expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(true)
   })
   it('validates settings drafts and rejects unsupported snapshot contracts', () => { const value = snapshot(); expect(SiteSettingsSchema.safeParse(value.settings).success).toBe(true); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale }).success).toBe(true); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true); expect(SiteSettingsSchema.safeParse({ ...value.settings, contractVersion: '2.0.0' }).success).toBe(false); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale, rawCss: '#fff' }).success).toBe(false); value.settings.contractVersion = '2.0.0' as never; expect(SiteSnapshotSchema.safeParse(value).success).toBe(false) })
+  it('keeps legacy settings valid while gating referenced site identity and navigation to 1.5', () => {
+    const value = snapshot(); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true)
+    const logo = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', filename: 'identity.svg', mimeType: 'image/svg+xml', width: 120, height: 60, alt: 'Synthetic identity', decorative: false }
+    value.media.push(logo as never); value.settings.contractVersion = '1.5.0'
+    Object.assign(value.settings, {
+      legalName: 'Synthetic Studio Incorporated',
+      address: { streetAddress: '100 Example Road', addressLocality: 'Example City', addressRegion: 'ON', postalCode: 'A1A 1A1', addressCountry: 'CA' },
+      linkedIn: 'https://www.linkedin.com/company/synthetic-studio', incident: { label: 'Need urgent help?', guidance: 'Call the published incident line and preserve affected systems.' },
+      logos: { primaryLight: logo }, navigation: { header: [{ kind: 'page', id: value.pages[0]!.id, label: 'Home', style: 'link' }], footer: { columns: [{ heading: 'Company', links: [{ kind: 'section', id: value.settings.sections[0]!.id, label: 'General' }] }], copyright: '© {year} Synthetic Studio Incorporated' } },
+    })
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(true)
+    const legacy = structuredClone(value); legacy.settings.contractVersion = '1.4.0'; expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(false)
+    const missing = structuredClone(value); missing.settings.navigation!.header[0]!.id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'; expect(SiteSnapshotSchema.safeParse(missing).success).toBe(false)
+  })
 })

@@ -10,6 +10,6 @@ import { IntegrationConfiguration } from './integration-configuration'
 export default async function IntegrationsPage() {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: await headers(), payload })
-  if (!hasRole(authenticated.user as never, ['owner'])) redirect('/admin/login')
-  return <StaffShell><IntegrationConfiguration /></StaffShell>
+  if (!hasRole(authenticated.user as never, ['owner', 'editor', 'approver', 'sales', 'hiring'])) redirect('/admin/login')
+  return <StaffShell><IntegrationConfiguration canManageAll={hasRole(authenticated.user as never, ['owner'])} /></StaffShell>
 }

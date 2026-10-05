@@ -16,7 +16,7 @@ const transitions: Record<Stage, Stage[]> = {
   new: ['new', 'qualified', 'contacted', 'lost'], qualified: ['qualified', 'contacted', 'lost'],
   contacted: ['contacted', 'qualified', 'proposal', 'lost'], proposal: ['proposal', 'won', 'lost', 'contacted'], won: ['won'], lost: ['lost'],
 }
-const topics = ['general', 'project', 'partnership', 'active-incident']
+const topics = ['general', 'project', 'partnership', 'active-incident', 'consultation', 'service', 'retainer', 'careers']
 const blank = { email: '', name: '', topic: 'general', sourcePage: '/manual', message: '', consent: false }
 const emptyPipeline = (): Record<Stage, PipelineGroup> => ({ new: { leads: [], totalDocs: 0, hasMore: false }, qualified: { leads: [], totalDocs: 0, hasMore: false }, contacted: { leads: [], totalDocs: 0, hasMore: false }, proposal: { leads: [], totalDocs: 0, hasMore: false }, won: { leads: [], totalDocs: 0, hasMore: false }, lost: { leads: [], totalDocs: 0, hasMore: false } })
 const emptyData = (): Data => ({ leads: [], pipeline: emptyPipeline(), assignees: [], sourcePages: [], page: 1, totalPages: 1, totalDocs: 0, hasNextPage: false, hasPrevPage: false })

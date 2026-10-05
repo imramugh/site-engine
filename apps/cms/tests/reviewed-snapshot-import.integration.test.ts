@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -12,14 +12,24 @@ import { transitionChangeSet } from '../src/editorial'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-reviewed-import-'))
+const registryFile = join(directory, 'theme-registry.json')
+const oldThemeManifest = { name: 'synthetic-import-theme', version: '1.4.0', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
+const newThemeManifest = { ...oldThemeManifest, version: '1.5.0', contract: '1.5.0' }
+const themeRegistry = { themes: [{ manifest: oldThemeManifest, installedAt: '2026-10-04T00:00:00.000Z' }, { manifest: newThemeManifest, installedAt: '2026-10-05T00:00:00.000Z' }] }
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-reviewed-import'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
+process.env.SITE_THEME_REGISTRY_JSON = registryFile
+writeFileSync(registryFile, JSON.stringify(themeRegistry))
 const { default: config } = await import('../payload.config.js')
+const { getInstalledTheme, parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
 const importRoute = await import('../app/api/editorial/import-snapshot/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
-afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
+afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }); delete process.env.SITE_THEME_REGISTRY_JSON })
+
+const installed = parseThemeRegistry(themeRegistry)
+const selection = (manifest: typeof oldThemeManifest) => ({ id: manifest.name, version: manifest.version, contract: manifest.contract, manifestDigest: getInstalledTheme(installed, manifest.name, manifest.version)!.manifestDigest })
 
 async function sessionFor(userID: string): Promise<string> {
   const token = newOpaqueToken(); const now = new Date().toISOString()
@@ -72,6 +82,71 @@ describe('reviewed snapshot reconciliation', () => {
     const candidate = buildCandidate(baseline, changes as never, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0' })
     expect(candidate.settings.searchEnabled).toBe(false)
     await payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+  })
+
+  it('imports contract 1.5 public identity and ordered navigation through the ordinary draft capture', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `site-15-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.5.0'; const desired = structuredClone(baseline)
+    desired.settings.legalName = 'Imported Public Identity Incorporated'
+    desired.settings.address = { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }
+    desired.settings.linkedIn = 'https://www.linkedin.com/company/imported-public-identity'
+    desired.settings.incident = { label: 'Incident in progress?', guidance: 'Use the public incident line.' }
+    desired.settings.navigation = { header: [{ kind: 'page', id: desired.pages[0]!.id, label: 'Home', style: 'link' }], footer: { columns: [{ heading: 'Company', links: [{ kind: 'section', id: desired.settings.sections[0]!.id, label: 'Company' }] }] } }
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Import public identity', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as Array<{ collection: string; after: Record<string, unknown> | null }>
+    expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'site-settings', after: expect.objectContaining({ legalName: 'Imported Public Identity Incorporated', address: expect.objectContaining({ addressCountry: 'CA' }), navigation: desired.settings.navigation }) })]))
+    const persisted = (await payload.find({ collection: 'site-settings', limit: 1, draft: true, overrideAccess: true })).docs[0]
+    expect(persisted).toMatchObject({ legalName: 'Imported Public Identity Incorporated', linkedIn: desired.settings.linkedIn, incident: { label: 'Incident in progress?' }, navigation: desired.settings.navigation })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'discard' }))
+  })
+
+  it('captures an installed theme transition atomically with contract 1.5 content', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `theme-import-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.4.0'; baseline.settings.theme = selection(oldThemeManifest); baseline.settings.themeSettings = { [oldThemeManifest.name]: {} }
+    const desired = structuredClone(baseline); desired.settings.contractVersion = '1.5.0'; desired.settings.theme = selection(newThemeManifest); desired.settings.legalName = 'Reviewed Contract Upgrade Incorporated'; desired.pages[0]!.summary = 'Reviewed content imported atomically with the installed contract upgrade.'
+    const existing = await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true })
+    const current = existing.docs[0]
+      ? await payload.update({ collection: 'theme-settings', id: existing.docs[0].id, data: { selection: baseline.settings.theme, settings: baseline.settings.themeSettings }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+      : await payload.create({ collection: 'theme-settings', data: { key: 'active', selection: baseline.settings.theme, settings: baseline.settings.themeSettings }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Upgrade reviewed contract', manifest: desired, baseline }) })
+    const changes = (await payload.findByID({ collection: 'change-sets', id: String(set.id), overrideAccess: true })).changes as Array<{ collection: string; id: string; after: Record<string, unknown> }>
+    expect(changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'theme-settings', id: current.id, after: expect.objectContaining({ selection: desired.settings.theme }) }), expect.objectContaining({ collection: 'site-settings', after: expect.objectContaining({ legalName: desired.settings.legalName }) }), expect.objectContaining({ collection: 'pages', after: expect.objectContaining({ summary: desired.pages[0]!.summary }) })]))
+    const candidate = buildCandidate(baseline, changes as never, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: newThemeManifest.version, engineVersion: 'test', contractVersion: '1.5.0' })
+    expect(candidate.settings).toMatchObject({ contractVersion: '1.5.0', theme: desired.settings.theme, legalName: desired.settings.legalName })
+    expect(candidate.pages[0]).toMatchObject({ summary: desired.pages[0]!.summary })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'discard' }))
+    expect((await payload.findByID({ collection: 'theme-settings', id: current.id, draft: true, overrideAccess: true })).selection).toEqual(baseline.settings.theme)
+  })
+
+  it('rejects unavailable or contract-mismatched selections before writing drafts', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `theme-reject-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.4.0'; baseline.settings.theme = selection(oldThemeManifest)
+    const beforeSections = (await payload.find({ collection: 'sections', limit: 0, pagination: false, draft: true, overrideAccess: true })).totalDocs
+    const beforeSets = (await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, overrideAccess: true })).totalDocs
+    const unavailable = structuredClone(baseline); unavailable.settings.contractVersion = '1.5.0'; unavailable.settings.theme = { id: 'unavailable-theme', version: '1.5.0', contract: '1.5.0', manifestDigest: 'f'.repeat(64) }; unavailable.settings.legalName = 'Must not persist'
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Unavailable theme', manifest: unavailable, baseline }) })).rejects.toThrow('not installed exactly as reviewed')
+    const missing = structuredClone(baseline); missing.settings.contractVersion = '1.5.0'; delete missing.settings.theme; missing.settings.legalName = 'Must not persist either'
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Missing selection', manifest: missing, baseline }) })).rejects.toThrow('requires a matching installed theme selection')
+    const mismatched = structuredClone(baseline); mismatched.settings.theme = selection(newThemeManifest)
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Mismatched selection', manifest: mismatched, baseline }) })).rejects.toThrow()
+    expect((await payload.find({ collection: 'sections', limit: 0, pagination: false, draft: true, overrideAccess: true })).totalDocs).toBe(beforeSections)
+    expect((await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, overrideAccess: true })).totalDocs).toBe(beforeSets)
+  })
+
+  it('preserves pending and divergent theme draft conflict safety', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `theme-conflict-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+    const baseline = isolatedFixture(); baseline.settings.contractVersion = '1.4.0'; baseline.settings.theme = selection(oldThemeManifest); const desired = structuredClone(baseline); desired.settings.contractVersion = '1.5.0'; desired.settings.theme = selection(newThemeManifest)
+    const records = await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true })
+    const settings = records.docs[0]
+      ? await payload.update({ collection: 'theme-settings', id: records.docs[0].id, data: { selection: baseline.settings.theme, settings: {} }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+      : await payload.create({ collection: 'theme-settings', data: { key: 'active', selection: baseline.settings.theme, settings: {} }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const pending = await payload.create({ collection: 'change-sets', data: { name: 'Pending theme', actor: owner.id, state: 'open', revision: 0, changes: [{ collection: 'theme-settings', id: settings.id }] }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Blocked theme', manifest: desired, baseline }) })).rejects.toThrow('pending editorial change')
+    expect((await payload.findByID({ collection: 'theme-settings', id: settings.id, draft: true, overrideAccess: true })).selection).toEqual(baseline.settings.theme)
+    await payload.update({ collection: 'change-sets', id: pending.id, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'theme-settings', id: settings.id, data: { selection: desired.settings.theme }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Divergent draft', manifest: desired, baseline }) })).rejects.toThrow('draft theme selection no longer matches')
+    await payload.update({ collection: 'theme-settings', id: settings.id, data: { selection: baseline.settings.theme }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
   })
 
   it('rejects an Editor and rolls back draft writes when a valid manifest collides with persisted content', async () => {

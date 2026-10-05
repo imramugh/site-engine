@@ -3,7 +3,13 @@ import { join, relative } from 'node:path';
 
 const denied = [/\b(?:customer|client)[-_ ]?(?:name|asset|fixture)\b/i, /https?:\/\/[^\s]+\.(?:internal|local)\b/i];
 const ignored = new Set(['node_modules', '.git', 'dist', '.astro', '.next', 'artifacts', 'data']);
-const oauthProtocolFields = new Set(['apps/oauth/src/server.ts', 'apps/oauth/tests/protocol.test.ts']);
+const oauthProtocolFields = new Set([
+  'apps/oauth/src/server.ts', 'apps/oauth/src/adapter.ts',
+  'apps/oauth/tests/protocol.test.ts', 'apps/oauth/tests/grant-management.test.ts',
+  'apps/cms/src/connected-assistants.ts', 'apps/cms/tests/connected-assistants.integration.test.ts',
+  'apps/cms/tests/oauth-bridge.integration.test.ts', 'apps/cms/e2e/connected-assistants.spec.ts',
+  'apps/cms/app/(staff)/integrations/integration-configuration.tsx',
+]);
 
 async function files(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -17,9 +23,10 @@ export async function inspectPublicProvenance(root: string): Promise<string[]> {
   for (const file of targets) {
     const path = relative(root, file);
     let content = await readFile(file, 'utf8').catch(() => '');
-    // RFC 7591's DCR display-name metadata key is allowed only in the OAuth
-    // protocol implementation and its direct protocol test.
-    if (oauthProtocolFields.has(path)) content = content.replaceAll('client' + '_name', '');
+    // RFC 7591's display-name metadata and its typed DTO spelling are allowed
+    // only in the protocol/grant-management implementation and direct tests.
+    // Other customer markers remain denied, including in these exact files.
+    if (oauthProtocolFields.has(path)) content = content.replace(new RegExp('\\bclient(?:_name|Name)\\b', 'g'), '');
     for (const pattern of denied) if (pattern.test(content)) findings.push(`${path}: ${pattern}`);
   }
   return findings;

@@ -76,9 +76,35 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   await owner.context.close()
 })
 
+test('ENG-022 Owner persists notification routing and private urgent contacts', async ({ browser }, testInfo) => {
+  const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
+  await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications')
+  const panel = owner.page.locator('[data-notification-preferences]'); await expect(panel).toBeVisible(); await expect(panel.locator('fieldset')).toHaveCount(6)
+  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('Messages remain queued until an operator connects a delivery service.')
+  const lead = panel.locator('fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }); await lead.locator('summary').first().click(); await lead.getByLabel('Sales').uncheck()
+  const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/notification-settings') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: 'Save preferences' }).click(); expect((await saved).status()).toBe(200); await expect(panel.getByRole('status')).toContainText('Notification preferences saved.')
+  await owner.page.reload(); await expect(owner.page.locator('[data-notification-preferences] fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }).getByLabel('Sales')).not.toBeChecked()
+  const contacts = [{ name: 'Browser incident contact', email: 'incident-browser@example.test', mobile: '+1 416 555 0199', enabled: true }]
+  await owner.page.goto('/site'); await owner.page.getByText('Urgent alert contacts Email and mobile', { exact: true }).click()
+  const urgent = owner.page.locator('[data-urgent-contacts]'); await expect(urgent).toBeVisible(); await urgent.getByRole('button', { name: 'Add contact', exact: true }).click()
+  await urgent.getByLabel('Name', { exact: true }).fill(contacts[0]!.name); await urgent.getByLabel('Email', { exact: true }).fill(contacts[0]!.email); await urgent.getByLabel('Mobile number', { exact: true }).fill(contacts[0]!.mobile)
+  expect(await urgent.getByLabel('Email', { exact: true }).evaluate((input: HTMLInputElement) => input.form?.id)).toBe('private-urgent-contacts')
+  const contactSave = owner.page.waitForResponse(response => response.url().endsWith('/api/urgent-contacts') && response.request().method() === 'POST')
+  await urgent.getByRole('button', { name: 'Save urgent contacts', exact: true }).click(); expect((await contactSave).status()).toBe(200); await expect(urgent.getByRole('status')).toContainText('Urgent contacts saved.')
+  await owner.page.reload(); await owner.page.getByText('Urgent alert contacts Email and mobile', { exact: true }).click(); await expect(urgent.getByLabel('Email', { exact: true })).toHaveValue(contacts[0]!.email)
+  for (const width of [1440, 390]) { await owner.page.setViewportSize({ width, height: 900 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]); await owner.page.screenshot({ path: testInfo.outputPath(`site-urgent-contacts-${width}.png`), fullPage: true }) }
+  await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications'); await expect(panel).toBeVisible()
+  const reloaded = await owner.page.request.get('/api/urgent-contacts'); expect(reloaded.status()).toBe(200); expect(await reloaded.json()).toMatchObject({ contacts })
+  await owner.page.screenshot({ path: testInfo.outputPath('notifications-1440.png'), fullPage: true })
+  await owner.page.setViewportSize({ width: 390, height: 844 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.screenshot({ path: testInfo.outputPath('notifications-390.png'), fullPage: true })
+  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.context.close()
+})
+
 test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
-  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page).toHaveURL(/\/admin\/login/); await editor.context.close()
+  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants', exact: true })).toBeVisible(); await expect(editor.page.getByRole('tab', { name: 'AI providers', exact: true })).toHaveCount(0); await editor.context.close()
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   const csrf = await owner.page.request.post('/api/integrations', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'x', credential: 'must-not-persist' } })
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()

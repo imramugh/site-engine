@@ -32,6 +32,10 @@ describe('ENG-008 change-set capture and lifecycle', () => {
     expect(changes[0]?.before).toBeNull()
     expect(changes[0]?.after.title).toBe('Second revision')
     expect((sets.docs[0]?.changes as { collection: string }[]).map((change) => change.collection)).toEqual(expect.arrayContaining(['sections', 'pages', 'redirects']))
+    const submitted = await withPayloadTransaction(payload, (req) => transitionChangeSet({ payload, req, actor: editor, id: sets.docs[0]!.id, action: 'submit' }))
+    expect(submitted.state).toBe('submitted')
+    const notification = await payload.find({ collection: 'notification-outbox', where: { sourceID: { equals: sets.docs[0]!.id } }, limit: 1, depth: 0, overrideAccess: true })
+    expect(notification.docs[0]).toMatchObject({ kind: 'change-set-submitted', recipientRules: ['approver'], channels: ['email'], state: 'queued' })
   })
 
   it('uses server-owned transitions, reviewer roles, and a transactional audit entry', async () => {

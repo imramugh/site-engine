@@ -84,6 +84,8 @@ export interface Config {
     'provider-usage-reservations': ProviderUsageReservation;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'notification-preferences': NotificationPreference;
+    'urgent-contacts': UrgentContact;
     'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
@@ -118,6 +120,8 @@ export interface Config {
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
+    'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -587,6 +591,7 @@ export interface SiteSetting {
    * Public site name.
    */
   siteName: string;
+  legalName?: string | null;
   /**
    * Published landing page to use as the homepage.
    */
@@ -594,9 +599,41 @@ export interface SiteSetting {
   defaultLocale: 'en' | 'en-CA';
   organizationType?: ('organization' | 'professional-service') | null;
   logo?: (string | null) | Asset;
+  logos?: {
+    primaryLight?: (string | null) | Asset;
+    primaryDark?: (string | null) | Asset;
+    fullLockupLight?: (string | null) | Asset;
+    fullLockupDark?: (string | null) | Asset;
+    symbolLight?: (string | null) | Asset;
+    symbolDark?: (string | null) | Asset;
+  };
   contactEmail?: string | null;
   contactPhone?: string | null;
   seoDescription?: string | null;
+  address?: {
+    streetAddress?: string | null;
+    addressLocality?: string | null;
+    addressRegion?: string | null;
+    postalCode?: string | null;
+    addressCountry?: string | null;
+  };
+  linkedIn?: string | null;
+  incident?: {
+    label?: string | null;
+    guidance?: string | null;
+  };
+  /**
+   * Validated ordered header and footer references.
+   */
+  navigation?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   /**
    * Expose the static public search page and include it in the primary navigation after this change is reviewed and published.
    */
@@ -693,7 +730,8 @@ export interface Inquiry {
   telephone?: string | null;
   company?: string | null;
   message: string;
-  topic: 'general' | 'project' | 'partnership' | 'active-incident';
+  topic:
+    'general' | 'project' | 'partnership' | 'active-incident' | 'consultation' | 'service' | 'retainer' | 'careers';
   sourcePage: string;
   consentedAt: string;
   consentBasis: 'visitor-confirmed' | 'staff-recorded' | 'unknown';
@@ -712,8 +750,14 @@ export interface Inquiry {
  */
 export interface NotificationOutbox {
   id: string;
-  inquiry: string | Inquiry;
-  kind: 'lead-received' | 'urgent-lead-alert';
+  inquiry?: (string | null) | Inquiry;
+  kind:
+    | 'new-lead'
+    | 'active-incident-lead'
+    | 'new-job-application'
+    | 'change-set-submitted'
+    | 'follow-ups-due'
+    | 'publish-or-integration-failed';
   idempotencyKey: string;
   state: 'queued' | 'delivered' | 'failed';
   payload:
@@ -725,7 +769,69 @@ export interface NotificationOutbox {
     | number
     | boolean
     | null;
+  recipientRules:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  recipients:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  channels:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  sourceType?: string | null;
+  sourceID?: string | null;
   availableAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-preferences".
+ */
+export interface NotificationPreference {
+  id: string;
+  key: string;
+  events:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedBy: string | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "urgent-contacts".
+ */
+export interface UrgentContact {
+  id: string;
+  name: string;
+  email: string;
+  mobile?: string | null;
+  enabled: boolean;
   updatedAt: string;
   createdAt: string;
 }
@@ -784,7 +890,7 @@ export interface Application {
   jobId: string;
   resumeKey: string;
   idempotencyKey: string;
-  status?: ('new' | 'reviewing' | 'closed') | null;
+  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1163,6 +1269,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-outbox';
         value: string | NotificationOutbox;
+      } | null)
+    | ({
+        relationTo: 'notification-preferences';
+        value: string | NotificationPreference;
+      } | null)
+    | ({
+        relationTo: 'urgent-contacts';
+        value: string | UrgentContact;
       } | null)
     | ({
         relationTo: 'mail-drafts';
@@ -1572,13 +1686,41 @@ export interface ThemeSettingsSelect<T extends boolean = true> {
 export interface SiteSettingsSelect<T extends boolean = true> {
   key?: T;
   siteName?: T;
+  legalName?: T;
   homepageId?: T;
   defaultLocale?: T;
   organizationType?: T;
   logo?: T;
+  logos?:
+    | T
+    | {
+        primaryLight?: T;
+        primaryDark?: T;
+        fullLockupLight?: T;
+        fullLockupDark?: T;
+        symbolLight?: T;
+        symbolDark?: T;
+      };
   contactEmail?: T;
   contactPhone?: T;
   seoDescription?: T;
+  address?:
+    | T
+    | {
+        streetAddress?: T;
+        addressLocality?: T;
+        addressRegion?: T;
+        postalCode?: T;
+        addressCountry?: T;
+      };
+  linkedIn?: T;
+  incident?:
+    | T
+    | {
+        label?: T;
+        guidance?: T;
+      };
+  navigation?: T;
   searchEnabled?: T;
   contractVersion?: T;
   updatedAt?: T;
@@ -1675,7 +1817,35 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
   idempotencyKey?: T;
   state?: T;
   payload?: T;
+  recipientRules?: T;
+  recipients?: T;
+  channels?: T;
+  sourceType?: T;
+  sourceID?: T;
   availableAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-preferences_select".
+ */
+export interface NotificationPreferencesSelect<T extends boolean = true> {
+  key?: T;
+  events?: T;
+  updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "urgent-contacts_select".
+ */
+export interface UrgentContactsSelect<T extends boolean = true> {
+  name?: T;
+  email?: T;
+  mobile?: T;
+  enabled?: T;
   updatedAt?: T;
   createdAt?: T;
 }

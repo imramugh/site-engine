@@ -23,7 +23,7 @@ export type MediaAsset = {
 
 export async function mediaFocalContractVersion(payload: Payload, initialBaseline?: PreviewBaseline, req?: PayloadRequest): Promise<'1.4.0' | null> {
   const context = await previewThemeContext({ payload, changeSets: [], initialBaseline, req })
-  return context.activeContractVersion === '1.4.0' ? '1.4.0' : null
+  return context.activeContractVersion === '1.4.0' || context.activeContractVersion === '1.5.0' ? '1.4.0' : null
 }
 
 export async function mediaWorkspace(
@@ -82,12 +82,20 @@ export async function mediaWorkspace(
     focalY: typeof asset.focalY === 'number' && Number.isFinite(asset.focalY) ? Math.round(Math.min(100, Math.max(0, asset.focalY))) : 50,
     deletedAt: asset.deletedAt, url: file.url, usages: usage.get(asset.id) ?? [],
   })})
-  const filtered = mapped.filter(asset => {
-    if (q) {
-      const needle = q.toLocaleLowerCase()
-      const searchable = [asset.filename, asset.alt, asset.caption]
-      if (!searchable.some((value) => typeof value === 'string' && value.toLocaleLowerCase().includes(needle))) return false
-    }
+  const searched = mapped.filter(asset => {
+    if (!q) return true
+    const needle = q.toLocaleLowerCase()
+    const searchable = [asset.filename, asset.alt, asset.caption]
+    return searchable.some((value) => typeof value === 'string' && value.toLocaleLowerCase().includes(needle))
+  })
+  const counts = {
+    all: searched.filter(asset => !asset.deletedAt).length,
+    missingAlt: searched.filter(asset => !asset.deletedAt && !asset.decorative && !asset.alt?.trim()).length,
+    unused: searched.filter(asset => !asset.deletedAt && asset.usages.length === 0).length,
+    large: searched.filter(asset => !asset.deletedAt && (asset.filesize ?? 0) > 3 * 1024 * 1024).length,
+    bin: searched.filter(asset => Boolean(asset.deletedAt)).length,
+  }
+  const filtered = searched.filter(asset => {
     if (query.filter === 'bin') return Boolean(asset.deletedAt)
     if (asset.deletedAt) return false
     if (query.filter === 'missing-alt') return !asset.decorative && !asset.alt?.trim()
@@ -98,6 +106,6 @@ export async function mediaWorkspace(
   const total = filtered.length
   return {
     assets: filtered.slice((page - 1) * pageSize, page * pageSize),
-    total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)), truncated: false,
+    total, counts, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)), truncated: false,
   }
 }

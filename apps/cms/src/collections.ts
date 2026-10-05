@@ -6,12 +6,13 @@ import { bootstrapOnly, freshStaff, ownerOrSelfOrBootstrap, roles, staff } from 
 import { serverSessionStrategy } from './identity'
 import { incompatibleBlocks, validatePageTree, validateSectionTemplatePolicy, type FieldIssue, type TreePage, type TreeSection } from './tree/validation'
 import { captureChange } from './editorial'
-import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
+import { canTransitionLead, inquiryTopics, leadStages, validateLeadAssignee, type LeadStage } from './inquiries'
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
 import { mediaFocalContractVersion } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
+import { enqueueNotification } from './notification-settings'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -443,7 +444,7 @@ export const Inquiries: CollectionConfig = {
     { name: 'telephone', type: 'text' },
     { name: 'company', type: 'text' },
     { name: 'message', type: 'textarea', required: true },
-    { name: 'topic', type: 'select', required: true, options: ['general', 'project', 'partnership', 'active-incident'] },
+    { name: 'topic', type: 'select', required: true, options: [...inquiryTopics] },
     { name: 'sourcePage', type: 'text', required: true },
     { name: 'consentedAt', type: 'date', required: true, admin: { readOnly: true } },
     { name: 'consentBasis', type: 'select', required: true, options: ['visitor-confirmed', 'staff-recorded', 'unknown'], admin: { readOnly: true } },
@@ -461,12 +462,39 @@ export const NotificationOutbox: CollectionConfig = {
   slug: 'notification-outbox', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
-    { name: 'inquiry', type: 'relationship', relationTo: 'inquiries', required: true },
-    { name: 'kind', type: 'select', required: true, options: ['lead-received', 'urgent-lead-alert'] },
+    { name: 'inquiry', type: 'relationship', relationTo: 'inquiries' },
+    { name: 'kind', type: 'select', required: true, options: ['new-lead', 'active-incident-lead', 'new-job-application', 'change-set-submitted', 'follow-ups-due', 'publish-or-integration-failed'] },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true },
     { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'delivered', 'failed'] },
     { name: 'payload', type: 'json', required: true },
+    { name: 'recipientRules', type: 'json', required: true },
+    { name: 'recipients', type: 'json', required: true },
+    { name: 'channels', type: 'json', required: true },
+    { name: 'sourceType', type: 'text' },
+    { name: 'sourceID', type: 'text' },
     { name: 'availableAt', type: 'date', required: true },
+  ],
+}
+
+/** Private operator settings. These collections never participate in editorial capture or publishing. */
+export const NotificationPreferences: CollectionConfig = {
+  slug: 'notification-preferences', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true },
+    { name: 'events', type: 'json', required: true },
+    { name: 'updatedBy', type: 'relationship', relationTo: 'users', required: true },
+  ],
+}
+
+export const UrgentContacts: CollectionConfig = {
+  slug: 'urgent-contacts', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'name', type: 'text', required: true, maxLength: 120 },
+    { name: 'email', type: 'email', required: true },
+    { name: 'mobile', type: 'text', maxLength: 32 },
+    { name: 'enabled', type: 'checkbox', required: true, defaultValue: true },
   ],
 }
 
@@ -508,8 +536,14 @@ export const MailAuthorizations: CollectionConfig = {
 
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
-  hooks: { beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data] },
-  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'closed'] }],
+  hooks: {
+    beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data],
+    afterChange: [async ({ doc, operation, req }) => {
+      if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
+      return doc
+    }],
+  },
+  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
 }
 
 export const ChangeSets: CollectionConfig = {
@@ -852,19 +886,55 @@ export const SiteSettings: CollectionConfig = {
       if ((data.contractVersion !== undefined && data.contractVersion !== null) || data.sections !== undefined || data.theme !== undefined || data.themeSettings !== undefined) throw new Error('Contract, sections, and theme settings are not editable through site settings.')
       const editable = { ...originalDoc, ...data }
       for (const key of ['id', 'key', 'createdAt', 'updatedAt', '_status', 'contractVersion']) delete editable[key]
-      contractError(SiteSettingsDraftSchema.safeParse(editable), req, 'site-settings')
-      return { ...originalDoc, ...data, key: originalDoc?.key ?? 'active' }
+      const address = editable.address as Record<string, unknown> | undefined
+      const clearAddress = Boolean(data.address && typeof data.address === 'object' && ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode'].every(field => !(data.address as Record<string, unknown>)[field]))
+      if (address && ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode'].every(field => !address[field])) delete editable.address
+      const incident = editable.incident as Record<string, unknown> | undefined
+      const clearIncident = Boolean(data.incident && typeof data.incident === 'object' && !(data.incident as Record<string, unknown>).label && !(data.incident as Record<string, unknown>).guidance)
+      if (incident && !incident.label && !incident.guidance) delete editable.incident
+      const clearLogos = Boolean(data.logos && typeof data.logos === 'object' && Object.values(data.logos as Record<string, unknown>).every(value => !value))
+      if (clearLogos) delete editable.logos
+      const parsed = SiteSettingsDraftSchema.safeParse(editable)
+      contractError(parsed, req, 'site-settings')
+      if (parsed.success && parsed.data.navigation) {
+        const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => column.links)]
+        for (const reference of references) {
+          try { await req.payload.findByID({ collection: reference.kind === 'page' ? 'pages' : 'sections', id: reference.id, depth: 0, overrideAccess: true, req }) }
+          catch { throw new Error(`Site navigation references an unavailable ${reference.kind}.`) }
+        }
+      }
+      return {
+        ...parsed.data,
+        ...(clearAddress ? { address: { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null } } : {}),
+        ...(clearIncident ? { incident: { label: null, guidance: null } } : {}),
+        ...(clearLogos ? { logos: { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null } } : {}),
+        key: originalDoc?.key ?? 'active',
+      }
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => { await captureChange({ collection: 'site-settings', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req }); return doc }],
   },
   fields: [
     { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active', admin: { readOnly: true } },
     { name: 'siteName', type: 'text', required: true, maxLength: 100, admin: { description: 'Public site name.' } },
+    { name: 'legalName', type: 'text', maxLength: 160 },
     { name: 'homepageId', type: 'relationship', relationTo: 'pages', admin: { description: 'Published landing page to use as the homepage.' } },
     { name: 'defaultLocale', type: 'select', required: true, options: ['en', 'en-CA'] },
     { name: 'organizationType', type: 'select', options: ['organization', 'professional-service'] },
     { name: 'logo', type: 'relationship', relationTo: 'assets' },
+    { name: 'logos', type: 'group', fields: [
+      { name: 'primaryLight', type: 'relationship', relationTo: 'assets' }, { name: 'primaryDark', type: 'relationship', relationTo: 'assets' },
+      { name: 'fullLockupLight', type: 'relationship', relationTo: 'assets' }, { name: 'fullLockupDark', type: 'relationship', relationTo: 'assets' },
+      { name: 'symbolLight', type: 'relationship', relationTo: 'assets' }, { name: 'symbolDark', type: 'relationship', relationTo: 'assets' },
+    ] },
     { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 160 },
+    { name: 'address', type: 'group', fields: [
+      { name: 'streetAddress', type: 'text', maxLength: 240 }, { name: 'addressLocality', type: 'text', maxLength: 100 },
+      { name: 'addressRegion', type: 'text', maxLength: 100 }, { name: 'postalCode', type: 'text', maxLength: 24 },
+      { name: 'addressCountry', type: 'text', maxLength: 2, defaultValue: 'CA' },
+    ] },
+    { name: 'linkedIn', type: 'text', maxLength: 300 },
+    { name: 'incident', type: 'group', fields: [{ name: 'label', type: 'text', maxLength: 80 }, { name: 'guidance', type: 'textarea', maxLength: 1000 }] },
+    { name: 'navigation', type: 'json', admin: { description: 'Validated ordered header and footer references.' } },
     { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
     { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
   ],

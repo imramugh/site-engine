@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canTransitionLead, csvEscape, validateInquiry } from '../src/inquiries'
+import { canTransitionLead, csvEscape, inquiryTopics, validateInquiry } from '../src/inquiries'
 
 const valid = { email: 'visitor@example.test', message: 'Please contact me about a project.', topic: 'project', sourcePage: '/contact', consent: true, idempotencyKey: 'a-valid-idempotency-key-1234' }
 
@@ -9,6 +9,11 @@ describe('ENG-019 inquiry validation and lead transitions', () => {
     const invalid = validateInquiry({ ...valid, email: 'not-an-email', consent: false, sourcePage: 'https://example.test', message: '' })
     expect(invalid.input).toBeUndefined()
     expect(invalid.errors).toMatchObject({ email: expect.any(String), consent: expect.any(String), sourcePage: expect.any(String), message: expect.any(String) })
+  })
+
+  it('accepts every current and legacy topic and rejects values outside the shared contract', () => {
+    for (const topic of inquiryTopics) expect(validateInquiry({ ...valid, topic }).input?.topic).toBe(topic)
+    expect(validateInquiry({ ...valid, topic: 'arbitrary-private-label' }).errors.topic).toMatch(/topic/i)
   })
 
   it('accepts omitted legacy names but rejects a provided blank or unsafe name', () => {

@@ -4,6 +4,7 @@ import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSe
 import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
+import { enqueueNotification } from './notification-settings'
 
 export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings' | 'style-guides'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
@@ -25,7 +26,7 @@ const mutableFields: Record<CapturedCollection, readonly string[]> = {
   assets: ['filename', 'mimeType', 'width', 'height', 'alt', 'decorative', 'focalX', 'focalY', 'sizes'],
   'theme-settings': ['selection', 'settings'],
   'style-guides': ['bannedPhrases', 'preferredTerms', 'canadianSpelling', 'maximumSentenceWords', 'minimumReadingEase'],
-  'site-settings': ['siteName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'contactEmail', 'contactPhone', 'seoDescription', 'searchEnabled'],
+  'site-settings': ['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'searchEnabled'],
 }
 
 function idOf(value: unknown): string | undefined {
@@ -57,6 +58,10 @@ function normalizePageOptionalNulls(value: Record<string, unknown> | null, prior
   return normalized
 }
 
+function normalizeSiteOptionalNulls(value: Record<string, unknown> | null, prior?: Record<string, unknown> | null): Record<string, unknown> | null {
+  return value ? Object.fromEntries(Object.entries(value).filter(([field, item]) => item !== null || Boolean(prior && field in prior))) : value
+}
+
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined, includeFocalPoint = false): Record<string, unknown> | null {
   if (!document) return null
   if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint)
@@ -75,6 +80,22 @@ export function snapshot(collection: CapturedCollection, document: Record<string
     // portable review representation, so retain their immutable identifiers.
     if (field === 'homepageId') return [[field, idOf(value) ?? null]]
     if (field === 'logo') return [[field, idOf(value) ?? null]]
+    if (collection === 'site-settings' && field === 'logos' && value && typeof value === 'object') {
+      const logos: Array<[string, string]> = []
+      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        const assetID = idOf(item)
+        if (assetID) logos.push([key, assetID])
+      }
+      return logos.length ? [[field, Object.fromEntries(logos)]] : []
+    }
+    if (collection === 'site-settings' && field === 'address' && value && typeof value === 'object') {
+      const address = value as Record<string, unknown>
+      return ['streetAddress', 'addressLocality', 'addressRegion', 'postalCode'].every(key => typeof address[key] === 'string' && address[key]) ? [[field, value]] : [[field, null]]
+    }
+    if (collection === 'site-settings' && field === 'incident' && value && typeof value === 'object') {
+      const incident = value as Record<string, unknown>
+      return typeof incident.label === 'string' && incident.label && typeof incident.guidance === 'string' && incident.guidance ? [[field, value]] : [[field, null]]
+    }
     if (field === 'sectionId') return [[field, idOf(value) ?? null]]
     if (field === 'parentId') {
       const parentID = idOf(value)
@@ -102,6 +123,12 @@ function restoration(collection: CapturedCollection, value: Record<string, unkno
     // Draft persistence cannot accept the snapshot-only published status.
     // Restoring an archived draft returns it to the ordinary draft workflow.
     if (collection === 'pages' && field === 'status') return [field, 'draft']
+    // Payload group traversal requires an object even when every nested value
+    // is being cleared. The collection hook normalizes these empty groups.
+    if (collection === 'site-settings' && field === 'logos' && !(field in value)) return [field, { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }]
+    if (collection === 'site-settings' && field === 'address' && !(field in value)) return [field, { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }]
+    if (collection === 'site-settings' && field === 'incident' && !(field in value)) return [field, { label: null, guidance: null }]
+    if (collection === 'site-settings' && field === 'searchEnabled' && !(field in value)) return [field, false]
     return [field, field in value ? value[field] : null]
   }))
 }
@@ -167,7 +194,7 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   // fields; do not let them erase frozen baseline values. On an update, null
   // is retained only where the reviewed before-image had that field, making an
   // explicit clear distinguishable from first-create omission.
-  if (collection === 'site-settings' && after) after = Object.fromEntries(Object.entries(after).filter(([field, value]) => value !== null || Boolean(before && field in before)))
+  if (collection === 'site-settings') after = normalizeSiteOptionalNulls(after, before)
   if (equivalent(before, after)) return
   const changeSet = await openSet(req.payload, actor, req)
   const changes = Array.isArray(changeSet.changes) ? [...changeSet.changes] as CapturedChange[] : []
@@ -194,7 +221,9 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
   const current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
-  return collection === 'pages' ? normalizePageOptionalNulls(current, expected) : current
+  if (collection === 'pages') return normalizePageOptionalNulls(current, expected)
+  if (collection === 'site-settings') return normalizeSiteOptionalNulls(current, expected)
+  return current
 }
 
 export async function markStaleIfNeeded(payload: Payload, set: Record<string, unknown>, req: PayloadRequest): Promise<Record<string, unknown>> {
@@ -290,6 +319,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
   if (details?.checks.some((check) => check.status === 'failed')) throw new Error(`Change-set quality checks failed: ${details.checks.flatMap((check) => check.errors ?? []).map((error) => error.message).join('; ')}`)
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, preview: action === 'submit' ? { status: 'pending' } : undefined, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
+  if (action === 'submit') await enqueueNotification(payload, req, { kind: 'change-set-submitted', idempotencyKey: `change-set-submitted:${id}:${String(set.revision)}`, sourceType: 'change-set', sourceID: id, payload: { changeSet: id, revision: set.revision } })
   await payload.create({ collection: 'audit-events', data: { event: `editorial.change_set_${action}`, user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, state } }, overrideAccess: true, req })
   return set
 }

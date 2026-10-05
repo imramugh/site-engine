@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
-import { createAcceptedInquiry, InquiryIdempotencyCollisionError, InquiryRateLimitedError, validateInquiry, validateLeadAssignee } from '../src/inquiries'
+import { createAcceptedInquiry, InquiryIdempotencyCollisionError, InquiryRateLimitedError, inquiryTopics, type InquiryTopic, validateInquiry, validateLeadAssignee } from '../src/inquiries'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-inquiries-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -14,7 +14,7 @@ let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
-const fixture = (key: string, topic: 'project' | 'active-incident' = 'project') => ({ email: 'visitor@example.test', message: '<img src=x onerror=alert(1)> Please help with a project.', topic, sourcePage: '/contact', consent: true, idempotencyKey: key, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
+const fixture = (key: string, topic: InquiryTopic = 'project') => ({ email: 'visitor@example.test', message: '<img src=x onerror=alert(1)> Please help with a project.', topic, sourcePage: '/contact', consent: true, idempotencyKey: key, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
 
 describe('ENG-019 real SQLite intake and outbox', () => {
   it('rejects malformed submissions before persistence', async () => {
@@ -33,8 +33,19 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     expect(leads.docs).toHaveLength(1)
     expect(leads.docs[0]).toMatchObject({ topic: 'active-incident', urgent: true, stage: 'new', message: input.message, name: 'Synthetic visitor', telephone: '+1 555 0123', company: 'Example Company' })
     const queued = await payload.find({ collection: 'notification-outbox', where: { inquiry: { equals: leads.docs[0].id } }, overrideAccess: true })
-    expect(queued.docs.map((event) => event.kind).sort()).toEqual(['lead-received', 'urgent-lead-alert'])
+    expect(queued.docs.map((event) => event.kind).sort()).toEqual(['active-incident-lead', 'new-lead'])
     expect(queued.docs.every((event) => event.state === 'queued')).toBe(true)
+    expect(queued.docs.find((event) => event.kind === 'active-incident-lead')).toMatchObject({ recipientRules: ['urgent-contact', 'owner'], channels: ['email', 'sms'] })
+  })
+
+  it('persists every current and legacy topic without changing urgency semantics', async () => {
+    for (const [index, topic] of inquiryTopics.entries()) {
+      const input = validateInquiry({ ...fixture(`topic-${topic}-idempotency-${index}-1234`, topic), email: `topic-${index}@example.test` }).input!
+      await createAcceptedInquiry(payload, input)
+      const stored = await payload.find({ collection: 'inquiries', where: { idempotencyKey: { equals: input.idempotencyKey } }, overrideAccess: true })
+      expect(stored.docs).toHaveLength(1)
+      expect(stored.docs[0]).toMatchObject({ topic, urgent: topic === 'active-incident' })
+    }
   })
 
   it('suppresses honeypot submissions and rate limits repeated non-idempotent requests', async () => {

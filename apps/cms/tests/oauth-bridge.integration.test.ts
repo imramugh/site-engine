@@ -29,7 +29,7 @@ async function port() {
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }); delete process.env.OAUTH_INTROSPECTION_SECRET })
 
-test('real CMS SQLite sessions bind OAuth grants and revoke their token family', async () => {
+test('real OAuth tokens can be safely listed and their full family revoked by management ID', async () => {
   const bridgeSecret = 'real-bridge-secret'
   const cmsPort = await port(); const cmsOrigin = `http://127.0.0.1:${cmsPort}`
   const cms = createServer(async (incoming, outgoing) => {
@@ -46,7 +46,7 @@ test('real CMS SQLite sessions bind OAuth grants and revoke their token family',
     const user = await payload.create({ collection: 'users', data: { email: 'real-oauth@example.test', name: 'Real OAuth', roles: ['editor'] }, overrideAccess: true })
     const sessionToken = newOpaqueToken(); const now = new Date().toISOString()
     const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(sessionToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    const registration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read offline_access' }) })
+    const registration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude Desktop', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read offline_access' }) })
     const client = await registration.json() as { client_id: string }; assert.equal(registration.status, 201)
     const verifier = randomBytes(48).toString('base64url'); const challenge = createHash('sha256').update(verifier).digest('base64url')
     const authorization = `${issuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read offline_access', resource, code_challenge: challenge, code_challenge_method: 'S256' })}`
@@ -71,9 +71,13 @@ test('real CMS SQLite sessions bind OAuth grants and revoke their token family',
     const tokens = await tokenResponse.json() as { access_token: string; refresh_token: string }
     const introspect = () => fetch(`${origin}/internal/introspect`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'real-bridge-introspection-secret' }, body: JSON.stringify({ token: tokens.access_token, resource }) })
     assert.equal((await introspect()).status, 200); assert.equal((await (await introspect()).json() as { active: boolean }).active, true)
-    await payload.update({ collection: 'users', id: user.id, data: { roles: ['approver'] }, overrideAccess: true })
-    assert.deepEqual(await (await introspect()).json(), { active: false })
-    await payload.update({ collection: 'users', id: user.id, data: { roles: ['editor'] }, overrideAccess: true })
+    const manage = (body: object) => fetch(`${origin}/internal/grants`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'real-bridge-introspection-secret' }, body: JSON.stringify(body) })
+    const ownList = await manage({ operation: 'list', userId: user.id }); assert.equal(ownList.status, 200)
+    const listed = await ownList.json() as { grants: Array<{ managementId: string; userId: string; clientName: string; scopes: string[]; sessionId?: string }> }
+    assert.equal(listed.grants.length, 1); assert.equal(listed.grants[0]?.userId, user.id); assert.equal(listed.grants[0]?.clientName, 'Claude Desktop'); assert.deepEqual(listed.grants[0]?.scopes, ['mcp:content:read']); assert.equal(listed.grants[0]?.sessionId, undefined)
+    assert.deepEqual(await (await manage({ operation: 'list', userId: 'different-user' })).json(), { grants: [] })
+    assert.equal((await manage({ operation: 'revoke', managementId: listed.grants[0]!.managementId, userId: 'different-user' })).status, 404)
+    assert.equal((await manage({ operation: 'revoke', managementId: listed.grants[0]!.managementId, userId: user.id })).status, 200)
     assert.deepEqual(await (await introspect()).json(), { active: false })
     const revokedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) })
     assert.equal(revokedRefresh.status, 400)
