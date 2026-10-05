@@ -83,6 +83,17 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     expect((await payload.find({ collection: 'retention-purge-jobs', where: { resourceID: { equals: record.id } }, overrideAccess: true })).docs[0]).toMatchObject({ state: 'failed', lastError: 'storage-purge-failed' })
   })
 
+  it('does not record a deletion intent or remove a resume while an application reply is consumed', async () => {
+    writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
+    const owner = await user('owner'); const record = await application(); const resume = join(applicationStorage(), record.resumeKey)
+    await payload.create({ collection: 'mail-drafts', data: { application: record.id, threadID: crypto.randomUUID(), recipient: record.email, sender: 'owner@example.test', subject: 'In-flight reply', body: 'The delivery workflow has consumed this draft.', attachmentHashes: [], revision: 1, state: 'consumed' }, overrideAccess: true })
+    await expect(purgeApplication(payload, record.id, owner.account.id)).resolves.toMatchObject({ state: 'failed' })
+    expect(existsSync(resume)).toBe(true)
+    await expect(payload.findByID({ collection: 'applications', id: record.id, overrideAccess: true })).resolves.toMatchObject({ id: record.id })
+    expect((await payload.find({ collection: 'deletion-tombstones', where: { resourceID: { equals: record.id } }, overrideAccess: true })).totalDocs).toBe(0)
+    expect((await import('node:fs')).readFileSync(ledger, 'utf8')).toBe('')
+  })
+
   it('makes concurrent application purge calls one completed idempotent job', async () => {
     writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
     const record = await application()
