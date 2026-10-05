@@ -1,10 +1,10 @@
-import type { Dispatch, FormEvent, SetStateAction } from 'react'
+import type { Dispatch, FormEvent, SetStateAction, ReactNode } from 'react'
 import styles from './site-workspace.module.css'
 import { emptyAddress, emptyLogos, type References, type Settings } from './site-types'
 
-type Props = { busy: boolean; canSave: boolean; references: References; settings: Settings; setSettings: Dispatch<SetStateAction<Settings | null>>; onSubmit: (event: FormEvent) => void }
+type Props = { footer: ReactNode; busy: boolean; canSave: boolean; references: References; settings: Settings; setSettings: Dispatch<SetStateAction<Settings | null>>; onSubmit: (event: FormEvent) => void }
 
-export function SiteDetailsForm({ busy, canSave, references, settings, setSettings, onSubmit }: Props) {
+export function SiteDetailsForm({ footer, busy, canSave, references, settings, setSettings, onSubmit }: Props) {
   const address = settings.address ?? emptyAddress
   const logos = settings.logos ?? emptyLogos
   const incident = settings.incident ?? { label: '', guidance: '' }
@@ -23,6 +23,7 @@ export function SiteDetailsForm({ busy, canSave, references, settings, setSettin
       </section>
       <div className={styles.sideCards}><section className={styles.card} data-site-details-card="incident"><header><h2>Incident line</h2></header><label>Bar label<input required={Boolean(settings.incident)} maxLength={80} value={incident.label} onChange={event => setSettings({ ...settings, incident: { ...incident, label: event.target.value } })} /></label><label>Guidance<textarea required={Boolean(settings.incident)} maxLength={1000} value={incident.guidance} onChange={event => setSettings({ ...settings, incident: { ...incident, guidance: event.target.value } })} /></label>{settings.incident ? <button type="button" onClick={() => setSettings({ ...settings, incident: null })}>Clear incident line</button> : null}</section>
         <section className={styles.card} data-site-details-card="logos"><header><h2>Logos</h2></header><div className={styles.logoPreviews}>{([['primaryLight', 'On light backgrounds'], ['primaryDark', 'On dark backgrounds']] as const).map(([field, label]) => <figure key={field} data-site-logo-tone={field === 'primaryLight' ? 'light' : 'dark'}>{logoPreview(logos[field]) ? <img src={logoPreview(logos[field])!} alt={label} /> : <span>Theme default</span>}<figcaption>{label}</figcaption></figure>)}</div><p>Primary, full lockup and symbol, each light and dark. The theme picks the right one for each background.</p><details className={styles.additionalSettings}><summary>Choose logo variants</summary>{([['primaryLight','Primary · light'],['primaryDark','Primary · dark'],['fullLockupLight','Full lockup · light'],['fullLockupDark','Full lockup · dark'],['symbolLight','Symbol · light'],['symbolDark','Symbol · dark']] as const).map(([field,label]) => <label key={field}>{label}<select value={logos[field] ?? ''} onChange={event => setSettings({ ...settings, logos: { ...logos, [field]: event.target.value || null } })}><option value="">Not selected</option>{references.assets.map(asset => <option key={asset.id} value={asset.id}>{asset.label}</option>)}</select></label>)}</details></section></div>
+      <div className={styles.draftFooter}>{footer}</div>
       <div className={styles.formActions}><button type="submit" disabled={!canSave}>Save business details</button><span>Saved changes remain private until review and publication.</span></div>
     </fieldset>
   </form>
