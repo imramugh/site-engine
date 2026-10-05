@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { BlockSchema, BlockSchemas, TemplateAllowedBlocks, TemplateSchema, type Block } from '@site-engine/contract'
 
 export const blockTypes = Object.keys(BlockSchemas) as Block['type'][]
@@ -22,10 +22,20 @@ const fieldLimits: Record<Block['type'], string> = {
   logoStrip: '1–12 existing media references.', video: 'Video, poster, and captions media references; optional transcript.',
 }
 
+const names: Record<Block['type'], string> = {
+  hero: 'Hero', incidentBar: 'Incident bar', pillarGrid: 'Pillar grid', featureGrid: 'Feature grid', splitList: 'Split list', chipList: 'Chip list', testimonials: 'Testimonials', faq: 'FAQ', callout: 'Callout', relatedServices: 'Related services', cta: 'CTA band', richText: 'Rich text', contact: 'Contact', media: 'Media', imageText: 'Image and text', gallery: 'Gallery', logoStrip: 'Logo strip', video: 'Video',
+}
+
+const descriptions: Record<Block['type'], string> = {
+  hero: 'Page introduction with optional actions and support panel.', incidentBar: 'Time-sensitive status message with an optional action.', pillarGrid: 'Linked service or capability pillars.', featureGrid: 'Scannable feature cards.', splitList: 'Paired title and body rows.', chipList: 'Compact set of topics or tags.', testimonials: 'Permission-confirmed customer quotations.', faq: 'Expandable questions and answers.', callout: 'Highlighted supporting message and action.', relatedServices: 'Links to existing related pages.', cta: 'Closing action band.', richText: 'Long-form body copy.', contact: 'Contact details and optional inquiry form.', media: 'Single image or file with caption.', imageText: 'Image paired with a heading and body.', gallery: 'Ordered set of images.', logoStrip: 'Partner or certification logos.', video: 'Video with poster, captions, and transcript.',
+}
+
 export const insertableBlockTypes = ['hero', 'incidentBar', 'featureGrid', 'splitList', 'chipList', 'faq', 'callout', 'richText', 'contact'] as const satisfies readonly Block['type'][]
 
 export const blockCatalog = blockTypes.map((type) => ({
   type,
+  name: names[type],
+  description: descriptions[type],
   insertable: insertableBlockTypes.includes(type as typeof insertableBlockTypes[number]),
   allowedTemplates: TemplateSchema.options.filter((template) => TemplateAllowedBlocks[template].includes(type)),
   fieldLimits: fieldLimits[type],
@@ -33,15 +43,35 @@ export const blockCatalog = blockTypes.map((type) => ({
 
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
 
-export function recipeBlocks(template: string, selected: unknown, existing: unknown = []): Block[] {
+export type RecipeSelection = { type: Block['type']; appearance?: Partial<Block['appearance']> }
+
+function selection(value: unknown): RecipeSelection {
+  if (typeof value === 'string') return { type: value as Block['type'] }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Each recipe item must name one supported block.')
+  const input = value as Record<string, unknown>
+  return { type: input.type as Block['type'], appearance: input.appearance as RecipeSelection['appearance'] }
+}
+
+export function deterministicRecipeBlockID(requestKey: string, index: number, type: string): string {
+  const bytes = createHash('sha256').update(`${requestKey}:${index}:${type}`).digest().subarray(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function recipeBlocks(template: string, selected: unknown, existing: unknown = [], createID: (index: number, type: Block['type']) => string = () => randomUUID()): Block[] {
   const parsedTemplate = TemplateSchema.parse(template)
-  if (!Array.isArray(selected) || selected.length === 0 || selected.length > 40 || !selected.every((type): type is Block['type'] => typeof type === 'string' && insertableBlockTypes.includes(type as typeof insertableBlockTypes[number]))) throw new Error('Choose between one and forty insertable supported blocks.')
-  const disallowed = selected.find((type) => !TemplateAllowedBlocks[parsedTemplate].includes(type))
-  if (disallowed) throw new Error(`${disallowed} is not allowed by the ${parsedTemplate} template.`)
+  if (!Array.isArray(selected) || selected.length === 0 || selected.length > 40) throw new Error('Choose between one and forty insertable supported blocks.')
+  const selections = selected.map(selection)
+  if (!selections.every(({ type }) => insertableBlockTypes.includes(type as typeof insertableBlockTypes[number]))) throw new Error('Choose between one and forty insertable supported blocks.')
+  const disallowed = selections.find(({ type }) => !TemplateAllowedBlocks[parsedTemplate].includes(type))
+  if (disallowed) throw new Error(`${disallowed.type} is not allowed by the ${parsedTemplate} template.`)
   if (!Array.isArray(existing)) throw new Error('Existing page blocks are invalid.')
   const current = existing.map((block) => BlockSchema.parse(block))
-  const recipe = selected.map((type) => {
-    const id = randomUUID(); const base = { id, type, hidden: false, appearance }
+  const recipe = selections.map(({ type, appearance: requested }, index) => {
+    const selectedAppearance = { ...appearance, ...(requested ?? {}) }
+    const id = createID(index, type); const base = { id, type, hidden: false, appearance: selectedAppearance }
     const safe: Partial<Record<Block['type'], Record<string, unknown>>> = {
       hero: { ...base, heading: 'Draft heading', body: 'Replace this neutral draft text before review.' }, incidentBar: { ...base, message: 'Replace this draft status message before review.' },
       featureGrid: { ...base, heading: 'Draft features', items: [{ title: 'Draft item', body: 'Replace this neutral draft text before review.' }] },

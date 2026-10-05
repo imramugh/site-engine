@@ -9,6 +9,7 @@ import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeR
 import config from '../payload.config'
 import { createNamedChangeSet, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
+import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -17,7 +18,7 @@ const knownMethods = new Set([
   'resources/list', 'resources/templates/list', 'resources/read',
   'prompts/list', 'prompts/get',
 ])
-const knownTools = new Set(['list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'update_page'])
+const knownTools = new Set(['list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page'])
 const protectedReadMethods = new Set(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'])
 const contentReadScope = 'mcp:content:read'
 const contentWriteScope = 'mcp:content:write'
@@ -44,6 +45,7 @@ export const blockLibrary = {
   blockTypes: Object.keys(BlockSchemas),
   templates: Object.fromEntries(TemplateSchema.options.map((template) => [template, TemplateAllowedBlocks[template]])),
   appearance: AppearanceOptions,
+  catalog: blockCatalog.map(({ type, name, description, allowedTemplates, fieldLimits, insertable }) => ({ type, name, description, allowedTemplates, fieldLimits, insertable })),
 }
 
 type RpcRequest = { jsonrpc: '2.0'; id?: string | number | null; method: string; params?: Record<string, unknown> }
@@ -118,7 +120,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (!identity.active) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
   if (!rateLimit(`client:${identity.clientId}`) || !rateLimit(`user:${identity.userId}`)) return new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '60' } })
   const tool = typeof body.params?.name === 'string' ? body.params.name : undefined
-  const required = body.method === 'tools/call' && ['create_change_set', 'submit_change_set', 'create_page', 'update_page'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : protectedReadMethods.has(body.method) ? contentReadScope : undefined
+  const required = body.method === 'tools/call' && ['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : protectedReadMethods.has(body.method) ? contentReadScope : undefined
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'www-authenticate': `${challenge(origin.origin)}, error="insufficient_scope", scope="${required}"`, 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
   let current: Awaited<ReturnType<typeof payload.findByID>>
@@ -260,6 +262,10 @@ export async function handleMcp(request: Request): Promise<Response> {
     }
   }
   server.registerTool('create_page', { title: 'Create page', description: `Create a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, ...data }) => pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey }))
+  const recipeAppearance = z.object({ background: z.enum(AppearanceOptions.backgrounds), width: z.enum(AppearanceOptions.widths), spacing: z.enum(AppearanceOptions.spacings), motionIntent: z.enum(AppearanceOptions.motionIntents), logoTone: z.enum(AppearanceOptions.logoTones) })
+  server.registerTool('create_page_from_recipe', { title: 'Create page from recipe', description: `Create an ordered, template-compatible draft recipe in an explicit open change set. ${toolLimits}`, inputSchema: { changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid(), blocks: z.array(z.object({ type: z.enum(Object.keys(BlockSchemas) as [string, ...string[]]), appearance: recipeAppearance.optional() })).min(1).max(40) }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, blocks, ...data }) => {
+    try { return pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey, blocks: recipeBlocks(data.template, blocks, [], (index, type) => deterministicRecipeBlockID(requestKey, index, type)) }) } catch (error) { return { isError: true, ...text({ error: error instanceof Error ? error.message : 'invalid_recipe' }) } }
+  })
   server.registerTool('update_page', { title: 'Update page', description: `Update a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160).optional(), summary: z.string().min(24).max(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ id, changeSetId, expectedChangeSetRevision, ...data }) => pageWrite(id, changeSetId, expectedChangeSetRevision, data))
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: 32_768 })
   await server.connect(transport)

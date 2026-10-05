@@ -20,5 +20,6 @@ describe('ENG-006 / ENG-022 admin shell contracts', () => {
     await writeFile(join(directory, 'branding.json'), JSON.stringify({ name: 'Private', initials: 'P', logoUrl: 'https://example.test/logo.svg', tokens: { '--admin-accent': 'url(javascript:bad)' } }))
     expect(await loadAdminBranding(directory)).toMatchObject({ name: 'Private', initials: 'P', tokens: {} })
     expect(parseAdminBranding({ name: 'Private', initials: 'P', logoUrl: '/admin-branding/assets/logo.svg', tokens: { '--admin-accent': '#123456', '--untrusted': '#fff' } })).toEqual({ name: 'Private', initials: 'P', logoUrl: '/admin-branding/assets/logo.svg', stylesheetUrl: '/admin-branding/admin-branding.css', tokens: { '--admin-accent': '#123456' } })
+    expect(parseAdminBranding({ name: 'Private', initials: 'P', blockGalleryPreviews: { 'theme@1.2.3': { hero: '/admin-branding/assets/block-gallery/theme@1.2.3/hero.png', '<script>': '/admin-branding/assets/bad.png', faq: 'https://example.test/bad.png' }, '../bad@1.2.3': { hero: '/admin-branding/assets/bad.png' } } }).blockGalleryPreviews).toEqual({ 'theme@1.2.3': { hero: '/admin-branding/assets/block-gallery/theme@1.2.3/hero.png' } })
   })
 })
