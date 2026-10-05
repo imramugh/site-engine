@@ -3,6 +3,7 @@ import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole, type Role } from './access'
 import { snapshot, type CapturedCollection } from './editorial'
 import { buildCandidate, canonicalHash } from './publishing'
+import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 
 type Actor = { id: string; roles?: Role[] | null; disabled?: boolean | null }
 type ImportInput = { payload: Payload; req: PayloadRequest; actor: Actor | undefined; name: string; manifest: unknown; baseline: unknown }
@@ -57,10 +58,17 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
   if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 120) throw new Error('A change-set name of at most 120 characters is required.')
   const manifest = SiteSnapshotSchema.parse(input.manifest)
   const baseline = SiteSnapshotSchema.parse(input.baseline)
+  const themeChanged = !same(manifest.settings.theme ?? null, baseline.settings.theme ?? null)
+  if (manifest.settings.contractVersion !== baseline.settings.contractVersion && (!manifest.settings.theme || manifest.settings.theme.contract !== manifest.settings.contractVersion)) throw new Error('A contract upgrade requires a matching installed theme selection.')
+  if (themeChanged) {
+    if (!manifest.settings.theme) throw new Error('A reviewed theme selection cannot be removed by snapshot import.')
+    verifyInstalledThemeSelection(manifest.settings.theme, await loadThemeRegistry())
+  }
   if (manifest.media.some(asset => !baseline.media.some(existing => existing.id === asset.id))) throw new Error('Import new media through the asset upload workflow before snapshot reconciliation.')
   if (manifest.pages.some(page => page.status !== 'published')) throw new Error('Only published pages may be reconciled through snapshot import.')
-  const [siteSettings, existingRedirects] = await Promise.all([
+  const [siteSettings, themeSettings, existingRedirects] = await Promise.all([
     payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+    payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
     manifest.redirects.length ? payload.find({ collection: 'redirects', where: { from: { in: manifest.redirects.map(redirect => redirect.from) } }, limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }) : Promise.resolve({ docs: [] }),
   ])
   const pending = await payload.find({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
@@ -70,9 +78,21 @@ export async function importReviewedSnapshot(input: ImportInput): Promise<Record
     ...manifest.pages.map(page => `pages:${page.id}`),
     ...existingRedirects.docs.map(redirect => `redirects:${redirect.id}`),
     ...siteSettings.docs.map(settings => `site-settings:${settings.id}`),
+    ...(themeChanged ? themeSettings.docs.map(settings => `theme-settings:${settings.id}`) : []),
   ]
-  if (requested.some(key => touched.has(key))) throw new Error('Snapshot reconciliation conflicts with a pending editorial change. Resolve or discard that change first.')
+  if (requested.some(key => touched.has(key)) || (themeChanged && [...touched].some(key => key.startsWith('theme-settings:')))) throw new Error('Snapshot reconciliation conflicts with a pending editorial change. Resolve or discard that change first.')
   const changes: Captured[] = []
+  if (themeChanged) {
+    const desiredTheme = manifest.settings.theme!
+    const baselineTheme = { ...(baseline.settings.theme ? { selection: baseline.settings.theme } : {}), settings: baseline.settings.themeSettings }
+    const existing = themeSettings.docs[0] as unknown as Record<string, unknown> | undefined
+    if (existing && !same(snapshot('theme-settings', existing), baselineTheme)) throw new Error('The draft theme selection no longer matches the reviewed baseline.')
+    const data = { selection: desiredTheme, settings: manifest.settings.themeSettings }
+    const savedTheme = existing
+      ? await payload.update({ collection: 'theme-settings', id: String(existing.id), data, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+      : await payload.create({ collection: 'theme-settings', data: { key: 'active', ...data }, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+    capture(changes, 'theme-settings', String(savedTheme.id), baselineTheme, savedTheme as unknown as Record<string, unknown>)
+  }
   // Sections first, without page relations; pages can then reference them.
   for (const section of manifest.settings.sections) {
     const existing = await findDraftByID(payload, req, 'sections', section.id)
