@@ -103,6 +103,7 @@ export type Block = z.infer<typeof BlockSchema>;
 const hrefUsesFragment = (href: string | undefined) => Boolean(href?.includes('#'));
 const linkUsesFragment = (link: z.infer<typeof LinkSchema> | undefined) => hrefUsesFragment(link?.href);
 function requiresContract13(block: Block): boolean { return block.type === 'contact' && block.contactDetails !== undefined; }
+function requiresContract15(block: Block): boolean { return block.type === 'contact' && (block.inquiryTopicLabel !== undefined || block.inquiryTopics !== undefined || block.inquiryConsentLabel !== undefined); }
 
 function requiresContract12(block: Block): boolean {
   switch (block.type) {
@@ -283,6 +284,7 @@ export const SiteSnapshotSchema = z.object({
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
       if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
       if (!['1.3.0', '1.4.0', '1.5.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
+      if (snapshot.settings.contractVersion !== '1.5.0' && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

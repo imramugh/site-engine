@@ -18,6 +18,7 @@ describe('ENG-002 versioned contract', () => {
     expect(compatibleContractVersion('1.2.0')).toBe(true);
     expect(compatibleContractVersion('1.3.0')).toBe(true);
     expect(compatibleContractVersion('1.4.0')).toBe(true);
+    expect(compatibleContractVersion('1.5.0')).toBe(true);
     expect(compatibleContractVersion('2.0.0')).toBe(false);
     expect(compatibleContractVersion('1.0.0-beta')).toBe(false);
     expect(ThemeInstallSchema.safeParse({ manifest: { name: 'neutral', version: '1.0.0', contract: '1.1.0', entry: './dist/index.js' }, installedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(true);
@@ -95,6 +96,11 @@ describe('ENG-002 versioned contract', () => {
     expect(BlockSchema.safeParse({ ...contact, inquiryTopics: Array.from({ length: 13 }, (_, index) => ({ value: index ? 'general' : 'consultation', label: `Topic ${index}` })) }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...contact, inquiryForm: false }).success).toBe(false);
     expect(BlockSchema.safeParse({ ...contact, inquiryTopics: [{ value: 'unsupported', label: 'Unsupported' }] }).success).toBe(false);
+    const snapshot = fixture(); const contactPage = { ...structuredClone(snapshot.pages[0]!), id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', slug: 'inquiry', template: 'standard' as const, blocks: [contact as never] };
+    snapshot.settings.sections[0]!.allowedTemplates.push('standard'); snapshot.settings.sections[0]!.pageIds.push(contactPage.id); snapshot.pages.push(contactPage);
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.settings.contractVersion = '1.5.0';
+    expect(SiteSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 
   it('accepts bounded structured service links and rejects unsafe fragments', () => {
