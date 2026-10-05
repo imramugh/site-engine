@@ -1,94 +1,17 @@
 'use client'
-
 import { useEffect, useRef, useState } from 'react'
-
-type Data = {
-  summary: {
-    pendingReviews: number
-    urgentOrNewLeads: number
-    latestRelease: { sequence: number; activatedAt: string } | null
-    latestPublishFailure: { sequence: number; errorCode?: string } | null
-    queue: { pending: number; processing: number; failed: number }
-  }
-  audit: {
-    docs: Array<{ id: string; event: string; actor?: string; actorId?: string; createdAt: string }>
-    page: number
-    totalPages: number
-  }
-  shortcuts: Array<{ label: string; href: string }>
-}
-
-function failureMessage(response: Response): string {
-  return response.status === 403
-    ? 'Owner access is required to view operations.'
-    : 'Unable to load operations. Check your connection and try again.'
-}
-
-export function OperationsDashboard() {
-  const [data, setData] = useState<Data>()
-  const [error, setError] = useState('')
-  const [event, setEvent] = useState('')
-  const [actor, setActor] = useState('')
-  const [since, setSince] = useState('')
-  const [page, setPage] = useState(1)
-  const requestID = useRef(0)
-
-  async function load(next = page) {
-    const currentRequest = ++requestID.current
-    try {
-      const result = await fetch(`/api/operations?page=${next}&event=${encodeURIComponent(event)}&actor=${encodeURIComponent(actor)}&since=${encodeURIComponent(since)}`)
-      if (currentRequest !== requestID.current) return
-      if (!result.ok) {
-        setError(failureMessage(result))
-        if (result.status === 403) setData(undefined)
-        return
-      }
-      const nextData = await result.json() as Data
-      if (currentRequest !== requestID.current) return
-      setData(nextData)
-      setPage(next)
-      setError('')
-    } catch {
-      if (currentRequest === requestID.current) setError('Unable to load operations. Check your connection and try again.')
-    }
-  }
-
-  useEffect(() => { void load(1) }, [])
-
-  return <main>
-    <h1>Operations</h1>
-    {error && <p role="alert">{error}</p>}
-    {data && <>
-      <section aria-label="Operational summary">
-        <h2>Operational summary</h2>
-        <ul>
-          <li>Pending reviews: {data.summary.pendingReviews}</li>
-          <li>Urgent or new leads: {data.summary.urgentOrNewLeads}</li>
-          <li>Publish queue: pending {data.summary.queue.pending}, processing {data.summary.queue.processing}, failed {data.summary.queue.failed}</li>
-          <li>Latest release: {data.summary.latestRelease ? `#${data.summary.latestRelease.sequence}` : 'None'}</li>
-          <li>Latest publish failure: {data.summary.latestPublishFailure ? `#${data.summary.latestPublishFailure.sequence} (${data.summary.latestPublishFailure.errorCode ?? 'unknown error'})` : 'None'}</li>
-        </ul>
-        <nav aria-label="Operations shortcuts">
-          {data.shortcuts.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
-        </nav>
-      </section>
-      <section aria-label="Audit timeline">
-        <h2>Audit timeline</h2>
-        <label htmlFor="event-filter">Filter event</label>
-        <input id="event-filter" value={event} onChange={(input) => setEvent(input.target.value)} />
-        <label htmlFor="actor-filter">Filter actor</label>
-        <input id="actor-filter" value={actor} onChange={(input) => setActor(input.target.value)} />
-        <label htmlFor="since-filter">From date</label>
-        <input id="since-filter" type="date" value={since} onChange={(input) => setSince(input.target.value)} />
-        <button onClick={() => void load(1)}>Apply filter</button>
-        <ul>
-          {data.audit.docs.map((item) => <li key={item.id}>
-            <strong>{item.event}</strong> {item.actor ?? 'System'} <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
-          </li>)}
-        </ul>
-        <button disabled={page <= 1} onClick={() => void load(page - 1)}>Previous</button>
-        <button disabled={page >= data.audit.totalPages} onClick={() => void load(page + 1)}>Next</button>
-      </section>
-    </>}
-  </main>
-}
+import styles from './operations-dashboard.module.css'
+type Row={id:string;createdAt:string;who:string;via:string;title:string;detail:string;status:string;source:string;category:string;diff:null|{label:string;before:string;after:string;pages:number};rollback:null|{releaseID:string;sequence:number;enabled:boolean;note:string}}
+type Data={audit:{docs:Row[];page:number;totalPages:number};filterOptions:{actors:Array<{id:string;label:string}>;pages:Array<{id:string;label:string}>}}
+type Filters={actor:string;source:string;target:string;type:string;period:string}
+const defaults:Filters={actor:'',source:'',target:'',type:'',period:'30'}
+const date=(value:string)=>new Intl.DateTimeFormat('en-CA',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Toronto'}).format(new Date(value))
+function initials(value:string){return value.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'S'}
+function failureMessage(response:Response){return response.status===403?'Owner access is required to view the change log.':'Unable to load the change log. Check your connection and try again.'}
+export function OperationsDashboard(){const[data,setData]=useState<Data>(),[error,setError]=useState(''),[status,setStatus]=useState(''),[filters,setFilters]=useState<Filters>(defaults),[page,setPage]=useState(1),[expanded,setExpanded]=useState<string>(),[busy,setBusy]=useState('');const requestID=useRef(0)
+async function load(next=1,nextFilters=filters){const current=++requestID.current;const query=new URLSearchParams({page:String(next)});for(const[key,value]of Object.entries(nextFilters))if(value)query.set(key,value);try{const response=await fetch(`/api/operations?${query}`,{cache:'no-store'});if(current!==requestID.current)return;if(!response.ok){setError(failureMessage(response));if(response.status===403)setData(undefined);return}const value=await response.json()as Data;if(current!==requestID.current)return;setData(value);setPage(next);setError('');window.history.replaceState(null,'',`/operations?${query}`)}catch{if(current===requestID.current)setError('Unable to load the change log. Check your connection and try again.')}}
+useEffect(()=>{const query=new URLSearchParams(window.location.search);const initial={...defaults,...Object.fromEntries((Object.keys(defaults)as Array<keyof Filters>).map(key=>[key,query.get(key)??defaults[key]]))};setFilters(initial);void load(Number(query.get('page')??1),initial)},[])
+const update=(key:keyof Filters)=>(event:React.ChangeEvent<HTMLSelectElement>)=>setFilters(current=>({...current,[key]:event.target.value}))
+const reset=()=>{setFilters(defaults);setExpanded(undefined);void load(1,defaults)}
+const rollback=async(row:Row)=>{if(!row.rollback?.enabled||!window.confirm(`Prepare rollback of release #${row.rollback.sequence} for review? Nothing will publish automatically.`))return;setBusy(row.id);setError('');setStatus('');try{const response=await fetch('/api/operations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'prepare-rollback',releaseID:row.rollback.releaseID})});const value=await response.json();if(!response.ok)throw new Error(value.error);setStatus(`${value.changeSet.name} is ready for editorial review.`)}catch(cause){setError(cause instanceof Error?cause.message:'Rollback preparation failed.')}finally{setBusy('')}}
+return <main className={styles.main} data-change-log aria-busy={!data&&!error}><h1 className={styles.sr}>Change log</h1>{error&&<div className={styles.error} role="alert">{error} <button type="button" onClick={()=>void load(page)}>Try again</button></div>}{status&&<div className={styles.success} role="status">{status} <a href="/editorial">Open editorial review</a></div>}<section className={styles.card} aria-label="Change log"><form className={styles.filters} data-change-log-filters onSubmit={event=>{event.preventDefault();void load(1)}}><button type="button" className={Object.values(filters).every((value,index)=>value===(Object.values(defaults)[index]??''))?styles.active:''} onClick={reset}>All changes</button><label><span>Person</span><select aria-label="Person" value={filters.actor} onChange={update('actor')}><option value="">Any person</option>{data?.filterOptions.actors.map(option=><option key={option.id} value={option.id}>{option.label}</option>)}</select></label><label><span>Source</span><select aria-label="Assistant or source" value={filters.source} onChange={update('source')}><option value="">Any source</option><option value="assistant">Assistant</option><option value="person">Person</option><option value="system">Automated</option></select></label><label><span>Page</span><select aria-label="Page" value={filters.target} onChange={update('target')}><option value="">Any page</option>{data?.filterOptions.pages.map(option=><option key={option.id} value={option.id}>{option.label}</option>)}</select></label><label><span>Type</span><select aria-label="Type" value={filters.type} onChange={update('type')}><option value="">Any type</option><option value="editorial">Content and review</option><option value="media">Media</option><option value="site">Site and theme</option><option value="integration">Integrations</option><option value="identity">Users and sign-in</option><option value="assistant">Assistants</option><option value="lead">Leads</option><option value="career">Careers</option></select></label><label><span>Period</span><select aria-label="Period" value={filters.period} onChange={update('period')}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select></label><button type="submit">Apply</button></form>{data&&<><div className={styles.head} aria-hidden="true"><span>When</span><span>Who</span><span>Change</span><span>Status</span><span /></div><div className={styles.rows}>{data.audit.docs.length?data.audit.docs.map(row=><article key={row.id} data-change-log-row><div className={styles.row}><time dateTime={row.createdAt}>{date(row.createdAt)}</time><span className={styles.who}><i aria-hidden="true">{initials(row.who)}</i><span><strong>{row.who}</strong><small>{row.via}</small></span></span><span className={styles.change}><strong>{row.title}</strong><small>{row.detail}</small></span><span className={styles.badge} data-status={row.status.toLowerCase().replaceAll(' ','-')}>{row.status}</span><button type="button" aria-expanded={expanded===row.id} aria-controls={`change-${row.id}`} onClick={()=>setExpanded(current=>current===row.id?undefined:row.id)}>{expanded===row.id?'Hide':'View'}</button></div>{expanded===row.id&&<div className={styles.detail} id={`change-${row.id}`}><div>{row.diff?<><strong>{row.diff.label}</strong><code><del>{row.diff.before}</del> <ins>{row.diff.after}</ins></code><small>Pages affected: {row.diff.pages}</small></>:<><strong>Recorded activity</strong><p>{row.detail}</p></>}</div><aside>{row.rollback&&<><button type="button" disabled={!row.rollback.enabled||busy===row.id} onClick={()=>void rollback(row)}>Prepare rollback for review</button><small>{row.rollback.note}</small></>}</aside></div>}</article>):<p className={styles.empty}>No changes match these filters.</p>}</div><footer><span>Page {data.audit.page} of {Math.max(1,data.audit.totalPages)}</span><button type="button" disabled={page<=1} onClick={()=>void load(page-1)}>Previous</button><button type="button" disabled={page>=data.audit.totalPages} onClick={()=>void load(page+1)}>Next</button></footer></>}</section></main>}
