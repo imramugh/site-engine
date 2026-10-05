@@ -53,13 +53,14 @@ async function smtpTransport(mailbox: StoredMailbox): Promise<Transport> {
 }
 
 const internal = (req: PayloadRequest) => { req.context.mailboxInternal = true; return req }
-export function publicMailbox(doc: StoredMailbox) { return { id: doc.id, name: doc.name, provider: 'smtp', primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], host: doc.host, port: doc.port, security: doc.security, username: doc.username, health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialFingerprint ? `configured • ${doc.credentialFingerprint}` : null } }
+export function publicMailbox(doc: StoredMailbox) { return { id: doc.id, name: doc.name, provider: 'smtp', primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], host: doc.host, port: doc.port, security: doc.security, username: doc.username, health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialFingerprint ? `configured • ${doc.credentialFingerprint}` : null } }
 
 export async function configureSMTPMailbox(payload: Payload, input: SMTPConfiguration, actor: string) {
   return withPayloadTransaction(payload, async (transaction) => {
     const req = internal(transaction); const existing = input.id ? await payload.findByID({ collection: 'mailbox-configurations', id: input.id, depth: 0, overrideAccess: true, req }) as unknown as StoredMailbox : undefined
     const config = validated(input, existing); const password = input.password || (existing?.encryptedCredential ? decryptPassword(existing.encryptedCredential) : '')
-    const data = { ...config, provider: 'smtp' as const, encryptedCredential: encryptPassword(password), credentialFingerprint: createHash('sha256').update(password).digest('hex').slice(0, 12), health: 'unknown' as const }
+    const verifiedAliases = Array.isArray(existing?.verifiedAliases) ? existing.verifiedAliases.map(String).filter((alias) => config.aliases.includes(alias)) : []
+    const data = { ...config, verifiedAliases, provider: 'smtp' as const, encryptedCredential: encryptPassword(password), credentialFingerprint: createHash('sha256').update(password).digest('hex').slice(0, 12), health: 'unknown' as const }
     const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as { id: string }).id, provider: 'smtp', credentialFingerprint: data.credentialFingerprint } }, overrideAccess: true, req })
     return saved
@@ -76,7 +77,7 @@ export async function testSMTPMailbox(payload: Payload, id: string, actor: strin
 export async function setMailboxArea(payload: Payload, input: { area: MailboxArea; mailbox: string; senderAddress: string }, actor: string) {
   if (!mailboxAreas.includes(input.area) || !uuid.test(input.mailbox)) throw new Error('Mailbox mapping is invalid.')
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: input.mailbox, depth: 0, overrideAccess: true }) as unknown as StoredMailbox; const senderAddress = normalizedEmail(input.senderAddress)
-  if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.aliases) ? mailbox.aliases.map(String) : [])].includes(senderAddress)) throw new Error('Sender address is not configured on this mailbox.')
+  if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(String) : [])].includes(senderAddress)) throw new Error('Sender address has not been verified on this mailbox.')
   return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const current = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: input.area } }, limit: 1, depth: 0, overrideAccess: true, req }); const saved = current.docs[0] ? await payload.update({ collection: 'mailbox-area-mappings', id: current.docs[0].id, data: { mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-area-mappings', data: { area: input.area, mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.area_mapped', user: actor, actor, detail: { area: input.area, mailbox: input.mailbox, senderAddress } }, overrideAccess: true, req }); return saved })
 }
 
@@ -90,7 +91,27 @@ export async function sendAuthorizedMailboxTest(payload: Payload, input: { reque
     const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: input.mailbox, depth: 0, overrideAccess: true }) as unknown as StoredMailbox; if (mailbox.health !== 'connected') throw new Error('Mailbox connection must be tested before sending.')
     if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.aliases) ? mailbox.aliases.map(String) : [])].includes(exact.senderAddress)) throw new Error('Sender address is not configured on this mailbox.')
     const claim = await withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const created = await payload.create({ collection: 'mailbox-test-sends', data: { requestKey: input.requestKey, requestHash: digest, mailbox: input.mailbox, senderAddress: exact.senderAddress, recipientAddress: exact.recipientAddress, authorizedBy: actor, state: 'sending' }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_authorized', user: actor, actor, detail: { mailbox: input.mailbox, testSend: created.id, requestHash: digest } }, overrideAccess: true, req }); return created })
-    try { const result = await (await smtpTransport(mailbox)).sendMail({ from: exact.senderAddress, to: exact.recipientAddress, subject: exact.subject, text: exact.body }); return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const sent = await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'sent', providerMessageID: result.messageId?.slice(0, 500) }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'sent' } }, overrideAccess: true, req }); return sent }) } catch { return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'failed', failureCode: 'provider_unavailable' }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'failed' } }, overrideAccess: true, req }); throw new Error('SMTP test message could not be delivered.') }) }
+    try {
+      const result = await (await smtpTransport(mailbox)).sendMail({ from: exact.senderAddress, to: exact.recipientAddress, subject: exact.subject, text: exact.body })
+      return withPayloadTransaction(payload, async (transaction) => {
+        const req = internal(transaction)
+        const sent = await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'sent', providerMessageID: result.messageId?.slice(0, 500) }, overrideAccess: true, req })
+        const aliases = Array.isArray(mailbox.aliases) ? mailbox.aliases.map(String) : []
+        const verified = Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(String) : []
+        if (aliases.includes(exact.senderAddress) && !verified.includes(exact.senderAddress)) {
+          await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { verifiedAliases: [...verified, exact.senderAddress] }, overrideAccess: true, req })
+        }
+        await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'sent', senderVerified: exact.senderAddress } }, overrideAccess: true, req })
+        return sent
+      })
+    } catch {
+      await withPayloadTransaction(payload, async (transaction) => {
+        const req = internal(transaction)
+        await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'failed', failureCode: 'provider_unavailable' }, overrideAccess: true, req })
+        await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'failed' } }, overrideAccess: true, req })
+      })
+      throw new Error('SMTP test message could not be delivered.')
+    }
   })
 }
 

@@ -11,6 +11,7 @@ export const MailboxConfigurations: CollectionConfig = {
     { name: 'provider', type: 'select', required: true, options: ['smtp'] },
     { name: 'primaryAddress', type: 'email', required: true },
     { name: 'aliases', type: 'json', required: true, defaultValue: [] },
+    { name: 'verifiedAliases', type: 'json', required: true, defaultValue: [] },
     { name: 'host', type: 'text', required: true, maxLength: 253 },
     { name: 'port', type: 'number', required: true, min: 1, max: 65535 },
     { name: 'security', type: 'select', required: true, options: ['starttls', 'tls'] },

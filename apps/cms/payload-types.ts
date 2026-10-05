@@ -743,6 +743,15 @@ export interface MailboxConfiguration {
     | number
     | boolean
     | null;
+  verifiedAliases:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   host: string;
   port: number;
   security: 'starttls' | 'tls';
@@ -1870,6 +1879,7 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   provider?: T;
   primaryAddress?: T;
   aliases?: T;
+  verifiedAliases?: T;
   host?: T;
   port?: T;
   security?: T;
