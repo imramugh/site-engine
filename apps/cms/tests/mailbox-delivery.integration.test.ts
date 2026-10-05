@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { getPayload } from 'payload'
+import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
+import { prepareReply, authorizeReply, sendReply } from '../src/mail-replies'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-delivery-'))
 Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-delivery-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'http://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAIL_TEST_SMTP_LOOPBACK: '1' })
@@ -63,4 +65,26 @@ test('SMTP credentials stay private while mappings and one-use authorized delive
   await service.clearMailboxArea(payload, 'careers', owner.id)
   const changed = await service.configureSMTPMailbox(payload, { id: mailbox.id, name: 'Synthetic mailbox', primaryAddress: 'hello@example.test', aliases: ['careers@example.test'], host: 'smtp.changed.example.test', port, security: 'starttls', username: 'changed-user' }, owner.id)
   expect(changed).toMatchObject({ verifiedAliases: [], health: 'unknown', testedAt: null })
+})
+
+
+test('a reviewed lead reply reaches SMTP once with the exact confirmed content', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'reply-owner@example.test', name: 'Reply owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Reply fixture mailbox', primaryAddress: 'replies@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'reply-user', password: 'reply-password' }, owner.id)
+  await service.testSMTPMailbox(payload, mailbox.id, owner.id)
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'replies@example.test' }, owner.id)
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'reply-recipient@example.test', message: 'Please reply to this synthetic inquiry.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: crypto.randomUUID(), stage: 'new' }, overrideAccess: true })
+  const token = newOpaqueToken()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+  const actor = { id: owner.id, sessionToken: token }
+  const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'replies@example.test', subject: 'Reviewed reply fixture', body: 'This exact reviewed message reaches only the local SMTP sink.' })
+  const grant = await authorizeReply(payload, actor, draft.id)
+  const before = messages.length
+  await expect(sendReply(payload, actor, grant.id)).resolves.toMatchObject({ provider: 'smtp', messageID: expect.any(String) })
+  expect(messages).toHaveLength(before + 1)
+  expect(messages.at(-1)).toContain('Reviewed reply fixture')
+  expect(messages.at(-1)).toContain('This exact reviewed message reaches only the local SMTP sink.')
+  await expect(sendReply(payload, actor, grant.id)).rejects.toThrow('authorization_not_usable')
+  expect(messages).toHaveLength(before + 1)
+  expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, overrideAccess: true })).toMatchObject({ state: 'sent' })
 })
