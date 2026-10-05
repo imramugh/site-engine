@@ -9,12 +9,20 @@ import sharp from 'sharp'
 import { existsSync } from 'node:fs'
 import { mediaStorageDirectory, snapshotMediaReference } from '../src/media'
 import { moveAssetToBin, restoreAssetFromBin } from '../src/media-lifecycle'
+import { neutralFixture } from '@site-engine/contract/fixtures'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-cms-'))
 const db = join(directory, 'cms.sqlite')
 process.env.DATABASE_URI = `file:${db}`
 process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
+const contract14Baseline = join(directory, 'contract-1.4.json')
+const contract13Baseline = join(directory, 'contract-1.3.json')
+writeFileSync(contract14Baseline, JSON.stringify({ ...neutralFixture, settings: { ...neutralFixture.settings, contractVersion: '1.4.0' } }))
+writeFileSync(contract13Baseline, JSON.stringify({ ...neutralFixture, settings: { ...neutralFixture.settings, contractVersion: '1.3.0' } }))
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-payload'
+process.env.PREVIEW_THEME_VERSION = '1.0.0'
+process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
+process.env.PREVIEW_CONTRACT_VERSION = '1.4.0'
 const tokenFile = join(directory, 'bootstrap-token')
 writeFileSync(tokenFile, 'test-only-bootstrap-token')
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = tokenFile
@@ -262,6 +270,7 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
   const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
 
   it('rejects missing alt text, transforms a real upload, and blocks binning an in-use asset with locations', async () => {
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
     const owner = await payload.create({ collection: 'users', data: { email: 'media-owner@example.test', name: 'Media Owner', roles: ['owner'] }, overrideAccess: true })
     const file = { data: await raster(), mimetype: 'image/png', name: 'synthetic-media.png', size: 0 }
     file.size = file.data.length
@@ -284,6 +293,16 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     const recaptured = snapshotMediaReference(updatedFocal)
     expect(recaptured).toMatchObject({ focalX: 80, focalY: 20, filename: captured.filename, sha256: captured.sha256, variants: captured.variants })
     expect(captured).toMatchObject({ focalX: 25, focalY: 75 })
+    const focalSets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+    const capturedAsset = focalSets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+    expect(capturedAsset?.after).toMatchObject({ focalX: 80, focalY: 20 })
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract13Baseline
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Legacy-contract metadata edit' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Legacy-contract metadata edit' })
+    const legacySets = await payload.find({ collection: 'change-sets', where: { actor: { equals: owner.id } }, limit: 10, depth: 0, overrideAccess: true })
+    const legacyCapturedAsset = legacySets.docs.flatMap((set) => Array.isArray(set.changes) ? set.changes as Array<{ collection: string; id: string; after?: Record<string, unknown> }> : []).find((change) => change.collection === 'assets' && change.id === asset.id)
+    expect(legacyCapturedAsset?.after).not.toHaveProperty('focalX')
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { focalX: 81, focalY: 20 }, user: owner, overrideAccess: false })).rejects.toThrow('active contract 1.4')
+    process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14Baseline
     await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Replacement' }, file, user: owner, overrideAccess: false })).rejects.toThrow('Upload a new asset')
     await expect(payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Updated description' }, user: owner, overrideAccess: false })).resolves.toMatchObject({ alt: 'Updated description' })
     expect(captured.variants?.heroAvif).toMatchObject({ filename: asset.sizes?.heroAvif?.filename, width: asset.sizes?.heroAvif?.width, height: asset.sizes?.heroAvif?.height, mimeType: 'image/avif', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
@@ -321,9 +340,8 @@ describe('ENG-014 media library, variants, and lifecycle', () => {
     expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, focalX: -1, focalY: 50 }, ownerHeaders))).toBe(400)
     expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, focalX: 50, focalY: '50' }, ownerHeaders))).toBe(400)
     expect(await status(patch({ id: asset.id, alt: 'x'.repeat(9_000), decorative: false }, ownerHeaders))).toBe(413)
-    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'], focalX: 27.6, focalY: 72.2 }, editorHeaders))).toBe(409)
-    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'], focalX: 50, focalY: 50 }, editorHeaders))).toBe(200)
-    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated safe description', focalX: 50, focalY: 50 })
+    expect(await status(patch({ id: asset.id, alt: 'Updated safe description', decorative: false, tags: ['safe'], focalX: 27.6, focalY: 72.2 }, editorHeaders))).toBe(200)
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated safe description', focalX: 28, focalY: 72 })
   })
 
   it('allows a decorative image and bins an unused asset for exactly thirty days', async () => {

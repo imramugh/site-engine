@@ -1,4 +1,4 @@
-import type { Payload } from 'payload'
+import type { Payload, PayloadRequest } from 'payload'
 import { previewThemeContext, type PreviewBaseline } from './review-preview'
 
 type Actor = { id?: string; roles?: string[]; disabled?: boolean } | undefined
@@ -21,8 +21,8 @@ export type MediaAsset = {
   usages: Array<{ pageId: string; pageTitle: string; locations: string[] }>
 }
 
-export async function mediaFocalContractVersion(payload: Payload, initialBaseline?: PreviewBaseline): Promise<'1.4.0' | null> {
-  const context = await previewThemeContext({ payload, changeSets: [], initialBaseline })
+export async function mediaFocalContractVersion(payload: Payload, initialBaseline?: PreviewBaseline, req?: PayloadRequest): Promise<'1.4.0' | null> {
+  const context = await previewThemeContext({ payload, changeSets: [], initialBaseline, req })
   return context.activeContractVersion === '1.4.0' ? '1.4.0' : null
 }
 

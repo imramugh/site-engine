@@ -10,6 +10,8 @@ import { canTransitionLead, leadStages, validateLeadAssignee, type LeadStage } f
 import { normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/engine/theme-registry'
 import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorageDirectory, mediaMetadataIssues, mediaStorageDirectory, validateRasterUpload } from './media'
+import { mediaFocalContractVersion } from './media-workspace'
+import { loadInitialPreviewBaseline } from './review-preview'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -304,6 +306,10 @@ export const Assets: CollectionConfig = {
       return data
     }],
     beforeChange: [async ({ data, originalDoc, req }) => {
+      const focalContract = await mediaFocalContractVersion(req.payload, await loadInitialPreviewBaseline(), req)
+      const focalChanged = Boolean(originalDoc) && (data.focalX !== undefined && data.focalX !== originalDoc.focalX || data.focalY !== undefined && data.focalY !== originalDoc.focalY)
+      if (focalChanged && !focalContract) throw new Error('Focal-point editing requires an active contract 1.4 theme.')
+      req.context.mediaFocalContract = focalContract
       const lifecycle = req.context.mediaLifecycle
       const serverTransition = lifecycle === 'bin' || lifecycle === 'restore'
       const directLifecycleWrite = data.restoreFromBin === true || Boolean(originalDoc
