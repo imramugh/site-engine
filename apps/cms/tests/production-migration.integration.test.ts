@@ -26,14 +26,19 @@ describe('production migrations (ENG-036)', () => {
     try {
     const databaseURI = `file:${join(directory, 'cms.sqlite')}`
     const environment: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'production', DATABASE_URI: databaseURI, PAYLOAD_SECRET: 'test-secret-that-is-long-enough-for-payload' }
+    const runtimeDatabaseURI = `file:${join(directory, 'runtime.sqlite')}`
+    const runtimeEnvironment: NodeJS.ProcessEnv = { ...environment, DATABASE_URI: runtimeDatabaseURI }
     const payloadBin = resolve(cmsRoot, 'node_modules/payload/bin.js')
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')
-    const migrate = () => spawnSync(process.execPath, [payloadBin, 'migrate', '--config', 'payload.config.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
-    const initialMigration = migrate()
+    const migrate = (migrationEnvironment = environment) => spawnSync(process.execPath, [payloadBin, 'migrate', '--config', 'payload.config.ts'], { cwd: cmsRoot, env: migrationEnvironment, encoding: 'utf8' })
+    const initialMigration = migrate(environment)
     expect(initialMigration.status, initialMigration.stderr || initialMigration.stdout).toBe(0)
-    // This process opens the clean CLI-migrated database with NODE_ENV=production,
-    // so Payload runs with push:false before fixture rewinds mutate historical tables.
-    const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
+    // Keep the normal Payload runtime proof independent from the historical
+    // upgrade fixture below: that fixture deliberately rewinds constraints which
+    // the runtime verifier is meant to exercise on a current production schema.
+    const runtimeMigration = migrate(runtimeEnvironment)
+    expect(runtimeMigration.status, runtimeMigration.stderr || runtimeMigration.stdout).toBe(0)
+    const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: runtimeEnvironment, encoding: 'utf8' })
     expect(verify.status, verify.stderr || verify.stdout).toBe(0)
     const sqlite = createClient({ url: databaseURI })
     const tables = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('users', 'payload_migrations')")
@@ -42,9 +47,6 @@ describe('production migrations (ENG-036)', () => {
     expect(emptySchema.rows.map((row) => row.name)).toEqual(['baseline_snapshot_id', 'baseline_sequence'])
     const emptyIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
     expect(emptyIndexes.rows.map((row) => row.name)).toEqual(['publish_snapshots_baseline_snapshot_idx'])
-    // The production-mode verifier above creates the singleton row. Replace it
-    // with the historical fixture before reconstructing the pre-identity schema.
-    await sqlite.execute('DELETE FROM site_settings')
     await sqlite.execute("INSERT INTO site_settings (id, key, site_name, default_locale, search_enabled, updated_at, created_at) VALUES ('15000000-0000-4000-8000-000000000001', 'active', 'Legacy identity', 'en-CA', 1, '2026-10-04T00:00:00.000Z', '2026-10-04T00:00:00.000Z')")
     for (const statement of [
       'DROP INDEX site_settings_logos_logos_primary_light_idx', 'DROP INDEX site_settings_logos_logos_primary_dark_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_light_idx', 'DROP INDEX site_settings_logos_logos_full_lockup_dark_idx', 'DROP INDEX site_settings_logos_logos_symbol_light_idx', 'DROP INDEX site_settings_logos_logos_symbol_dark_idx',
@@ -67,11 +69,6 @@ describe('production migrations (ENG-036)', () => {
     // migrations are recorded, an existing row uses the old global slug index,
     // and the latest migration has not been recorded yet.
     for (const statement of [
-      // The production-mode verifier intentionally created same-slug pages in
-      // separate sections. They are not part of this historical fixture, whose
-      // old schema has a global unique slug index.
-      'DELETE FROM pages',
-      'DELETE FROM sections',
       'DROP INDEX pages_section_parent_slug_idx',
       'CREATE UNIQUE INDEX pages_slug_idx ON pages (slug)',
       "INSERT INTO sections (id, name, summary, slug) VALUES ('10000000-0000-4000-8000-000000000001', 'Legacy one', 'Synthetic legacy section used to prove the page slug migration preserves existing content.', 'legacy-one')",
