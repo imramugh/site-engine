@@ -224,6 +224,12 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(page.getByText('Title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Submitted' })).toContainText('Submitted')
+  const editorQueue = await page.evaluate(async (id) => {
+    const response = await fetch('/api/editorial/list', { cache: 'no-store' })
+    const text = await response.text(); const body = JSON.parse(text) as { sets: Array<{ id: string; presentation: { actorLabel: string; sourceLabel: string; affectedPageCount: number; checkSummary: string } }> }
+    return { status: response.status, text, set: body.sets.find(item => item.id === id) }
+  }, changeSetID)
+  expect(editorQueue.status).toBe(200); expect(editorQueue.text).not.toContain('editor.synthetic@example.test'); expect(editorQueue.set?.presentation).toMatchObject({ actorLabel: 'You', sourceLabel: 'Source not recorded', affectedPageCount: 1, checkSummary: 'Checks passed' })
   const editorQuality = await page.evaluate(async () => (await fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: document.querySelector('button[aria-pressed="true"]')?.textContent?.split(' — ')[0] }) })).status)
   expect(editorQuality).toBe(403)
   const directSpoof = await page.evaluate(async () => (await fetch('/api/change-sets/not-a-real-id', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: 'approved' }) })).status)
@@ -238,6 +244,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.goto('/admin/editorial')
   await reviewer.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await expect(reviewer.getByRole('button', { name: /Pending/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(reviewer.locator('[data-editorial-schedules]')).toHaveCount(0)
   await expect(reviewer.getByText('Synthetic published application baseline')).toHaveCount(0)
   await reviewer.getByRole('button', { name: /History/ }).click()
   await expect(reviewer.locator('[data-editorial-queue-item]').filter({ hasText: 'Synthetic published application baseline' })).toBeVisible()
@@ -246,7 +253,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.addScriptTag({ path: axeSource })
   expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   const submittedQueueItem = reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`)
-  await expect(submittedQueueItem).toContainText('revision')
+  await expect(submittedQueueItem.locator('[data-review-context]')).toContainText('Synthetic Editor · Source not recorded · 1 page')
+  await expect(submittedQueueItem.locator('[data-review-checks]')).toHaveText('Checks passed')
   await expect(submittedQueueItem.locator('[data-editorial-state="submitted"]')).toHaveText('submitted')
   await submittedQueueItem.click()
   await expect(reviewer.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toHaveText('submitted')
@@ -287,6 +295,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.evaluate(() => window.scrollTo(0, 0))
   await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await reviewer.screenshot({ path: 'artifacts/editorial-comparison-1440.png', fullPage: true })
+  await reviewer.screenshot({ path: 'artifacts/reviews-source-1440.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Live', exact: true }).click()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveCount(0)
   const singlePane = reviewer.locator('[data-editorial-frame]')
@@ -305,6 +314,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await reviewer.evaluate(() => window.scrollTo(0, 0))
   await reviewer.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await reviewer.screenshot({ path: 'artifacts/editorial-comparison-390.png', fullPage: true })
+  await reviewer.screenshot({ path: 'artifacts/reviews-source-390.png', fullPage: true })
   await reviewer.getByRole('button', { name: 'Desktop', exact: true }).click()
   await expect.poll(() => previewViewport('Proposed comparison')).toEqual({ width: 760, height: 640 })
   let commentAttempts = 0
@@ -379,9 +389,9 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   await expect(owner.getByRole('button', { name: 'Run readiness checks' })).toBeVisible({ timeout: 10_000 }); await owner.getByRole('button', { name: 'Run readiness checks' }).click()
   const beforeSchedule = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }
   const future = '2031-01-02T03:04'; await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()
-  await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); await expect(owner.getByText('UTC 2031-01-02T03:04:00.000Z')).toBeVisible()
+  await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); const schedule = owner.locator('[data-editorial-schedules] li').first(); await expect(schedule).toContainText('Jan 1, 2031, 10:04 p.m. EST'); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).not.toBeVisible(); await schedule.getByText('Technical details').click(); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
-  owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.getByText('UTC 2031-01-02T04:04:00.000Z')).toBeVisible()
+  owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.locator('[data-editorial-schedules] li').first()).toContainText('Jan 1, 2031, 11:04 p.m. EST')
   await owner.getByRole('button', { name: 'Cancel schedule' }).click(); await expect(owner.getByText('Scheduled publication cancelled.', { exact: true })).toBeVisible(); await expect(owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"] [data-editorial-state="changes-requested"]`)).toBeVisible()
   const seeded = await owner.request.post('/__e2e/schedule-page'); expect(seeded.ok(), await seeded.text()).toBeTruthy(); await owner.reload()
   await expect(owner.getByText('Page 1 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Next schedules' })).toBeEnabled(); await owner.getByRole('button', { name: 'Next schedules' }).click(); await expect(owner.getByText('Page 2 of 2')).toBeVisible(); await expect(owner.getByRole('button', { name: 'Previous schedules' })).toBeEnabled()
