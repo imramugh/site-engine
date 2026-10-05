@@ -52,6 +52,8 @@ describe('ENG-007 emergency authentication through HTTP requests and real SQLite
     await payload.update({ collection: 'users', id: userID, data: { emergencyFailedCount: 0, emergencyFailedAt: null }, overrideAccess: true })
     for (let i = 0; i < 5; i++) expect((await POST(request('invalid-recovery'))).status).toBe(403)
     expect((await POST(request('invalid-recovery'))).status).toBe(429)
+    // Disabling staff must preserve another active Owner.
+    await payload.create({ collection: 'users', data: { email: 'retained-owner@example.test', name: 'Retained Owner', roles: ['owner'] }, overrideAccess: true })
     await payload.update({ collection: 'users', id: userID, data: { disabled: true }, overrideAccess: true })
     expect((await POST(request('invalid-recovery'))).status).toBe(403)
   })

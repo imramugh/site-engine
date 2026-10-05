@@ -71,6 +71,8 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
 
     await payload.update({ collection: 'auth-sessions', id: second.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
     expect((await resolve(secondToken)).status).toBe(401)
+    // Disabling staff must preserve another active Owner.
+    await payload.create({ collection: 'users', data: { email: 'retained-owner@example.test', name: 'Retained Owner', roles: ['owner'] }, overrideAccess: true })
     await payload.update({ collection: 'users', id: user.id, data: { disabled: true }, overrideAccess: true })
     expect((await resolve(firstToken)).status).toBe(401)
 
