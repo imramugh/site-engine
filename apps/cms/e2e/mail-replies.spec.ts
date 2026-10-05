@@ -17,6 +17,7 @@ async function composer(browser: Browser, sendFails = false) {
     if (body.action === 'send' && sendFails) return route.fulfill({ status: 503, json: { error: 'Provider acknowledgement was lost.' } })
     return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
   })
+  await page.route('**/api/mail-threads/lead/**', route => route.fulfill({ json: { messages: [{ id: 'matched-message', direction: 'inbound', sender: 'visitor@example.test', recipient: 'team@example.test', subject: 'Matched reply', body: '<script>window.bad = true</script>Visible inbound reply', receivedAt: '2026-10-05T12:00:00.000Z', attachments: [{ name: 'cv.pdf', contentType: 'application/pdf', size: 12 }] }] } }))
   await page.goto('/leads')
   await page.getByRole('button', { name: /First editable lead/ }).click()
   const reply = page.locator('[data-mail-reply-composer]')
@@ -48,6 +49,17 @@ test('ENG-020/033 reviews the persisted envelope, reconfirms edits, and cannot r
     expect(requests).toEqual(['prepare', 'authorize', 'cancel', 'prepare', 'authorize', 'send'])
     await page.addScriptTag({ path: axe })
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  } finally { await context.close() }
+})
+
+test('ENG-020 shows only the supplied matched inbound timeline entry as escaped text', async ({ browser }) => {
+  const { context, page } = await composer(browser)
+  try {
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline).toContainText('Matched reply')
+    await expect(timeline).toContainText('<script>window.bad = true</script>Visible inbound reply')
+    await expect(timeline).toContainText('cv.pdf')
+    await expect(page.locator('script:text("window.bad")')).toHaveCount(0)
   } finally { await context.close() }
 })
 
