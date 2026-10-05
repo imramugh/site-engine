@@ -6,7 +6,9 @@ import { withPayloadTransaction } from './auth-transaction'
 import { enqueueNotification } from './notification-settings'
 
 export const inquiryTopics = INQUIRY_TOPIC_VALUES
-export const leadStages = ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] as const
+// Values are durable identifiers. Their order is the operator-facing sales
+// progression and can change without rewriting stored leads or audit history.
+export const leadStages = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'] as const
 export type InquiryTopic = InquiryTopicValue
 export type LeadStage = typeof leadStages[number]
 
@@ -67,7 +69,7 @@ export function validateInquiry(value: unknown): { input?: InquiryInput; errors:
 export function canTransitionLead(from: LeadStage, to: LeadStage): boolean {
   if (from === to) return true
   if (from === 'new') return ['qualified', 'contacted', 'lost'].includes(to)
-  if (from === 'qualified') return ['contacted', 'lost'].includes(to)
+  if (from === 'qualified') return ['contacted', 'proposal', 'lost'].includes(to)
   if (from === 'contacted') return ['qualified', 'proposal', 'lost'].includes(to)
   if (from === 'proposal') return ['won', 'lost', 'contacted'].includes(to)
   return false

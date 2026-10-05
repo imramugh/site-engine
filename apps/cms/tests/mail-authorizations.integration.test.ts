@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload, type Payload } from 'payload'
 import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
+import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mail-authorizations-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -33,11 +34,12 @@ async function draft(): Promise<Draft> {
     data: { email: `lead-${randomUUID()}@example.test`, message: 'Please send more information about this project.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' },
     draft: false, overrideAccess: true,
   })
-  return await payload.create({
+  const created = await payload.create({
     collection: 'mail-drafts',
     data: { lead: lead.id, threadID: randomUUID(), recipient: lead.email, sender: 'team@example.test', subject: 'Project follow-up', body: 'Thank you for your enquiry.', attachmentHashes: ['first-attachment'], revision: 1, state: 'prepared' },
     draft: false, overrideAccess: true,
-  }) as Draft
+  })
+  return await payload.findByID({ collection: 'mail-drafts', id: created.id, depth: 0, overrideAccess: true }) as Draft
 }
 
 const future = () => new Date(Date.now() + 60_000)
@@ -124,6 +126,26 @@ describe('local mail authorization transactions', () => {
     expect((await payload.findByID({ collection: 'mail-authorizations', id: first.id, depth: 0, overrideAccess: true })).revokedAt).toBeTruthy()
     await expect(consumeMailAuthorization(payload, owner, first.id)).rejects.toThrow('authorization_not_usable')
     await expect(consumeMailAuthorization(payload, owner, second.id)).resolves.toMatchObject({ id: second.id })
+  })
+
+  it('revokes prior grants on spam classification and never revives them on restore', async () => {
+    const owner = await actor('owner')
+    const prepared = await draft()
+    const grant = await authorizeMailDraft(payload, owner, prepared.id, future())
+    await classifyLeadAsSpam(payload, prepared.lead, owner.id)
+    expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'revoked' })
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ revokedAt: expect.any(String), consumedAt: null })
+    await expect(consumeMailAuthorization(payload, owner, grant.id)).rejects.toThrow('lead_is_spam')
+    await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('lead_is_spam')
+    await restoreLeadFromSpam(payload, prepared.lead, owner.id)
+    await expect(consumeMailAuthorization(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+  })
+
+  it('rejects creating or rebinding a draft to a spam inquiry', async () => {
+    const prepared = await draft()
+    const spam = await payload.create({ collection: 'inquiries', data: { email: `spam-${randomUUID()}@example.test`, message: 'Spam.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new' }, overrideAccess: true })
+    await expect(payload.create({ collection: 'mail-drafts', data: { lead: spam.id, threadID: randomUUID(), recipient: spam.email, sender: 'team@example.test', subject: 'Blocked', body: 'Blocked', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true })).rejects.toThrow('lead_is_spam')
+    await expect(payload.update({ collection: 'mail-drafts', id: prepared.id, data: { lead: spam.id }, overrideAccess: true })).rejects.toThrow('lead_is_spam')
   })
 
   it('rolls back consumption if its mandatory audit write fails', async () => {

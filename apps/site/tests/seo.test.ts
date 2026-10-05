@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
-import { schemaForRoute, publicModel, sitemapXML } from '../src/lib/seo.js';
+import { llmsText, schemaForRoute, publicModel, sitemapXML } from '../src/lib/seo.js';
 
 const appearance = { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const };
 
@@ -33,4 +33,13 @@ describe('ENG-012 public structured output', () => {
     expect(JSON.stringify(jobPosting)).toContain('The complete visible role description.');
     expect(JSON.stringify(jobPosting)).not.toContain('A role summary that is not used as structured job detail.');
   });
+
+  it('uses the reviewed site description in llms.txt and organization profiles', () => {
+    const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.seoDescription = 'A concise reviewed description for public discovery.'
+    const model = publicModel(snapshot, snapshot.settings.homepageId)
+    expect(llmsText(model, snapshot, 'https://public.example.test')).toContain('\n\nA concise reviewed description for public discovery.\n\n## Pages')
+    const schema = schemaForRoute(model.routes[0]!, model, snapshot, 'https://public.example.test')
+    expect(schema['@graph'].find(item => item['@type'] === 'Organization')).toMatchObject({ description: snapshot.settings.seoDescription })
+  })
 });

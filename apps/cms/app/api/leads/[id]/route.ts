@@ -1,9 +1,10 @@
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
-import { hasRole } from '../../../../src/access'
+import { freshStaff, hasRole } from '../../../../src/access'
 import { canTransitionLead, LeadAssigneeError, leadStages, validateLeadAssignee, type LeadStage } from '../../../../src/inquiries'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
+import { classifyLeadAsSpam, deleteSpamLead, LeadSpamLifecycleError, restoreLeadFromSpam } from '../../../../src/lead-spam-lifecycle'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -18,7 +19,7 @@ async function boundedJSON(request: Request) {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
   const value: unknown = JSON.parse(new TextDecoder().decode(bytes))
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID')
-  return value as { stage?: unknown; notes?: unknown; nextAction?: unknown; assignee?: unknown }
+  return value as { action?: unknown; stage?: unknown; notes?: unknown; nextAction?: unknown; assignee?: unknown }
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
@@ -28,11 +29,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const actor = authenticated.user as { id: string; roles?: ('owner' | 'sales')[] } | null
   if (!hasRole(actor as never, ['owner', 'sales'])) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
   const { id } = await context.params
-  let body: { stage?: unknown; notes?: unknown; nextAction?: unknown; assignee?: unknown }
+  let body: { action?: unknown; stage?: unknown; notes?: unknown; nextAction?: unknown; assignee?: unknown }
   try { body = await boundedJSON(request) } catch (error) { const tooLarge = error instanceof Error && error.message === 'TOO_LARGE'; return Response.json({ error: tooLarge ? 'The lead update is too large.' : 'Send a valid update.' }, { status: tooLarge ? 413 : 400, headers: noStore }) }
   try {
+    if (body.action !== undefined) {
+      if ((body.action !== 'mark-spam' && body.action !== 'not-spam') || Object.keys(body).some((field) => field !== 'action')) return Response.json({ error: 'Send one valid spam action.' }, { status: 422, headers: noStore })
+      const lead = body.action === 'mark-spam' ? await classifyLeadAsSpam(payload, id, actor!.id) : await restoreLeadFromSpam(payload, id, actor!.id)
+      return Response.json({ lead: { id: lead.id, stage: lead.stage, spam: Boolean(lead.spam), updatedAt: lead.updatedAt } }, { headers: noStore })
+    }
+    if (Object.keys(body).some((field) => !['stage', 'notes', 'nextAction', 'assignee'].includes(field))) return Response.json({ error: 'Send only supported lead fields.' }, { status: 422, headers: noStore })
     const lead = await withPayloadTransaction(payload, async (req) => {
       const current = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true, req })
+      if (current.spam) throw new Error('SPAM_RECORD')
       const next = body.stage === undefined ? current.stage as LeadStage : body.stage as LeadStage
       if (!leadStages.includes(next) || !canTransitionLead((current.stage ?? 'new') as LeadStage, next)) throw new Error('INVALID_TRANSITION')
       const data: Record<string, unknown> = { stage: next }
@@ -47,10 +55,28 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     })
     return Response.json({ lead: { id: lead.id, stage: lead.stage, notes: lead.notes ?? '', nextAction: lead.nextAction ?? '', assignee: typeof lead.assignee === 'string' ? lead.assignee : lead.assignee?.id ?? null, updatedAt: lead.updatedAt } }, { headers: noStore })
   } catch (error) {
+    if (error instanceof LeadSpamLifecycleError) return Response.json({ error: error.message }, { status: error.code === 'NOT_FOUND' ? 404 : 409, headers: noStore })
     if (error instanceof LeadAssigneeError) return Response.json({ error: error.message }, { status: 422, headers: noStore })
     if (error instanceof Error && error.message === 'INVALID_TRANSITION') return Response.json({ error: 'That lead-stage transition is not allowed.' }, { status: 422, headers: noStore })
+    if (error instanceof Error && error.message === 'SPAM_RECORD') return Response.json({ error: 'Restore spam before editing lead details.' }, { status: 409, headers: noStore })
     if (error instanceof Error && error.message.startsWith('INVALID_')) return Response.json({ error: `Invalid ${error.message.slice(8).toLowerCase()}.` }, { status: 422, headers: noStore })
     if (error && typeof error === 'object' && 'status' in error && error.status === 404) return Response.json({ error: 'Lead not found.' }, { status: 404, headers: noStore })
     return Response.json({ error: 'Lead could not be updated.' }, { status: 422, headers: noStore })
+  }
+}
+
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
+  const payload = await getPayload({ config })
+  const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
+  const actor = authenticated.user as { id: string; roles?: ('owner' | 'sales')[] } | null
+  if (!actor?.id || !(await freshStaff(['owner'])({ req: { payload, user: actor, headers: request.headers } as never }))) return Response.json({ error: 'Fresh Owner authentication is required.' }, { status: 403, headers: noStore })
+  try {
+    const { id } = await context.params
+    await deleteSpamLead(payload, id, actor.id)
+    return new Response(null, { status: 204, headers: noStore })
+  } catch (error) {
+    if (error instanceof LeadSpamLifecycleError) return Response.json({ error: error.message }, { status: error.code === 'NOT_FOUND' ? 404 : error.code === 'ACTIVE_SEND' ? 409 : 422, headers: noStore })
+    return Response.json({ error: 'Spam record could not be deleted.' }, { status: 422, headers: noStore })
   }
 }

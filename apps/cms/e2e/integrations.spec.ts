@@ -56,7 +56,7 @@ test('ENG-023 Owner rotates a masked credential and explicitly tests a connectio
   await owner.context.close()
 })
 
-test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', async ({ browser }) => {
+test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', async ({ browser }, testInfo) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations')
   const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(4)
@@ -69,10 +69,19 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
     }
   }
   for (const tab of ['Email', 'Sign-in', 'Connected assistants', 'Notifications', 'AI providers']) { await owner.page.getByRole('tab', { name: tab, exact: true }).click(); await expect(owner.page.getByRole('tabpanel')).toBeVisible() }
-  await owner.page.setViewportSize({ width: 390, height: 844 }); await owner.page.getByRole('tab', { name: 'AI providers' }).click()
-  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
-  const boxes = await cards.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width)); expect(boxes.every((width) => width > 300 && width <= 366)).toBe(true)
+  await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
+  await expect(owner.page.locator('[data-integrations-status][role="alert"]')).toHaveCount(0)
+  const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(3)
+  await expect(signin.locator('[data-signin-method="google"]')).toContainText('Invitation only'); await expect(signin.locator('[data-signin-method="google"]')).toContainText(/assigned manually/i)
+  await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last used'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-1440.png'), fullPage: true })
+  await owner.page.setViewportSize({ width: 390, height: 844 }); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  const boxes = await signin.locator('article').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width)); expect(boxes.every((width) => width > 300 && width <= 366)).toBe(true)
+  expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-390.png'), fullPage: true })
+  await owner.page.getByRole('tab', { name: 'AI providers' }).click(); const providerBoxes = await cards.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width)); expect(providerBoxes.every((width) => width > 300 && width <= 366)).toBe(true)
   await owner.context.close()
 })
 
@@ -80,7 +89,9 @@ test('ENG-022 Owner persists notification routing and private urgent contacts', 
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications')
   const panel = owner.page.locator('[data-notification-preferences]'); await expect(panel).toBeVisible(); await expect(panel.locator('fieldset')).toHaveCount(6)
-  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('Messages remain queued until an operator connects a delivery service.')
+  await expect(panel).toContainText('No event source is available yet.'); await expect(panel).toContainText('Notification messages are queued.')
+  await expect(panel.getByRole('link', { name: 'Email tab' })).toHaveAttribute('href', '/integrations?tab=email'); await expect(panel.getByRole('link', { name: 'Site › Business details' })).toHaveAttribute('href', '/site')
+  await expect(panel.locator('[data-notification-sidebar="sms"]')).toContainText('Not connected'); await expect(panel.locator('[data-notification-sidebar="templates"]')).toContainText('Templates are not yet configurable')
   const lead = panel.locator('fieldset').filter({ has: owner.page.getByText('New lead', { exact: true }) }); await lead.locator('summary').first().click(); await lead.getByLabel('Sales').uncheck()
   const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/notification-settings') && response.request().method() === 'POST')
   await panel.getByRole('button', { name: 'Save preferences' }).click(); expect((await saved).status()).toBe(200); await expect(panel.getByRole('status')).toContainText('Notification preferences saved.')
@@ -104,7 +115,7 @@ test('ENG-022 Owner persists notification routing and private urgent contacts', 
 
 test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
-  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants', exact: true })).toBeVisible(); await expect(editor.page.getByRole('tab', { name: 'AI providers', exact: true })).toHaveCount(0); await editor.context.close()
+  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); const onlyTab = editor.page.getByRole('tab', { name: 'Connected assistants', exact: true }); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(onlyTab).toBeVisible(); await onlyTab.focus(); for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) { await editor.page.keyboard.press(key); await expect(onlyTab).toBeFocused(); await expect(onlyTab).toHaveAttribute('aria-selected', 'true') }; await expect(editor.page).toHaveURL(/tab=assistants/); await editor.context.close()
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   const csrf = await owner.page.request.post('/api/integrations', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'x', credential: 'must-not-persist' } })
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()

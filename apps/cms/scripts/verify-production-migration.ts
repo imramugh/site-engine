@@ -39,8 +39,11 @@ try {
   const fieldErrors = (error as { data?: { errors?: Array<{ path?: string }> } }).data?.errors
   if (!fieldErrors?.some((field) => field.path === 'slug')) throw error
 }
-const settings = await payload.create({ collection: 'site-settings', data: { siteName: 'Production migration verifier', defaultLocale: 'en', searchEnabled: true }, draft: true, user: created, overrideAccess: false })
-if (settings.searchEnabled !== true || (await payload.findByID({ collection: 'site-settings', id: settings.id, draft: true, overrideAccess: true })).searchEnabled !== true) throw new Error('Migrated Payload did not preserve a searchEnabled singleton write.')
+const crawlerPolicy = { searchEngines: false, aiSearchAndAnswers: true, aiModelTraining: false }
+const settings = await payload.create({ collection: 'site-settings', data: { siteName: 'Production migration verifier', defaultLocale: 'en', searchEnabled: true, crawlerPolicy }, draft: true, user: created, overrideAccess: false })
+const migratedSettings = await payload.findByID({ collection: 'site-settings', id: settings.id, draft: true, overrideAccess: true })
+if (settings.searchEnabled !== true || migratedSettings.searchEnabled !== true) throw new Error('Migrated Payload did not preserve a searchEnabled singleton write.')
+if (JSON.stringify(migratedSettings.crawlerPolicy) !== JSON.stringify(crawlerPolicy)) throw new Error('Migrated Payload did not preserve a crawler policy singleton write.')
 console.info('Migrated Payload read/write verification passed.')
 
 await payload.destroy()

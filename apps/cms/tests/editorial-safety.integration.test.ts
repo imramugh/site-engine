@@ -11,7 +11,7 @@ process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'synthetic-editorial-safety-secret-that-is-long-enough'
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
-beforeAll(async () => { payload = await getPayload({ config }) })
+beforeAll(async () => { payload = await getPayload({ config }) }, 60_000)
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
 async function fixture(label: string, seoDescription?: string) {

@@ -550,6 +550,8 @@ export interface Redirect {
   from: string;
   to: string;
   status?: number | null;
+  createdBy?: (string | null) | User;
+  createdByLabel?: string | null;
   /**
    * Updated by the edge log ingestion adapter.
    */
@@ -644,6 +646,18 @@ export interface SiteSetting {
    * Expose the static public search page and include it in the primary navigation after this change is reviewed and published.
    */
   searchEnabled?: boolean | null;
+  /**
+   * Reviewed robots.txt requests. These preferences do not enforce access.
+   */
+  crawlerPolicy?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   contractVersion?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -810,7 +824,10 @@ export interface Inquiry {
   consentedAt: string;
   consentBasis: 'visitor-confirmed' | 'staff-recorded' | 'unknown';
   idempotencyKey: string;
-  stage: 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost';
+  stage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
+  spam?: boolean | null;
+  spamMarkedAt?: string | null;
+  spamPreviousStage?: ('new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost') | null;
   urgent?: boolean | null;
   notes?: string | null;
   assignee?: (string | null) | User;
@@ -959,6 +976,8 @@ export interface Application {
   id: string;
   name: string;
   email: string;
+  telephone?: string | null;
+  linkedIn?: string | null;
   coverLetter: string;
   consent: boolean;
   jobId: string;
@@ -1749,6 +1768,8 @@ export interface RedirectsSelect<T extends boolean = true> {
   from?: T;
   to?: T;
   status?: T;
+  createdBy?: T;
+  createdByLabel?: T;
   hitCount?: T;
   lastHitAt?: T;
   updatedAt?: T;
@@ -1808,6 +1829,7 @@ export interface SiteSettingsSelect<T extends boolean = true> {
       };
   navigation?: T;
   searchEnabled?: T;
+  crawlerPolicy?: T;
   contractVersion?: T;
   updatedAt?: T;
   createdAt?: T;
@@ -1935,6 +1957,9 @@ export interface InquiriesSelect<T extends boolean = true> {
   consentBasis?: T;
   idempotencyKey?: T;
   stage?: T;
+  spam?: T;
+  spamMarkedAt?: T;
+  spamPreviousStage?: T;
   urgent?: T;
   notes?: T;
   assignee?: T;
@@ -2023,6 +2048,8 @@ export interface MailAuthorizationsSelect<T extends boolean = true> {
 export interface ApplicationsSelect<T extends boolean = true> {
   name?: T;
   email?: T;
+  telephone?: T;
+  linkedIn?: T;
   coverLetter?: T;
   consent?: T;
   jobId?: T;

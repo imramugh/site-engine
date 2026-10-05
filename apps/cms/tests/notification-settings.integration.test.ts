@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { getPayload } from 'payload'
+import { createLocalReq, getPayload } from 'payload'
 import { defaultNotificationPreferences, enqueueNotification, parseNotificationPreferences, readNotificationPreferences, saveNotificationPreferences, type NotificationPreference } from '../src/notification-settings'
 import { withPayloadTransaction } from '../src/auth-transaction'
 
@@ -61,5 +61,15 @@ describe('private notification routing settings', () => {
     const application = await payload.create({ collection: 'applications', data: { name: 'Applicant', email: 'applicant-notification@example.test', coverLetter: 'A bounded application fixture.', consent: true, jobId: '00000000-0000-4000-8000-000000000101', resumeKey: '00000000-0000-4000-8000-000000000102-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', idempotencyKey: '00000000-0000-4000-8000-000000000103' }, overrideAccess: true })
     const queued = await payload.find({ collection: 'notification-outbox', where: { sourceID: { equals: application.id } }, limit: 1, depth: 0, overrideAccess: true })
     expect(queued.docs[0]).toMatchObject({ kind: 'new-job-application', sourceType: 'application', sourceID: application.id, recipientRules: ['hiring', 'owner'], channels: ['email'], state: 'queued' })
+  })
+
+  it('suppresses retry notification intent for a currently classified spam inquiry', async () => {
+    const inquiry = await payload.create({ collection: 'inquiries', data: { email: 'spam-notify@example.test', message: 'Spam.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'spam-notification-inquiry', stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new' }, overrideAccess: true })
+    await expect(enqueueNotification(payload, undefined, { inquiry: inquiry.id, kind: 'new-lead', idempotencyKey: 'spam-notification-retry', sourceType: 'inquiry', sourceID: inquiry.id, payload: {} })).resolves.toBeUndefined()
+    const bareRequest = await createLocalReq({}, payload)
+    expect(bareRequest.transactionID).toBeUndefined()
+    await expect(enqueueNotification(payload, bareRequest, { inquiry: inquiry.id, kind: 'new-lead', idempotencyKey: 'spam-notification-bare-request', sourceType: 'inquiry', sourceID: inquiry.id, payload: {} })).resolves.toBeUndefined()
+    expect((await payload.count({ collection: 'notification-outbox', where: { idempotencyKey: { equals: 'spam-notification-retry' } }, overrideAccess: true })).totalDocs).toBe(0)
+    expect((await payload.count({ collection: 'notification-outbox', where: { idempotencyKey: { equals: 'spam-notification-bare-request' } }, overrideAccess: true })).totalDocs).toBe(0)
   })
 })

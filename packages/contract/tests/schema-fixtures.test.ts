@@ -77,6 +77,18 @@ describe('ENG-002 site data semantic fixtures', () => {
     expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(true)
   })
   it('validates settings drafts and rejects unsupported snapshot contracts', () => { const value = snapshot(); expect(SiteSettingsSchema.safeParse(value.settings).success).toBe(true); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale }).success).toBe(true); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true); expect(SiteSettingsSchema.safeParse({ ...value.settings, contractVersion: '2.0.0' }).success).toBe(false); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale, rawCss: '#fff' }).success).toBe(false); value.settings.contractVersion = '2.0.0' as never; expect(SiteSnapshotSchema.safeParse(value).success).toBe(false) })
+
+  it('gates reviewed crawler policy to contract 1.7 without changing older snapshots', () => {
+    const legacy = snapshot()
+    legacy.settings.contractVersion = '1.6.0'
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true)
+    legacy.settings.crawlerPolicy = { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(false)
+    legacy.settings.contractVersion = '1.7.0'
+    expect(SiteSnapshotSchema.safeParse(legacy).success).toBe(true)
+    expect(SiteSettingsDraftSchema.safeParse({ siteName: 'Example', defaultLocale: 'en-CA', crawlerPolicy: legacy.settings.crawlerPolicy }).success).toBe(true)
+    expect(SiteSettingsDraftSchema.safeParse({ siteName: 'Example', defaultLocale: 'en-CA', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: true } }).success).toBe(false)
+  })
   it('keeps legacy settings valid while gating referenced site identity and navigation to 1.5', () => {
     const value = snapshot(); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true)
     const logo = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', filename: 'identity.svg', mimeType: 'image/svg+xml', width: 120, height: 60, alt: 'Synthetic identity', decorative: false }

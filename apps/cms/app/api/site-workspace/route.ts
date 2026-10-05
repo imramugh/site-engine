@@ -27,7 +27,7 @@ function ownedSet(set: Document, actor: Actor, expectedRevision: unknown) {
 }
 function settingsValue(doc?: Document) {
   const object = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-  const address = object(doc?.address); const incident = object(doc?.incident); const logos = object(doc?.logos); const navigation = object(doc?.navigation)
+  const address = object(doc?.address); const incident = object(doc?.incident); const logos = object(doc?.logos); const navigation = object(doc?.navigation); const crawlerPolicy = object(doc?.crawlerPolicy)
   const logoIDs = Object.fromEntries(['primaryLight','primaryDark','fullLockupLight','fullLockupDark','symbolLight','symbolDark'].map(field => [field, idOf(logos?.[field]) ?? null]))
   return {
     siteName: String(doc?.siteName ?? ''),
@@ -45,12 +45,18 @@ function settingsValue(doc?: Document) {
     navigation: navigation ?? null,
     seoDescription: typeof doc?.seoDescription === 'string' ? doc.seoDescription : null,
     searchEnabled: doc?.searchEnabled === true,
+    crawlerPolicy: crawlerPolicy && ['searchEngines', 'aiSearchAndAnswers', 'aiModelTraining'].every(field => typeof crawlerPolicy[field] === 'boolean') ? {
+      searchEngines: crawlerPolicy.searchEngines === true,
+      aiSearchAndAnswers: crawlerPolicy.aiSearchAndAnswers === true,
+      aiModelTraining: crawlerPolicy.aiModelTraining === true,
+    } : null,
   }
 }
 function guideValue(doc?: Document) {
   const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  const terms = (value: unknown) => Array.isArray(value) ? value.flatMap(item => item && typeof item === 'object' && !Array.isArray(item) && typeof (item as Record<string, unknown>).avoid === 'string' && typeof (item as Record<string, unknown>).prefer === 'string' ? [{ avoid: String((item as Record<string, unknown>).avoid), prefer: String((item as Record<string, unknown>).prefer) }] : []) : []
   return {
-    bannedPhrases: strings(doc?.bannedPhrases), preferredTerms: strings(doc?.preferredTerms),
+    bannedPhrases: strings(doc?.bannedPhrases), preferredTerms: terms(doc?.preferredTerms),
     canadianSpelling: doc?.canadianSpelling === 'warn' ? 'warn' : 'off',
     maximumSentenceWords: Number(doc?.maximumSentenceWords ?? 30), minimumReadingEase: Number(doc?.minimumReadingEase ?? 30),
   }
@@ -83,7 +89,7 @@ async function context(payload: Awaited<ReturnType<typeof getPayload>>, actor: A
   return {
     settings, settingsHash: canonicalHash(settings), guide, guideHash: canonicalHash(guide),
     changeSets: sets.docs.map(set => ({ id: set.id, name: set.name, state: set.state, revision: set.revision, contractVersion: themeContext.changeSetContractVersions[String(set.id)] ?? null })),
-    redirects: (redirects.docs as unknown as Document[]).map(doc => ({ id: doc.id, ...redirectValue(doc), hitCount: Number(doc.hitCount ?? 0), lastHitAt: doc.lastHitAt ?? null, hash: canonicalHash(redirectValue(doc)) })),
+    redirects: (redirects.docs as unknown as Document[]).map(doc => ({ id: doc.id, ...redirectValue(doc), createdBy: typeof doc.createdByLabel === 'string' && doc.createdByLabel.trim() ? doc.createdByLabel : null, hitCount: Number(doc.hitCount ?? 0), hash: canonicalHash(redirectValue(doc)) })),
     navigation,
     references: { pages: pages.filter(page => page._status !== 'archived').map(page => ({ id: page.id, title: page.title })), sections: sections.map(section => ({ id: section.id, title: section.name, pillars: (section.pageIds ?? []).map(idOf).map(id => pages.find(page => page.id === id)).filter(page => page?._status !== 'archived' && page?.template === 'pillar' && (!idOf(page?.parentId) || idOf(page?.parentId) === idOf(section.landingPageId))).map(page => ({ id: page!.id, title: page!.title })) })), assets: assetsResult.docs.filter(asset => !asset.deletedAt).map(asset => { const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as { url?: string } : asset; return { id: asset.id, label: asset.alt || asset.filename || asset.id, url: file.url ?? null } }) },
   }
@@ -100,6 +106,23 @@ async function body(request: Request) {
 function cleanStrings(value: unknown, maxItems = 100) {
   if (!Array.isArray(value) || value.length > maxItems || !value.every(item => typeof item === 'string' && item.trim().length <= 120)) throw new Error('Guidance must be a list of short text entries.')
   return [...new Set(value.map(item => (item as string).trim()).filter(Boolean))]
+}
+function cleanPreferredTerms(value: unknown) {
+  if (!Array.isArray(value) || value.length > 100) throw new Error('Preferred terms must be a bounded list.')
+  const terms = value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['avoid', 'prefer'].includes(key))) throw new Error('Each preferred term needs an avoided and preferred form.')
+    const avoid = (item as Record<string, unknown>).avoid; const prefer = (item as Record<string, unknown>).prefer
+    if (typeof avoid !== 'string' || typeof prefer !== 'string' || !avoid.trim() || !prefer.trim() || avoid.trim().length > 80 || prefer.trim().length > 80 || avoid.trim().toLocaleLowerCase() === prefer.trim().toLocaleLowerCase()) throw new Error('Each preferred term needs distinct text of 80 characters or fewer.')
+    return { avoid: avoid.trim(), prefer: prefer.trim() }
+  })
+  if (new Set(terms.map(term => term.avoid.toLocaleLowerCase())).size !== terms.length) throw new Error('Avoided terms must be unique.')
+  return terms
+}
+function cleanCrawlerPolicy(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('All crawler preferences are required.')
+  const policy = value as Record<string, unknown>
+  if (Object.keys(policy).some(key => !['searchEngines', 'aiSearchAndAnswers', 'aiModelTraining'].includes(key)) || !['searchEngines', 'aiSearchAndAnswers', 'aiModelTraining'].every(key => typeof policy[key] === 'boolean')) throw new Error('All crawler preferences are required.')
+  return { searchEngines: policy.searchEngines as boolean, aiSearchAndAnswers: policy.aiSearchAndAnswers as boolean, aiModelTraining: policy.aiModelTraining as boolean }
 }
 
 export async function GET(request: Request) {
@@ -121,16 +144,45 @@ export async function POST(request: Request) {
       req.user = actor as never; req.headers = new Headers(request.headers); req.headers.set('x-site-engine-change-set', input.changeSetID as string)
       const set = await payload.findByID({ collection: 'change-sets', id: input.changeSetID as string, depth: 0, overrideAccess: true, req }) as unknown as Document
       if (!ownedSet(set, actor!, input.expectedRevision)) throw new Error('The selected change set changed or is not owned by this account.')
-      if (input.action === 'settings') {
+      if (input.action === 'search-ai') {
+        const [currentSettings, currentGuide] = await Promise.all([
+          payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+          payload.find({ collection: 'style-guides', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+        ])
+        const settingsDoc = currentSettings.docs[0] as unknown as Document | undefined
+        const guideDoc = currentGuide.docs[0] as unknown as Document | undefined
+        if (!settingsDoc) throw new Error('Configure Business details before Search and AI.')
+        if (input.expectedSettingsHash !== canonicalHash(settingsValue(settingsDoc)) || input.expectedGuideHash !== canonicalHash(guideValue(guideDoc))) throw new Error('Search and AI settings changed. Reload before saving.')
+        const value = input.value as { settings?: Record<string, unknown>; guide?: Record<string, unknown> } | undefined
+        if (!value || !value.settings || !value.guide || Object.keys(value.settings).some(key => !['seoDescription', 'searchEnabled', 'crawlerPolicy'].includes(key)) || Object.keys(value.guide).some(key => !['bannedPhrases','preferredTerms','canadianSpelling','maximumSentenceWords','minimumReadingEase'].includes(key))) throw new Error('Unsupported Search and AI setting.')
+        const policy = cleanCrawlerPolicy(value.settings.crawlerPolicy)
+        const description = value.settings.seoDescription
+        if (description !== null && (typeof description !== 'string' || !description.trim() || description.trim().length > 160)) throw new Error('The short site description must be 160 characters or fewer.')
+        if (typeof value.settings.searchEnabled !== 'boolean') throw new Error('Public search preference is required.')
+        if (!['off', 'warn'].includes(String(value.guide.canadianSpelling)) || !Number.isInteger(value.guide.maximumSentenceWords) || Number(value.guide.maximumSentenceWords) < 5 || Number(value.guide.maximumSentenceWords) > 100 || !Number.isInteger(value.guide.minimumReadingEase) || Number(value.guide.minimumReadingEase) < 0 || Number(value.guide.minimumReadingEase) > 121) throw new Error('Writing guidance values are outside the supported range.')
+        const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
+        if (preview.changeSetContractVersions[String(set.id)] !== '1.7.0') throw new Error('Search and AI crawler preferences require a selected contract 1.7 theme in the same change set.')
+        await payload.update({ collection: 'site-settings', id: settingsDoc.id, data: { seoDescription: typeof description === 'string' ? description.trim() : null, searchEnabled: value.settings.searchEnabled, crawlerPolicy: policy }, draft: true, overrideAccess: false, user: actor as never, req })
+        // The capture hook performs its own internal change-set update using
+        // this request. Restore the caller's capture context before writing
+        // the second document in this atomic operation.
+        req.context = { ...req.context, editorialInternal: false }
+        const guideData = { key: 'active', bannedPhrases: cleanStrings(value.guide.bannedPhrases), preferredTerms: cleanPreferredTerms(value.guide.preferredTerms), canadianSpelling: value.guide.canadianSpelling as 'off' | 'warn', maximumSentenceWords: Number(value.guide.maximumSentenceWords), minimumReadingEase: Number(value.guide.minimumReadingEase) }
+        if (guideDoc) await payload.update({ collection: 'style-guides', id: guideDoc.id, data: guideData, draft: true, overrideAccess: false, user: actor as never, req })
+        else await payload.create({ collection: 'style-guides', data: guideData, draft: true, overrideAccess: false, user: actor as never, req })
+      } else if (input.action === 'settings') {
         const current = (await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Document | undefined
         if (input.expectedHash !== canonicalHash(settingsValue(current))) throw new Error('Site details changed. Reload before saving.')
         const value = input.value as Record<string, unknown>
-        if (!value || Object.keys(value).some(key => !['siteName','legalName','homepageId','defaultLocale','organizationType','logo','logos','contactEmail','contactPhone','address','linkedIn','incident','navigation','seoDescription','searchEnabled'].includes(key))) throw new Error('Unsupported site setting.')
+        if (!value || Object.keys(value).some(key => !['siteName','legalName','homepageId','defaultLocale','organizationType','logo','logos','contactEmail','contactPhone','address','linkedIn','incident','navigation','seoDescription','searchEnabled','crawlerPolicy'].includes(key))) throw new Error('Unsupported site setting.')
         const navigation = value.navigation as { header?: Array<{ kind?: string }>; footer?: { columns?: Array<{ kind?: string }>; bottomLinks?: Array<{ kind?: string }> } } | null | undefined
         const uses16 = Boolean(navigation && (navigation.header?.some(item => item.kind === 'unavailable') || navigation.footer?.bottomLinks || navigation.footer?.columns?.some(column => ['section-pillars', 'contact'].includes(column.kind ?? ''))))
-        if (uses16) {
+        const uses17 = value.crawlerPolicy !== null && value.crawlerPolicy !== undefined
+        if (uses16 || uses17) {
           const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
-          if (preview.changeSetContractVersions[String(set.id)] !== '1.6.0') throw new Error('This Navigation design requires a selected contract 1.6 theme in the same change set.')
+          const selectedContract = preview.changeSetContractVersions[String(set.id)]
+          if (uses16 && selectedContract !== '1.6.0' && selectedContract !== '1.7.0') throw new Error('This Navigation design requires a selected contract 1.6 or newer theme in the same change set.')
+          if (uses17 && selectedContract !== '1.7.0') throw new Error('Crawler preferences require a selected contract 1.7 theme in the same change set.')
         }
         const data = { ...value, logos: value.logos ?? { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }, address: value.address ?? { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }, incident: value.incident ?? { label: null, guidance: null }, key: 'active' }
         if (current) await payload.update({ collection: 'site-settings', id: current.id, data, draft: true, overrideAccess: false, user: actor as never, req })
@@ -141,7 +193,7 @@ export async function POST(request: Request) {
         const value = input.value as Record<string, unknown>
         if (!value || Object.keys(value).some(key => !['bannedPhrases','preferredTerms','canadianSpelling','maximumSentenceWords','minimumReadingEase'].includes(key))) throw new Error('Unsupported style setting.')
         if (!['off', 'warn'].includes(String(value.canadianSpelling)) || !Number.isInteger(value.maximumSentenceWords) || Number(value.maximumSentenceWords) < 5 || Number(value.maximumSentenceWords) > 100 || !Number.isInteger(value.minimumReadingEase) || Number(value.minimumReadingEase) < 0 || Number(value.minimumReadingEase) > 121) throw new Error('Writing guidance values are outside the supported range.')
-        const data = { key: 'active', bannedPhrases: cleanStrings(value.bannedPhrases), preferredTerms: cleanStrings(value.preferredTerms), canadianSpelling: value.canadianSpelling as 'off' | 'warn', maximumSentenceWords: Number(value.maximumSentenceWords), minimumReadingEase: Number(value.minimumReadingEase) }
+        const data = { key: 'active', bannedPhrases: cleanStrings(value.bannedPhrases), preferredTerms: cleanPreferredTerms(value.preferredTerms), canadianSpelling: value.canadianSpelling as 'off' | 'warn', maximumSentenceWords: Number(value.maximumSentenceWords), minimumReadingEase: Number(value.minimumReadingEase) }
         if (current) await payload.update({ collection: 'style-guides', id: current.id, data, draft: true, overrideAccess: false, user: actor as never, req })
         else await payload.create({ collection: 'style-guides', data, draft: true, overrideAccess: false, user: actor as never, req })
       } else if (input.action === 'redirect') {

@@ -16,6 +16,7 @@ import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
 import { canonicalHash } from '../src/publishing.js'
 import { deriveRoutes } from '@site-engine/engine'
+import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
@@ -39,6 +40,7 @@ const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const leadOwnerEmail = 'lead-owner.synthetic@example.test'
 const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
 const leadSessionTokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' } as const
+const staleLeadOwnerSessionToken = 'synthetic-lead-stale-owner-session-token'
 const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
 const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const themeOwnerEmail = 'theme-owner.synthetic@example.test'
@@ -102,16 +104,20 @@ const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact', 'richText'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const navigationThemeManifest = { ...browserThemeManifest, name: 'navigation-browser-theme', version: '1.6.0', contract: '1.6.0', settingKeys: [] }
+const searchThemeManifest = { ...browserThemeManifest, name: 'search-browser-theme', version: '1.7.0', contract: '1.7.0', settingKeys: [] }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const galleryTheme = process.env.BLOCK_GALLERY_E2E_THEME_ID && process.env.BLOCK_GALLERY_E2E_THEME_VERSION ? { name: process.env.BLOCK_GALLERY_E2E_THEME_ID, version: process.env.BLOCK_GALLERY_E2E_THEME_VERSION, contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } } : undefined
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null'
-writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
-writeFileSync(themeRegistry, JSON.stringify({ themes: [
+const themeInstalls = [
   { manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   { manifest: navigationThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
+  { manifest: searchThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   ...(galleryTheme ? [{ manifest: galleryTheme, installedAt: '2026-10-05T00:00:00.000Z' }] : []),
-] }))
+]
+writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
+writeFileSync(themeRegistry, JSON.stringify({ themes: themeInstalls }))
+const previewThemeRegistry = parseThemeRegistry({ themes: themeInstalls })
 const initialBaseline = structuredClone(neutralFixture)
 initialBaseline.settings.contractVersion = '1.4.0'
 if (galleryTheme) initialBaseline.settings.theme = { id: galleryTheme.name, version: galleryTheme.version, contract: galleryTheme.contract, manifestDigest: createHash('sha256').update(stable(galleryTheme)).digest('hex') }
@@ -356,6 +362,7 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(themeOwnerSessionToken), user: themeOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(mediaOwnerSessionToken), user: mediaOwner.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   for (const [role, user] of Object.entries({ owner: leadOwner, editor: leadEditor }) as Array<[keyof typeof leadSessionTokens, { id: string }]>) await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(leadSessionTokens[role]), user: user.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(staleLeadOwnerSessionToken), user: leadOwner.id, authenticatedAt: new Date(Date.now() - 60 * 60_000).toISOString(), lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const mediaRaster = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#155e75' } }).png().toBuffer()
   const mediaAssets = []
   for (let index = 0; index < 26; index += 1) {
@@ -407,6 +414,8 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'inquiries', data: { email: 'notes-b.synthetic@example.test', name: 'Second editable lead', message: 'A separate lead for controlled form state.', topic: 'partnership', sourcePage: '/services/b', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-notes-b', stage: 'contacted', urgent: false, notes: 'Second lead notes', nextAction: 'Email second lead' }, overrideAccess: true })
   const archivedLead = await payload.create({ collection: 'inquiries', data: { email: 'archived-lead.synthetic@example.test', name: 'Archived lead', message: 'A lead outside the default received range.', topic: 'general', sourcePage: '/archive', consentedAt: '2025-01-01T00:00:00.000Z', consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-archived', stage: 'new', urgent: false }, overrideAccess: true })
   await payload.update({ collection: 'inquiries', id: archivedLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
+  await payload.create({ collection: 'inquiries', data: { email: 'restore-spam.synthetic@example.test', name: 'Restore spam fixture', message: 'A persisted spam submission that can be restored.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-spam-restore', stage: 'qualified', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'qualified', urgent: false }, overrideAccess: true })
+  await payload.create({ collection: 'inquiries', data: { email: 'delete-spam.synthetic@example.test', name: 'Delete spam fixture', message: 'A persisted spam submission that can be permanently deleted.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-spam-delete', stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new', urgent: false }, overrideAccess: true })
   for (let index = 0; index < 51; index += 1) await payload.create({ collection: 'inquiries', data: { email: `proposal-${index}@synthetic.example.test`, message: `Synthetic proposal lead ${index}.`, topic: 'project', sourcePage: '/proposal-fixture', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `synthetic-leads-proposal-${index}`, stage: 'proposal', urgent: false }, overrideAccess: true })
   await payload.create({ collection: 'applications', data: { name: 'Synthetic candidate', email: 'candidate.synthetic@example.test', coverLetter: 'Synthetic application for role-scoped badge verification.', consent: true, jobId: 'synthetic-role', resumeKey: `${randomUUID()}-${'a'.repeat(64)}`, idempotencyKey: 'synthetic-application-new', status: 'new' }, overrideAccess: true })
   await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-pending', sequence: 2, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-pending', includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
@@ -467,7 +476,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         throw new Error('Unsupported preview worker action.')
       }
       const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
-      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: new Map(), heartbeatMs: 60_000, signal: undefined })
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
       return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return

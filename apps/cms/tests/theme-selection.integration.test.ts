@@ -31,6 +31,7 @@ writeFileSync(registryFile, JSON.stringify(registry))
 const { default: config } = await import('../payload.config.js')
 const { getInstalledTheme, parseThemeRegistry } = await import('@site-engine/engine/theme-registry')
 const editorialRoute = await import('../app/api/editorial/[action]/route.js')
+const themeRoute = await import('../app/api/themes/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })
@@ -107,5 +108,44 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID, overrideAccess: true })
     expect(approvedSnapshot).toMatchObject({ contractVersion: '1.1.0', themeVersion: manifest.version })
     expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.1.0')
+  })
+
+  it('allows a new reviewed preview when the singleton matches the published theme, reuses its owned draft, and denies a foreign pending selection', async () => {
+    const registryValue = parseThemeRegistry(registry)
+    const publishedTheme = getInstalledTheme(registryValue, oldManifest.name, oldManifest.version)!
+    const proposedTheme = getInstalledTheme(registryValue, manifest.name, manifest.version)!
+    const publishedSelection = { id: oldManifest.name, version: oldManifest.version, contract: oldManifest.contract, manifestDigest: publishedTheme.manifestDigest }
+    const settings = await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true })
+    if (settings.docs[0]) await payload.update({ collection: 'theme-settings', id: settings.docs[0].id, data: { selection: publishedSelection, settings: {} }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    else await payload.create({ collection: 'theme-settings', data: { key: 'active', selection: publishedSelection, settings: {} }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+
+    const owner = await payload.create({ collection: 'users', data: { email: `theme-route-owner-${randomUUID()}@example.test`, name: 'Theme route owner', roles: ['owner'] }, overrideAccess: true })
+    const other = await payload.create({ collection: 'users', data: { email: `theme-route-other-${randomUUID()}@example.test`, name: 'Theme route other owner', roles: ['owner'] }, overrideAccess: true })
+    const session = async (user: typeof owner) => {
+      const token = newOpaqueToken(); const now = new Date().toISOString()
+      await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+      return token
+    }
+    const ownerToken = await session(owner); const otherToken = await session(other)
+    const request = (token: string, id: string, version: string) => themeRoute.POST(new Request('http://cms.test/api/themes', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `site_engine_session=${token}` }, body: JSON.stringify({ id, version, changeSetName: 'Reviewed route theme' }) }))
+    const chooser = (token: string) => themeRoute.GET(new Request('http://cms.test/api/themes', { headers: { cookie: `site_engine_session=${token}` } }))
+
+    const publishedChooser = await chooser(ownerToken)
+    expect(publishedChooser.status).toBe(200)
+    expect(await publishedChooser.json()).toMatchObject({ publishedSelection: { id: oldManifest.name, version: oldManifest.version }, draftSelection: null, draftChangeSet: null })
+
+    const created = await request(ownerToken, manifest.name, manifest.version)
+    expect(created.status, await created.clone().text()).toBe(201)
+    expect(await created.json()).toMatchObject({ selection: { id: manifest.name, version: manifest.version }, reused: false })
+    const ownedChooser = await chooser(ownerToken)
+    expect(await ownedChooser.json()).toMatchObject({ draftSelection: { id: manifest.name, version: manifest.version }, draftChangeSet: { state: 'open' } })
+    const foreignChooser = await chooser(otherToken)
+    expect(await foreignChooser.json()).toMatchObject({ draftSelection: { id: manifest.name, version: manifest.version }, draftChangeSet: null })
+    const denied = await request(otherToken, oldManifest.name, oldManifest.version)
+    expect(denied.status).toBe(400)
+    expect(await denied.json()).toMatchObject({ error: expect.stringContaining('Another reviewed draft controls') })
+    const reused = await request(ownerToken, manifest.name, manifest.version)
+    expect(reused.status, await reused.clone().text()).toBe(200)
+    expect(await reused.json()).toMatchObject({ selection: { id: proposedTheme.manifest.name, version: proposedTheme.manifest.version }, reused: true })
   })
 })

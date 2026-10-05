@@ -16,12 +16,18 @@ describe('ENG-013 Nginx redirect artifact', () => {
     await exec('docker', ['version', '--format', '{{.Server.Version}}'])
     directory = await mkdtemp(join(tmpdir(), 'site-engine-nginx-'))
     await chmod(directory, 0o755)
-    await writeFile(join(directory, 'redirects.nginx.conf'), nginxRedirectInclude({
+    const redirectsConfig = join(directory, 'redirects.nginx.conf')
+    const nginxConfig = join(directory, 'nginx.conf')
+    await writeFile(redirectsConfig, nginxRedirectInclude({
       settings: { contractVersion: '1.0.0', siteName: 'Sample', defaultLocale: 'en', homepageId: '11111111-1111-4111-8111-111111111111', sections: [{ id: '22222222-2222-4222-8222-222222222222', name: 'General', slug: 'general', allowedTemplates: ['landing'], pageIds: ['11111111-1111-4111-8111-111111111111'] }] },
       pages: [{ id: '11111111-1111-4111-8111-111111111111', sectionId: '22222222-2222-4222-8222-222222222222', title: 'Home', summary: 'A synthetic home page with a valid descriptive summary.', slug: 'home', template: 'landing', status: 'published', blocks: [{ id: '33333333-3333-4333-8333-333333333333', type: 'hero', heading: 'Home', body: 'Synthetic body', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }], media: [], redirects: [{ from: '/legacy', to: '/general', status: 301 }], changeSets: [],
     }))
-    await writeFile(join(directory, 'nginx.conf'), `pid /tmp/nginx.pid;\nevents {}\nhttp { server { listen 8080; absolute_redirect off; include /etc/nginx/redirects.nginx.conf; location / { return 200 'static'; } } }\n`)
-    await exec('docker', ['run', '--pull=missing', '-d', '--name', name, '-p', '127.0.0.1:4600:8080', '-v', `${directory}/nginx.conf:/etc/nginx/nginx.conf:ro`, '-v', `${directory}/redirects.nginx.conf:/etc/nginx/redirects.nginx.conf:ro`, image])
+    await writeFile(nginxConfig, `pid /tmp/nginx.pid;\nevents {}\nhttp { server { listen 8080; absolute_redirect off; include /etc/nginx/redirects.nginx.conf; location / { return 200 'static'; } } }\n`)
+    // CI runs with umask 077. These two synthetic, non-secret configs are
+    // bind-mounted into an unprivileged container, so grant only read access
+    // after creation while keeping every other temporary fixture private.
+    await Promise.all([chmod(redirectsConfig, 0o644), chmod(nginxConfig, 0o644)])
+    await exec('docker', ['run', '--pull=missing', '-d', '--name', name, '-p', '127.0.0.1:4600:8080', '-v', `${nginxConfig}:/etc/nginx/nginx.conf:ro`, '-v', `${redirectsConfig}:/etc/nginx/redirects.nginx.conf:ro`, image])
     for (let attempt = 0; attempt < 30; attempt += 1) {
       try { if ((await fetch('http://127.0.0.1:4600/')).status === 200) return } catch { /* container is starting */ }
       await new Promise((resolve) => setTimeout(resolve, 100))

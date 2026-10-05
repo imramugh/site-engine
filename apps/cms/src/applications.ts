@@ -7,6 +7,37 @@ import { inflateRawSync } from 'node:zlib'
 const maxBytes = 5_000_000; const maxUncompressed = 20_000_000
 export const applicationStorage = () => resolve(process.env.APPLICATION_STORAGE_DIR || './data/applications')
 
+export function normalizeApplicantTelephone(value: FormDataEntryValue | null): string | null {
+  if (value === null || value === '') return null
+  if (typeof value !== 'string') throw new Error('Invalid telephone.')
+  const telephone = value.trim()
+  if (!telephone) return null
+  const digits = telephone.replace(/\D/g, '')
+  if (telephone.length > 48 || digits.length < 7 || digits.length > 15 || !/^\+?[0-9(][0-9 ().-]*$/.test(telephone)) throw new Error('Invalid telephone.')
+  return telephone
+}
+
+export function normalizeApplicantLinkedIn(value: FormDataEntryValue | null): string | null {
+  if (value === null || value === '') return null
+  if (typeof value !== 'string') throw new Error('Invalid LinkedIn URL.')
+  const input = value.trim()
+  if (!input) return null
+  if (input.length > 500) throw new Error('Invalid LinkedIn URL.')
+  let url: URL
+  try { url = new URL(input) } catch { throw new Error('Invalid LinkedIn URL.') }
+  const hostname = url.hostname.toLowerCase()
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || (hostname !== 'linkedin.com' && !hostname.endsWith('.linkedin.com')) || url.pathname === '/') throw new Error('Invalid LinkedIn URL.')
+  url.hash = ''
+  return url.toString()
+}
+
+const immutableApplicationFields = ['name', 'email', 'telephone', 'linkedIn', 'coverLetter', 'consent', 'jobId', 'resumeKey', 'idempotencyKey'] as const
+export function preserveApplicationIntake<T extends Record<string, unknown>>(data: T, original: Record<string, unknown>): T {
+  const next: Record<string, unknown> = { ...data }
+  for (const field of immutableApplicationFields) next[field] = original[field]
+  return next as T
+}
+
 /** Read only the original immutable upload; never follow a substituted symlink. */
 export async function readResume(key: string): Promise<Buffer> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[a-f0-9]{64}$/i.test(key)) throw new Error('Invalid resume key')

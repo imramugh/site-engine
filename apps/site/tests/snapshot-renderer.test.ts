@@ -199,7 +199,7 @@ describe('static snapshot renderer', () => {
     expect(sitemap).toContain('<loc>https://public.example.test/docs/release-notes</loc>');
     expect(sitemap).not.toContain('draft-marker');
     expect(robots).toContain('Disallow: /');
-    expect(robots).toContain('crawler policy 2026-10-03');
+    expect(robots).toContain('crawler policy 2026-10-05');
     expect(llms).toContain('[Alpha release notes](https://public.example.test/docs/release-notes)');
     expect(llms).not.toContain('DRAFT_MARKER_MUST_NOT_RENDER');
     expect(machine.pages.map((page: { url: string }) => page.url)).not.toContain('https://public.example.test/docs/draft-marker');
@@ -378,6 +378,24 @@ describe('static snapshot renderer', () => {
       expect(cspErrors.filter((message) => /content security policy|inline script/i.test(message))).toEqual([]);
     } finally { publicServer.server.closeAllConnections(); publicServer.server.close(); previewServer.server.closeAllConnections(); previewServer.server.close(); await browser.close(); }
   }, 180_000);
+
+  it('renders reviewed 1.7 crawler preferences and discovery description into a public artifact', async () => {
+    const snapshot = fixture('Crawler policy')
+    snapshot.settings.contractVersion = '1.7.0'
+    snapshot.settings.crawlerPolicy = { searchEngines: false, aiSearchAndAnswers: true, aiModelTraining: false }
+    snapshot.settings.seoDescription = 'Reviewed public discovery description.'
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'crawler-policy-1-7.json'), publicOrigin: PUBLIC_ORIGIN, basePath: '/', outputRoot: root })
+    const robots = await readFile(join(built.output, 'robots.txt'), 'utf8')
+    const llms = await readFile(join(built.output, 'llms.txt'), 'utf8')
+    const html = await readFile(join(built.output, 'index.html'), 'utf8')
+    expect(robots).toContain('User-agent: *\nDisallow: /')
+    expect(robots).toContain('User-agent: OAI-SearchBot')
+    expect(robots.slice(robots.indexOf('User-agent: OAI-SearchBot'), robots.indexOf('User-agent: GPTBot'))).toContain('Allow: /')
+    expect(robots.slice(robots.indexOf('User-agent: GPTBot'))).toContain('Disallow: /')
+    expect(robots).not.toContain('ChatGPT-User')
+    expect(llms).toContain('# Sample Studio\n\nReviewed public discovery description.')
+    expect(html).toContain('Reviewed public discovery description.')
+  }, 120_000)
 
   it('rejects component roots that are non-absolute, symbolic, or missing the required renderer contract', async () => {
     const input = await writeSnapshot(root, fixture('Unsafe components'), 'unsafe-components.json');

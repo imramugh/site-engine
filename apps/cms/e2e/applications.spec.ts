@@ -9,6 +9,7 @@ const expiredJobID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const resume = '%PDF-1.7\nSynthetic application resume\n%%EOF\n'
+const longLinkedIn = `https://ca.linkedin.com/in/synthetic-applicant-${'profile-'.repeat(48)}end`
 
 async function newPage(browser: Browser, role: 'owner' | 'hiring' | 'editor' | 'sales'): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
@@ -19,10 +20,12 @@ async function newPage(browser: Browser, role: 'owner' | 'hiring' | 'editor' | '
 test('ENG-021 accepts a valid multipart application only for a published role and protects its resume', async ({ browser, page }) => {
   test.setTimeout(90_000)
   await page.goto('/')
-  const submit = async (targetJobID: string, idempotencyKey: string, coverLetter = 'I would like to apply for this synthetic role.', file = resume) => page.evaluate(async ({ targetJobID, idempotencyKey, coverLetter, file }) => {
+  const submit = async (targetJobID: string, idempotencyKey: string, coverLetter = 'I would like to apply for this synthetic role.', file = resume, telephone = '(416) 555-0199', profile = longLinkedIn) => page.evaluate(async ({ targetJobID, idempotencyKey, coverLetter, file, telephone, profile }) => {
     const form = new FormData()
     form.set('name', 'Synthetic Applicant')
     form.set('email', 'applicant.synthetic@example.test')
+    form.set('telephone', telephone)
+    form.set('linkedIn', profile)
     form.set('coverLetter', coverLetter)
     form.set('consent', 'true')
     form.set('jobId', targetJobID)
@@ -30,7 +33,7 @@ test('ENG-021 accepts a valid multipart application only for a published role an
     form.set('resume', new File([file], 'synthetic-resume.pdf', { type: 'application/pdf' }))
     const response = await fetch('/api/applications', { method: 'POST', body: form })
     return { status: response.status, body: await response.json() as { id?: string; error?: string } }
-  }, { targetJobID, idempotencyKey, coverLetter, file })
+  }, { targetJobID, idempotencyKey, coverLetter, file, telephone, profile })
 
   for (const [rejectedJobID, idempotencyKey] of [[draftJobID, '13131313-1313-4131-8131-131313131313'], [expiredJobID, '14141414-1414-4141-8141-141414141414'], ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '15151515-1515-4151-8151-151515151515']] as const) {
     const rejected = await submit(rejectedJobID, idempotencyKey)
@@ -46,6 +49,9 @@ test('ENG-021 accepts a valid multipart application only for a published role an
   const changedReplay = await submit(jobID, '12121212-1212-4121-8121-121212121212', 'A changed replay must never replace the stored application.')
   expect(changedReplay.status).toBe(400)
   expect(changedReplay.body).toEqual({ error: 'invalid_application' })
+  expect((await submit(jobID, '12121212-1212-4121-8121-121212121212', undefined, undefined, '(647) 555-0100')).status).toBe(400)
+  expect((await submit(jobID, '16161616-1616-4161-8161-161616161616', undefined, undefined, '123', longLinkedIn)).status).toBe(400)
+  expect((await submit(jobID, '17171717-1717-4171-8171-171717171717', undefined, undefined, '(416) 555-0199', 'https://attacker.example/profile')).status).toBe(400)
 
   const resumeURL = `/api/applications/${created.body.id}/resume`
   const anonymous = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
@@ -79,12 +85,14 @@ test('ENG-021 accepts a valid multipart application only for a published role an
   }
 })
 
-test('ENG-021 submits the public Astro application form to the same-origin CMS endpoint', async ({ page }) => {
+test('ENG-021 submits optional contact details through the public Astro form and keeps the protected intake immutable', async ({ browser, page }) => {
   test.setTimeout(90_000)
   await page.goto('/careers/synthetic-application-engineer')
   await expect(page.getByRole('heading', { name: 'Apply for this role' })).toBeVisible()
   await page.getByLabel('Name').fill('Browser Applicant')
   await page.getByLabel('Email').fill('browser.applicant@example.test')
+  await page.getByLabel('Phone').fill('(647) 555-0123')
+  await page.getByLabel('LinkedIn').fill(longLinkedIn)
   await page.getByLabel('Cover letter').fill('I would like to apply through the public careers page.')
   await page.getByLabel(/Resume/).setInputFiles({ name: 'browser-resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from(resume) })
   await page.getByLabel(/I consent/).check()
@@ -92,6 +100,20 @@ test('ENG-021 submits the public Astro application form to the same-origin CMS e
   await submit.click()
   await expect(page.getByRole('status')).toHaveText('Your application has been received.')
   await expect(submit).toBeDisabled()
+
+  const owner = await newPage(browser, 'owner')
+  const read = async () => {
+    const response = await owner.page.request.get('/api/hiring/applications?page=1')
+    expect(response.status()).toBe(200)
+    const application = (await response.json() as { docs: Array<{ id: string; email: string; telephone: string | null; linkedIn: string | null }> }).docs.find(item => item.email === 'browser.applicant@example.test')
+    expect(application).toMatchObject({ telephone: '(647) 555-0123', linkedIn: longLinkedIn })
+    return application!
+  }
+  const application = await read()
+  const update = await owner.page.request.patch(`/api/applications/${application.id}`, { headers: { origin: cmsOrigin }, data: { telephone: '+1 000 000 0000', linkedIn: 'https://www.linkedin.com/in/replaced', status: 'reviewing' } })
+  expect(update.status()).toBe(200)
+  await read()
+  await owner.context.close()
 })
 
 test('ENG-021 lets Owner and Hiring work the protected application dashboard while Sales and Editor are denied', async ({ browser }) => {
@@ -110,6 +132,8 @@ test('ENG-021 lets Owner and Hiring work the protected application dashboard whi
     await session.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
     const details = session.page.getByRole('complementary', { name: 'Application details' })
     await expect(details).toContainText('Synthetic Application Engineer')
+    await expect(details.getByRole('link', { name: '(416) 555-0199' })).toHaveAttribute('href', 'tel:4165550199')
+    await expect(details.getByRole('link', { name: 'View profile' })).toHaveAttribute('href', longLinkedIn)
     await expect(session.page.getByRole('button', { name: 'Download resume' })).toBeVisible()
     if (role === 'owner') { await details.getByRole('button', { name: 'Interview' }).click(); await expect(details.getByRole('button', { name: 'Interview' })).toHaveAttribute('aria-pressed', 'true'); await session.page.addScriptTag({ path: axeSource }); expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]) }
     await session.context.close()
@@ -155,6 +179,8 @@ test('ENG-021 starts a real job draft through the normal content editor and rend
   }
   await owner.page.setViewportSize({ width: 1440, height: 1050 })
   await owner.page.getByRole('button', { name: /Applications ·/ }).click()
+  await owner.page.getByRole('button', { name: /Synthetic candidate/ }).first().click()
+  await expect(owner.page.getByRole('complementary', { name: 'Application details' }).getByText('Not provided')).toHaveCount(2)
   await owner.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
   const desktopDetail = owner.page.getByRole('complementary', { name: 'Application details' })
   const desktopBox = await desktopDetail.boundingBox()

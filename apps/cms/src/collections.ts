@@ -13,6 +13,8 @@ import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorage
 import { mediaFocalContractVersion } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
 import { enqueueNotification } from './notification-settings'
+import { preserveApplicationIntake } from './applications'
+import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -394,7 +396,7 @@ export const AssetFileVersions: CollectionConfig = {
 export const Redirects: CollectionConfig = {
   slug: 'redirects', admin: { useAsTitle: 'from', group: 'Content' }, access: editorialAccess,
   hooks: {
-    beforeChange: [async ({ data, originalDoc, req }) => {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
       const redirect = normalizedRedirect({ from: data.from ?? originalDoc?.from, to: data.to ?? originalDoc?.to })
       const existing = await req.payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
       validateRedirectSet([
@@ -402,7 +404,14 @@ export const Redirects: CollectionConfig = {
         redirect,
       ])
       contractError(RedirectSchema.safeParse(redirect), req, 'redirects')
-      return { ...originalDoc, ...data, ...redirect, status: 301 }
+      const actor = req.user as { id?: unknown; name?: unknown; email?: unknown } | null
+      const actorLabel = typeof actor?.name === 'string' && actor.name.trim()
+        ? actor.name.trim().slice(0, 160)
+        : typeof actor?.email === 'string' && actor.email.trim() ? actor.email.trim().slice(0, 160) : null
+      const imported = req.context.reviewedSnapshotImport === true
+      const createdBy = operation === 'update' ? originalDoc?.createdBy ?? null : imported || typeof actor?.id !== 'string' ? null : actor.id
+      const createdByLabel = operation === 'update' ? originalDoc?.createdByLabel ?? null : imported ? null : actorLabel
+      return { ...originalDoc, ...data, ...redirect, status: 301, createdBy, createdByLabel }
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
       await captureChange({ collection: 'redirects', doc: doc as Record<string, unknown>, previousDoc: previousDoc as Record<string, unknown> | undefined, operation, req })
@@ -413,6 +422,8 @@ export const Redirects: CollectionConfig = {
     { name: 'from', type: 'text', required: true, unique: true },
     { name: 'to', type: 'text', required: true },
     { name: 'status', type: 'number', defaultValue: 301, admin: { readOnly: true } },
+    { name: 'createdBy', type: 'relationship', relationTo: 'users', admin: { readOnly: true } },
+    { name: 'createdByLabel', type: 'text', maxLength: 160, admin: { readOnly: true } },
     { name: 'hitCount', type: 'number', defaultValue: 0, min: 0, admin: { readOnly: true, description: 'Updated by the edge log ingestion adapter.' } },
     { name: 'lastHitAt', type: 'date', admin: { readOnly: true } },
   ],
@@ -423,17 +434,20 @@ export const Inquiries: CollectionConfig = {
   admin: { useAsTitle: 'email', group: 'Private', defaultColumns: ['email', 'topic', 'stage', 'urgent', 'assignee', 'nextAction', 'updatedAt'] },
   // Public submissions enter only through the server-owned intake route. This
   // keeps the form entirely outside editorial and ordinary Payload REST create.
-  access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: staff(['owner']) },
+  access: { create: () => false, read: staff(['owner', 'sales']), update: staff(['owner', 'sales']), delete: freshStaff(['owner']) },
   hooks: { beforeChange: [async ({ data, originalDoc, operation, req }) => {
     if (operation !== 'update') return data
+    if (originalDoc.spam && req.context.leadSpamLifecycle !== true) throw new Error('Restore spam before editing lead details.')
+    if (['spam', 'spamMarkedAt', 'spamPreviousStage'].some((field) => data[field] !== undefined && data[field] !== originalDoc[field]) && req.context.leadSpamLifecycle !== true) throw new Error('Spam classification uses the audited lead lifecycle.')
     for (const field of ['email', 'name', 'telephone', 'company', 'message', 'topic', 'sourcePage', 'consentedAt', 'consentBasis', 'idempotencyKey', 'urgent']) {
       if (data[field] !== undefined && data[field] !== originalDoc[field]) throw new Error('Original inquiry and consent evidence cannot be changed.')
     }
-    if (data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
+    if (req.context.leadSpamLifecycle !== true && data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
     for (const field of ['notes', 'nextAction']) if (data[field] !== undefined && data[field] !== null && (typeof data[field] !== 'string' || data[field].length > 5_000)) throw new Error(`Invalid ${field}.`)
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
+    if (req.context.leadSpamDeleteLifecycle !== true) throw new Error('Lead deletion uses the audited spam lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
@@ -449,7 +463,10 @@ export const Inquiries: CollectionConfig = {
     { name: 'consentedAt', type: 'date', required: true, admin: { readOnly: true } },
     { name: 'consentBasis', type: 'select', required: true, options: ['visitor-confirmed', 'staff-recorded', 'unknown'], admin: { readOnly: true } },
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { readOnly: true } },
-    { name: 'stage', type: 'select', defaultValue: 'new', required: true, options: ['new', 'qualified', 'contacted', 'proposal', 'won', 'lost'] },
+    { name: 'stage', type: 'select', defaultValue: 'new', required: true, options: ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'] },
+    { name: 'spam', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
+    { name: 'spamMarkedAt', type: 'date', admin: { readOnly: true } },
+    { name: 'spamPreviousStage', type: 'select', options: ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'], admin: { readOnly: true } },
     { name: 'urgent', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
     { name: 'notes', type: 'textarea' },
     { name: 'assignee', type: 'relationship', relationTo: 'users' },
@@ -509,7 +526,10 @@ export const MailDrafts: CollectionConfig = {
     { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
   ],
   hooks: {
-    beforeChange: [({ data, originalDoc, operation }) => {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      const requestedLead = relationId(data.lead) ?? (operation === 'update' ? relationId(originalDoc?.lead) : undefined)
+      if (!requestedLead) throw new Error('A valid lead is required for a mail draft.')
+      if (req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
       const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
       // Payload update input is a patch. An omitted draft-bound field must not
@@ -537,13 +557,13 @@ export const MailAuthorizations: CollectionConfig = {
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: {
-    beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? { ...data, name: originalDoc.name, email: originalDoc.email, coverLetter: originalDoc.coverLetter, consent: originalDoc.consent, jobId: originalDoc.jobId, resumeKey: originalDoc.resumeKey, idempotencyKey: originalDoc.idempotencyKey } : data],
+    beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? preserveApplicationIntake(data, originalDoc) : data],
     afterChange: [async ({ doc, operation, req }) => {
       if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
       return doc
     }],
   },
-  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
+  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'telephone', type: 'text', maxLength: 48 }, { name: 'linkedIn', type: 'text', maxLength: 500 }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
 }
 
 export const ChangeSets: CollectionConfig = {
@@ -942,6 +962,7 @@ export const SiteSettings: CollectionConfig = {
     { name: 'incident', type: 'group', fields: [{ name: 'label', type: 'text', maxLength: 80 }, { name: 'guidance', type: 'textarea', maxLength: 1000 }] },
     { name: 'navigation', type: 'json', admin: { description: 'Validated ordered header and footer references.' } },
     { name: 'searchEnabled', type: 'checkbox', defaultValue: false, admin: { description: 'Expose the static public search page and include it in the primary navigation after this change is reviewed and published.' } },
+    { name: 'crawlerPolicy', type: 'json', admin: { description: 'Reviewed robots.txt requests. These preferences do not enforce access.' } },
     { name: 'contractVersion', type: 'text', admin: { readOnly: true, hidden: true } },
   ],
 }

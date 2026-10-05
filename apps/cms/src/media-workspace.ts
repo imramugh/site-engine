@@ -23,7 +23,7 @@ export type MediaAsset = {
 
 export async function mediaFocalContractVersion(payload: Payload, initialBaseline?: PreviewBaseline, req?: PayloadRequest): Promise<'1.4.0' | null> {
   const context = await previewThemeContext({ payload, changeSets: [], initialBaseline, req })
-  return context.activeContractVersion === '1.4.0' || context.activeContractVersion === '1.5.0' || context.activeContractVersion === '1.6.0' ? '1.4.0' : null
+  return context.activeContractVersion === '1.4.0' || context.activeContractVersion === '1.5.0' || context.activeContractVersion === '1.6.0' || context.activeContractVersion === '1.7.0' ? '1.4.0' : null
 }
 
 export async function mediaWorkspace(
