@@ -13,7 +13,7 @@ describe('ENG-006 / ENG-022 admin shell contracts', () => {
     expect(navigationForRoles(['sales']).map((item) => item.href)).toEqual(['/admin', '/leads'])
     expect(navigationForRoles(['hiring']).map((item) => item.href)).toEqual(['/admin', '/applications'])
     expect(navigationForRoles(['owner'], adminSiteNavigationItems).map((item) => [item.label, item.href])).toEqual([
-      ['Site', '/admin/collections/site-settings'], ['Integrations', '/integrations'], ['Users', '/admin/collections/users'],
+      ['Site', '/site'], ['Integrations', '/integrations'], ['Users', '/admin/collections/users'],
     ])
     expect(navigationForRoles(['editor'], adminSiteNavigationItems)).toEqual([])
   })

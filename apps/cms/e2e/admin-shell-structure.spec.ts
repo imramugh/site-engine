@@ -48,7 +48,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await expect(owner.page.locator('[data-admin-secondary] [data-admin-nav-item] > span:not([data-admin-nav-badge])')).toHaveText(['Site', 'Integrations', 'Users'])
   await expect(owner.page.locator('[data-admin-nav-separator]')).toHaveCount(1)
   await owner.page.locator('[data-admin-account-button]').click()
-  await expect(owner.page.getByRole('menuitem', { name: 'Log out' })).toHaveAttribute('href', '/admin/logout')
+  await expect(owner.page.getByRole('menuitem', { name: 'Sign out' })).toHaveAttribute('href', '/admin/logout')
   await owner.page.screenshot({ path: 'artifacts/playwright-cms/admin-shell-1440.png', fullPage: true })
   expect(await installAxe(owner.page)).toEqual([])
 
