@@ -757,7 +757,7 @@ export interface MailboxConfiguration {
   security: 'starttls' | 'tls';
   username: string;
   encryptedCredential?: string | null;
-  credentialFingerprint: string;
+  credentialRevision: string;
   health: 'unknown' | 'connected' | 'rejected' | 'unavailable' | 'revoked';
   testedAt?: string | null;
   updatedAt: string;
@@ -1885,7 +1885,7 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   security?: T;
   username?: T;
   encryptedCredential?: T;
-  credentialFingerprint?: T;
+  credentialRevision?: T;
   health?: T;
   testedAt?: T;
   updatedAt?: T;
