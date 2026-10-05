@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 const MAX_BYTES = 32 * 1024
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store' } })
 const sameOrigin = (request: Request) => { const origin = request.headers.get('origin'); const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL; return Boolean(origin && configured && origin === new URL(configured).origin) }
-async function body(request: Request) { const bytes = new Uint8Array(await request.arrayBuffer()); if (bytes.byteLength > MAX_BYTES) throw new Error('too_large'); const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes)); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid'); return parsed as Record<string, unknown> }
+async function body(request: Request) { if (!request.body) throw new Error('invalid'); const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const chunk = await reader.read(); if (chunk.done) break; size += chunk.value.byteLength; if (size > MAX_BYTES) throw new Error('too_large'); chunks.push(chunk.value) } } finally { await reader.cancel().catch(() => undefined) } const parsed: unknown = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks))); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid'); return parsed as Record<string, unknown> }
 async function owner(request: Request) { const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); return { payload, user: auth.user as { id: string; roles?: string[] } | null } }
 
 export async function GET(request: Request) {
@@ -31,6 +31,6 @@ export async function POST(request: Request) {
     return json(await mailboxWorkspace(payload))
   } catch (error) {
     if (error instanceof Error && error.message === 'too_large') return json({ error: 'Request is too large.' }, 413)
-    return json({ error: error instanceof Error && /confirmation|request key|not configured|must be tested|could not be delivered/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
+    return json({ error: error instanceof Error && /confirmation|request key|not configured|not been verified|must be tested|could not be delivered/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
   }
 }

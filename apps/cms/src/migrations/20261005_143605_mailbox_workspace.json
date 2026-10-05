@@ -4021,6 +4021,14 @@
           "autoincrement": false,
           "default": "'[]'"
         },
+        "verified_aliases": {
+          "name": "verified_aliases",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
         "host": {
           "name": "host",
           "type": "text",
@@ -4569,7 +4577,7 @@
           "name": "inquiry_id",
           "type": "text(36)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "kind": {
@@ -4599,6 +4607,41 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "recipient_rules": {
+          "name": "recipient_rules",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recipients": {
+          "name": "recipients",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channels": {
+          "name": "channels",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_i_d": {
+          "name": "source_i_d",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "available_at": {
@@ -4670,6 +4713,180 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "notification_preferences": {
+      "name": "notification_preferences",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text(36)",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "events": {
+          "name": "events",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_by_id": {
+          "name": "updated_by_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        }
+      },
+      "indexes": {
+        "notification_preferences_key_idx": {
+          "name": "notification_preferences_key_idx",
+          "columns": [
+            "key"
+          ],
+          "isUnique": true
+        },
+        "notification_preferences_updated_by_idx": {
+          "name": "notification_preferences_updated_by_idx",
+          "columns": [
+            "updated_by_id"
+          ],
+          "isUnique": false
+        },
+        "notification_preferences_updated_at_idx": {
+          "name": "notification_preferences_updated_at_idx",
+          "columns": [
+            "updated_at"
+          ],
+          "isUnique": false
+        },
+        "notification_preferences_created_at_idx": {
+          "name": "notification_preferences_created_at_idx",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "notification_preferences_updated_by_id_users_id_fk": {
+          "name": "notification_preferences_updated_by_id_users_id_fk",
+          "tableFrom": "notification_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "urgent_contacts": {
+      "name": "urgent_contacts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text(36)",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mobile": {
+          "name": "mobile",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+        }
+      },
+      "indexes": {
+        "urgent_contacts_updated_at_idx": {
+          "name": "urgent_contacts_updated_at_idx",
+          "columns": [
+            "updated_at"
+          ],
+          "isUnique": false
+        },
+        "urgent_contacts_created_at_idx": {
+          "name": "urgent_contacts_created_at_idx",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -6710,6 +6927,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "notification_preferences_id": {
+          "name": "notification_preferences_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "urgent_contacts_id": {
+          "name": "urgent_contacts_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "mail_drafts_id": {
           "name": "mail_drafts_id",
           "type": "text(36)",
@@ -6940,6 +7171,20 @@
           "name": "payload_locked_documents_rels_notification_outbox_id_idx",
           "columns": [
             "notification_outbox_id"
+          ],
+          "isUnique": false
+        },
+        "payload_locked_documents_rels_notification_preferences_i_idx": {
+          "name": "payload_locked_documents_rels_notification_preferences_i_idx",
+          "columns": [
+            "notification_preferences_id"
+          ],
+          "isUnique": false
+        },
+        "payload_locked_documents_rels_urgent_contacts_id_idx": {
+          "name": "payload_locked_documents_rels_urgent_contacts_id_idx",
+          "columns": [
+            "urgent_contacts_id"
           ],
           "isUnique": false
         },
@@ -7281,6 +7526,32 @@
           "tableTo": "notification_outbox",
           "columnsFrom": [
             "notification_outbox_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "payload_locked_documents_rels_notification_preferences_fk": {
+          "name": "payload_locked_documents_rels_notification_preferences_fk",
+          "tableFrom": "payload_locked_documents_rels",
+          "tableTo": "notification_preferences",
+          "columnsFrom": [
+            "notification_preferences_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "payload_locked_documents_rels_urgent_contacts_fk": {
+          "name": "payload_locked_documents_rels_urgent_contacts_fk",
+          "tableFrom": "payload_locked_documents_rels",
+          "tableTo": "urgent_contacts",
+          "columnsFrom": [
+            "urgent_contacts_id"
           ],
           "columnsTo": [
             "id"
@@ -7665,6 +7936,6 @@
   "internal": {
     "indexes": {}
   },
-  "id": "f82d7932-d089-4e3a-95f2-66dbc13dbd8a",
+  "id": "e5f1e38b-d38d-490d-a832-a41cc8f6d925",
   "prevId": "00000000-0000-0000-0000-000000000000"
 }
