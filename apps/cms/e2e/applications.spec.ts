@@ -144,6 +144,16 @@ test('ENG-021 starts a real job draft through the normal content editor and rend
   await owner.page.goto('/applications')
   await expect(owner.page.getByRole('table', { name: 'Roles' })).toContainText('Synthetic Reviewed Careers Role')
   await owner.page.screenshot({ path: testInfo.outputPath('careers-roles-1440.png'), fullPage: true })
+  for (const width of [390, 320]) {
+    await owner.page.setViewportSize({ width, height: 844 })
+    expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    const scroll = owner.page.getByLabel('Roles table, scroll horizontally for more columns', { exact: true }); await scroll.focus(); await scroll.press('End')
+    await scroll.evaluate(element => { element.scrollLeft = element.scrollWidth })
+    await expect(owner.page.getByRole('link', { name: 'Edit role', exact: true }).first()).toBeInViewport()
+    await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+    await owner.page.screenshot({ path: testInfo.outputPath(`careers-roles-${width}.png`), fullPage: true })
+  }
+  await owner.page.setViewportSize({ width: 1440, height: 1050 })
   await owner.page.getByRole('button', { name: /Applications ·/ }).click()
   await owner.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
   const desktopDetail = owner.page.getByRole('complementary', { name: 'Application details' })
