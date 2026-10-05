@@ -84,6 +84,28 @@ test('ENG-022 gives only an Owner the source-shaped accessible Change log', asyn
   for (const role of ['editor', 'sales'] as const) { const denied = await newPage(browser, role); expect((await denied.page.request.get('/api/operations')).status()).toBe(403); await denied.page.goto('/operations'); await expect(denied.page.getByText('Owner access is required to view the change log.')).toBeVisible(); await denied.context.close() }
 })
 
+test('ENG-037 lets only a fresh Owner manage retention in Operations and requires explicit deletion confirmation', async ({ browser }) => {
+  const owner = await newPage(browser, 'owner')
+  await owner.page.goto('/operations')
+  const panel = owner.page.getByLabel('Retention and deletion')
+  await expect(panel.getByRole('heading', { name: 'Retention and deletion' })).toBeVisible()
+  await panel.getByLabel('Spam days').fill('31')
+  await panel.getByLabel('Media bin days').fill('32')
+  await panel.getByRole('button', { name: 'Save policy' }).click()
+  await expect(panel.getByRole('status')).toContainText('Retention policy saved')
+  await owner.page.reload()
+  await expect(owner.page.getByLabel('Retention and deletion').getByLabel('Spam days')).toHaveValue('31')
+  const unconfirmed = await owner.page.request.delete('/api/retention', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { inquiryID: '11111111-1111-4111-8111-111111111111' } })
+  expect(unconfirmed.status()).toBe(422)
+  await owner.page.addScriptTag({ path: axeSource })
+  expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.context.close()
+  const editor = await newPage(browser, 'editor')
+  const denied = await editor.page.request.put('/api/retention', { headers: { origin: cmsOrigin, 'content-type': 'application/json' }, data: { spamDays: 7, mediaBinDays: 7 } })
+  expect(denied.status()).toBe(403)
+  await editor.context.close()
+})
+
 test('ENG-022 exposes the role-aware Leads and Applications links through the admin navigation', async ({ browser }) => {
   const owner = await newPage(browser, 'owner')
   await owner.page.goto('/admin')

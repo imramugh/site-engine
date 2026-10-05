@@ -4,6 +4,7 @@ import { changeLogFilters } from '../../../src/change-log-query'
 import { hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
 import { prepareReviewedRollback, projectChangeLog } from '../../../src/change-log'
+import { retentionPolicy } from '../../../src/retention'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,7 +51,7 @@ export async function GET(request: Request) {
   if (since && !Number.isNaN(Date.parse(since))) clauses.push({ createdAt: { greater_than_equal: since } })
   clauses.push(...await changeLogFilters(payload, { type, source, target }))
 
-  const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages] = await Promise.all([
+  const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages, retention, retentionFailures] = await Promise.all([
     payload.count({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: true }),
     payload.count({ collection: 'inquiries', where: { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }] }, overrideAccess: true }),
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, overrideAccess: true }),
@@ -61,6 +62,8 @@ export async function GET(request: Request) {
     payload.find({ collection: 'audit-events', where: clauses.length ? { and: clauses } as never : undefined, sort: '-createdAt', limit: 25, page, depth: 1, overrideAccess: true }),
     payload.find({ collection: 'users', sort: 'name', limit: 200, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'pages', sort: 'title', limit: 200, depth: 0, draft: true, overrideAccess: true }),
+    retentionPolicy(payload),
+    payload.count({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, overrideAccess: true }),
   ])
 
   const projected = await projectChangeLog(payload, audit.docs as unknown as Array<Record<string, unknown>>)
@@ -76,6 +79,7 @@ export async function GET(request: Request) {
         failed: failed.totalDocs,
       },
     },
+    retention: { ...retention, failedJobs: retentionFailures.totalDocs, backupNotice: 'Deletion markers are replayed before a restored backup serves traffic. Immutable backups age out on their configured schedule.' },
     audit: {
       docs: projected.map((item, index) => ({ ...item, actorId: typeof audit.docs[index]?.actor === 'object' ? audit.docs[index]?.actor?.id : audit.docs[index]?.actor, metadata: safeDetail(audit.docs[index]!.event, audit.docs[index]!.detail) })),
       page: audit.page,

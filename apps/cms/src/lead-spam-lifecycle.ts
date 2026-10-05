@@ -1,6 +1,7 @@
 import type { Payload } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 import { leadStages, type LeadStage } from './inquiries'
+import { recordDeletionIntent } from './retention'
 
 export class LeadSpamLifecycleError extends Error {
   constructor(public readonly code: 'NOT_FOUND' | 'NOT_SPAM' | 'ALREADY_SPAM' | 'ACTIVE_SEND', message: string) { super(message) }
@@ -46,6 +47,7 @@ export async function restoreLeadFromSpam(payload: Payload, id: string, actor: s
 /** Permanently removes an explicitly selected spam record and its mutable,
  * inquiry-bound delivery material. Immutable audit records retain IDs only. */
 export async function deleteSpamLead(payload: Payload, id: string, actor: string) {
+  await recordDeletionIntent(payload, undefined, 'inquiry', id)
   return withPayloadTransaction(payload, async (req) => {
     const current = await payload.find({ collection: 'inquiries', where: { id: { equals: id } }, limit: 1, depth: 0, overrideAccess: true, req })
     const lead = current.docs[0]

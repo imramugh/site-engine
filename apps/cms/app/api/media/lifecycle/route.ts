@@ -3,6 +3,7 @@ import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { moveAssetToBin, restoreAssetFromBin } from '../../../../src/media-lifecycle'
+import { retentionPolicy } from '../../../../src/retention'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +26,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
       return body.action === 'bin'
-        ? moveAssetToBin(payload, req, authenticated.user as never, assetId)
+        ? moveAssetToBin(payload, req, authenticated.user as never, assetId, new Date(), (await retentionPolicy(payload, req)).mediaBinDays)
         : restoreAssetFromBin(payload, req, authenticated.user as never, assetId)
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })

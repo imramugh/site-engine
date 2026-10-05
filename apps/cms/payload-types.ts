@@ -92,6 +92,9 @@ export interface Config {
     'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
+    'retention-settings': RetentionSetting;
+    'deletion-tombstones': DeletionTombstone;
+    'retention-purge-jobs': RetentionPurgeJob;
     'change-sets': ChangeSet;
     'configured-ai-jobs': ConfiguredAiJob;
     'publish-snapshots': PublishSnapshot;
@@ -131,6 +134,9 @@ export interface Config {
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
+    'retention-settings': RetentionSettingsSelect<false> | RetentionSettingsSelect<true>;
+    'deletion-tombstones': DeletionTombstonesSelect<false> | DeletionTombstonesSelect<true>;
+    'retention-purge-jobs': RetentionPurgeJobsSelect<false> | RetentionPurgeJobsSelect<true>;
     'change-sets': ChangeSetsSelect<false> | ChangeSetsSelect<true>;
     'configured-ai-jobs': ConfiguredAiJobsSelect<false> | ConfiguredAiJobsSelect<true>;
     'publish-snapshots': PublishSnapshotsSelect<false> | PublishSnapshotsSelect<true>;
@@ -990,6 +996,46 @@ export interface MailAuthorization {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-settings".
+ */
+export interface RetentionSetting {
+  id: string;
+  key: string;
+  spamDays: number;
+  mediaBinDays: number;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "deletion-tombstones".
+ */
+export interface DeletionTombstone {
+  id: string;
+  resourceType: 'application' | 'inquiry' | 'media';
+  resourceID: string;
+  deletedAt: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-purge-jobs".
+ */
+export interface RetentionPurgeJob {
+  id: string;
+  resourceType: 'spam-inquiry' | 'application' | 'media';
+  resourceID: string;
+  state: 'queued' | 'failed' | 'completed';
+  attempts: number;
+  lastError?: string | null;
+  resumeKey?: string | null;
+  completedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "change-sets".
  */
 export interface ChangeSet {
@@ -1395,6 +1441,18 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'applications';
         value: string | Application;
+      } | null)
+    | ({
+        relationTo: 'retention-settings';
+        value: string | RetentionSetting;
+      } | null)
+    | ({
+        relationTo: 'deletion-tombstones';
+        value: string | DeletionTombstone;
+      } | null)
+    | ({
+        relationTo: 'retention-purge-jobs';
+        value: string | RetentionPurgeJob;
       } | null)
     | ({
         relationTo: 'change-sets';
@@ -2058,6 +2116,43 @@ export interface ApplicationsSelect<T extends boolean = true> {
   resumeKey?: T;
   idempotencyKey?: T;
   status?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-settings_select".
+ */
+export interface RetentionSettingsSelect<T extends boolean = true> {
+  key?: T;
+  spamDays?: T;
+  mediaBinDays?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "deletion-tombstones_select".
+ */
+export interface DeletionTombstonesSelect<T extends boolean = true> {
+  resourceType?: T;
+  resourceID?: T;
+  deletedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "retention-purge-jobs_select".
+ */
+export interface RetentionPurgeJobsSelect<T extends boolean = true> {
+  resourceType?: T;
+  resourceID?: T;
+  state?: T;
+  attempts?: T;
+  lastError?: T;
+  resumeKey?: T;
+  completedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

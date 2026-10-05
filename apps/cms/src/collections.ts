@@ -447,7 +447,7 @@ export const Inquiries: CollectionConfig = {
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
-    if (req.context.leadSpamDeleteLifecycle !== true) throw new Error('Lead deletion uses the audited spam lifecycle.')
+    if (req.context.leadSpamDeleteLifecycle !== true && req.context.retentionPurge !== true) throw new Error('Lead deletion uses an audited deletion lifecycle.')
     // A deleted lead must not retain queued copies of its personal data or
     // leave required outbox relationships pointing at a removed record.
     await req.payload.delete({ collection: 'notification-outbox', where: { inquiry: { equals: id } }, overrideAccess: true, req })
@@ -559,6 +559,7 @@ export const MailAuthorizations: CollectionConfig = {
 export const Applications: CollectionConfig = {
   slug: 'applications', admin: { useAsTitle: 'email', group: 'Private' }, access: { create: () => false, read: staff(['owner', 'hiring']), update: staff(['owner', 'hiring']), delete: staff(['owner']) },
   hooks: {
+    beforeDelete: [({ req }) => { if (req.context.retentionPurge !== true) throw new Error('Applications are permanently deleted through the audited retention lifecycle.') }],
     beforeChange: [({ data, originalDoc, operation }) => operation === 'update' && originalDoc ? preserveApplicationIntake(data, originalDoc) : data],
     afterChange: [async ({ doc, operation, req }) => {
       if (operation === 'create') await enqueueNotification(req.payload, req, { kind: 'new-job-application', idempotencyKey: `new-job-application:${doc.idempotencyKey}`, sourceType: 'application', sourceID: doc.id, payload: { application: doc.id, job: doc.jobId } })
@@ -566,6 +567,33 @@ export const Applications: CollectionConfig = {
     }],
   },
   fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'telephone', type: 'text', maxLength: 48 }, { name: 'linkedIn', type: 'text', maxLength: 500 }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
+}
+
+/** Owner-controlled policy. The defaults are encoded in code so a missing row is safe. */
+export const RetentionSettings: CollectionConfig = {
+  slug: 'retention-settings', admin: { useAsTitle: 'key', group: 'Administration', hidden: true },
+  access: { create: freshStaff(['owner']), read: staff(['owner']), update: freshStaff(['owner']), delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'default', admin: { readOnly: true } },
+    { name: 'spamDays', type: 'number', required: true, defaultValue: 30, min: 1, max: 365 },
+    { name: 'mediaBinDays', type: 'number', required: true, defaultValue: 30, min: 1, max: 365 },
+  ],
+}
+
+/** Deliberately minimal replay ledger for restored backups; never store personal content or object keys here. */
+export const DeletionTombstones: CollectionConfig = {
+  slug: 'deletion-tombstones', admin: { hidden: true }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [{ name: 'resourceType', type: 'select', required: true, options: ['application', 'inquiry', 'media'] }, { name: 'resourceID', type: 'text', required: true }, { name: 'deletedAt', type: 'date', required: true }],
+}
+
+/** Operator-visible retry state. The resume key is cleared as soon as storage deletion succeeds. */
+export const RetentionPurgeJobs: CollectionConfig = {
+  slug: 'retention-purge-jobs', admin: { useAsTitle: 'resourceID', group: 'Administration' }, access: { create: () => false, read: staff(['owner']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'resourceType', type: 'select', required: true, options: ['spam-inquiry', 'application', 'media'] }, { name: 'resourceID', type: 'text', required: true },
+    { name: 'state', type: 'select', required: true, options: ['queued', 'failed', 'completed'], defaultValue: 'queued' }, { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0 },
+    { name: 'lastError', type: 'text' }, { name: 'resumeKey', type: 'text', access: { read: () => false }, admin: { hidden: true } }, { name: 'completedAt', type: 'date' },
+  ],
 }
 
 export const ChangeSets: CollectionConfig = {
