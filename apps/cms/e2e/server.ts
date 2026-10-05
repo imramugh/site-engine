@@ -1,7 +1,7 @@
 import { createServer as createHTTPServer, request as requestUpstream, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer } from 'node:https'
 import { once } from 'node:events'
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -92,6 +92,7 @@ const shellSessionTokens = {
 } as const
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'site-engine-cms-e2e-'))
 const databasePath = join(temporaryDirectory, 'cms.sqlite')
+const retentionLedger = join(temporaryDirectory, 'deletions.ndjson')
 const bootstrapPath = join(temporaryDirectory, 'bootstrap-token')
 const caCertificate = join(temporaryDirectory, 'synthetic-ca.pem')
 const caKey = join(temporaryDirectory, 'synthetic-ca.key')
@@ -148,6 +149,8 @@ Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
 process.env.MEDIA_STORAGE_DIR = join(temporaryDirectory, 'media')
 process.env.APPLICATION_STORAGE_DIR = join(temporaryDirectory, 'applications')
+writeFileSync(retentionLedger, ''); chmodSync(retentionLedger, 0o600)
+process.env.RETENTION_TOMBSTONES_FILE = retentionLedger
 process.env.PAYLOAD_SECRET = 'synthetic-browser-payload-secret-not-for-production'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = cmsOrigin
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = bootstrapPath
