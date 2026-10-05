@@ -19,6 +19,7 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
     'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video',
   ]));
   await expect(page.getByText('Hidden fixture')).toHaveCount(0);
+  await expect(page.getByText('HIDDEN_TESTIMONIAL_MUST_NOT_RENDER')).toHaveCount(0);
   await expect(page.getByText('This unconfirmed quote must not render.')).toHaveCount(0);
   const video = page.locator('video');
   await expect(video).toHaveCount(1);
@@ -29,6 +30,28 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
   await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText('Operations');
   await page.goto('/unknown-route');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+});
+
+test('ENG-005 starter blocks retain their semantic HTML and omit hidden content', async ({ page }) => {
+  await page.goto('/general/gallery');
+  await expect(page.locator('[data-block="incidentBar"] [role="status"]')).toHaveCount(1);
+  await expect(page.locator('[data-block="pillarGrid"] ul.cards > li.card')).toHaveCount(2);
+  await expect(page.locator('[data-block="featureGrid"] ul.cards > li.card')).toHaveCount(2);
+  await expect(page.locator('[data-block="splitList"] ol.split > li')).toHaveCount(2);
+  await expect(page.locator('[data-block="chipList"] ul.chips > li')).toHaveCount(3);
+  await expect(page.locator('[data-block="testimonials"] figure.quote blockquote')).toHaveCount(1);
+  await expect(page.locator('[data-block="faq"] details > summary')).toHaveCount(2);
+  await expect(page.locator('[data-block="callout"] ul')).toHaveCount(0);
+  await expect(page.locator('[data-block="relatedServices"] ul > li')).toHaveCount(1);
+  await expect(page.locator('[data-block="cta"] h2')).toHaveCount(1);
+  await expect(page.locator('[data-block="richText"] p')).toHaveCount(1);
+  await expect(page.locator('[data-block="contact"]')).toContainText('This synthetic contact block accepts a secure inquiry.');
+  await expect(page.locator('[data-block="media"] figure img')).toHaveCount(1);
+  await expect(page.locator('[data-block="imageText"] picture + div h2')).toHaveCount(1);
+  await expect(page.locator('[data-block="gallery"] ul.cards > li img')).toHaveCount(2);
+  await expect(page.locator('[data-block="logoStrip"] ul.cards > li img')).toHaveCount(1);
+  await expect(page.locator('[data-block="video"] video track[kind="captions"]')).toHaveCount(1);
+  await expect(page.locator('[data-block-id="40000000-0000-4000-8000-000000000022"]')).toHaveCount(0);
 });
 
 test('ENG-038 starter fixture matrix renders every declared surface at desktop and mobile', async ({ page }, testInfo) => {

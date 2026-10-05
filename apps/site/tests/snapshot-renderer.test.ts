@@ -145,7 +145,7 @@ describe('static snapshot renderer', () => {
     server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true });
   });
 
-  it('rebuilds related service cards from current referenced page data and omits permitted empty list markup', async () => {
+  it('ENG-005 ENG-038 builds installed starter components with live related cards and an explicit empty callout list', async () => {
     const snapshot = fixture('Related rebuild');
     const appearance = { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const };
     snapshot.settings.contractVersion = '1.2.0';

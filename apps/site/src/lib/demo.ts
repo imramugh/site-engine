@@ -33,6 +33,7 @@ export const demoSnapshot: SiteSnapshot = SiteSnapshotSchema.parse({
       block('40000000-0000-4000-8000-000000000018', 'gallery', { mediaIds: [ids.image, ids.poster] }),
       block('40000000-0000-4000-8000-000000000019', 'logoStrip', { mediaIds: [ids.logo] }),
       block('40000000-0000-4000-8000-000000000020', 'video', { mediaId: ids.video, posterMediaId: ids.poster, captionsMediaId: ids.captions, transcript: 'Synthetic video transcript.' }),
+      { ...block('40000000-0000-4000-8000-000000000022', 'testimonials', { items: [{ quote: 'HIDDEN_TESTIMONIAL_MUST_NOT_RENDER', attribution: 'Hidden fixture', permissionConfirmed: true }] }), hidden: true },
       { ...block('40000000-0000-4000-8000-000000000021', 'callout', { heading: 'Hidden fixture', body: 'This must not appear.' }), hidden: true },
     ] },
     { id: ids.pillar, sectionId: ids.serviceSection, title: 'Operations', summary: 'A generic service pillar.', slug: 'operations', template: 'pillar', status: 'published', blocks: [block('40000000-0000-4000-8000-000000000022', 'featureGrid', { heading: 'Child services', items: [{ title: 'Detail', body: 'A child service is generated below.' }] })] },
