@@ -176,6 +176,13 @@ describe('static snapshot renderer', () => {
     expect(html).not.toContain('hero__support');
     expect(html).not.toContain('data-secondary-cta');
     expect(Object.keys(alphaBuild.manifest.files).some(path => path.endsWith('.css'))).toBe(true);
+    const missingPage = await readFile(join(alphaBuild.output, '404.html'), 'utf8');
+    expect(missingPage).toContain(alpha.settings.siteName);
+    expect(missingPage).toContain(`${BASE_PATH}docs/release-notes`);
+    expect(missingPage).toContain(`href="${BASE_PATH}"`);
+    expect(missingPage).not.toContain('/general/gallery');
+    expect(missingPage).not.toContain('>Search<');
+    expect(missingPage).toContain('noindex, nofollow, noarchive');
     browserOutput = alphaBuild.output;
   }, 180_000);
 
@@ -472,7 +479,11 @@ describe('static snapshot renderer', () => {
       try {
         const page = await browser.newPage();
         await page.goto(`${served.origin}${BASE_PATH}docs/release-notes/`, { waitUntil: 'networkidle' });
-        expect(await page.locator('picture img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0 && image.currentSrc.endsWith('sample-image.svg'))).toBe(true);
+        const loaded = await page.locator('picture img').evaluate((image: HTMLImageElement) => ({ complete: image.complete, width: image.naturalWidth, height: image.naturalHeight, source: image.currentSrc }));
+        expect(loaded.complete).toBe(true);
+        expect(loaded.width).toBeGreaterThan(0);
+        expect(loaded.height).toBeGreaterThan(0);
+        expect(loaded.source).toBe(`${served.origin}${BASE_PATH}media/sample-image-hero.avif`);
       } finally { await browser.close(); served.server.closeAllConnections(); served.server.close(); }
       const promoted = (await readdir(root)).filter((name) => name.startsWith('snapshot-'));
       snapshot.media[0]!.sha256 = '0'.repeat(64);
