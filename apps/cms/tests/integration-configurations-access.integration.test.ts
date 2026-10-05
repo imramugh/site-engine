@@ -97,6 +97,23 @@ describe('ENG-023 integration configuration access', () => {
     expect(JSON.stringify(audit)).not.toContain('never-in-audit')
   })
 
+  it('queues one Owner outage alert only for a connected integration transition and allows a later restored transition', async () => {
+    const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/review', pricingAsOf: '2026-10-04T00:00:00.000Z' }
+    const owner = await payload.create({ collection: 'users', data: { email: 'outage-owner@example.test', name: 'Outage owner', roles: ['owner'] }, overrideAccess: true })
+    await configureIntegration(payload, { provider: 'openrouter', model: 'provider/model', credential: 'outage-secret', fallbackProvider: null, pricing, actor: owner.id })
+    await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T01:00:00.000Z') }, async () => ({ ok: true, code: 'connected' }))
+    await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T02:00:00.000Z') }, async () => ({ ok: false, code: 'unavailable' }))
+    await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T03:00:00.000Z') }, async () => ({ ok: false, code: 'unavailable' }))
+    let alerts = await payload.find({ collection: 'notification-outbox', where: { sourceType: { equals: 'integration-configuration' } }, limit: 10, depth: 0, overrideAccess: true })
+    expect(alerts.totalDocs).toBe(1); expect(alerts.docs[0]).toMatchObject({ kind: 'publish-or-integration-failed', recipientRules: ['owner'], payload: expect.objectContaining({ provider: 'openrouter', health: 'unavailable' }) })
+    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'integration.outage' } }, limit: 10, depth: 0, overrideAccess: true })
+    expect(audit.totalDocs).toBe(1); expect(JSON.stringify(audit.docs[0])).not.toContain('outage-secret')
+    await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T04:00:00.000Z') }, async () => ({ ok: true, code: 'connected' }))
+    await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T05:00:00.000Z') }, async () => ({ ok: false, code: 'rejected' }))
+    alerts = await payload.find({ collection: 'notification-outbox', where: { sourceType: { equals: 'integration-configuration' } }, limit: 10, depth: 0, overrideAccess: true })
+    expect(alerts.totalDocs).toBe(2)
+  })
+
   it('fails closed when a configuration rotates or is revoked during the external check', async () => {
     const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/review', pricingAsOf: '2026-10-04T00:00:00.000Z' }
     await configureIntegration(payload, { provider: 'google-gemini', model: 'old-model', credential: 'old-credential', fallbackProvider: null, pricing })

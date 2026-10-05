@@ -1,5 +1,6 @@
 import { withPayloadTransaction } from './auth-transaction'
 import { credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider } from './integrations'
+import { enqueueNotification } from './notification-settings'
 
 type PayloadLike = Parameters<typeof withPayloadTransaction>[0]
 type AuditWrite = (input: { payload: PayloadLike; req: unknown; event: string; actor: string | undefined; provider: IntegrationProvider; detail?: Record<string, string> }) => Promise<void>
@@ -8,10 +9,10 @@ const defaultAuditWrite: AuditWrite = async ({ payload, req, event, actor, provi
   await payload.create({ collection: 'audit-events', data: { event, actor, detail: { provider, ...detail } }, overrideAccess: true, req: req as never })
 }
 
-type StoredConfiguration = { id: string; provider: IntegrationProvider; model: string; encryptedCredential: string | null; credentialFingerprint: string | null; health?: string | null; updatedAt?: string | null }
+type StoredConfiguration = { id: string; provider: IntegrationProvider; model: string; encryptedCredential: string | null; credentialFingerprint: string | null; health?: string | null; testedAt?: string | null; updatedAt?: string | null }
 function snapshot(record: Record<string, unknown>): StoredConfiguration | undefined {
   if (typeof record.id !== 'string' || !integrationProvider(record.provider) || typeof record.model !== 'string' || !record.encryptedCredential || typeof record.encryptedCredential !== 'string' || !record.credentialFingerprint || typeof record.credentialFingerprint !== 'string' || record.health === 'revoked') return undefined
-  return { id: record.id, provider: record.provider, model: record.model, encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
+  return { id: record.id, provider: record.provider, model: record.model, encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, testedAt: typeof record.testedAt === 'string' ? record.testedAt : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
 }
 const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && ['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(value)
 const unchanged = (left: StoredConfiguration, right: StoredConfiguration) => left.id === right.id && left.provider === right.provider && left.model === right.model && left.encryptedCredential === right.encryptedCredential && left.credentialFingerprint === right.credentialFingerprint && left.updatedAt === right.updatedAt && right.health !== 'revoked'
@@ -58,6 +59,11 @@ export async function testIntegrationConnection(payload: PayloadLike, input: { p
     if (!actual || !unchanged(expected, actual)) throw new IntegrationConfigurationStaleError()
     const saved = await payload.update({ collection: 'integration-configurations', id: actual.id, data: { health: result.code, testedAt }, overrideAccess: true, req })
     await auditWrite({ payload, req, event: 'integration.connection_tested', actor: input.actor, provider: input.provider, detail: { health: result.code } })
+    if (actual.health === 'connected' && ['unavailable', 'rejected'].includes(result.code)) {
+      const transition = actual.testedAt ?? actual.updatedAt ?? 'connected'
+      await payload.create({ collection: 'audit-events', data: { event: 'integration.outage', actor: input.actor, detail: { provider: input.provider, configuration: actual.id, health: result.code, transition } }, overrideAccess: true, req })
+      await enqueueNotification(payload as never, req as never, { kind: 'publish-or-integration-failed', idempotencyKey: `integration-outage:${actual.id}:${transition}`, sourceType: 'integration-configuration', sourceID: actual.id, payload: { provider: input.provider, health: result.code, configuration: actual.id } })
+    }
     return saved
   })
 }
