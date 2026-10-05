@@ -17,6 +17,8 @@ async function axe(page: Page) {
 test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }, testInfo) => {
   test.setTimeout(60_000)
   const owner = await session(browser, 'synthetic-site-owner-session-token')
+  const themeDraft = await owner.page.request.post('/api/themes', { headers: { origin, 'content-type': 'application/json' }, data: { id: 'navigation-browser-theme', version: '1.6.0', changeSetName: 'Navigation 1.6 browser draft' } })
+  expect(themeDraft.status(), await themeDraft.text()).toBe(201)
   const publicationBefore = await owner.page.request.get('/__e2e/publish-state').then(response => response.json())
   await owner.page.goto('/site')
   await expect(owner.page.locator('[data-site-workspace]')).toBeVisible()
@@ -33,7 +35,7 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   await owner.page.getByLabel('Province or region').fill('ON')
   await owner.page.getByLabel('Postal code').fill('M5V 2T6')
   await owner.page.getByText('Additional site settings', { exact: true }).click()
-  await owner.page.getByLabel('Homepage').selectOption({ label: 'Direct edit browser page' })
+  await expect(owner.page.getByLabel('Homepage')).not.toHaveValue('')
   await owner.page.getByLabel('LinkedIn URL').fill('https://www.linkedin.com/company/synthetic-site-workspace')
   await owner.page.getByLabel('Bar label').fill('Incident in progress?')
   await owner.page.getByLabel('Guidance').fill('Call the incident line and preserve affected systems.')

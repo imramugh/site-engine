@@ -190,11 +190,15 @@ export async function captureChange(input: { collection: CapturedCollection; doc
     before = normalizePageOptionalNulls(before)
     after = normalizePageOptionalNulls(after, before)
   }
-  // A first singleton create receives database nulls for omitted optional
-  // fields; do not let them erase frozen baseline values. On an update, null
-  // is retained only where the reviewed before-image had that field, making an
-  // explicit clear distinguishable from first-create omission.
-  if (collection === 'site-settings') after = normalizeSiteOptionalNulls(after, before)
+  // Payload materializes omitted singleton fields as null on both creates and
+  // later updates. Normalize the before-image first so a first real value can
+  // still merge with the portable snapshot's omission. A null after-image is
+  // retained only when the normalized before-image held a real value, keeping
+  // an explicit clear distinct from database null materialization.
+  if (collection === 'site-settings') {
+    before = normalizeSiteOptionalNulls(before)
+    after = normalizeSiteOptionalNulls(after, before)
+  }
   if (equivalent(before, after)) return
   const changeSet = await openSet(req.payload, actor, req)
   const changes = Array.isArray(changeSet.changes) ? [...changeSet.changes] as CapturedChange[] : []
