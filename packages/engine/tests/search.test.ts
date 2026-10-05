@@ -12,9 +12,17 @@ describe('ENG-024 static search index', () => {
     snapshot.pages.push({ ...home, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', slug: 'draft', title: 'Draft title', summary: 'draft search phrase', status: 'draft' })
     snapshot.pages.push({ ...home, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', slug: 'private', title: 'Noindex title', summary: 'noindex search phrase', noindex: true })
     const index = buildSearchIndex(snapshot)
+    const document = index.documents.find((candidate) => candidate.url === '/')!
     expect(JSON.stringify(index)).toContain('Published search phrase')
     expect(JSON.stringify(index)).not.toContain('hidden search phrase')
     expect(JSON.stringify(index)).not.toContain('draft search phrase')
     expect(JSON.stringify(index)).not.toContain('noindex search phrase')
+    expect(document).toMatchObject({
+      title: home.title,
+      summary: home.summary,
+      headings: expect.arrayContaining([hero.type === 'hero' ? hero.heading : '']),
+      body: expect.stringContaining('Published search phrase'),
+      url: '/',
+    })
   })
 })

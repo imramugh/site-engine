@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
-import { archivePage, archiveReferences, normalizeRedirectPath, redirectForPublishedChange, validateRedirectSet } from '../src/redirect-lifecycle'
+import { archivePage, archiveReferences, normalizeRedirectPath, recordRedirectHit, redirectForPublishedChange, validateRedirectSet } from '../src/redirect-lifecycle'
 import { buildCandidate, canonicalHash } from '../src/publishing'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
@@ -28,6 +28,22 @@ describe('ENG-013 redirect and archive lifecycle', () => {
     expect(() => normalizeRedirectPath('https://outside.example')).toThrow('Invalid redirect path')
     expect(() => validateRedirectSet([{ from: '/a', to: '/b' }, { from: '/b', to: '/a' }])).toThrow('another redirect')
     expect(() => validateRedirectSet([{ from: '/a', to: '/destination' }, { from: '/a/', to: '/other' }])).toThrow('not unique')
+  })
+
+  it('persists trusted redirect hits and leaves unknown paths unchanged', async () => {
+    const redirect = await payload.create({ collection: 'redirects', data: { from: '/tracked', to: '/', status: 301 }, overrideAccess: true })
+    const first = new Date('2026-10-05T12:00:00.000Z')
+    const second = new Date('2026-10-05T12:01:00.000Z')
+
+    await withPayloadTransaction(payload, (req) => recordRedirectHit(payload, req, ' /tracked/ ', first))
+    await withPayloadTransaction(payload, (req) => recordRedirectHit(payload, req, '/tracked', second))
+    await withPayloadTransaction(payload, (req) => recordRedirectHit(payload, req, '/not-configured', second))
+
+    expect(await payload.findByID({ collection: 'redirects', id: redirect.id, depth: 0, overrideAccess: true })).toMatchObject({
+      hitCount: 2,
+      lastHitAt: second.toISOString(),
+    })
+    expect((await payload.find({ collection: 'redirects', where: { from: { equals: '/not-configured' } }, limit: 0, overrideAccess: true })).totalDocs).toBe(0)
   })
 
   it('records the immutable creator without exposing it to the public redirect snapshot', async () => {
