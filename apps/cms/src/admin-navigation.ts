@@ -1,4 +1,5 @@
 import type { Payload } from 'payload'
+import { activeLeadWhere } from './lead-filters'
 export type AdminRole = 'owner' | 'editor' | 'approver' | 'sales' | 'hiring'
 
 export type AdminNavigationItem = {
@@ -46,7 +47,7 @@ export async function navigationBadges(payload: Pick<Payload, 'count'>, user: { 
   const pending: Array<Promise<void>> = []
   const badges: AdminNavigationBadges = {}
   const count = (key: keyof AdminNavigationBadges, input: CountInput) => pending.push(payload.count(input).then(result => { if (result.totalDocs > 0) badges[key] = result.totalDocs }).catch(() => undefined))
-  if (allowed('owner') || allowed('sales')) count('Leads', { collection: 'inquiries', where: { stage: { equals: 'new' } }, overrideAccess: false, user })
+  if (allowed('owner') || allowed('sales')) count('Leads', { collection: 'inquiries', where: { and: [activeLeadWhere, { stage: { equals: 'new' } }] }, overrideAccess: false, user })
   if (allowed('owner') || allowed('hiring')) count('Careers', { collection: 'applications', where: { status: { equals: 'new' } }, overrideAccess: false, user })
   if (allowed('owner') || allowed('editor') || allowed('approver')) count('Reviews', { collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: false, user })
   await Promise.all(pending)

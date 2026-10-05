@@ -1,3 +1,4 @@
+import type { Where } from 'payload'
 import { leadStages } from './inquiries'
 
 export const receivedRanges = ['all', '7', '30', '90', '365'] as const
@@ -14,6 +15,9 @@ export type LeadFilters = {
   page: number
   spam: boolean
 }
+
+/** Includes pre-classification rows where the optional spam flag is absent. */
+export const activeLeadWhere: Where = { or: [{ spam: { equals: false } }, { spam: { exists: false } }] }
 
 const sourcePattern = /^\/(?!\/)[a-z0-9/_-]*$/i
 const userIDPattern = /^[0-9a-f-]{36}$/i
@@ -40,7 +44,7 @@ export function parseLeadFilters(url: URL): LeadFilters {
 }
 
 export function leadFilterClauses(filters: LeadFilters, includeStage: boolean, now = new Date()): Record<string, unknown>[] {
-  const clauses: Record<string, unknown>[] = [filters.spam ? { spam: { equals: true } } : { or: [{ spam: { equals: false } }, { spam: { exists: false } }] }]
+  const clauses: Record<string, unknown>[] = [filters.spam ? { spam: { equals: true } } : activeLeadWhere]
   if (includeStage && filters.stage) clauses.push({ stage: { equals: filters.stage } })
   if (filters.urgent) clauses.push({ urgent: { equals: true } })
   if (filters.assignee) clauses.push({ assignee: { equals: filters.assignee } })

@@ -65,6 +65,7 @@ test('ENG-006 searches real permitted records without exposing private lead fiel
   expect(serialized).not.toContain('A synthetic urgent lead.')
   expect(serialized).not.toContain('email')
   expect(serialized).not.toContain('message')
+  expect((await searchJSON(page, 'spam fixture')).body.results.Leads).toEqual([])
 
   const tooShort = await page.evaluate(async () => (await fetch('/api/admin/search?q=x')).status)
   expect(tooShort).toBe(400)
