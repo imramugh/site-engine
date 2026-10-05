@@ -19,6 +19,12 @@ import { assertLeadAcceptsOutbound } from './lead-outbound'
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
 async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 'application', id: string) {
+  const store = req.payload as any
+  const threads = await store.find({ collection: 'mail-threads', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const thread of threads.docs) {
+    await store.delete({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, overrideAccess: true, req })
+    await store.delete({ collection: 'mail-threads', id: thread.id, overrideAccess: true, req })
+  }
   const drafts = await req.payload.find({ collection: 'mail-drafts', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
   for (const draft of drafts.docs) {
     await req.payload.delete({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, overrideAccess: true, req })
