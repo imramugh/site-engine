@@ -102,6 +102,7 @@ const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact', 'richText'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const navigationThemeManifest = { ...browserThemeManifest, name: 'navigation-browser-theme', version: '1.6.0', contract: '1.6.0', settingKeys: [] }
+const searchThemeManifest = { ...browserThemeManifest, name: 'search-browser-theme', version: '1.7.0', contract: '1.7.0', settingKeys: [] }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const galleryTheme = process.env.BLOCK_GALLERY_E2E_THEME_ID && process.env.BLOCK_GALLERY_E2E_THEME_VERSION ? { name: process.env.BLOCK_GALLERY_E2E_THEME_ID, version: process.env.BLOCK_GALLERY_E2E_THEME_VERSION, contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } } : undefined
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null'
@@ -109,6 +110,7 @@ writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
 writeFileSync(themeRegistry, JSON.stringify({ themes: [
   { manifest: browserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   { manifest: navigationThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
+  { manifest: searchThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
   ...(galleryTheme ? [{ manifest: galleryTheme, installedAt: '2026-10-05T00:00:00.000Z' }] : []),
 ] }))
