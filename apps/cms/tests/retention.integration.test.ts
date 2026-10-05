@@ -98,6 +98,20 @@ describe('ENG-037 real SQLite retention privacy lifecycle', () => {
     await expect(payload.findByID({ collection: 'inquiries', id: active.id, overrideAccess: true })).resolves.toMatchObject({ id: active.id, spam: false })
   })
 
+  it('purges spam exactly at the policy boundary while preserving newer spam and active inquiries', async () => {
+    writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
+    const now = new Date('2026-10-05T12:00:00.000Z')
+    const create = (key: string, spam: boolean, markedAt: string) => payload.create({ collection: 'inquiries', data: { email: `${key}@example.test`, message: key, topic: 'general', sourcePage: '/', consentedAt: markedAt, consentBasis: 'visitor-confirmed', idempotencyKey: crypto.randomUUID(), stage: 'new', spam, ...(spam ? { spamMarkedAt: markedAt, spamPreviousStage: 'new' } : {}) }, draft: false, overrideAccess: true })
+    const boundary = await create('boundary', true, '2026-09-05T12:00:00.000Z')
+    const newer = await create('newer', true, '2026-09-05T12:00:00.001Z')
+    const active = await create('active', false, '2026-08-01T00:00:00.000Z')
+    await expect(runRetentionCleanup(payload, now)).resolves.toMatchObject({ spam: expect.any(Number) })
+    await expect(payload.findByID({ collection: 'inquiries', id: boundary.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })
+    await expect(payload.findByID({ collection: 'inquiries', id: newer.id, overrideAccess: true })).resolves.toMatchObject({ id: newer.id, spam: true })
+    await expect(payload.findByID({ collection: 'inquiries', id: active.id, overrideAccess: true })).resolves.toMatchObject({ id: active.id, spam: false })
+    expect((await payload.find({ collection: 'retention-purge-jobs', where: { resourceID: { equals: boundary.id } }, overrideAccess: true })).docs[0]).toMatchObject({ resourceType: 'spam-inquiry', state: 'completed' })
+  })
+
   it('permanently purges a retained non-spam inquiry only through the retention lifecycle', async () => {
     writeFileSync(ledger, ''); chmodSync(ledger, 0o600); process.env.RETENTION_TOMBSTONES_FILE = ledger
     const inquiry = await payload.create({ collection: 'inquiries', data: { email: `${crypto.randomUUID()}@example.test`, message: 'Manual deletion proof.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: crypto.randomUUID(), spam: false, stage: 'new' }, draft: false, overrideAccess: true })
