@@ -6,7 +6,7 @@ type Role = typeof roleOptions[number]
 type User = { id: string; name: string; email: string; roles: Role[]; provider: string | null; disabled: boolean; lastSignIn: string | null }
 type Invitation = { id: string; email: string; provider: string; roles: Role[]; expiresAt: string }
 type Data = { users: User[]; invitations: Invitation[]; providers: { google: boolean; microsoft: boolean }; truncated: boolean }
-const date = (value: string | null) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Never'
+const date = (value: string | null) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Toronto' }).format(new Date(value)) : 'Never'
 const title = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
 export function UsersWorkspace() {
   const [data, setData] = useState<Data | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState<User | null>(null), [inviteURL, setInviteURL] = useState('')
