@@ -160,6 +160,7 @@ describe('static snapshot renderer', () => {
     const input = await writeSnapshot(root, snapshot, 'related-rebuild.json');
     const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
     const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    expect(Object.keys(built.manifest.files).filter(path => path.includes('font') || path.includes('Deja') || path.endsWith('.ttf')), Object.keys(built.manifest.files).join('\n')).not.toEqual([]);
     expect(html).toContain('Renamed related service');
     expect(html).not.toContain('Hidden list marker');
     for (const id of ['99999999-0000-4000-8000-000000000003']) {

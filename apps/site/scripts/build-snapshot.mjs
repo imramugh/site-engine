@@ -82,8 +82,8 @@ async function copyThemeComponents(source, destination) {
     const componentInfo = await lstat(join(source, component)).catch(() => undefined);
     if (!componentInfo?.isFile() || componentInfo.isSymbolicLink()) throw new Error(`Theme component root is missing required ${component}.`);
   }
-  await mkdir(destination, { recursive: false });
   async function copyDirectory(from, to) {
+    await mkdir(to, { recursive: false });
     const entries = await readdir(from, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === '.' || entry.name === '..' || entry.name.includes(sep)) throw new Error('Theme component path is unsafe.');
@@ -98,6 +98,28 @@ async function copyThemeComponents(source, destination) {
   await copyDirectory(source, destination);
 }
 
+async function copyStarterAssets(componentsRoot, stagingRoot) {
+  // Starter component CSS may reference package-local, public assets. Copy the
+  // conventional fonts directory beside the renderer so relative @font-face
+  // URLs survive the isolated snapshot build without executing theme code.
+  const fonts = resolve(componentsRoot, '../..', 'fonts');
+  const info = await lstat(fonts).catch(() => undefined);
+  if (!info) return;
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Theme fonts directory must be a real directory.');
+  async function copyDirectory(from, to) {
+    await mkdir(to, { recursive: false });
+    const entries = await readdir(from, { withFileTypes: true });
+    for (const entry of entries) {
+      const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name); const entryInfo = await lstat(sourcePath);
+      if (entryInfo.isSymbolicLink()) throw new Error('Theme fonts directory must not contain symbolic links.');
+      if (entryInfo.isDirectory()) await copyDirectory(sourcePath, destinationPath);
+      else if (entryInfo.isFile()) await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
+      else throw new Error('Theme fonts directory contains an unsupported entry.');
+    }
+  }
+  await copyDirectory(fonts, join(stagingRoot, 'fonts'));
+}
+
 async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot, analytics }) {
   // Astro writes prerender intermediates to <root>/.astro independently of its
   // cacheDir. Separate source roots prevent simultaneous jobs deleting each
@@ -109,7 +131,9 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     await cp(new URL(name, sourceRoot), join(renderRoot, name), { recursive: true });
   }
   const themeComponents = join(renderRoot, 'theme-components');
-  await copyThemeComponents(await trustedThemeComponentsRoot(themeComponentsRoot), themeComponents);
+  const componentsRoot = await trustedThemeComponentsRoot(themeComponentsRoot);
+  await copyThemeComponents(componentsRoot, themeComponents);
+  await copyStarterAssets(componentsRoot, dirname(renderRoot));
   await symlink(fileURLToPath(new URL('node_modules', sourceRoot)), join(renderRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
