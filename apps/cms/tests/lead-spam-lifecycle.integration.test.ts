@@ -35,7 +35,7 @@ describe('audited lead spam lifecycle', () => {
     expect(classified).toMatchObject({ id: item.id, spam: true, spamPreviousStage: 'contacted', spamMarkedAt: expect.any(String) })
     expect((await payload.count({ collection: 'notification-outbox', where: { inquiry: { equals: item.id } }, overrideAccess: true })).totalDocs).toBe(0)
     const audit = (await payload.find({ collection: 'audit-events', where: { event: { equals: 'lead.spam_classified' } }, overrideAccess: true })).docs[0]!
-    expect(audit.detail).toEqual({ lead: item.id, previousStage: 'contacted', cancelledNotifications: 101 })
+    expect(audit.detail).toEqual({ lead: item.id, previousStage: 'contacted', cancelledNotifications: 101, revokedDrafts: 0, revokedGrants: 0 })
 
     const restored = await restoreLeadFromSpam(payload, item.id, owner.id)
     expect(restored).toMatchObject({ id: item.id, spam: false, stage: 'new', spamMarkedAt: null, spamPreviousStage: null })

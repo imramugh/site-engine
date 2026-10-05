@@ -1,4 +1,6 @@
 import type { Payload, PayloadRequest } from 'payload'
+import { withPayloadTransaction } from './auth-transaction'
+import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 export const notificationEventKinds = ['new-lead', 'active-incident-lead', 'new-job-application', 'change-set-submitted', 'follow-ups-due', 'publish-or-integration-failed'] as const
 export type NotificationEventKind = typeof notificationEventKinds[number]
@@ -78,13 +80,19 @@ async function resolveRecipients(payload: Payload, req: PayloadRequest | undefin
 }
 
 export async function enqueueNotification(payload: Payload, req: PayloadRequest | undefined, input: { kind: NotificationEventKind; idempotencyKey: string; inquiry?: string; sourceType?: string; sourceID?: string; leadOwnerID?: string; payload: Record<string, unknown> }) {
-  const preference = (await readNotificationPreferences(payload, req)).find((entry) => entry.kind === input.kind)
-  if (!preference?.enabled) return undefined
-  const recipients = await resolveRecipients(payload, req, preference.recipients, input.leadOwnerID)
-  return payload.create({
-    collection: 'notification-outbox',
-    data: { inquiry: input.inquiry, kind: input.kind, idempotencyKey: input.idempotencyKey, state: 'queued', payload: input.payload, recipientRules: preference.recipients, recipients, channels: preference.channels, sourceType: input.sourceType, sourceID: input.sourceID, availableAt: new Date().toISOString() },
-    overrideAccess: true,
-    req,
-  })
+  const enqueue = async (transaction: PayloadRequest) => {
+    if (input.inquiry) {
+      try { await assertLeadAcceptsOutbound(payload, input.inquiry, transaction) } catch (error) { if (error instanceof Error && error.message === 'lead_is_spam') return undefined; throw error }
+    }
+    const preference = (await readNotificationPreferences(payload, transaction)).find((entry) => entry.kind === input.kind)
+    if (!preference?.enabled) return undefined
+    const recipients = await resolveRecipients(payload, transaction, preference.recipients, input.leadOwnerID)
+    return payload.create({
+      collection: 'notification-outbox',
+      data: { inquiry: input.inquiry, kind: input.kind, idempotencyKey: input.idempotencyKey, state: 'queued', payload: input.payload, recipientRules: preference.recipients, recipients, channels: preference.channels, sourceType: input.sourceType, sourceID: input.sourceID, availableAt: new Date().toISOString() },
+      overrideAccess: true,
+      req: transaction,
+    })
+  }
+  return req?.transactionID ? enqueue(req) : withPayloadTransaction(payload, enqueue)
 }

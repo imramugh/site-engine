@@ -13,6 +13,7 @@ import { MEDIA_VARIANTS, assertReferencedAssetsAreAccessible, ensureMediaStorage
 import { mediaFocalContractVersion } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
 import { enqueueNotification } from './notification-settings'
+import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
@@ -524,7 +525,10 @@ export const MailDrafts: CollectionConfig = {
     { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed'] },
   ],
   hooks: {
-    beforeChange: [({ data, originalDoc, operation }) => {
+    beforeChange: [async ({ data, originalDoc, operation, req }) => {
+      const requestedLead = relationId(data.lead) ?? (operation === 'update' ? relationId(originalDoc?.lead) : undefined)
+      if (!requestedLead) throw new Error('A valid lead is required for a mail draft.')
+      if (req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
       const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead']
       // Payload update input is a patch. An omitted draft-bound field must not
