@@ -89,6 +89,8 @@ export interface Config {
     'notification-outbox': NotificationOutbox;
     'notification-preferences': NotificationPreference;
     'urgent-contacts': UrgentContact;
+    'mail-threads': MailThread;
+    'mail-thread-messages': MailThreadMessage;
     'mail-drafts': MailDraft;
     'mail-authorizations': MailAuthorization;
     applications: Application;
@@ -131,6 +133,8 @@ export interface Config {
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
+    'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
+    'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
@@ -934,6 +938,66 @@ export interface UrgentContact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-threads".
+ */
+export interface MailThread {
+  id: string;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
+  mailbox: string | MailboxConfiguration;
+  provider: 'smtp' | 'microsoft' | 'google';
+  providerConversationID: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "applications".
+ */
+export interface Application {
+  id: string;
+  name: string;
+  email: string;
+  telephone?: string | null;
+  linkedIn?: string | null;
+  coverLetter: string;
+  consent: boolean;
+  jobId: string;
+  resumeKey: string;
+  idempotencyKey: string;
+  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-thread-messages".
+ */
+export interface MailThreadMessage {
+  id: string;
+  thread: string | MailThread;
+  mailbox: string | MailboxConfiguration;
+  providerMessageID: string;
+  direction: 'inbound' | 'outbound';
+  sender: string;
+  recipient: string;
+  subject: string;
+  body: string;
+  receivedAt: string;
+  attachmentMetadata?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mail-drafts".
  */
 export interface MailDraft {
@@ -956,25 +1020,6 @@ export interface MailDraft {
     | null;
   revision: number;
   state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "applications".
- */
-export interface Application {
-  id: string;
-  name: string;
-  email: string;
-  telephone?: string | null;
-  linkedIn?: string | null;
-  coverLetter: string;
-  consent: boolean;
-  jobId: string;
-  resumeKey: string;
-  idempotencyKey: string;
-  status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1429,6 +1474,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'urgent-contacts';
         value: string | UrgentContact;
+      } | null)
+    | ({
+        relationTo: 'mail-threads';
+        value: string | MailThread;
+      } | null)
+    | ({
+        relationTo: 'mail-thread-messages';
+        value: string | MailThreadMessage;
       } | null)
     | ({
         relationTo: 'mail-drafts';
@@ -2065,6 +2118,37 @@ export interface UrgentContactsSelect<T extends boolean = true> {
   email?: T;
   mobile?: T;
   enabled?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-threads_select".
+ */
+export interface MailThreadsSelect<T extends boolean = true> {
+  lead?: T;
+  application?: T;
+  mailbox?: T;
+  provider?: T;
+  providerConversationID?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-thread-messages_select".
+ */
+export interface MailThreadMessagesSelect<T extends boolean = true> {
+  thread?: T;
+  mailbox?: T;
+  providerMessageID?: T;
+  direction?: T;
+  sender?: T;
+  recipient?: T;
+  subject?: T;
+  body?: T;
+  receivedAt?: T;
+  attachmentMetadata?: T;
   updatedAt?: T;
   createdAt?: T;
 }

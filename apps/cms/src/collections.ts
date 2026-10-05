@@ -548,6 +548,26 @@ const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read'
   if (hiring) return { application: { exists: true } }
   return false
 }
+export const MailThreads: CollectionConfig = {
+  slug: 'mail-threads', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: staff(['owner', 'sales', 'hiring']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
+    { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true }, { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] },
+    { name: 'providerConversationID', type: 'text', required: true, maxLength: 500 },
+  ],
+  hooks: { beforeChange: [({ data, originalDoc }) => { const lead = relationId(data.lead) ?? relationId(originalDoc?.lead); const application = relationId(data.application) ?? relationId(originalDoc?.application); if (Boolean(lead) === Boolean(application)) throw new Error('A mail thread must belong to one lead or application.'); return data }] },
+}
+
+export const MailThreadMessages: CollectionConfig = {
+  slug: 'mail-thread-messages', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: staff(['owner', 'sales', 'hiring']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'thread', type: 'relationship', relationTo: 'mail-threads', required: true }, { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true },
+    { name: 'providerMessageID', type: 'text', required: true, maxLength: 500 }, { name: 'direction', type: 'select', required: true, options: ['inbound', 'outbound'] },
+    { name: 'sender', type: 'text', required: true, maxLength: 320 }, { name: 'recipient', type: 'text', required: true, maxLength: 320 }, { name: 'subject', type: 'text', required: true, maxLength: 500 },
+    { name: 'body', type: 'textarea', required: true, maxLength: 20_000 }, { name: 'receivedAt', type: 'date', required: true }, { name: 'attachmentMetadata', type: 'json', defaultValue: [] },
+  ],
+}
+
 export const MailDrafts: CollectionConfig = {
   slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
   access: { create: () => false, read: readMailDrafts, update: () => false, delete: () => false },
