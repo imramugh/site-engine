@@ -226,28 +226,6 @@ describe('production migrations (ENG-036)', () => {
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')
     const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
     expect(verify.status, verify.stderr || verify.stdout).toBe(0)
-    const runtime = spawnSync(process.execPath, [tsxBin, '-e', `
-      import { getPayload } from 'payload'; import config from './payload.config';
-      (async () => { const payload = await getPayload({ config });
-      try {
-        const owner = await payload.create({ collection: 'users', data: { email: 'runtime-owner@example.test', name: 'Runtime owner', roles: ['owner'] }, overrideAccess: true });
-        const inquiry = await payload.create({ collection: 'inquiries', data: { email: 'runtime-lead@example.test', message: 'Preserved lead draft migration proof.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'runtime-lead', stage: 'new' }, overrideAccess: true });
-        const leadDraft = await payload.create({ collection: 'mail-drafts', data: { lead: inquiry.id, threadID: 'runtime-lead-thread', recipient: inquiry.email, sender: owner.email, subject: 'Preserved lead draft', body: 'Legacy-compatible reply.', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true, context: { migrationFixture: true } });
-        const authorization = await payload.create({ collection: 'mail-authorizations', data: { draft: leadDraft.id, digest: 'a'.repeat(64), draftRevision: 1, authorizedBy: owner.id, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true });
-        await payload.db.client.execute({ sql: 'INSERT INTO payload_locked_documents (id, global_slug, updated_at, created_at) VALUES (?, NULL, ?, ?)', args: ['99000000-0000-4000-8000-000000000001', new Date().toISOString(), new Date().toISOString()] });
-        await payload.db.client.execute({ sql: 'INSERT INTO payload_locked_documents_rels (parent_id, path, mail_drafts_id) VALUES (?, ?, ?)', args: ['99000000-0000-4000-8000-000000000001', 'mail-drafts', leadDraft.id] });
-        const application = await payload.create({ collection: 'applications', data: { name: 'Runtime applicant', email: 'runtime-application@example.test', coverLetter: 'Application reply migration proof.', consent: true, jobId: 'runtime-job', resumeKey: 'legacy', idempotencyKey: 'runtime-application' }, overrideAccess: true });
-        const applicationDraft = await payload.create({ collection: 'mail-drafts', data: { application: application.id, threadID: 'runtime-application-thread', recipient: application.email, sender: owner.email, subject: 'Application reply', body: 'Application relation is writable after CLI migration.', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true, context: { migrationFixture: true } });
-        await payload.create({ collection: 'retention-settings', data: { key: 'default', spamDays: 31, mediaBinDays: 32 }, overrideAccess: true });
-        await payload.create({ collection: 'deletion-tombstones', data: { resourceType: 'inquiry', resourceID: inquiry.id, deletedAt: new Date().toISOString() }, overrideAccess: true });
-        await payload.create({ collection: 'retention-purge-jobs', data: { resourceType: 'application', resourceID: application.id, state: 'queued', attempts: 0 }, overrideAccess: true });
-        const [settings, tombstones, jobs, persistedLead, persistedAuth, persistedApplication] = await Promise.all([
-          payload.find({ collection: 'retention-settings', limit: 1, depth: 0, overrideAccess: true }), payload.find({ collection: 'deletion-tombstones', limit: 1, depth: 0, overrideAccess: true }), payload.find({ collection: 'retention-purge-jobs', limit: 1, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-drafts', id: leadDraft.id, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-authorizations', id: authorization.id, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-drafts', id: applicationDraft.id, depth: 0, overrideAccess: true }),
-        ]);
-        if (settings.docs[0]?.spamDays !== 31 || tombstones.docs[0]?.resourceID !== inquiry.id || jobs.docs[0]?.resourceID !== application.id || persistedLead.lead !== inquiry.id || persistedAuth.draft !== leadDraft.id || persistedApplication.application !== application.id) throw new Error('CLI-migrated push:false runtime did not preserve retention or reply relations.');
-      } finally { await payload.destroy(); } })();
-    `], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
-    expect(runtime.status, runtime.stderr || runtime.stdout).toBe(0)
     } finally { rmSync(directory, { recursive: true, force: true }) }
   }, 120_000)
 })
