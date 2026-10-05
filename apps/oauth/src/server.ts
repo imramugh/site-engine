@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Provider from 'oidc-provider';
-import { createHashedAdapter, findGrantBinding, openOAuthDatabase, revokeGrantFamily, storeGrantBinding } from './adapter.js';
+import { createHashedAdapter, findGrantBinding, listManagedGrants, openOAuthDatabase, revokeGrantFamily, revokeManagedGrant, storeGrantBinding, touchManagedGrant } from './adapter.js';
 import { createHttpSessionBridge } from './session-bridge.js';
 
 const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'];
@@ -18,7 +18,7 @@ export type OAuthServiceOptions = { issuer: string; resource: string; databasePa
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
 type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
 type Grant = { addResourceScope(resource: string, scope: string): void; addOIDCScope(scope: string): void; save(): Promise<string> };
-type ProviderWithGrants = Provider & { Grant: { new (attributes: { accountId: string; clientId: string }): Grant; find(id: string): Promise<Grant | undefined> } };
+type ProviderWithGrants = Provider & { Grant: { new (attributes: { accountId: string; clientId: string }): Grant; find(id: string): Promise<Grant | undefined> }; Client: { find(id: string): Promise<{ clientName?: string } | undefined> } };
 type PendingInteraction = { csrf: string; accountId: string; sessionId: string; expiresAt: number };
 type TokenRecord = { grantId?: string; accountId?: string; clientId?: string; resource?: string; scope?: string; exp?: number; aud?: string | string[] };
 const pendingInteractionLimit = 500;
@@ -139,6 +139,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     let user: SessionUser | undefined;
     try { user = await bridge.find(binding.userId, binding.sessionId); } catch { return undefined; }
     if (!user?.enabled || user.id !== binding.userId || user.sessionId !== binding.sessionId) return undefined;
+    touchManagedGrant(db, record.grantId);
     return { binding, user };
   };
   const lookupToken = async (model: 'AuthorizationCode' | 'RefreshToken' | 'AccessToken', value: string): Promise<TokenRecord | undefined> => {
@@ -210,6 +211,16 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     const requestUrl = new URL(request.url ?? '/', issuer.origin);
     if (requestUrl.pathname === '/.well-known/oauth-protected-resource/mcp') {
       return json(response, 200, { resource: options.resource, authorization_servers: [options.issuer], scopes_supported: scopes });
+    }
+    if (requestUrl.pathname === '/internal/grants') {
+      const suppliedSecret = request.headers['x-oauth-introspection-secret'];
+      if (request.method !== 'POST' || !secretMatches(typeof suppliedSecret === 'string' ? suppliedSecret : undefined, process.env.OAUTH_INTROSPECTION_SECRET)) return json(response, 401, { error: 'unauthorized' });
+      try {
+        const body = await requestJson(request); const keys = Object.keys(body);
+        if (body.operation === 'list' && keys.every((key) => key === 'operation' || key === 'userId') && (body.userId === undefined || typeof body.userId === 'string')) return json(response, 200, { grants: listManagedGrants(db, body.userId as string | undefined).map(({ sessionId: _sessionId, ...grant }) => grant) });
+        if (body.operation === 'revoke' && keys.every((key) => key === 'operation' || key === 'managementId' || key === 'userId') && typeof body.managementId === 'string' && (body.userId === undefined || typeof body.userId === 'string')) return revokeManagedGrant(db, body.managementId, body.userId as string | undefined) ? json(response, 200, { revoked: true }) : json(response, 404, { error: 'not_found' });
+        throw new Error('invalid');
+      } catch { return json(response, 400, { error: 'invalid_request' }); }
     }
     if (requestUrl.pathname === '/internal/introspect') {
       const suppliedSecret = request.headers['x-oauth-introspection-secret'];
@@ -326,7 +337,9 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
           }
           const grantId = await grant.save();
           if (!user.sessionId) throw new Error('session bridge omitted a session binding');
-          if (!storeGrantBinding(db, grantId, { userId: user.id, sessionId: user.sessionId, clientId: interaction.params.client_id, resource: options.resource, scopes: [...new Set(effectiveScopes)], expiresAt: Date.now() + 1_209_600_000 })) throw new Error('grant session binding changed');
+          const client = await (provider as ProviderWithGrants).Client.find(interaction.params.client_id);
+          const clientName = typeof client?.clientName === 'string' && client.clientName.trim() ? client.clientName.trim().slice(0, 160) : 'Connected assistant';
+          if (!storeGrantBinding(db, grantId, { userId: user.id, sessionId: user.sessionId, clientId: interaction.params.client_id, clientName, resource: options.resource, scopes: [...new Set(effectiveScopes)], expiresAt: Date.now() + 1_209_600_000 })) throw new Error('grant session binding changed');
           result = { consent: { grantId } };
         }
         return provider.interactionFinished(request, response, result);

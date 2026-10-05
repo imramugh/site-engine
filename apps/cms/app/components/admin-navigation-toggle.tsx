@@ -181,7 +181,7 @@ export function AdminNavigationToggle({ primary, site, displayName, email, provi
         <div className={styles.accountMenu} role="menu">
           <div><strong>{email}</strong><small>{provider ? `Signed in with ${provider}` : 'Emergency access'}</small></div>
           <a role="menuitem" href="/account">Account and sessions</a>
-          {roles.includes('owner') ? <a role="menuitem" href="/integrations?tab=assistants">My connected assistants</a> : null}
+          <a role="menuitem" href="/integrations?tab=assistants">My connected assistants</a>
           <button role="menuitem" type="button" disabled={signingOut} onClick={() => void signOut()}>Sign out</button>
           <button role="menuitem" type="button" disabled={signingOut} onClick={() => void signOut(true)}>Sign out everywhere</button>
         </div>
