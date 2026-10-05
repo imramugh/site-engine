@@ -363,7 +363,11 @@ export const Assets: CollectionConfig = {
       const next = { ...data }
       delete next.restoreFromBin
       if (serverTransition && lifecycle === 'bin') { if (!next.deletedAt || !next.deleteAfter) throw new Error('Deletion bin timestamps are required.'); }
-      if (serverTransition && lifecycle === 'restore') { next.deletedAt = null; next.deleteAfter = null }
+      if (serverTransition && lifecycle === 'restore') {
+        const purged = await req.payload.find({ collection: 'deletion-tombstones', where: { and: [{ resourceType: { equals: 'media' } }, { resourceID: { equals: String(originalDoc?.id) } }] }, limit: 1, depth: 0, overrideAccess: true, req })
+        if (purged.docs.length) throw new Error('Permanent media purge has started; this asset cannot be restored.')
+        next.deletedAt = null; next.deleteAfter = null
+      }
       return next
     }],
     afterChange: [async ({ doc, previousDoc, operation, req }) => {
@@ -974,6 +978,13 @@ export const SiteSettings: CollectionConfig = {
       if (clearLogos) delete editable.logos
       const parsed = SiteSettingsDraftSchema.safeParse(editable)
       contractError(parsed, req, 'site-settings')
+      if (parsed.success) {
+        for (const id of [parsed.data.logo, ...Object.values(parsed.data.logos ?? {})]) {
+          if (typeof id !== 'string') continue
+          const asset = await req.payload.findByID({ collection: 'assets', id, depth: 0, overrideAccess: true, req })
+          if (asset.deletedAt) throw new Error('Restore an asset from the media bin before using it in site settings.')
+        }
+      }
       if (parsed.success && parsed.data.navigation) {
         const references = [...parsed.data.navigation.header, ...parsed.data.navigation.footer.columns.flatMap(column => 'links' in column ? column.links : []), ...(parsed.data.navigation.footer.bottomLinks ?? [])]
         for (const reference of references) {

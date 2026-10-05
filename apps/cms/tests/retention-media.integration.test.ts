@@ -87,6 +87,7 @@ describe('ENG-037 media retention lifecycle on SQLite storage', () => {
     expect(storedFiles(deletedVersion).map((filename) => join(mediaStorageDirectory(), filename)).every((file) => !existsSync(file))).toBe(true)
     expect(storedFiles(failingVersion).map((filename) => join(mediaStorageDirectory(), filename)).every(existsSync)).toBe(true)
     expect((await payload.find({ collection: 'retention-purge-jobs', where: { resourceID: { equals: asset.id } }, overrideAccess: true })).docs[0]).toMatchObject({ resourceType: 'media', state: 'failed' })
+    await expect(payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: null, deleteAfter: null }, overrideAccess: true, context: { mediaLifecycle: 'restore' } })).rejects.toThrow('Permanent media purge has started')
 
     await expect(runRetentionCleanup(payload, now)).resolves.toMatchObject({ media: expect.any(Number) })
     await expect(payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).rejects.toMatchObject({ status: 404 })

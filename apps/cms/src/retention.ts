@@ -37,6 +37,10 @@ async function job(payload: Payload, req: PayloadRequest | undefined, kind: Rete
 }
 
 function isNotFound(error: unknown): boolean { return Boolean(error && typeof error === 'object' && 'status' in error && error.status === 404) }
+async function resourceGone(payload: Payload, collection: 'applications' | 'inquiries' | 'assets', id: string, req?: PayloadRequest): Promise<boolean> {
+  try { await payload.findByID({ collection, id, depth: 0, overrideAccess: true, req }); return false }
+  catch (error) { if (isNotFound(error)) return true; throw error }
+}
 async function hasTombstone(payload: Payload, req: PayloadRequest | undefined, type: 'application' | 'inquiry' | 'media', id: string) {
   const found = await payload.find({ collection: 'deletion-tombstones', where: { and: [{ resourceType: { equals: type } }, { resourceID: { equals: id } }] }, limit: 1, depth: 0, overrideAccess: true, req })
   return Boolean(found.docs[0])
@@ -93,7 +97,7 @@ async function purgeApplicationUnlocked(payload: Payload, id: string, actor: str
     await completeJob(payload, req, record.id)
     return { state: 'completed', jobID: record.id }
   } catch (error) {
-    if (isNotFound(error) && await hasTombstone(payload, req, 'application', id)) { await completeJob(payload, req, record.id); return { state: 'completed', jobID: record.id } }
+    if (isNotFound(error) && await hasTombstone(payload, req, 'application', id) && await resourceGone(payload, 'applications', id, req)) { await completeJob(payload, req, record.id); return { state: 'completed', jobID: record.id } }
     await failJob(payload, req, record.id, record.attempts ?? 0, error); return { state: 'failed', jobID: record.id }
   }
 }
@@ -129,19 +133,27 @@ export async function purgeRetainedInquiry(payload: Payload, id: string, actor: 
 async function purgeMedia(payload: Payload, req: PayloadRequest | undefined, id: string, attempts = 0): Promise<'completed' | 'failed' | 'skipped'> {
   const record = await job(payload, req, 'media', id) as { id: string; state?: string }
   try {
-    await payload.findByID({ collection: 'assets', id, depth: 0, overrideAccess: true, req })
-    const references = await retentionMediaReferences(payload, req, id)
-    if (references.length) return 'skipped'
-    const versionIDs = await assetVersionIDsForRetention(payload, req, id)
-    await recordDeletionIntent(payload, req, 'media', id)
-    // Keep the parent relationship until every immutable file version is gone.
-    // If storage fails midway, the next attempt can still discover remaining bytes.
-    for (const versionID of versionIDs) await payload.delete({ collection: 'asset-file-versions', id: versionID, overrideAccess: true, req, context: { retentionMediaGC: true } })
+    const versionIDs = await withPayloadTransaction(payload, async transaction => {
+      const asset = await payload.findByID({ collection: 'assets', id, depth: 0, overrideAccess: true, req: transaction })
+      if (!asset.deletedAt) return null
+      const references = await retentionMediaReferences(payload, transaction, id)
+      if (references.length) return null
+      const versions = await assetVersionIDsForRetention(payload, transaction, id)
+      // Commit the irreversible intent before touching files. Restoration checks
+      // this tombstone; a failed partial purge cannot make broken media active.
+      await recordDeletionIntent(payload, transaction, 'media', id)
+      return versions
+    })
+    if (versionIDs === null) return 'skipped'
+    for (const versionID of versionIDs) {
+      try { await payload.delete({ collection: 'asset-file-versions', id: versionID, overrideAccess: true, req, context: { retentionMediaGC: true } }) }
+      catch (error) { if (!isNotFound(error)) throw error }
+    }
     await payload.delete({ collection: 'assets', id, overrideAccess: true, req, context: { retentionPurge: true } })
     await completeJob(payload, req, record.id)
-    return 'completed'
+    return 'completed' 
   } catch (error) {
-    if (isNotFound(error) && await hasTombstone(payload, req, 'media', id)) { await completeJob(payload, req, record.id); return 'completed' }
+    if (isNotFound(error) && await hasTombstone(payload, req, 'media', id) && await resourceGone(payload, 'assets', id, req)) { await completeJob(payload, req, record.id); return 'completed' }
     await failJob(payload, req, record.id, attempts, error); return 'failed'
   }
 }
@@ -162,7 +174,7 @@ async function purgeSpamInquiry(payload: Payload, id: string, cutoff: string): P
       return 'completed' as const
     })
   } catch (error) {
-    if (isNotFound(error) && await hasTombstone(payload, undefined, 'inquiry', id)) { await completeJob(payload, undefined, record.id); return 'completed' }
+    if (isNotFound(error) && await hasTombstone(payload, undefined, 'inquiry', id) && await resourceGone(payload, 'inquiries', id)) { await completeJob(payload, undefined, record.id); return 'completed' }
     await failJob(payload, undefined, record.id, record.attempts ?? 0, error)
     return 'failed'
   }
