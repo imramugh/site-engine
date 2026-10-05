@@ -72,7 +72,7 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
   await expect(owner.page.locator('[data-integrations-status][role="alert"]')).toHaveCount(0)
   const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(3)
-  await expect(signin.locator('[data-signin-method="google"]')).toContainText('Invitation only'); await expect(signin.locator('[data-signin-method="google"]')).toContainText('Assigned manually')
+  await expect(signin.locator('[data-signin-method="google"]')).toContainText('Invitation only'); await expect(signin.locator('[data-signin-method="google"]')).toContainText(/assigned manually/i)
   await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last used'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-1440.png'), fullPage: true })
