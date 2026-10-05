@@ -1,4 +1,5 @@
 import { SiteSnapshotSchema, ThemeInstallSchema, type Page, type Section, type SiteSnapshot, type Block, type PublicRoute, type RouteModel } from '@site-engine/contract';
+export { validateThemePackage } from './theme-package.js';
 export type { PublicRoute, RouteModel } from '@site-engine/contract';
 
 export function validateThemeInstall(input: unknown) { return ThemeInstallSchema.safeParse(input); }
