@@ -315,7 +315,7 @@ describe('static snapshot renderer', () => {
 
   it('renders trusted custom components inside the generic host without losing core outputs or parallel isolation', async () => {
     const customComponents = await customThemeComponents(root);
-    const custom = fixture('Custom theme host'); custom.settings.searchEnabled = true; const defaultSnapshot = fixture('Default theme host');
+    const custom = fixture('Custom theme host'); custom.settings.contractVersion = '1.5.0'; custom.settings.searchEnabled = true; const defaultSnapshot = fixture('Default theme host');
     const section = custom.settings.sections[0]!;
     const jobID = '12121212-1212-4212-8212-121212121212';
     const inquiryID = '13131313-1313-4313-8313-131313131313';
