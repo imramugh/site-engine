@@ -16,10 +16,13 @@ process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = join(directory, 'bootstrap-token')
 writeFileSync(process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE, 'test-only-bootstrap-token')
 const { default: config } = await import('../payload.config.js')
 const directRoute = await import('../app/api/editorial/direct-edit/route.js')
+const contextRoute = await import('../app/api/editorial/direct-edit/context/route.js')
+const styleRoute = await import('../app/api/editorial/direct-edit/style/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let releaseSequence = 10_000
 
 const heroID = '10000000-0000-4000-8000-000000000001'
+const calloutID = '10000000-0000-4000-8000-000000000002'
 async function actor(role: 'owner' | 'editor' | 'approver' = 'editor') {
   return payload.create({ collection: 'users', data: { email: `${role}-${newOpaqueToken()}@example.test`, name: role, roles: [role] }, overrideAccess: true })
 }
@@ -30,8 +33,12 @@ async function session(user: { id: string }) {
 }
 async function fixture(user: { id: string; roles?: string[] }) {
   const unique = randomUUID().replaceAll('-', '').slice(0, 12)
-  const section = await payload.create({ collection: 'sections', data: { name: `Section ${unique}`, slug: `section-${unique}`, allowedTemplates: ['landing', 'standard'] }, overrideAccess: true, context: { editorialInternal: true } })
-  const page = await payload.create({ collection: 'pages', data: { title: 'Direct edit page', summary: 'A synthetic page with enough summary text for direct edit tests.', slug: `page-${unique}`, sectionId: section.id, template: 'landing', blocks: [{ id: heroID, type: 'hero', heading: 'Original heading', body: 'Original hero body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+  const section = await payload.create({ collection: 'sections', data: { name: `Section ${unique}`, slug: `section-${unique}`, allowedTemplates: ['landing', 'standard', 'pillar', 'service'] }, overrideAccess: true, context: { editorialInternal: true } })
+  const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
+  const page = await payload.create({ collection: 'pages', data: { title: 'Direct edit page', summary: 'A synthetic page with enough summary text for direct edit tests.', slug: `page-${unique}`, sectionId: section.id, template: 'landing', blocks: [
+    { id: heroID, type: 'hero', eyebrow: 'Original eyebrow', heading: 'Original heading', body: 'Original hero body.', cta: { label: 'Generated link', href: '/contact' }, hidden: false, appearance },
+    { id: calloutID, type: 'callout', heading: 'Original callout', body: 'Original callout body.', items: ['Nested item must stay protected.'], cta: { label: 'Generated callout link', href: '/contact' }, hidden: false, appearance },
+  ] }, overrideAccess: true, context: { editorialInternal: true } })
   const set = await payload.create({ collection: 'change-sets', data: { name: 'Direct edit set', state: 'open', actor: user.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   return { section, page, set }
 }
@@ -47,7 +54,49 @@ async function installPublishedPointer(user: { id: string }, setID: string, page
 beforeAll(async () => { payload = await getPayload({ config }) }, 30_000)
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
-describe('ENG-026 draft-only direct hero edits', () => {
+describe('ENG-026 draft-only direct rendered-text edits', () => {
+  it('projects only supported text, serves CSP-compatible authenticated styles, and saves a non-Hero mapped field', async () => {
+    const editor = await actor(); const current = await fixture(editor); const cookie = await session(editor)
+    const headers = { cookie }
+    const context = await contextRoute.GET(new Request('http://cms.test/api/editorial/direct-edit/context', { headers }))
+    expect(context.status).toBe(200)
+    const result = await context.json() as { pages: Array<{ id: string; blocks: Array<{ id: string; type: string; fields: Record<string, string> }> }> }
+    const page = result.pages.find((item) => item.id === current.page.id)
+    expect(page?.blocks).toEqual([
+      { id: heroID, type: 'hero', fields: { eyebrow: 'Original eyebrow', heading: 'Original heading', body: 'Original hero body.' } },
+      { id: calloutID, type: 'callout', fields: { heading: 'Original callout', body: 'Original callout body.' } },
+    ])
+    expect(JSON.stringify(result)).not.toContain('Generated link')
+    expect(JSON.stringify(result)).not.toContain('Nested item')
+
+    const style = await styleRoute.GET(new Request('http://cms.test/api/editorial/direct-edit/style', { headers }))
+    expect(style.status).toBe(200); expect(style.headers.get('content-type')).toBe('text/css; charset=utf-8')
+    expect(await style.text()).toContain('data-direct-edit-mode')
+    expect((await styleRoute.GET(new Request('http://cms.test/api/editorial/direct-edit/style'))).status).toBe(401)
+
+    const calloutEdit = {
+      pageID: current.page.id, blockID: calloutID, field: 'body' as const, value: 'Updated callout body.',
+      expectedValueHash: directEditValueHash('Original callout body.'), expectedRevision: 0, changeSetID: current.set.id,
+    }
+    const saved = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(calloutEdit) }))
+    expect(saved.status, await saved.text()).toBe(200)
+    const updated = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    expect((updated.blocks as Array<Record<string, unknown>>)[1]).toMatchObject({ heading: 'Original callout', body: 'Updated callout body.', items: ['Nested item must stay protected.'] })
+  })
+
+  it('rejects a Service Hero owned by metadata when override text is equal or different', async () => {
+    const editor = await actor(); const current = await fixture(editor)
+    const parent = await payload.create({ collection: 'pages', data: { title: 'Service pillar', summary: 'Synthetic parent for generated Service Hero ownership tests.', slug: `pillar-${randomUUID().slice(0, 8)}`, sectionId: current.section.id, template: 'pillar', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'pages', id: current.page.id, data: { template: 'service', parentId: parent.id, title: 'Original heading', kicker: 'Original eyebrow', lede: 'Original hero body.' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id) }))).rejects.toThrow('FIELD_NOT_EDITABLE')
+    await payload.update({ collection: 'pages', id: current.page.id, data: { title: 'Generated different heading', lede: 'Generated different body.' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(withPayloadTransaction(payload, req => applyDirectEdit({ payload, req, actor: editor as never, edit: edit(current.page.id, current.set.id) }))).rejects.toThrow('FIELD_NOT_EDITABLE')
+    const cookie = await session(editor)
+    const response = await contextRoute.GET(new Request('http://cms.test/api/editorial/direct-edit/context', { headers: { cookie } }))
+    const context = await response.json() as { pages: Array<{ id: string; blocks: Array<{ type: string }> }> }
+    expect(context.pages.find((page) => page.id === current.page.id)?.blocks.map((block) => block.type)).toEqual(['callout'])
+  })
+
   it('uses the same working-draft path as ordinary editing, captures an allowed hero field, and replays safely', async () => {
     const editor = await actor(); const current = await fixture(editor)
     const published = await installPublishedPointer(editor, current.set.id, current.page.id)

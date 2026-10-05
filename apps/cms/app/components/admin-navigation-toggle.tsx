@@ -20,7 +20,7 @@ const titleForPath = (pathname: string) => {
   const titles: Record<string, string> = {
     '/admin': 'Dashboard', '/content-tree': 'Pages', '/block-gallery': 'Block gallery', '/media': 'Media', '/leads': 'Leads',
     '/applications': 'Careers', '/editorial': 'Reviews', '/operations': 'Change log', '/integrations': 'Integrations',
-    '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'Hero draft editor',
+    '/themes': 'Themes', '/ai-jobs': 'AI jobs', '/direct-edit': 'On-page editor',
   }
   const collectionTitles: Record<string, string> = { assets: 'Media', users: 'Users', pages: 'Pages', sections: 'Sections', redirects: 'Redirects', 'audit-events': 'Audit events', 'site-settings': 'Site' }
   const collection = pathname.match(/^\/admin\/collections\/([^/]+)/)?.[1]

@@ -3,7 +3,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { PageSchema } from '@site-engine/contract'
 import { hasRole } from './access'
 import { withPayloadTransaction } from './auth-transaction'
-import { directEditDefinition, validDirectEditValue, type DirectEditField } from './direct-edit-fields'
+import { directEditDefinitionForPage, validDirectEditValue, type DirectEditField } from './direct-edit-fields'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Page = Record<string, unknown>
@@ -69,7 +69,7 @@ function hasCapturedReplay(set: Record<string, unknown>, edit: DirectEditInput):
   })
 }
 
-/** Applies the first direct-edit surface: plain hero heading and body only.
+/** Applies the bounded direct-edit surface: explicitly mapped, top-level plain-text fields only.
  * The normal Pages hook performs the durable change-set capture in this same
  * transaction; this service deliberately does not create review or publish work. */
 export async function applyDirectEdit(input: { payload: Payload; req: PayloadRequest; actor: Actor; edit: DirectEditInput }): Promise<DirectEditResult> {
@@ -90,7 +90,7 @@ export async function applyDirectEdit(input: { payload: Payload; req: PayloadReq
   const blocks = Array.isArray(page.blocks) ? page.blocks.map((block) => ({ ...(block as Record<string, unknown>) })) : []
   const index = blocks.findIndex((block) => block.id === edit.blockID)
   const blockType = String(blocks[index]?.type ?? '')
-  if (index < 0 || !directEditDefinition(blockType, edit.field)) throw new Error('FIELD_NOT_EDITABLE')
+  if (index < 0 || !directEditDefinitionForPage({ ...page, blocks }, blocks[index]!, edit.field)) throw new Error('FIELD_NOT_EDITABLE')
   if (!validDirectEditValue(blockType, edit.field, edit.value)) throw new Error('INVALID_DIRECT_EDIT')
   const previous = blocks[index]?.[edit.field]
   if (typeof previous !== 'string') throw new Error('FIELD_NOT_EDITABLE')

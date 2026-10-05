@@ -1,21 +1,27 @@
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { hasRole } from '../../../../../src/access'
+import { directEditDefinitionForPage, directEditFields, type DirectEditField } from '../../../../../src/direct-edit-fields'
 import { serverSessionStrategy } from '../../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
 
-type Hero = { id: string; heading: string; body: string }
+type EditableBlock = { id: string; type: string; fields: Partial<Record<DirectEditField, string>> }
 
-function heroes(blocks: unknown): Hero[] {
+function editableBlocks(page: Record<string, unknown>): EditableBlock[] {
+  const blocks = page.blocks
   if (!Array.isArray(blocks)) return []
-  return blocks.flatMap((block) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'hero' && typeof (block as Record<string, unknown>).id === 'string' && typeof (block as Record<string, unknown>).heading === 'string' && typeof (block as Record<string, unknown>).body === 'string'
-    ? [{ id: (block as Record<string, string>).id, heading: (block as Record<string, string>).heading, body: (block as Record<string, string>).body }]
-    : [])
+  return blocks.flatMap((block) => {
+    if (!block || typeof block !== 'object') return []
+    const source = block as Record<string, unknown>
+    if (typeof source.id !== 'string' || typeof source.type !== 'string') return []
+    const fields = Object.fromEntries(directEditFields.flatMap((field) => directEditDefinitionForPage(page, source, field) && typeof source[field] === 'string' ? [[field, source[field]]] : [])) as Partial<Record<DirectEditField, string>>
+    return Object.keys(fields).length ? [{ id: source.id, type: source.type, fields }] : []
+  })
 }
 
-/** A minimal, role-filtered read model for the direct Hero editor. It never
+/** A minimal, role-filtered read model for the direct rendered-text editor. It never
  * returns arbitrary page blocks, credentials, or another editor's change set. */
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -29,7 +35,7 @@ export async function GET(request: Request): Promise<Response> {
       payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: user.id } }, { state: { in: ['open', 'changes-requested'] } }] }, sort: '-updatedAt', limit: 50, depth: 0, user: user as never, overrideAccess: false }),
     ])
     return Response.json({
-      pages: pages.docs.map((page) => ({ id: page.id, title: String(page.title), heroes: heroes(page.blocks) })).filter((page) => page.heroes.length),
+      pages: pages.docs.map((page) => ({ id: page.id, title: String(page.title), blocks: editableBlocks(page as unknown as Record<string, unknown>) })).filter((page) => page.blocks.length),
       truncated: pages.totalDocs > pages.docs.length || sets.totalDocs > sets.docs.length,
       changeSets: sets.docs.map((set) => ({ id: set.id, name: String(set.name), state: String(set.state), revision: Number(set.revision ?? 0) })),
     }, { headers: noStore })

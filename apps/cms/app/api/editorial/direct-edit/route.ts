@@ -1,6 +1,7 @@
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { executeDirectEdit, type DirectEditInput } from '../../../../src/direct-edit'
+import { directEditFields } from '../../../../src/direct-edit-fields'
 import { serverSessionStrategy } from '../../../../src/identity'
 
 export const dynamic = 'force-dynamic'
@@ -16,8 +17,8 @@ function sameOrigin(request: Request): boolean {
 function input(value: unknown): DirectEditInput | undefined {
   if (!value || typeof value !== 'object') return undefined
   const source = value as Record<string, unknown>
-  if (typeof source.pageID !== 'string' || typeof source.blockID !== 'string' || (source.field !== 'heading' && source.field !== 'body') || typeof source.value !== 'string' || typeof source.expectedValueHash !== 'string' || typeof source.expectedRevision !== 'number' || typeof source.changeSetID !== 'string') return undefined
-  return { pageID: source.pageID, blockID: source.blockID, field: source.field, value: source.value, expectedValueHash: source.expectedValueHash, expectedRevision: source.expectedRevision, changeSetID: source.changeSetID }
+  if (typeof source.pageID !== 'string' || typeof source.blockID !== 'string' || typeof source.field !== 'string' || !directEditFields.includes(source.field as DirectEditInput['field']) || typeof source.value !== 'string' || typeof source.expectedValueHash !== 'string' || typeof source.expectedRevision !== 'number' || typeof source.changeSetID !== 'string') return undefined
+  return { pageID: source.pageID, blockID: source.blockID, field: source.field as DirectEditInput['field'], value: source.value, expectedValueHash: source.expectedValueHash, expectedRevision: source.expectedRevision, changeSetID: source.changeSetID }
 }
 
 async function body(request: Request): Promise<unknown> {

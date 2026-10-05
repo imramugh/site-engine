@@ -33,7 +33,7 @@ export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [
 
 /** Related tools remain discoverable without competing with the primary shell. */
 export const adminToolNavigationItems: readonly AdminNavigationItem[] = [
-  { href: '/direct-edit', label: 'Hero draft editor', roles: ['owner', 'editor'] },
+  { href: '/direct-edit', label: 'On-page editor', roles: ['owner', 'editor', 'approver'] },
   { href: '/themes', label: 'Themes', roles: ['owner'] },
   { href: '/ai-jobs', label: 'AI jobs', roles: ['owner'] },
 ]

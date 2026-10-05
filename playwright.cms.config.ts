@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const webServerTimeout = Number(process.env.CMS_E2E_STARTUP_TIMEOUT_MS ?? 120_000)
 
 export default defineConfig({
   testDir: './apps/cms/e2e',
@@ -24,6 +25,6 @@ export default defineConfig({
     command: 'corepack pnpm@12.8.1 --filter @site-engine/cms exec tsx e2e/server.ts',
     url: `http://127.0.0.1:${e2ePort + 3}`,
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: webServerTimeout,
   },
 })

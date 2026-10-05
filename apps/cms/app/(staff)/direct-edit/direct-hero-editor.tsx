@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { directEditChecks, directEditDefinition, uniqueDirectEditMatch, type DirectEditField } from '../../../src/direct-edit-fields'
 import styles from './direct-hero-editor.module.css'
 
-type Hero = { id: string; heading: string; body: string }
-type Page = { id: string; title: string; heroes: Hero[] }
+type EditableBlock = { id: string; type: string; fields: Partial<Record<DirectEditField, string>> }
+type Page = { id: string; title: string; blocks: EditableBlock[] }
 type ChangeSet = { id: string; name: string; state: string; revision: number }
 type Data = { pages: Page[]; changeSets: ChangeSet[]; truncated?: boolean }
 type Preview = { id: string; status: string; path?: string }
@@ -20,6 +20,7 @@ export function DirectHeroEditor() {
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<Preview>()
   const [editMode, setEditMode] = useState(false)
+  const [activeBlockID, setActiveBlockID] = useState<string>()
   const [activeField, setActiveField] = useState<DirectEditField>()
   const [value, setValue] = useState('')
   const [previewMappable, setPreviewMappable] = useState<boolean>()
@@ -31,10 +32,10 @@ export function DirectHeroEditor() {
 
   const page = useMemo(() => data.pages.find((item) => item.id === pageID) ?? data.pages[0], [data.pages, pageID])
   const changeSet = useMemo(() => data.changeSets.find((item) => item.id === changeSetID) ?? data.changeSets[0], [data.changeSets, changeSetID])
-  const hero = page?.heroes[0]
-  const original = activeField && hero ? hero[activeField] : ''
+  const activeBlock = page?.blocks.find((block) => block.id === activeBlockID)
+  const original = activeField && activeBlock ? activeBlock.fields[activeField] ?? '' : ''
   const dirty = Boolean(activeField && value !== original)
-  const checks = activeField ? directEditChecks('hero', activeField, value) : []
+  const checks = activeField && activeBlock ? directEditChecks(activeBlock.type, activeField, value) : []
   const valid = checks.length > 0 && checks.every((check) => check.passed)
 
   const stopPolling = useCallback(() => {
@@ -49,6 +50,7 @@ export function DirectHeroEditor() {
     setPreview(undefined)
     setPreviewMappable(undefined)
     setEditMode(false)
+    setActiveBlockID(undefined)
     setActiveField(undefined)
   }, [stopPolling])
 
@@ -88,7 +90,7 @@ export function DirectHeroEditor() {
 
   const preparePreview = useCallback(async () => {
     if (!changeSet || !page) return
-    stopPolling(); frameCleanup.current(); setPreview(undefined); setPreviewMappable(undefined); setEditMode(false); setActiveField(undefined)
+    stopPolling(); frameCleanup.current(); setPreview(undefined); setPreviewMappable(undefined); setEditMode(false); setActiveBlockID(undefined); setActiveField(undefined)
     const version = requestVersion.current
     setBusy(true); setMessage('Preparing saved draft preview…')
     try {
@@ -104,87 +106,110 @@ export function DirectHeroEditor() {
   }, [changeSet, page, poll, stopPolling])
 
   const cancel = useCallback(() => {
-    if (activeNode.current && activeField && hero) {
-      activeNode.current.textContent = hero[activeField]
+    if (activeNode.current && activeField && activeBlock) {
+      activeNode.current.textContent = activeBlock.fields[activeField] ?? ''
       activeNode.current.contentEditable = 'false'
       activeNode.current.focus()
     }
-    activeNode.current = undefined; setActiveField(undefined); setValue('')
+    activeNode.current = undefined; setActiveBlockID(undefined); setActiveField(undefined); setValue('')
     setMessage('Edit cancelled. The saved draft is unchanged.')
-  }, [activeField, hero])
+  }, [activeBlock, activeField])
 
   const wirePreview = useCallback(() => {
     frameCleanup.current()
     const document = previewFrame.current?.contentDocument
-    if (!document || !hero) { setPreviewMappable(false); return }
-    const identified = [...document.querySelectorAll<HTMLElement>(`[data-block-id="${hero.id}"]`)]
-    const typed = [...document.querySelectorAll<HTMLElement>('[data-block-type="hero"], [data-block="hero"]')]
-    const block = identified.length === 1 ? identified[0] : identified.length === 0 ? uniqueDirectEditMatch(typed, (candidate) => candidate.querySelector('h1')?.textContent?.trim() === hero.heading && [...candidate.querySelectorAll('p')].some((node) => node.textContent?.trim() === hero.body)) : undefined
-    if (!block) { setPreviewMappable(false); setEditMode(false); return }
-    const style = document.createElement('style')
-    style.dataset.directEditStyle = 'true'
-    style.textContent = '[data-direct-edit-field]{outline:2px dashed transparent;outline-offset:4px}[data-direct-edit-mode="true"] [data-direct-edit-field]{cursor:text;outline-color:Highlight}[data-direct-edit-field]:focus{outline-style:solid;background:color-mix(in srgb, Highlight 12%, transparent)}'
-    document.head.append(style); document.documentElement.dataset.directEditMode = String(editMode)
+    if (!document || !page) { setPreviewMappable(false); return }
+    const stylesheet = document.createElement('link')
+    stylesheet.dataset.directEditStyle = 'true'
+    stylesheet.rel = 'stylesheet'
+    stylesheet.href = '/api/editorial/direct-edit/style'
+    document.head.append(stylesheet); document.documentElement.dataset.directEditMode = String(editMode)
     const cleanups: Array<() => void> = []
-    ;(['heading', 'body'] as const).forEach((field) => {
-      const definition = directEditDefinition('hero', field)!
-      const expected = hero[field]
-      const candidates = definition.selectors.flatMap((selector) => [...block.querySelectorAll<HTMLElement>(selector)])
-      const node = uniqueDirectEditMatch(candidates, (candidate) => candidate.textContent?.trim() === expected)
-      if (!node) return
-      const priorTabIndex = node.getAttribute('tabindex'); const priorLabel = node.getAttribute('aria-label')
-      node.dataset.directEditField = field; node.tabIndex = editMode ? 0 : -1; node.setAttribute('aria-label', `Edit Hero ${field}`)
-      const activate = (event: Event) => {
-        if (!editMode) return
-        event.preventDefault(); event.stopPropagation()
-        if (activeNode.current && activeNode.current !== node) return
-        if (activeNode.current && activeNode.current !== node) activeNode.current.contentEditable = 'false'
-        activeNode.current = node; node.contentEditable = 'plaintext-only'; setActiveField(field); setValue(node.innerText)
-        setMessage(`Editing Hero ${field} in the rendered page. Escape cancels.`); node.focus()
-        const selection = document.getSelection(); const range = document.createRange(); range.selectNodeContents(node); selection?.removeAllRanges(); selection?.addRange(range)
-      }
-      const input = () => setValue(node.innerText.replace(/\r\n/g, '\n'))
-      const paste = (event: ClipboardEvent) => {
-        event.preventDefault()
-        const text = event.clipboardData?.getData('text/plain') ?? ''
-        const selection = document.getSelection()
-        if (!selection?.rangeCount) return
-        const range = selection.getRangeAt(0)
-        range.deleteContents()
-        const inserted = document.createTextNode(text)
-        range.insertNode(inserted)
-        range.setStartAfter(inserted); range.collapse(true)
-        selection.removeAllRanges(); selection.addRange(range)
-        node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }))
-      }
-      const keydown = (event: KeyboardEvent) => {
-        if (event.key !== 'Escape' || activeNode.current !== node) return
-        event.preventDefault(); node.textContent = expected; node.contentEditable = 'false'; node.focus()
-        activeNode.current = undefined; setActiveField(undefined); setValue(''); setMessage('Edit cancelled. The saved draft is unchanged.')
-      }
-      node.addEventListener('click', activate); node.addEventListener('keydown', keydown); node.addEventListener('input', input); node.addEventListener('paste', paste)
-      cleanups.push(() => {
-        node.removeEventListener('click', activate); node.removeEventListener('keydown', keydown); node.removeEventListener('input', input); node.removeEventListener('paste', paste)
-        node.contentEditable = 'false'; delete node.dataset.directEditField
-        priorTabIndex === null ? node.removeAttribute('tabindex') : node.setAttribute('tabindex', priorTabIndex)
-        priorLabel === null ? node.removeAttribute('aria-label') : node.setAttribute('aria-label', priorLabel)
+    let mappedCount = 0
+    const matchingNode = (container: HTMLElement, block: EditableBlock, field: DirectEditField): HTMLElement | undefined => {
+      const definition = directEditDefinition(block.type, field)
+      const expected = block.fields[field]
+      if (!definition || expected === undefined) return undefined
+      const candidates = definition.selectors.flatMap((selector) => [...container.querySelectorAll<HTMLElement>(selector)])
+      return uniqueDirectEditMatch(candidates, (candidate) => candidate.textContent?.trim() === expected)
+    }
+    page.blocks.forEach((editableBlock) => {
+      const identified = [...document.querySelectorAll<HTMLElement>('[data-block-id]')].filter((candidate) => candidate.dataset.blockId === editableBlock.id)
+      const typed = [...document.querySelectorAll<HTMLElement>('[data-block-type], [data-block]')].filter((candidate) => candidate.dataset.blockType === editableBlock.type || candidate.dataset.block === editableBlock.type)
+      const fields = Object.keys(editableBlock.fields) as DirectEditField[]
+      const block = identified.length === 1
+        ? identified[0]
+        : identified.length === 0
+          ? uniqueDirectEditMatch(typed, (candidate) => fields.every((field) => Boolean(matchingNode(candidate, editableBlock, field))))
+          : undefined
+      if (!block) return
+      fields.forEach((field) => {
+        const expected = editableBlock.fields[field]
+        const node = matchingNode(block, editableBlock, field)
+        if (!node || expected === undefined) return
+        mappedCount += 1
+        const priorTabIndex = node.getAttribute('tabindex')
+        const priorLabel = node.getAttribute('aria-label')
+        node.dataset.directEditBlock = editableBlock.id
+        node.dataset.directEditField = field
+        node.tabIndex = editMode ? 0 : -1
+        if (editMode) node.setAttribute('aria-label', `Edit ${editableBlock.type} ${field}: ${expected}`)
+        const activate = (event: Event) => {
+          if (!editMode) return
+          event.preventDefault(); event.stopPropagation()
+          if (activeNode.current && activeNode.current !== node) return
+          activeNode.current = node; node.contentEditable = 'plaintext-only'; setActiveBlockID(editableBlock.id); setActiveField(field); setValue(node.innerText)
+          setMessage(`Editing ${editableBlock.type} ${field} in the rendered page. Escape cancels.`); node.focus()
+          const selection = document.getSelection(); const range = document.createRange(); range.selectNodeContents(node); selection?.removeAllRanges(); selection?.addRange(range)
+        }
+        const input = () => setValue(node.innerText.replace(/\r\n/g, '\n'))
+        const paste = (event: ClipboardEvent) => {
+          event.preventDefault()
+          const text = event.clipboardData?.getData('text/plain') ?? ''
+          const selection = document.getSelection()
+          if (!selection?.rangeCount) return
+          const range = selection.getRangeAt(0)
+          range.deleteContents()
+          const inserted = document.createTextNode(text)
+          range.insertNode(inserted)
+          range.setStartAfter(inserted); range.collapse(true)
+          selection.removeAllRanges(); selection.addRange(range)
+          node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }))
+        }
+        const keydown = (event: KeyboardEvent) => {
+          if ((event.key === 'Enter' || event.key === 'F2') && activeNode.current !== node) {
+            activate(event)
+            return
+          }
+          if (event.key === 'Escape' && activeNode.current === node) {
+            event.preventDefault(); node.textContent = expected; node.contentEditable = 'false'; node.focus()
+            activeNode.current = undefined; setActiveBlockID(undefined); setActiveField(undefined); setValue(''); setMessage('Edit cancelled. The saved draft is unchanged.')
+          }
+        }
+        node.addEventListener('click', activate); node.addEventListener('keydown', keydown); node.addEventListener('input', input); node.addEventListener('paste', paste)
+        cleanups.push(() => {
+          node.removeEventListener('click', activate); node.removeEventListener('keydown', keydown); node.removeEventListener('input', input); node.removeEventListener('paste', paste)
+          node.contentEditable = 'false'; delete node.dataset.directEditBlock; delete node.dataset.directEditField
+          priorTabIndex === null ? node.removeAttribute('tabindex') : node.setAttribute('tabindex', priorTabIndex)
+          priorLabel === null ? node.removeAttribute('aria-label') : node.setAttribute('aria-label', priorLabel)
+        })
       })
     })
-    const mapped = block.querySelectorAll('[data-direct-edit-field]').length === 2
+    const mapped = mappedCount > 0
     setPreviewMappable(mapped); if (!mapped) setEditMode(false)
-    frameCleanup.current = () => { cleanups.forEach((cleanup) => cleanup()); style.remove(); delete document.documentElement.dataset.directEditMode }
-  }, [editMode, hero])
+    frameCleanup.current = () => { cleanups.forEach((cleanup) => cleanup()); stylesheet.remove(); delete document.documentElement.dataset.directEditMode }
+  }, [editMode, page])
 
   useEffect(() => { if (preview?.status === 'completed') wirePreview() }, [preview?.status, wirePreview])
 
   const save = async () => {
-    if (!page || !hero || !changeSet || !activeField || !dirty || !valid) return
+    if (!page || !activeBlock || !changeSet || !activeField || !dirty || !valid) return
     setBusy(true); setMessage('Saving rendered text to the owned draft…')
     try {
-      const response = await fetch('/api/editorial/direct-edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pageID: page.id, blockID: hero.id, field: activeField, value, expectedValueHash: await digest(original), expectedRevision: changeSet.revision, changeSetID: changeSet.id }) })
+      const response = await fetch('/api/editorial/direct-edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pageID: page.id, blockID: activeBlock.id, field: activeField, value, expectedValueHash: await digest(original), expectedRevision: changeSet.revision, changeSetID: changeSet.id }) })
       const result = await response.json() as { error?: string }
       if (!response.ok) throw new Error(result.error || 'Unable to save this field.')
-      activeNode.current = undefined; setActiveField(undefined); setValue(''); await load()
+      activeNode.current = undefined; setActiveBlockID(undefined); setActiveField(undefined); setValue(''); await load()
       setMessage('Draft saved. Rendering the saved proposal…'); await preparePreview()
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to save this field.') } finally { setBusy(false) }
   }
@@ -200,9 +225,9 @@ export function DirectHeroEditor() {
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to submit this change set.') } finally { setBusy(false) }
   }
 
-  const ready = Boolean(page && hero && changeSet)
+  const ready = Boolean(page && page.blocks.length && changeSet)
   return <main className={styles.editor} data-direct-edit-workspace>
-    <header className={styles.heading}><div><h1>On-page text editor</h1><p>Prepare the saved draft, turn on Edit mode, then select highlighted Hero text.</p></div>{page ? <a className={styles.fallback} href={`/content-editor/${page.id}`}>Open full page editor</a> : null}</header>
+    <header className={styles.heading}><div><h1>On-page text editor</h1><p>Prepare the saved draft, turn on Edit mode, then select highlighted text.</p></div>{page ? <a className={styles.fallback} href={`/content-editor/${page.id}`}>Open full page editor</a> : null}</header>
     <p role="status" aria-live="polite">{message}</p>{data.truncated ? <p>Some older drafts are not shown. Use the full page editor to find them.</p> : null}
     <div className={styles.selectors}>
       <label>Page <select value={page?.id ?? ''} disabled={busy || dirty} onChange={(event) => { clearPreview(); setPageID(event.target.value) }}>{data.pages.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
@@ -214,8 +239,8 @@ export function DirectHeroEditor() {
       <button aria-pressed={editMode} disabled={preview?.status !== 'completed' || previewMappable !== true || busy || dirty} onClick={() => setEditMode((current) => !current)}>{editMode ? 'Exit Edit mode' : 'Enter Edit mode'}</button>
       <button disabled={!changeSet || busy || dirty} onClick={() => void submit()}>Submit for review</button>
     </section>
-    {previewMappable === false && preview?.status === 'completed' ? <p className={styles.notice}>This renderer does not expose an unambiguous Hero text match. Use the full page editor.</p> : null}
-    {activeField ? <section className={styles.checks} aria-label="Direct edit checks" data-direct-edit-checks><h2>Hero {activeField}</h2><p>The rendered text is edited as plain text. The saved contract remains the source of truth.</p><ul>{checks.map((check) => <li key={check.id} data-passed={check.passed}>{check.passed ? '✓' : '!'} {check.label}</li>)}</ul><div><button disabled={busy || !dirty || !valid} onClick={() => void save()}>Save rendered text</button><button disabled={busy} onClick={cancel}>Cancel</button></div></section> : null}
-    <section className={styles.preview} aria-label="Saved draft preview" data-direct-edit-preview>{preview?.status === 'completed' ? <iframe ref={previewFrame} className={styles.previewFrame} title="Editable saved draft preview" onLoad={wirePreview} src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`} /> : <p>Prepare a saved preview to edit rendered Hero text.</p>}</section>
+    {previewMappable === false && preview?.status === 'completed' ? <p className={styles.notice}>This renderer does not expose an unambiguous supported text match. Use the full page editor.</p> : null}
+    {activeField && activeBlock ? <section className={styles.checks} aria-label="Direct edit checks" data-direct-edit-checks><h2>{activeBlock.type} {activeField}</h2><p>The rendered text is edited as plain text. The saved contract remains the source of truth.</p><ul>{checks.map((check) => <li key={check.id} data-passed={check.passed}>{check.passed ? '✓' : '!'} {check.label}</li>)}</ul><div><button disabled={busy || !dirty || !valid} onClick={() => void save()}>Save rendered text</button><button disabled={busy} onClick={cancel}>Cancel</button></div></section> : null}
+    <section className={styles.preview} aria-label="Saved draft preview" data-direct-edit-preview>{preview?.status === 'completed' ? <iframe ref={previewFrame} className={styles.previewFrame} title="Editable saved draft preview" onLoad={wirePreview} src={`/preview/changes/${preview.id}/proposed${preview.path ?? '/'}`} /> : <p>Prepare a saved preview to edit supported rendered text.</p>}</section>
   </main>
 }
