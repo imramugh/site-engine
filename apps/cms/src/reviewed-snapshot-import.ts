@@ -1,4 +1,4 @@
-import { NotFound, type Payload, type PayloadRequest } from 'payload'
+import { type Payload, type PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole, type Role } from './access'
 import { snapshot, type CapturedCollection } from './editorial'
@@ -42,12 +42,10 @@ function capture(changes: Captured[], collection: CapturedCollection, id: string
   if (existing >= 0) { next.before = changes[existing]!.before; next.beforeHash = changes[existing]!.beforeHash; changes[existing] = next } else changes.push(next)
 }
 async function findDraftByID(payload: Payload, req: PayloadRequest, collection: 'sections' | 'pages', id: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    return await payload.findByID({ collection, id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
-  } catch (error) {
-    if (error instanceof NotFound) return undefined
-    throw error
-  }
+  // A caught Local API NotFound has already rolled back the shared transaction.
+  // Probe without throwing so mixed update/create imports remain atomic.
+  const result = await payload.find({ collection, where: { id: { equals: id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
+  return result.docs[0] as unknown as Record<string, unknown> | undefined
 }
 
 /** Reconciles a contract-valid desired snapshot into ordinary draft records, then

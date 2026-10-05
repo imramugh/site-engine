@@ -209,3 +209,26 @@ describe('section landing import routing', () => {
     await withPayloadTransaction(payload, req => { req.user = owner as never; return transitionChangeSet({ payload, req, actor: owner as never, id: String(set.id), action: 'submit' }) })
   })
 })
+
+
+it('keeps existing page updates when the same import creates a new page', async () => {
+  // Earlier conflict scenarios deliberately leave pending singleton captures in this disposable database.
+  await payload.update({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+  const owner = await payload.create({ collection: 'users', data: { email: `historical-${randomUUID()}@example.test`, name: 'Owner', roles: ['owner'] }, overrideAccess: true })
+  const baseline = isolatedFixture()
+  const initial = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Initial mixed-import baseline', manifest: baseline, baseline }) })
+  await payload.update({ collection: 'change-sets', id: String(initial.id), data: { state: 'published' }, overrideAccess: true, context: { editorialInternal: true } })
+  const desired = structuredClone(baseline)
+  const hero = desired.pages[0]!.blocks.find(block => block.type === 'hero')!
+  if (hero.type !== 'hero') throw new Error('Expected fixture hero')
+  hero.cta = { ...hero.cta!, href: '/updated-target' }
+  const newPage = { ...structuredClone(desired.pages[0]!), id: randomUUID(), slug: 'new-page', title: 'New page' }
+  desired.pages.push(newPage)
+  desired.settings.sections[0]!.pageIds.push(newPage.id)
+  const set = await withPayloadTransaction(payload, req => { req.user = owner as never; return importReviewedSnapshot({ payload, req, actor: owner, name: 'Update and create pages', manifest: desired, baseline }) })
+  const draft = await payload.findByID({ collection: 'pages', id: desired.pages[0]!.id, depth: 0, draft: true, overrideAccess: true })
+  expect(draft.blocks).toEqual(desired.pages[0]!.blocks)
+  expect(await payload.findByID({ collection: 'pages', id: newPage.id, draft: true, overrideAccess: true })).toMatchObject({ title: 'New page' })
+  await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: String(set.id), action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+  await payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+})
