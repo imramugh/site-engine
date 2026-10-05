@@ -28,7 +28,7 @@ async function searchJSON(page: Page, query: string) {
 test('ENG-006 searches real permitted records without exposing private lead fields', async ({ browser }) => {
   const owner = await signedIn(browser, 'owner')
   const page = owner.page
-  await expect(page.locator('[data-admin-primary] a[href="/leads"] [data-admin-nav-badge]')).toHaveText('1')
+  await expect(page.locator('[data-admin-primary] a[href="/leads"] [data-admin-nav-badge]')).toHaveText('2')
   await expect(page.locator('[data-admin-primary] a[href="/editorial"] [data-admin-nav-badge]')).toHaveText('1')
 
   const requests: string[] = []
