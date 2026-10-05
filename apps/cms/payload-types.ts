@@ -89,6 +89,7 @@ export interface Config {
     'notification-outbox': NotificationOutbox;
     'notification-deliveries': NotificationDelivery;
     'notification-preferences': NotificationPreference;
+    'notification-user-preferences': NotificationUserPreference;
     'urgent-contacts': UrgentContact;
     'mail-threads': MailThread;
     'mail-thread-messages': MailThreadMessage;
@@ -134,6 +135,7 @@ export interface Config {
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
     'notification-deliveries': NotificationDeliveriesSelect<false> | NotificationDeliveriesSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
+    'notification-user-preferences': NotificationUserPreferencesSelect<false> | NotificationUserPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
     'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
     'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
@@ -955,6 +957,25 @@ export interface NotificationPreference {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-user-preferences".
+ */
+export interface NotificationUserPreference {
+  id: string;
+  user: string | User;
+  mutedKinds:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "urgent-contacts".
  */
 export interface UrgentContact {
@@ -1506,6 +1527,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'notification-preferences';
         value: string | NotificationPreference;
+      } | null)
+    | ({
+        relationTo: 'notification-user-preferences';
+        value: string | NotificationUserPreference;
       } | null)
     | ({
         relationTo: 'urgent-contacts';
@@ -2161,6 +2186,16 @@ export interface NotificationPreferencesSelect<T extends boolean = true> {
   key?: T;
   events?: T;
   updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-user-preferences_select".
+ */
+export interface NotificationUserPreferencesSelect<T extends boolean = true> {
+  user?: T;
+  mutedKinds?: T;
   updatedAt?: T;
   createdAt?: T;
 }

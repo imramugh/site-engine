@@ -55,6 +55,10 @@ async function recipientEligible(payload: Payload, outbox: Outbox, recipient: Re
   }
   const user = await payload.findByID({ collection: 'users', id: recipient.id, depth: 0, overrideAccess: true }).catch(() => null) as { disabled?: boolean; email?: string; roles?: string[] } | null
   if (!user || user.disabled || user.email?.toLowerCase() !== recipient.email.toLowerCase()) return false
+  if (outbox.kind !== 'active-incident-lead') {
+    const muted = await (payload as any).find({ collection: 'notification-user-preferences', where: { user: { equals: recipient.id } }, limit: 1, depth: 0, overrideAccess: true })
+    if (Array.isArray(muted.docs[0]?.mutedKinds) && muted.docs[0].mutedKinds.includes(outbox.kind)) return false
+  }
   const roleMatch = preference.recipients.some((rule) => ['owner', 'sales', 'hiring', 'approver'].includes(rule) && user.roles?.includes(rule))
   if (roleMatch) return true
   if (!preference.recipients.includes('lead-owner') || outbox.sourceType !== 'inquiry') return false

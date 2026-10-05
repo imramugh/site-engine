@@ -3,7 +3,7 @@ import { buildConfig } from 'payload'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, DeletionTombstones, Inquiries, IntegrationConfigurations, ProviderUsageReservations, MailAuthorizations, MailDrafts, MailThreads, MailThreadMessages, NotificationOutbox, NotificationDeliveries, NotificationPreferences, RetentionPurgeJobs, RetentionSettings, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
+import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, DeletionTombstones, Inquiries, IntegrationConfigurations, ProviderUsageReservations, MailAuthorizations, MailDrafts, MailThreads, MailThreadMessages, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, RetentionPurgeJobs, RetentionSettings, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
 import { databaseURI } from './src/sqlite'
 import { MailboxAreaMappings, MailboxConfigurations, MailboxTestSends } from './src/mailbox-collections'
 
@@ -25,7 +25,7 @@ export default buildConfig({
     },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
-  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, ProviderUsageReservations, MailboxConfigurations, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, UrgentContacts, MailDrafts, MailThreads, MailThreadMessages, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
+  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, ProviderUsageReservations, MailboxConfigurations, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailDrafts, MailThreads, MailThreadMessages, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
     client: { url: databaseURI() },
     // The Payload CLI otherwise resolves migrations from the caller's cwd. Keep

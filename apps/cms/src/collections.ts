@@ -565,6 +565,16 @@ export const NotificationPreferences: CollectionConfig = {
   ],
 }
 
+/** A person's opt-out choices; incident alerts intentionally cannot be muted. */
+export const NotificationUserPreferences: CollectionConfig = {
+  slug: 'notification-user-preferences', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'user', type: 'relationship', relationTo: 'users', required: true, unique: true },
+    { name: 'mutedKinds', type: 'json', required: true, defaultValue: [] },
+  ],
+}
+
 export const UrgentContacts: CollectionConfig = {
   slug: 'urgent-contacts', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
