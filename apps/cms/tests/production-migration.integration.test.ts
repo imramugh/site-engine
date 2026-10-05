@@ -227,9 +227,8 @@ describe('production migrations (ENG-036)', () => {
     const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
     expect(verify.status, verify.stderr || verify.stdout).toBe(0)
     const runtime = spawnSync(process.execPath, [tsxBin, '-e', `
-      import { getPayload } from 'payload';
-      import config from './payload.config';
-      const payload = await getPayload({ config });
+      import { getPayload } from 'payload'; import config from './payload.config';
+      (async () => { const payload = await getPayload({ config });
       try {
         const owner = await payload.create({ collection: 'users', data: { email: 'runtime-owner@example.test', name: 'Runtime owner', roles: ['owner'] }, overrideAccess: true });
         const inquiry = await payload.create({ collection: 'inquiries', data: { email: 'runtime-lead@example.test', message: 'Preserved lead draft migration proof.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'runtime-lead', stage: 'new' }, overrideAccess: true });
@@ -246,7 +245,7 @@ describe('production migrations (ENG-036)', () => {
           payload.find({ collection: 'retention-settings', limit: 1, depth: 0, overrideAccess: true }), payload.find({ collection: 'deletion-tombstones', limit: 1, depth: 0, overrideAccess: true }), payload.find({ collection: 'retention-purge-jobs', limit: 1, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-drafts', id: leadDraft.id, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-authorizations', id: authorization.id, depth: 0, overrideAccess: true }), payload.findByID({ collection: 'mail-drafts', id: applicationDraft.id, depth: 0, overrideAccess: true }),
         ]);
         if (settings.docs[0]?.spamDays !== 31 || tombstones.docs[0]?.resourceID !== inquiry.id || jobs.docs[0]?.resourceID !== application.id || persistedLead.lead !== inquiry.id || persistedAuth.draft !== leadDraft.id || persistedApplication.application !== application.id) throw new Error('CLI-migrated push:false runtime did not preserve retention or reply relations.');
-      } finally { await payload.destroy(); }
+      } finally { await payload.destroy(); } })();
     `], { cwd: cmsRoot, env: environment, encoding: 'utf8' })
     expect(runtime.status, runtime.stderr || runtime.stdout).toBe(0)
     } finally { rmSync(directory, { recursive: true, force: true }) }
