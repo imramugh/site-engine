@@ -44,6 +44,9 @@ test('SMTP credentials stay private while mappings and one-use authorized delive
   const input = { requestKey: crypto.randomUUID(), mailbox: mailbox.id, senderAddress: 'careers@example.test', recipientAddress: 'sink@example.test', subject: 'Synthetic delivery', body: 'Only the local sink receives this message.', confirmed: true }
   const sent = await service.sendAuthorizedMailboxTest(payload, input, owner.id); expect(sent).toMatchObject({ state: 'sent' }); expect(messages).toHaveLength(1); expect(messages[0]).toContain('Only the local sink receives this message.')
   await service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'careers@example.test' }, owner.id)
+  await expect(service.configureSMTPMailbox(payload, { id: mailbox.id, name: 'Synthetic mailbox', primaryAddress: 'hello@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'synthetic-user' }, owner.id)).rejects.toThrow('Unassign this mailbox sender')
+  await service.clearMailboxArea(payload, 'careers', owner.id)
+  await service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'careers@example.test' }, owner.id)
   await expect(service.sendAuthorizedMailboxTest(payload, { ...input, body: 'Changed after authorization.' }, owner.id)).rejects.toThrow('different content')
   expect(await service.sendAuthorizedMailboxTest(payload, input, owner.id)).toMatchObject({ id: sent.id, state: 'sent' }); expect(messages).toHaveLength(1)
   const rejectedKey = crypto.randomUUID()
