@@ -28,7 +28,7 @@ export async function GET(request: Request): Promise<Response> {
     ...stages.map((status) => payload.count({ collection: 'applications', where: roleWhere ? { and: [roleWhere, { status: { equals: status } }] } as never : { status: { equals: status } }, user, overrideAccess: false })),
   ])
   return Response.json({
-    docs: result.docs.map((application) => ({ id: application.id, name: application.name, email: application.email, coverLetter: application.coverLetter, consent: application.consent, jobId: application.jobId, status: application.status, createdAt: application.createdAt })),
+    docs: result.docs.map((application) => ({ id: application.id, name: application.name, email: application.email, telephone: application.telephone ?? null, linkedIn: application.linkedIn ?? null, coverLetter: application.coverLetter, consent: application.consent, jobId: application.jobId, status: application.status, createdAt: application.createdAt })),
     page: result.page,
     totalPages: result.totalPages,
     totalDocs: result.totalDocs,

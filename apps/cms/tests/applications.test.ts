@@ -1,6 +1,6 @@
 import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { validateResume } from '../src/applications'
+import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, preserveApplicationIntake, validateResume } from '../src/applications'
 
 function docx(entries: Record<string, string>) {
   const locals: Buffer[] = []; const central: Buffer[] = []; let offset = 0
@@ -19,5 +19,27 @@ describe('application resume validation', () => {
     expect(() => validateResume({ data: macro, mimetype: type, size: macro.length, name: 'resume.docx' })).toThrow('DOCX')
     const external = docx({ '[Content_Types].xml': '<Types><Override ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>', 'word/document.xml': '<w:document xmlns:w="w"/>', 'word/_rels/document.xml.rels': '<Relationship Target="https://attacker.test" TargetMode="External"/>' })
     expect(() => validateResume({ data: external, mimetype: type, size: external.length, name: 'resume.docx' })).toThrow('DOCX')
+  })
+})
+
+describe('applicant contact validation', () => {
+  it('normalizes optional telephone and LinkedIn values and rejects unsafe input', () => {
+    expect(normalizeApplicantTelephone(' +1 (416) 555-0198 ')).toBe('+1 (416) 555-0198')
+    expect(normalizeApplicantTelephone('(416) 555-0199')).toBe('(416) 555-0199')
+    expect(normalizeApplicantTelephone('')).toBeNull()
+    expect(() => normalizeApplicantTelephone('555')).toThrow('Invalid telephone')
+    expect(() => normalizeApplicantTelephone('416-555-0198 ext 4')).toThrow('Invalid telephone')
+    expect(normalizeApplicantLinkedIn(' https://www.linkedin.com/in/synthetic-applicant#profile ')).toBe('https://www.linkedin.com/in/synthetic-applicant')
+    expect(normalizeApplicantLinkedIn('https://ca.linkedin.com/in/synthetic-applicant')).toBe('https://ca.linkedin.com/in/synthetic-applicant')
+    expect(normalizeApplicantLinkedIn(null)).toBeNull()
+    expect(() => normalizeApplicantLinkedIn('http://www.linkedin.com/in/example')).toThrow('Invalid LinkedIn URL')
+    expect(() => normalizeApplicantLinkedIn('https://linkedin.example/in/example')).toThrow('Invalid LinkedIn URL')
+    expect(() => normalizeApplicantLinkedIn('https://user:secret@www.linkedin.com/in/example')).toThrow('Invalid LinkedIn URL')
+    expect(() => normalizeApplicantLinkedIn('https://www.linkedin.com:444/in/example')).toThrow('Invalid LinkedIn URL')
+  })
+
+  it('keeps contact and other original intake fields immutable during hiring updates', () => {
+    const original = { name: 'Applicant', email: 'applicant@example.test', telephone: '+1 416 555 0198', linkedIn: 'https://www.linkedin.com/in/applicant', coverLetter: 'Original', consent: true, jobId: 'job', resumeKey: 'resume', idempotencyKey: 'key', status: 'new' }
+    expect(preserveApplicationIntake({ ...original, telephone: '+1 000 000 0000', linkedIn: null, status: 'interview' }, original)).toEqual({ ...original, status: 'interview' })
   })
 })
