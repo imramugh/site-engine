@@ -30,7 +30,7 @@ test('ENG-022 serves exact operational counts and server-side audit filters to a
   expect(summary.status()).toBe(200)
   const body = await summary.json() as {
     summary: { pendingReviews: number; urgentOrNewLeads: number; queue: { pending: number; processing: number; failed: number }; latestRelease: { sequence: number }; latestPublishFailure: { sequence: number; errorCode: string } }
-    audit: { docs: Array<{ event: string; actorId?: string; detail?: unknown }> }
+    audit: { docs: Array<{ event: string; actorId?: string; metadata?: unknown }> }
   }
   // Other scenarios may legitimately create reviews, leads, releases, and
   // outbox work before this file runs. These are system-wide operational
@@ -44,7 +44,7 @@ test('ENG-022 serves exact operational counts and server-side audit filters to a
   expect(body.summary.queue.pending).toBeGreaterThanOrEqual(52)
   expect(body.summary.queue.processing).toBeGreaterThanOrEqual(1)
   expect(body.summary.queue.failed).toBeGreaterThanOrEqual(1)
-  expect(body.audit.docs.find((event) => event.event === 'inquiry.created')?.detail).toBeUndefined()
+  expect(body.audit.docs.find((event) => event.event === 'inquiry.created')?.metadata).toBeUndefined()
   expect(JSON.stringify(body)).not.toContain('never-expose@example.test')
   expect(JSON.stringify(body)).not.toContain('private-resume-key')
 
@@ -69,35 +69,19 @@ test('ENG-022 serves exact operational counts and server-side audit filters to a
   await owner.context.close()
 })
 
-test('ENG-022 gives only an Owner the operations dashboard and an accessible filtered timeline', async ({ browser }) => {
+test('ENG-022 gives only an Owner the source-shaped accessible Change log', async ({ browser }) => {
   const owner = await newPage(browser, 'owner')
   const initialOperations = owner.page.waitForResponse((response) => response.url().includes('/api/operations') && response.request().method() === 'GET')
-  await owner.page.goto('/operations')
-  const initialResponse = await initialOperations
-  expect(initialResponse.status()).toBe(200)
-  const initialBody = await initialResponse.json() as {
-    summary: { pendingReviews: number; urgentOrNewLeads: number }
-  }
-  await expect(owner.page.getByRole('heading', { name: 'Operations' })).toBeVisible()
-  await expect(owner.page.getByLabel('Operational summary')).toContainText(`Pending reviews: ${initialBody.summary.pendingReviews}`)
-  await expect(owner.page.getByLabel('Operational summary')).toContainText(`Urgent or new leads: ${initialBody.summary.urgentOrNewLeads}`)
-  await owner.page.getByLabel('Filter event').fill('operations.fixture.page')
-  await owner.page.getByRole('button', { name: 'Apply filter' }).click()
-  await expect(owner.page.getByLabel('Audit timeline')).toContainText('operations.fixture.page')
-  await expect(owner.page.getByRole('button', { name: 'Next' })).toBeEnabled()
-  await owner.page.getByRole('button', { name: 'Next' }).click()
-  await expect(owner.page.getByRole('button', { name: 'Previous' })).toBeEnabled()
-  await owner.page.addScriptTag({ path: axeSource })
-  expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.page.goto('/operations'); expect((await initialOperations).status()).toBe(200)
+  await expect(owner.page.getByRole('heading', { name: 'Change log' })).toBeVisible()
+  await expect(owner.page.getByLabel('Change log')).toContainText('When')
+  await owner.page.getByLabel('Type').selectOption('editorial'); await owner.page.getByRole('button', { name: 'Apply' }).click()
+  await expect(owner.page).toHaveURL(/type=editorial/)
+  await expect(owner.page.locator('[data-change-log-row]').first()).toBeVisible()
+  const firstRow = owner.page.locator('[data-change-log-row]').first(); await firstRow.getByRole('button', { name: 'View', exact: true }).click(); await expect(firstRow.getByRole('button', { name: 'Hide', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
-
-  for (const role of ['editor', 'sales'] as const) {
-    const denied = await newPage(browser, role)
-    expect((await denied.page.request.get('/api/operations')).status()).toBe(403)
-    await denied.page.goto('/operations')
-    await expect(denied.page.getByText('Owner access is required to view operations.')).toBeVisible()
-    await denied.context.close()
-  }
+  for (const role of ['editor', 'sales'] as const) { const denied = await newPage(browser, role); expect((await denied.page.request.get('/api/operations')).status()).toBe(403); await denied.page.goto('/operations'); await expect(denied.page.getByText('Owner access is required to view the change log.')).toBeVisible(); await denied.context.close() }
 })
 
 test('ENG-022 exposes the role-aware Leads and Applications links through the admin navigation', async ({ browser }) => {
