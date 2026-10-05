@@ -24,11 +24,10 @@ async function openAdminNavigation(page: Page): Promise<void> {
 
 test('ENG-035 lets an Owner choose a compatible installed theme into a named reviewed change set', async ({ browser }) => {
   const owner = await signedInOwner(browser)
-  await owner.page.goto('/admin')
+  await owner.page.goto('/themes')
   await openAdminNavigation(owner.page)
-  await owner.page.getByText('More tools', { exact: true }).click()
-  await expect(owner.page.getByRole('link', { name: 'Themes' })).toBeVisible()
-  await owner.page.getByRole('link', { name: 'Themes' }).click()
+  await expect(owner.page.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(owner.page.getByText('More tools', { exact: true })).toHaveCount(0)
   await expect(owner.page).toHaveURL(/\/themes$/)
   await expect(owner.page.getByRole('heading', { name: 'Themes' })).toBeVisible()
   await expect(owner.page.getByLabel('Current theme selections')).toContainText('Published: None selected')

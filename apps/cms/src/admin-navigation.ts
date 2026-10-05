@@ -31,22 +31,6 @@ export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
 ]
 
-/** Related tools remain discoverable without competing with the primary shell. */
-export const adminToolNavigationItems: readonly AdminNavigationItem[] = [
-  { href: '/direct-edit', label: 'Hero draft editor', roles: ['owner', 'editor'] },
-  { href: '/themes', label: 'Themes', roles: ['owner'] },
-  { href: '/ai-jobs', label: 'AI jobs', roles: ['owner'] },
-]
-
-export const payloadCollectionItems: readonly AdminNavigationItem[] = [
-  { href: '/admin/collections/pages', label: 'Pages', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/sections', label: 'Sections', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/assets', label: 'Media', roles: ['owner', 'editor'] },
-  { href: '/admin/collections/redirects', label: 'Redirects', roles: ['owner', 'editor', 'approver'] },
-  { href: '/admin/collections/audit-events', label: 'Audit events', roles: ['owner'] },
-  { href: '/admin/collections/users', label: 'Users', roles: ['owner'] },
-]
-
 export function navigationForRoles(roles: readonly string[] | null | undefined, items = adminNavigationItems): AdminNavigationItem[] {
   const actorRoles = new Set(roles)
   return items.filter((item) => item.roles.some((role) => actorRoles.has(role)))

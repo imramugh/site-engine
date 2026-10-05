@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { adminSiteNavigationItems, adminToolNavigationItems, navigationBadges, navigationForRoles, payloadCollectionItems, type AdminRole } from '../../src/admin-navigation'
+import { adminSiteNavigationItems, navigationBadges, navigationForRoles, type AdminRole } from '../../src/admin-navigation'
 import { getPayload } from 'payload'
 import config from '../../payload.config'
 import { loadAdminBranding } from '../../src/admin-branding'
@@ -15,8 +15,6 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
   const branding = await loadAdminBranding()
   const primary = navigationForRoles(roles)
   const site = navigationForRoles(roles, adminSiteNavigationItems)
-  const tools = navigationForRoles(roles, adminToolNavigationItems)
-  const collections = navigationForRoles(roles, payloadCollectionItems)
   const displayName = user?.name || user?.email || 'Staff account'
   const acceptedRoles = roles.filter((role): role is AdminRole => ['owner', 'editor', 'approver', 'sales', 'hiring'].includes(role))
   const payload = await getPayload({ config })
@@ -30,7 +28,7 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
         {branding.logoUrl ? <img src={branding.logoUrl} alt={branding.name} /> : <span aria-hidden="true">{branding.initials}</span>}
         <strong>{branding.name}</strong>
       </a>
-      <AdminNavigationToggle primary={primary} site={site} tools={tools} collections={collections} displayName={displayName} roles={acceptedRoles} badges={badges} />
+      <AdminNavigationToggle primary={primary} site={site} displayName={displayName} roles={acceptedRoles} badges={badges} />
     </aside>
     <AdminWorkspaceHeader />
   </>
