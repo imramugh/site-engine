@@ -24,6 +24,6 @@ export default defineConfig({
     command: 'corepack pnpm@12.8.1 --filter @site-engine/cms exec tsx e2e/server.ts',
     url: `http://127.0.0.1:${e2ePort + 3}`,
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: Number(process.env.CMS_E2E_WEB_SERVER_TIMEOUT ?? 120_000),
   },
 })
