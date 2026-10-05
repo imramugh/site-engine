@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const tokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' }
@@ -14,9 +14,30 @@ async function axe(page: Page) {
   return page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)
 }
 
+async function attachRenderedFonts(page: Page, testInfo: TestInfo) {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    await cdp.send('DOM.enable'); await cdp.send('CSS.enable')
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true })
+    const evidence = []
+    for (const [name, selector] of [['filter label', '[aria-label="Lead filters"] label'], ['filter input', '[aria-label="Lead filters"] select'], ['primary button', '[data-leads-workspace] button']] as const) {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector })
+      expect(nodeId, `${name} font target exists`).toBeTruthy()
+      const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId })
+      expect(fonts.length, `${name} has a rendered platform font`).toBeGreaterThan(0)
+      evidence.push({ name, selector, fonts })
+    }
+    await testInfo.attach('rendered-platform-fonts', { body: Buffer.from(JSON.stringify(evidence, null, 2)), contentType: 'application/json' })
+    if (await page.locator('link[href="/admin-branding/admin-branding.css"]').count()) {
+      expect(evidence.every(({ fonts }) => fonts.some((font) => font.isCustomFont && font.familyName.startsWith('IBM Plex Sans'))), JSON.stringify(evidence)).toBe(true)
+    }
+  } finally { await cdp.detach() }
+}
+
 test('ENG-019 owner uses the real pipeline, manual intake, controlled detail form, filters, and CSV', async ({ browser }, testInfo) => {
   const owner = await signedIn(browser, 'owner')
   await owner.page.goto('/leads')
+  await attachRenderedFonts(owner.page, testInfo)
   await expect(owner.page.getByRole('heading', { name: 'Lead pipeline', level: 1 })).toBeAttached()
   await expect(owner.page.getByRole('button', { name: 'Pipeline' })).toHaveAttribute('aria-pressed', 'true')
   const proposal = owner.page.getByRole('region', { name: 'Proposal' })
