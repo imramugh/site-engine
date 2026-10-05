@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,18 +10,20 @@ import { afterEach, describe, expect, it } from 'vitest'
 const execFile = promisify(execFileCallback)
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const temporary: string[] = []
-const pnpm = (cwd: string, args: string[]) => execFile('corepack', ['pnpm@12.8.1', ...args], { cwd, env: { ...process.env, npm_config_ignore_scripts: 'true' } })
+const pnpm = (cwd: string, args: string[], environment: NodeJS.ProcessEnv = process.env) => execFile('corepack', ['pnpm@12.8.1', ...args], { cwd, env: { ...environment, npm_config_ignore_scripts: 'true' } })
 
 async function packedConsumer() {
   const directory = await mkdtemp(join(tmpdir(), 'starter-packed-consumer-')); temporary.push(directory)
-  const tarballs = join(directory, 'tarballs'); await (await import('node:fs/promises')).mkdir(tarballs)
+  const tarballs = join(directory, 'tarballs'); const store = join(directory, 'store'); const cache = join(directory, 'cache'); await mkdir(tarballs)
   for (const packageDirectory of ['packages/contract', 'packages/engine', 'packages/theme-starter']) await pnpm(join(root, packageDirectory), ['pack', '--pack-destination', tarballs])
+  const zodDirectory = dirname(createRequire(import.meta.url).resolve('zod/package.json'))
+  await pnpm(zodDirectory, ['pack', '--pack-destination', tarballs])
   const files = await readdir(tarballs)
   const tarball = (name: string) => join(tarballs, files.find(file => file.startsWith(name) && file.endsWith('.tgz'))!)
-  const contract = `file:${tarball('site-engine-contract')}`
+  const contract = `file:${tarball('site-engine-contract')}`; const zod = `file:${tarball('zod-')}`
   await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'clean-consumer', private: true, dependencies: { '@site-engine/contract': contract, '@site-engine/engine': `file:${tarball('site-engine-engine')}`, '@site-engine/theme-starter': `file:${tarball('site-engine-theme-starter')}` } }))
-  await writeFile(join(directory, 'pnpm-workspace.yaml'), `overrides:\n  '@site-engine/contract': '${contract}'\n`)
-  await pnpm(directory, ['install', '--offline', '--ignore-scripts'])
+  await writeFile(join(directory, 'pnpm-workspace.yaml'), `overrides:\n  '@site-engine/contract': '${contract}'\n  zod: '${zod}'\n`)
+  await pnpm(directory, ['install', '--offline', '--ignore-scripts', '--store-dir', store], { ...process.env, npm_config_cache: cache, XDG_CACHE_HOME: cache })
   return directory
 }
 
