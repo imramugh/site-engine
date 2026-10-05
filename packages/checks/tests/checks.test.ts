@@ -202,6 +202,14 @@ describe('public provenance', () => {
     await expect(inspectPublicProvenance(root)).resolves.toHaveLength(1)
   })
 
+  it('allows typed OAuth display names in the connected-assistant surface only', async () => {
+    const marker = 'client' + 'Name'
+    const root = await fixture({ 'apps/cms/src/connected-assistants.ts': `type Grant = { ${marker}: string }\n` })
+    await expect(inspectPublicProvenance(root)).resolves.toEqual([])
+    const outside = await fixture({ 'apps/site/src/unsafe.ts': `const ${marker} = 'private'\n` })
+    await expect(inspectPublicProvenance(outside)).resolves.toHaveLength(1)
+  })
+
   it('still rejects client assets and fixtures within OAuth protocol files', async () => {
     const root = await fixture({ 'apps/oauth/src/server.ts': `const field = '${'client' + '_asset'}'\n`, 'apps/oauth/tests/protocol.test.ts': `const field = '${'client' + '_fixture'}'\n` })
     await expect(inspectPublicProvenance(root)).resolves.toHaveLength(2)
