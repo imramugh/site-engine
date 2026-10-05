@@ -51,9 +51,9 @@ async function failJob(payload: Payload, req: PayloadRequest | undefined, id: st
 }
 
 /** Only identity and time survive a purge. It intentionally has no content, file key, email, or actor name. */
-export async function writeDeletionTombstone(payload: Payload, req: PayloadRequest | undefined, resourceType: 'application' | 'inquiry' | 'media', resourceID: string) {
+export async function writeDeletionTombstone(payload: Payload, req: PayloadRequest | undefined, resourceType: 'application' | 'inquiry' | 'media', resourceID: string, deletedAt = new Date().toISOString()) {
   const existing = await payload.find({ collection: 'deletion-tombstones', where: { and: [{ resourceType: { equals: resourceType } }, { resourceID: { equals: resourceID } }] }, limit: 1, depth: 0, overrideAccess: true, req })
-  if (!existing.docs[0]) await payload.create({ collection: 'deletion-tombstones', data: { resourceType, resourceID, deletedAt: new Date().toISOString() }, overrideAccess: true, req })
+  if (!existing.docs[0]) await payload.create({ collection: 'deletion-tombstones', data: { resourceType, resourceID, deletedAt }, overrideAccess: true, req })
 }
 
 export async function recordDeletionIntent(payload: Payload, req: PayloadRequest | undefined, resourceType: 'application' | 'inquiry' | 'media', resourceID: string, deletedAt = new Date().toISOString()) {
@@ -62,7 +62,7 @@ export async function recordDeletionIntent(payload: Payload, req: PayloadRequest
   const handle = await open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW)
   try { const metadata = await handle.stat(); if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Retention deletion ledger must be a restricted regular file.'); await handle.writeFile(`${JSON.stringify({ resourceType, resourceID, deletedAt })}\n`); await handle.sync() } finally { await handle.close() }
   const directory = await open(resolve(file, '..'), 'r'); try { await directory.sync() } finally { await directory.close() }
-  await writeDeletionTombstone(payload, req, resourceType, resourceID)
+  await writeDeletionTombstone(payload, req, resourceType, resourceID, deletedAt)
 }
 
 async function unlinkResume(key: string) {
