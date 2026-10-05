@@ -1,5 +1,6 @@
 import type { Payload } from 'payload'
 import { hasRole, type Role } from './access'
+import { activeLeadWhere } from './lead-filters'
 
 export type AdminSearchResult = { title: string; url: string; category: 'Pages' | 'Media' | 'Leads' }
 export type AdminSearchResponse = { results: Record<AdminSearchResult['category'], AdminSearchResult[]> }
@@ -25,7 +26,7 @@ export async function searchAdminRecords(payload: Payload, user: { id?: string; 
     response.results.Media = assets.docs.map((asset) => ({ category: 'Media', title: String(asset.alt || asset.filename || 'Untitled media'), url: `/admin/collections/assets/${asset.id}` }))
   }
   if (canSeeLeads) {
-    const leads = await payload.find({ collection: 'inquiries', where: { or: [{ company: text }, { name: text }, { topic: text }] }, select: { company: true, topic: true }, limit: 10, depth: 0, overrideAccess: false, user })
+    const leads = await payload.find({ collection: 'inquiries', where: { and: [activeLeadWhere, { or: [{ company: text }, { name: text }, { topic: text }] }] }, select: { company: true, topic: true }, limit: 10, depth: 0, overrideAccess: false, user })
     // Lead contact details and message text never leave this endpoint. A generic
     // title provides a useful route without widening the dashboard data surface.
     response.results.Leads = leads.docs.map((lead) => ({ category: 'Leads', title: String(lead.company || lead.topic || 'Lead'), url: `/admin/collections/inquiries/${encodeURIComponent(String(lead.id))}` }))
