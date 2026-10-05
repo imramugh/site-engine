@@ -70,6 +70,11 @@ test('Site workspace captures real settings, redirects, and navigation into an o
   await owner.page.getByRole('button', { name: 'Save redirect' }).click()
   await expect(owner.page.getByRole('cell', { name: '/contact-us' })).toBeVisible()
   await expect(owner.page.getByRole('cell', { name: 'Synthetic Site Owner' })).toBeVisible()
+  await owner.page.reload()
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Navigation 1.6 browser draft · open' })
+  await owner.page.getByRole('button', { name: 'Redirects' }).click()
+  await expect(owner.page.getByRole('cell', { name: '/contact-us' })).toBeVisible()
+  await expect(owner.page.locator('[aria-live="polite"]')).toBeEmpty()
   await axe(owner.page)
   await owner.page.screenshot({ path: testInfo.outputPath('site-redirects-1440.png'), fullPage: true })
 
@@ -137,8 +142,13 @@ test('Site workspace captures real settings, redirects, and navigation into an o
   await expect(owner.page.getByRole('heading', { name: 'Themes' })).toBeVisible()
   await axe(owner.page)
 
+  // Clear the transient navigation save notice before the source-comparison
+  // capture while retaining the populated redirect through the draft API.
+  await owner.page.reload()
   await owner.page.setViewportSize({ width: 390, height: 844 })
   await owner.page.getByRole('button', { name: 'Redirects' }).click()
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Navigation 1.6 browser draft · open' })
+  await expect(owner.page.locator('[aria-live="polite"]')).toBeEmpty()
   expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
   const redirectTable = owner.page.locator('[data-redirects-table]')
   expect(await redirectTable.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)

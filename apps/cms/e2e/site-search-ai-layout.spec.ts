@@ -37,6 +37,10 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const detailsResult = await detailsSaved
   expect(detailsResult.status, detailsResult.body).toBe(200)
 
+  // Reload after establishing the reviewed Site baseline so the reference
+  // screenshots show the workspace itself rather than a transient save notice.
+  await owner.page.reload()
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.7 browser draft · open' })
   await owner.page.getByRole('button', { name: 'Search and AI' }).click()
   const workspace = owner.page.locator('[data-site-search-ai]')
   await expect(workspace).toBeVisible()
@@ -50,6 +54,31 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   await workspace.getByLabel('Short description').fill('A reviewed description for public crawler and AI discovery artifacts.')
   await workspace.getByLabel('Words to avoid').fill('empty promise, unsupported claim')
   await workspace.getByLabel('Spelling').selectOption('warn')
+
+  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
+  const cards = workspace.locator('[data-site-search-card]')
+  const boxes = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).map(({ x, y, width, height }) => ({ x, y, width, height })))
+  expect(boxes).toHaveLength(2)
+  expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThan(2)
+  expect(Math.abs(boxes[0]!.width - boxes[1]!.width)).toBeLessThan(2)
+  expect(boxes[0]!.height).toBeLessThanOrEqual(250)
+  const crawlerRows = workspace.locator('[data-site-crawler-control]')
+  for (const row of await crawlerRows.all()) {
+    const positions = await row.locator(':scope > span, :scope > input').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x))
+    expect(positions[1]).toBeGreaterThan(positions[0]!)
+  }
+  await expect(owner.page.locator('[aria-live="polite"]')).toBeEmpty()
+  await axe(owner.page)
+  await owner.page.screenshot({ path: testInfo.outputPath('site-search-ai-1440.png'), fullPage: true })
+
+  await owner.page.setViewportSize({ width: 390, height: 844 })
+  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
+  const mobileBoxes = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).map(({ y }) => y))
+  expect(mobileBoxes[1]).toBeGreaterThan(mobileBoxes[0]!)
+  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
+  await axe(owner.page)
+  await owner.page.screenshot({ path: testInfo.outputPath('site-search-ai-390.png'), fullPage: true })
+
   const saved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
     .then(async response => ({ status: response.status(), body: await response.text() }))
   await workspace.getByRole('button', { name: 'Save Search and AI' }).click()
@@ -63,23 +92,6 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const captured = sets.sets.find(item => item.name === 'Search and AI 1.7 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides']))
-
-  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
-  const cards = workspace.locator('[data-site-search-card]')
-  const boxes = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).map(({ x, y, width }) => ({ x, y, width })))
-  expect(boxes).toHaveLength(2)
-  expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThan(2)
-  expect(Math.abs(boxes[0]!.width - boxes[1]!.width)).toBeLessThan(2)
-  await axe(owner.page)
-  await owner.page.screenshot({ path: testInfo.outputPath('site-search-ai-1440.png'), fullPage: true })
-
-  await owner.page.setViewportSize({ width: 390, height: 844 })
-  await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
-  const mobileBoxes = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).map(({ y }) => y))
-  expect(mobileBoxes[1]).toBeGreaterThan(mobileBoxes[0]!)
-  expect(await owner.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(392)
-  await axe(owner.page)
-  await owner.page.screenshot({ path: testInfo.outputPath('site-search-ai-390.png'), fullPage: true })
 
   const discarded = await owner.page.request.post('/api/editorial/discard', {
     headers: { origin, 'content-type': 'application/json' },
