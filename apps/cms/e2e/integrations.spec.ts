@@ -115,7 +115,7 @@ test('ENG-022 Owner persists notification routing and private urgent contacts', 
 
 test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
-  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants', exact: true })).toBeVisible(); await expect(editor.page.getByRole('tab', { name: 'AI providers', exact: true })).toHaveCount(0); await editor.context.close()
+  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); const onlyTab = editor.page.getByRole('tab', { name: 'Connected assistants', exact: true }); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(onlyTab).toBeVisible(); await onlyTab.focus(); for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) { await editor.page.keyboard.press(key); await expect(onlyTab).toBeFocused(); await expect(onlyTab).toHaveAttribute('aria-selected', 'true') }; await expect(editor.page).toHaveURL(/tab=assistants/); await editor.context.close()
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   const csrf = await owner.page.request.post('/api/integrations', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'x', credential: 'must-not-persist' } })
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()
