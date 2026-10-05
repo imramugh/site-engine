@@ -291,17 +291,20 @@ export const Assets: CollectionConfig = {
       if (req.file) throw new Error(immutableMessage)
       return args
     }],
-    beforeValidate: [async ({ data, req }) => {
+    beforeValidate: [async ({ data, originalDoc, req }) => {
+      const focalContract = await mediaFocalContractVersion(req.payload, await loadInitialPreviewBaseline(), req)
+      const focalValueChanged = (value: unknown, previous: unknown) => value != null && Number(value) !== Number(previous ?? 50)
+      const focalChanged = originalDoc
+        ? focalValueChanged(data?.focalX, originalDoc.focalX) || focalValueChanged(data?.focalY, originalDoc.focalY)
+        : focalValueChanged(data?.focalX, 50) || focalValueChanged(data?.focalY, 50)
+      if (focalChanged && !focalContract) throw new Error('Focal-point editing requires an active contract 1.4 theme.')
+      req.context.mediaFocalContract = focalContract
       const issues = mediaMetadataIssues(data ?? {})
       if (issues.length) fieldErrors(issues, req, 'assets')
       if (req.file) await validateRasterUpload(req.file)
       return data
     }],
     beforeChange: [async ({ data, originalDoc, req }) => {
-      const focalContract = await mediaFocalContractVersion(req.payload, await loadInitialPreviewBaseline(), req)
-      const focalChanged = Boolean(originalDoc) && (data.focalX !== undefined && data.focalX !== originalDoc.focalX || data.focalY !== undefined && data.focalY !== originalDoc.focalY)
-      if (focalChanged && !focalContract) throw new Error('Focal-point editing requires an active contract 1.4 theme.')
-      req.context.mediaFocalContract = focalContract
       const lifecycle = req.context.mediaLifecycle
       const serverTransition = lifecycle === 'bin' || lifecycle === 'restore'
       const directLifecycleWrite = data.restoreFromBin === true || Boolean(originalDoc
