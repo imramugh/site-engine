@@ -24,6 +24,7 @@ async function openAdminNavigation(page: Page): Promise<void> {
 
 test('ENG-035 lets an Owner choose a compatible installed theme into a named reviewed change set', async ({ browser }) => {
   const owner = await signedInOwner(browser)
+  const publicationBefore = await owner.page.request.get('/__e2e/publish-state').then(response => response.json())
   await owner.page.goto('/themes')
   await openAdminNavigation(owner.page)
   await expect(owner.page.getByRole('link', { name: 'Site', exact: true })).toHaveAttribute('aria-current', 'page')
@@ -53,7 +54,7 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
   expect(lifecycle.submitted, JSON.stringify(lifecycle.submittedBody)).toBe(200)
   expect(lifecycle.prepared).toBe(200)
   expect(lifecycle.job.job?.proposedManifest?.settings?.theme).toMatchObject({ id: 'browser-theme', version: '2.4.6' })
-  expect(await owner.page.request.get(`${cmsOrigin}/__e2e/publish-state`).then(async (response) => response.json())).toMatchObject({ releaseCount: 1 })
+  expect(await owner.page.request.get(`${cmsOrigin}/__e2e/publish-state`).then(async (response) => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
   await owner.page.addScriptTag({ path: axeSource })
   expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()

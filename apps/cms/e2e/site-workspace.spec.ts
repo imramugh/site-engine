@@ -16,6 +16,7 @@ async function axe(page: Page) {
 
 test('Site workspace captures real settings, guidance, and redirects into an owned draft', async ({ browser }, testInfo) => {
   const owner = await session(browser, 'synthetic-site-owner-session-token')
+  const publicationBefore = await owner.page.request.get('/__e2e/publish-state').then(response => response.json())
   await owner.page.goto('/site')
   await expect(owner.page.locator('[data-site-workspace]')).toBeVisible()
   await expect(owner.page.getByRole('button', { name: 'Business details', exact: true })).toHaveAttribute('aria-current', 'page')
@@ -59,7 +60,7 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   const captured = sets.sets.find(item => item.name === 'Browser Site workspace draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides', 'redirects']))
-  expect(await owner.page.request.get('/__e2e/publish-state').then(response => response.json())).toMatchObject({ releaseCount: 1 })
+  expect(await owner.page.request.get('/__e2e/publish-state').then(response => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
 
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
   await owner.page.getByRole('button', { name: 'Add header link' }).click()
