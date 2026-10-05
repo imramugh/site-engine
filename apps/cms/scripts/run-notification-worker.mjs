@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url'
+import { writeFile } from 'node:fs/promises'
 
 export class NotificationWorkerError extends Error { constructor(code) { super(code); this.code = code } }
 export function normalizeCMSOrigin(value) {
@@ -22,12 +23,13 @@ export function createNotificationWorkerAPI({ cmsOrigin, token, fetchImpl = fetc
 }
 const pause = (milliseconds, signal) => signal?.aborted ? Promise.resolve() : new Promise(resolve => { const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve() }; const timer = setTimeout(done, milliseconds); signal?.addEventListener('abort', done, { once: true }) })
 /** Sequential HTTP-only poller; it deliberately has no SQLite or SMTP access. */
-export async function runNotificationWorker({ api, signal, idleMs = 2_000, errorMs = 5_000, log = console.error }) {
+export async function runNotificationWorker({ api, signal, idleMs = 2_000, errorMs = 5_000, log = console.error, heartbeat = async () => undefined }) {
   if (![idleMs, errorMs].every(value => Number.isSafeInteger(value) && value >= 100 && value <= 60_000)) throw new NotificationWorkerError('INVALID_WORKER_CONFIGURATION')
-  while (!signal?.aborted) { try { await api(signal); await pause(idleMs, signal) } catch (error) { if (!signal?.aborted) log(`Notification worker: ${error?.code ?? 'WORKER_FAILED'}`); await pause(errorMs, signal) } }
+  while (!signal?.aborted) { try { await api(signal); await heartbeat(); await pause(idleMs, signal) } catch (error) { if (!signal?.aborted) log(`Notification worker: ${error?.code ?? 'WORKER_FAILED'}`); await pause(errorMs, signal) } }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const controller = new AbortController(); for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => controller.abort())
   const api = createNotificationWorkerAPI({ cmsOrigin: process.env.NOTIFICATION_WORKER_CMS_ORIGIN, token: process.env.NOTIFICATION_WORKER_TOKEN, timeoutMs: Number(process.env.NOTIFICATION_WORKER_TIMEOUT_MS ?? 45_000) })
-  await runNotificationWorker({ api, signal: controller.signal, idleMs: Number(process.env.NOTIFICATION_WORKER_IDLE_MS ?? 2_000), errorMs: Number(process.env.NOTIFICATION_WORKER_ERROR_MS ?? 5_000) })
+  const heartbeatFile = process.env.NOTIFICATION_WORKER_HEARTBEAT_FILE ?? '/tmp/notification-worker-heartbeat'
+  await runNotificationWorker({ api, signal: controller.signal, idleMs: Number(process.env.NOTIFICATION_WORKER_IDLE_MS ?? 2_000), errorMs: Number(process.env.NOTIFICATION_WORKER_ERROR_MS ?? 5_000), heartbeat: () => writeFile(heartbeatFile, `${Date.now()}\n`, { mode: 0o600 }) })
 }
