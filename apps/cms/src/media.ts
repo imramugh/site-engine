@@ -57,8 +57,13 @@ export async function validateRasterUpload(file: { data: Buffer; mimetype: strin
   if (detected !== file.mimetype) throw new Error('The declared image type does not match its binary content.')
 }
 
-type AssetLike = { id: string; filename?: string | null; mimeType?: string | null; alt?: string | null; decorative?: boolean | null; width?: number | null; height?: number | null; focalX?: number | null; focalY?: number | null; deletedAt?: string | null; sizes?: Record<string, { filename?: string | null; width?: number | null; height?: number | null; mimeType?: string | null }> }
+type FileIdentity = { filename?: string | null; mimeType?: string | null; width?: number | null; height?: number | null; filesize?: number | null; url?: string | null; sizes?: Record<string, { filename?: string | null; width?: number | null; height?: number | null; mimeType?: string | null }> }
+type AssetLike = FileIdentity & { id: string; alt?: string | null; decorative?: boolean | null; focalX?: number | null; focalY?: number | null; deletedAt?: string | null; currentFile?: unknown }
 type PageLike = { id: string; title?: string; blocks?: unknown[] }
+
+export function mediaFileIdentity(version: Record<string, unknown>) {
+  return Object.fromEntries(['filename', 'originalFilename', 'mimeType', 'width', 'height', 'filesize', 'url', 'sizes'].flatMap((key) => version[key] === undefined ? [] : [[key, version[key]]]))
+}
 
 function references(value: unknown, assetId: string, path = ''): string[] {
   if (typeof value === 'string') return value === assetId ? [path] : []
@@ -99,25 +104,27 @@ export async function assertReferencedAssetsAreAccessible(payload: Payload, req:
 }
 
 export function snapshotMediaReference(asset: AssetLike, includeFocalPoint = true) {
-  if (!asset.filename || !asset.mimeType || !asset.width || !asset.height) throw new Error(`Asset ${asset.id} is missing immutable upload metadata.`)
-  const original = trustedMedia(asset.filename)
+  const current = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as FileIdentity : undefined
+  const source = current?.filename ? current : asset
+  if (!source.filename || !source.mimeType || !source.width || !source.height) throw new Error(`Asset ${asset.id} is missing immutable upload metadata.`)
+  const original = trustedMedia(source.filename)
   const variants = Object.fromEntries(Object.entries(MEDIA_VARIANTS).flatMap(([name, expected]) => {
-    const variant = asset.sizes?.[name]
+    const variant = source.sizes?.[name]
     if (!variant?.filename) return []
     const file = trustedMedia(variant.filename)
     return [[name, { filename: variant.filename, width: variant.width ?? expected.width, height: variant.height ?? expected.height, mimeType: `image/${expected.format}`, sha256: file.sha256 }]]
   }))
   return {
     id: asset.id,
-    filename: asset.filename,
+    filename: source.filename,
     sha256: original.sha256,
     ...(Object.keys(variants).length ? { variants } : {}),
     alt: asset.alt ?? undefined,
     decorative: asset.decorative === true,
     ...(includeFocalPoint ? { focalX: canonicalFocalPoint(asset.focalX), focalY: canonicalFocalPoint(asset.focalY) } : {}),
-    width: asset.width,
-    height: asset.height,
-    mimeType: asset.mimeType,
+    width: source.width,
+    height: source.height,
+    mimeType: source.mimeType,
   }
 }
 

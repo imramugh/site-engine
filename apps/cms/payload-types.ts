@@ -75,6 +75,7 @@ export interface Config {
     pages: Page;
     sections: Section;
     assets: Asset;
+    'asset-file-versions': AssetFileVersion;
     redirects: Redirect;
     'theme-settings': ThemeSetting;
     'site-settings': SiteSetting;
@@ -108,6 +109,7 @@ export interface Config {
     pages: PagesSelect<false> | PagesSelect<true>;
     sections: SectionsSelect<false> | SectionsSelect<true>;
     assets: AssetsSelect<false> | AssetsSelect<true>;
+    'asset-file-versions': AssetFileVersionsSelect<false> | AssetFileVersionsSelect<true>;
     redirects: RedirectsSelect<false> | RedirectsSelect<true>;
     'theme-settings': ThemeSettingsSelect<false> | ThemeSettingsSelect<true>;
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
@@ -382,8 +384,91 @@ export interface Asset {
   caption?: string | null;
   credit?: string | null;
   tags?: string[] | null;
+  currentFileVersion?: (string | null) | AssetFileVersion;
+  currentFile?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   deletedAt?: string | null;
   deleteAfter?: string | null;
+  updatedAt: string;
+  createdAt: string;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  focalX?: number | null;
+  focalY?: number | null;
+  sizes?: {
+    heroAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    heroWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    cardAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    cardWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    thumbnailAvif?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    thumbnailWebp?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+  };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "asset-file-versions".
+ */
+export interface AssetFileVersion {
+  id: string;
+  parentAsset: string | Asset;
+  digest: string;
+  versionKey: string;
+  idempotencyKey: string;
+  originalFilename: string;
   updatedAt: string;
   createdAt: string;
   url?: string | null;
@@ -1044,6 +1129,10 @@ export interface PayloadLockedDocument {
         value: string | Asset;
       } | null)
     | ({
+        relationTo: 'asset-file-versions';
+        value: string | AssetFileVersion;
+      } | null)
+    | ({
         relationTo: 'redirects';
         value: string | Redirect;
       } | null)
@@ -1286,8 +1375,96 @@ export interface AssetsSelect<T extends boolean = true> {
   caption?: T;
   credit?: T;
   tags?: T;
+  currentFileVersion?: T;
+  currentFile?: T;
   deletedAt?: T;
   deleteAfter?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+  focalX?: T;
+  focalY?: T;
+  sizes?:
+    | T
+    | {
+        heroAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        heroWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        cardAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        cardWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        thumbnailAvif?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        thumbnailWebp?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+      };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "asset-file-versions_select".
+ */
+export interface AssetFileVersionsSelect<T extends boolean = true> {
+  parentAsset?: T;
+  digest?: T;
+  versionKey?: T;
+  idempotencyKey?: T;
+  originalFilename?: T;
   updatedAt?: T;
   createdAt?: T;
   url?: T;
