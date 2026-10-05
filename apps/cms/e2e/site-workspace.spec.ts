@@ -88,7 +88,9 @@ test('Site workspace captures real settings, guidance, and redirects into an own
   const navigationSaved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
   await owner.page.getByRole('button', { name: 'Save navigation' }).click(); expect((await navigationSaved).status()).toBe(200)
   await expect(owner.page.getByRole('status')).toContainText('Public content is unchanged')
+  await owner.page.getByText('Current content structure', { exact: true }).click()
   await expect(owner.page.getByRole('link', { name: 'Edit pages and structure in Content' })).toHaveAttribute('href', '/content-tree')
+  await owner.page.getByText('Current content structure', { exact: true }).click()
   const navSettings = await owner.page.request.get('/api/site-workspace').then(response => response.json())
   expect(navSettings.settings.navigation.header.map((item: { label: string }) => item.label)).toEqual(['Second browser link', 'First browser link'])
   for (const width of [1440, 390]) {

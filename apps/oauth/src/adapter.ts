@@ -121,7 +121,9 @@ export function openOAuthDatabase(path: string): DatabaseSync {
   for (const [name, declaration] of [['management_id', 'TEXT'], ['client_name', 'TEXT'], ['created_at', 'INTEGER'], ['last_used_at', 'INTEGER'], ['revoked_at', 'INTEGER']] as const) if (!columns.has(name)) db.exec(`ALTER TABLE oauth_grant_bindings ADD COLUMN ${name} ${declaration}`);
   const legacy = db.prepare('SELECT grant_hash FROM oauth_grant_bindings WHERE management_id IS NULL').all() as Array<{ grant_hash: string }>
   const backfill = db.prepare('UPDATE oauth_grant_bindings SET management_id = ?, client_name = COALESCE(client_name, ?), created_at = COALESCE(created_at, ?) WHERE grant_hash = ?')
-  const now = Date.now(); for (const row of legacy) backfill.run(randomUUID(), 'Connected assistant', now, row.grant_hash)
+  // The legacy schema did not retain connection time. Do not invent it from
+  // the deployment time; zero is projected as an unavailable date in the UI.
+  for (const row of legacy) backfill.run(randomUUID(), 'Connected assistant', 0, row.grant_hash)
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS oauth_grant_bindings_management_idx ON oauth_grant_bindings(management_id); INSERT OR IGNORE INTO oauth_schema_migrations (version) VALUES (2);');
   return db;
 }

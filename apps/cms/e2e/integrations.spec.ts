@@ -78,7 +78,7 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
 
 test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
-  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page).toHaveURL(/\/admin\/login/); await editor.context.close()
+  expect((await editor.page.request.get('/api/integrations')).status()).toBe(403); await editor.page.goto('/integrations'); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants', exact: true })).toBeVisible(); await expect(editor.page.getByRole('tab', { name: 'AI providers', exact: true })).toHaveCount(0); await editor.context.close()
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   const csrf = await owner.page.request.post('/api/integrations', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'x', credential: 'must-not-persist' } })
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()
