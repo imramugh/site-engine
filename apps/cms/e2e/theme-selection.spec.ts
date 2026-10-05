@@ -52,7 +52,7 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
     return { submitted: submitted.status, submittedBody, prepared: prepared.status, job: await prepared.json() as { job?: { proposedManifest?: { settings?: { theme?: unknown } } } } }
   }, createdBody.changeSet.id)
   expect(lifecycle.submitted, JSON.stringify(lifecycle.submittedBody)).toBe(200)
-  expect(lifecycle.prepared).toBe(200)
+  expect(lifecycle.prepared, JSON.stringify(lifecycle.job)).toBe(200)
   expect(lifecycle.job.job?.proposedManifest?.settings?.theme).toMatchObject({ id: 'browser-theme', version: '2.4.6' })
   expect(await owner.page.request.get(`${cmsOrigin}/__e2e/publish-state`).then(async (response) => response.json())).toMatchObject({ releaseCount: publicationBefore.releaseCount })
   await owner.page.addScriptTag({ path: axeSource })
