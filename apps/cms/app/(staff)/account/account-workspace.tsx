@@ -22,6 +22,7 @@ export function AccountWorkspace() {
   const [busy, setBusy] = useState('')
   const [mutedKinds, setMutedKinds] = useState<Kind[]>([])
   const [preferencesLoading, setPreferencesLoading] = useState(true)
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [preferencesSaving, setPreferencesSaving] = useState(false)
   const [preferencesError, setPreferencesError] = useState('')
   const [preferencesMessage, setPreferencesMessage] = useState('')
@@ -43,6 +44,7 @@ export function AccountWorkspace() {
       const body = await response.json() as { mutedKinds?: Kind[]; error?: string }
       if (!response.ok || !Array.isArray(body.mutedKinds)) throw new Error(body.error ?? 'Notification preferences could not be loaded.')
       setMutedKinds(body.mutedKinds)
+      setPreferencesLoaded(true)
     } catch (caught) { setPreferencesError(caught instanceof Error ? caught.message : 'Notification preferences could not be loaded.') }
     finally { setPreferencesLoading(false) }
   }, [])
@@ -61,9 +63,9 @@ export function AccountWorkspace() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Session could not be revoked.') }
     finally { setBusy('') }
   }
-  const togglePreference = (kind: Exclude<Kind, 'active-incident-lead'>) => setMutedKinds(current => current.includes(kind) ? current.filter(value => value !== kind) : [...current, kind])
+  const togglePreference = (kind: Exclude<Kind, 'active-incident-lead'>) => { setPreferencesMessage(''); setMutedKinds(current => current.includes(kind) ? current.filter(value => value !== kind) : [...current, kind]) }
   const savePreferences = async () => {
-    if (preferencesSaving) return
+    if (preferencesSaving || !preferencesLoaded) return
     setPreferencesSaving(true)
     setPreferencesError('')
     setPreferencesMessage('')
@@ -89,13 +91,13 @@ export function AccountWorkspace() {
         {data?.sessions.map(session => <article key={session.id}><div><strong>{session.current ? 'This session' : 'Other session'}</strong><span className={session.active ? styles.active : styles.inactive}>{session.active ? 'Active' : 'Ended'}</span><p>Signed in {date(session.authenticatedAt)} · Last active {date(session.lastSeenAt)}</p></div>{session.active && <button disabled={Boolean(busy)} onClick={() => void revoke(session.id)}>{session.current ? 'Sign out' : 'Revoke'}</button>}</article>)}
       </section>
       <section className={styles.preferences} aria-labelledby="notification-preferences-title" aria-busy={preferencesLoading || preferencesSaving}>
-        <header><div><h2 id="notification-preferences-title">Your notification emails</h2><p>Choose the routine updates sent to your own email address.</p></div><button type="button" disabled={preferencesLoading || preferencesSaving} onClick={() => void savePreferences()}>{preferencesSaving ? 'Saving…' : 'Save preferences'}</button></header>
+        <header><div><h2 id="notification-preferences-title">Your notification emails</h2><p>Choose routine updates for event roles that are authorized to notify you.</p></div><button type="button" disabled={!preferencesLoaded || preferencesLoading || preferencesSaving} onClick={() => void savePreferences()}>{preferencesSaving ? 'Saving…' : 'Save preferences'}</button></header>
         {preferencesError && <p className={styles.error} role="alert">{preferencesError} <button type="button" onClick={() => void loadPreferences()}>Try again</button></p>}
         {preferencesMessage && <p className={styles.status} role="status">{preferencesMessage}</p>}
-        <fieldset disabled={preferencesLoading || preferencesSaving} className={styles.preferenceList}>
+        <fieldset disabled={!preferencesLoaded || preferencesLoading || preferencesSaving} className={styles.preferenceList}>
           <legend className={styles.srOnly}>Routine notification emails</legend>
           {ordinaryEvents.map(event => <label key={event.kind} className={styles.preference}><input type="checkbox" checked={!mutedKinds.includes(event.kind)} onChange={() => togglePreference(event.kind)} /><span><strong>{event.label}</strong><small>{event.description}</small></span></label>)}
-          <div className={styles.fixedPreference}><input id="urgent-incident-alerts" type="checkbox" checked disabled /><label htmlFor="urgent-incident-alerts"><strong>Active incident alerts</strong><small>These urgent alerts are always sent and cannot be muted.</small></label></div>
+          <div className={styles.fixedPreference}><input id="urgent-incident-alerts" type="checkbox" checked disabled /><label htmlFor="urgent-incident-alerts"><strong>Active incident alerts</strong><small>Active incident alerts cannot be muted here. Your role determines which alerts you receive.</small></label></div>
         </fieldset>
       </section>
     </div>
