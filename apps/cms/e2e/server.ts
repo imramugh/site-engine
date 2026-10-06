@@ -642,6 +642,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/failed-preview-review') {
+    void (async () => {
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const id = randomUUID(); const jobID = randomUUID(); const changes = source.changes as Array<Record<string, unknown>>; const changeHash = canonicalHash(changes)
+      await payload.create({ collection: 'change-sets', data: { id, name: 'Structured data diagnostic review', actor: source.actor, state: 'submitted', revision: 1, changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSequence: 0, includedChangeKeys: changes.map((change) => `${change.collection}:${change.id}`) } }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys: changes.map((change) => `${change.collection}:${change.id}`), baselineSequence: 0, liveSequence: 0, liveManifest: initialBaseline, proposedManifest: initialBaseline, liveManifestHash: canonicalHash(initialBaseline), proposedManifestHash: canonicalHash(initialBaseline), versionPins: { themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION! }, status: 'failed', attempts: 3, errorCode: 'BUILD_FAILED', renderDiagnostics: [{ code: 'STRUCTURED_DATA_INVALID', path: 'structuredData.12345678-1234-4234-8234-1234567890ab', blockId: onPageReviewBlockID, message: 'Generated structured data must contain schema.org @context and an @graph array.' }] }, overrideAccess: true, context: { editorialInternal: true } })
+      return { id }
+    })().then((value) => json(response, value)).catch(() => { response.writeHead(500); response.end() })
+    return
+  }
   // E2E-only external SQLite fault: the production direct-edit request still
   // performs its normal page update and capture hook, while this trigger aborts
   // the capture's change-set write. It proves transaction rollback without a

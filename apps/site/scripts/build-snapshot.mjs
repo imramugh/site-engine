@@ -219,7 +219,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
-    const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, themeComponentsRoot === undefined) });
+    const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, true) });
     const renderedQualityError = qualityError(renderedQuality);
     if (renderedQualityError) throw renderedQualityError;
     await copyReferencedMedia(snapshot, staged);
