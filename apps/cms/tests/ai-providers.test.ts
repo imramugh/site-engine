@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
+import sharp from 'sharp'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-ai-providers-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -33,11 +34,20 @@ describe('ENG-023 provider monetary accounting', () => {
     expect(request?.headers.get('authorization')).toBe('Bearer vision-secret')
   })
 
-  it('rejects a highly compressed 768px vision input at the cap before transport', async () => {
-    await configured('openai', 'gpt-test', 'vision-secret', { monthlyCapMicroUsd: 10, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+  it('reserves the reviewed 768px visual bound before transport, independent of compressed byte size', async () => {
+    const image = await sharp({ create: { width: 768, height: 768, channels: 3, background: '#000000' } }).webp({ quality: 1 }).toBuffer()
+    expect((await sharp(image).metadata())).toMatchObject({ width: 768, height: 768 })
+    await configured('openai', 'gpt-4.1-mini', 'vision-secret', { monthlyCapMicroUsd: 2_100, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
     let contacted = false
-    const tinyFlat768 = 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAADQAQCdASoAAAMAAUAmJaQAA3AA/vuUAAA='
+    const tinyFlat768 = `data:image/webp;base64,${image.toString('base64')}`
     await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true, imageDataUrl: tinyFlat768 }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(contacted).toBe(false)
+  })
+
+  it('fails closed for an unreviewed vision model before transport', async () => {
+    await configured('openai', 'unreviewed-vision', 'vision-secret', { monthlyCapMicroUsd: 9_000_000 })
+    let contacted = false
+    await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true, imageDataUrl: 'data:image/webp;base64,AA==' }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
     expect(contacted).toBe(false)
   })
 

@@ -28,10 +28,13 @@ const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
 // Vision billing is based on image processing, not compressed data-URL bytes.
 // These are reviewed worst-case input-token reservations for the only enabled
-// Responses vision model; unlisted models fail closed until pricing review adds
+// Responses vision model. The MCP adapter always resizes to at most 768×768;
+// 2,000 tokens is the reviewed conservative ceiling for that bounded input.
+// Unlisted models fail closed until pricing review adds
 // their documented bound. `gpt-test` is the deterministic non-production test
 // model and deliberately uses a very high bound.
 const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-test': 1_000_000 })
+export function supportsVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && Number.isSafeInteger(visionInputTokenUpperBounds[model]) }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const text = (value: unknown) => typeof value === 'string' ? value : undefined
@@ -67,7 +70,7 @@ function requestBody(provider: IntegrationProvider, model: string, input: string
 function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string): number | undefined {
   const serialized = Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens, imageDataUrl)), 'utf8')
   if (!imageDataUrl) return serialized
-  const visual = provider === 'openai' ? visionInputTokenUpperBounds[model] : undefined
+  const visual = supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : undefined
   return visual !== undefined && Number.isSafeInteger(serialized + visual) ? serialized + visual : undefined
 }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal): Request {
