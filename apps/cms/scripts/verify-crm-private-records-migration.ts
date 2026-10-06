@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import config from '../payload.config.js'
+import { down } from '../src/migrations/20261006_009000_crm_private_records.js'
 
 const payload = await getPayload({ config })
 try {
@@ -15,5 +16,8 @@ try {
   const reply = await payload.create({ collection: 'external-replies', data: { lead: lead.id, sentAt: new Date().toISOString(), subject: 'Private reply subject', summary: 'Private reply summary.', recordedBy: owner.id, idempotencyKey: key }, overrideAccess: true })
   assert.equal((await payload.findByID({ collection: 'external-replies', id: reply.id, overrideAccess: true })).summary, 'Private reply summary.')
   await assert.rejects(() => payload.create({ collection: 'external-replies', data: { lead: lead.id, sentAt: new Date().toISOString(), subject: 'Duplicate', summary: 'Duplicate private reply.', recordedBy: owner.id, idempotencyKey: key }, overrideAccess: true }))
-  console.log('CRM private records production persistence and uniqueness verified')
+  await assert.rejects(() => down({ db: payload.db.drizzle } as never), /Cannot roll back CRM private records/)
+  assert.equal((await payload.findByID({ collection: 'applications', id: application.id, overrideAccess: true })).notes, 'A durable private application note.')
+  assert.equal((await payload.findByID({ collection: 'external-replies', id: reply.id, overrideAccess: true })).summary, 'Private reply summary.')
+  console.log('CRM private records production persistence, uniqueness, and rollback guard verified')
 } finally { await payload.destroy() }

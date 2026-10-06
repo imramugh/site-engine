@@ -15,6 +15,6 @@ test('production CLI migration persists nullable application notes and private e
     expect(migrate.status, migrate.stderr || migrate.stdout).toBe(0)
     const probe = spawnSync(process.execPath, [resolve(root, 'node_modules/tsx/dist/cli.mjs'), 'scripts/verify-crm-private-records-migration.ts'], { cwd: root, env, encoding: 'utf8' })
     expect(probe.status, probe.stderr || probe.stdout).toBe(0)
-    expect(probe.stdout).toContain('CRM private records production persistence and uniqueness verified')
+    expect(probe.stdout).toContain('CRM private records production persistence, uniqueness, and rollback guard verified')
   } finally { rmSync(directory, { recursive: true, force: true }) }
 }, 120_000)
