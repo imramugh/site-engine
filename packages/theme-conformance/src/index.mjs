@@ -407,7 +407,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
       .evaluate((element) => element.blur());
   }
   return page.evaluate(
-    async ({ requireTokenCoverage }) => {
+    async ({ requireFormError, requireTokenCoverage }) => {
       await document.fonts.ready;
       return {
         motion:
@@ -432,11 +432,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
           ),
         backgrounds:
           !requireTokenCoverage ||
-          new Set(
-            [...document.querySelectorAll("[data-background]")].map(
-              (element) => element.dataset.background,
-            ),
-          ).size === 6,
+          new Set([...document.querySelectorAll("[data-background], [class*='theme-']")].flatMap((element) => [element.dataset.background, ...[...element.classList].filter((name) => /^theme-(default|subtle|brand|accent|highlight|inverse)$/.test(name)).map((name) => name.slice(6))]).filter(Boolean)).size === 6,
         logoTones:
           !requireTokenCoverage ||
           new Set(
@@ -446,15 +442,11 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
           ).size === 2,
         motionIntents:
           !requireTokenCoverage ||
-          new Set(
-            [...document.querySelectorAll("[data-motion-intent]")].map(
-              (element) => element.dataset.motionIntent,
-            ),
-          ).size === 4,
+          new Set([...document.querySelectorAll("[data-motion-intent], [class*='motion-']")].flatMap((element) => [element.dataset.motionIntent, ...[...element.classList].filter((name) => /^motion-(none|subtle|ambient|signature)$/.test(name)).map((name) => name.slice(7))]).filter(Boolean)).size === 4,
         value: document.documentElement.dataset.motion,
       };
     },
-    { requireTokenCoverage },
+    { requireFormError, requireTokenCoverage },
   );
 }
 
@@ -587,8 +579,8 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           );
           const state = await browserState(
             page,
-            path === "general/matrix" && manifest.name === "starter",
-            path === "general/matrix" && manifest.name === "starter",
+            path === "general/matrix",
+            path === "general/matrix",
           );
           if (
             violations.length ||
