@@ -9,7 +9,7 @@ import { auditCallbackDenial, auditIdentityDecision } from '../../../../../src/i
 const validProvider = (value: string): value is IdentityProvider => value === 'google' || value === 'microsoft'
 
 class CallbackFailure extends Error {
-  constructor(readonly status: number, message: string, readonly reason: 'transaction_provider_mismatch' | 'identity_verification_failed' | 'invitation_not_authorized' | 'identity_already_bound' | 'identity_disabled', readonly userID?: string) {
+  constructor(readonly status: number, message: string, readonly reason: 'transaction_not_current' | 'transaction_provider_mismatch' | 'identity_verification_failed' | 'invitation_not_authorized' | 'identity_already_bound' | 'identity_disabled', readonly userID?: string) {
     super(message)
   }
 }
@@ -47,7 +47,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     await withPayloadTransaction(payload, async (req) => {
       const current = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: stateHash } }, limit: 1, overrideAccess: true, req })
       const currentTransaction = current.docs[0]
-      if (!currentTransaction || currentTransaction.provider !== provider || currentTransaction.consumedAt || new Date(currentTransaction.expiresAt).getTime() <= Date.now()) throw new CallbackFailure(400, 'Sign-in request expired or was already used.', 'transaction_provider_mismatch')
+      if (!currentTransaction || currentTransaction.provider !== provider || currentTransaction.consumedAt || new Date(currentTransaction.expiresAt).getTime() <= Date.now()) throw new CallbackFailure(400, 'Sign-in request expired or was already used.', 'transaction_not_current')
 
       const consumed = await payload.update({
         collection: 'auth-transactions',
@@ -56,7 +56,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
         overrideAccess: true,
         req,
       })
-      if (consumed.docs.length !== 1) throw new CallbackFailure(400, 'Sign-in request expired or was already used.', 'transaction_provider_mismatch')
+      if (consumed.docs.length !== 1) throw new CallbackFailure(400, 'Sign-in request expired or was already used.', 'transaction_not_current')
 
       const existing = await payload.find({ collection: 'users', where: { and: [{ provider: { equals: provider } }, { providerIssuer: { equals: settings.issuer } }, { providerSubject: { equals: identity.subject } }] }, limit: 1, overrideAccess: true, req })
       const invitationID = typeof currentTransaction.invitation === 'string' ? currentTransaction.invitation : currentTransaction.invitation?.id
@@ -83,7 +83,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     return response
   } catch (error) {
     if (error instanceof CallbackFailure) {
-      await auditCallbackDenial(payload, { transactionID: String(transaction.id), provider, reason: error.reason, user: error.userID })
+      await withPayloadTransaction(payload, req => auditCallbackDenial(payload, { transactionID: String(transaction.id), provider, reason: error.reason, user: error.userID }, req))
       return new NextResponse(error.message, { status: error.status })
     }
     return new NextResponse('Identity verification failed.', { status: 401 })

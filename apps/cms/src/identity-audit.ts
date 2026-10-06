@@ -6,7 +6,7 @@ import type { Payload, PayloadRequest } from 'payload'
  * or attempted email addresses in this collection.
  */
 export const identityAuditReasons = {
-  callback: ['transaction_provider_mismatch', 'identity_verification_failed', 'invitation_not_authorized', 'identity_already_bound', 'identity_disabled'] as const,
+  callback: ['transaction_not_current', 'transaction_provider_mismatch', 'identity_verification_failed', 'invitation_not_authorized', 'identity_already_bound', 'identity_disabled'] as const,
   emergency: ['account_not_eligible', 'account_disabled', 'invalid_credential'] as const,
 } as const
 
@@ -33,18 +33,18 @@ export async function auditIdentityDecision({ payload, req, event, user, provide
 }
 
 /** A rejected OIDC transaction may be retried until it expires. Record one decision per transaction. */
-export async function auditCallbackDenial(payload: Payload, input: { transactionID?: string; provider: 'google' | 'microsoft'; reason: CallbackReason; user?: string }) {
+export async function auditCallbackDenial(payload: Payload, input: { transactionID?: string; provider: 'google' | 'microsoft'; reason: CallbackReason; user?: string }, req?: PayloadRequest) {
   if (input.transactionID) {
     const existing = await payload.find({
       collection: 'audit-events',
       where: { and: [{ event: { equals: 'identity.sign_in_denied' } }, { 'detail.transactionID': { equals: String(input.transactionID) } }] },
       limit: 1,
       depth: 0,
-      overrideAccess: true,
+      overrideAccess: true, ...(req ? { req } : {}),
     })
     if (existing.docs.length) return
   }
-  await auditIdentityDecision({ payload, event: 'identity.sign_in_denied', user: input.user, provider: input.provider, reason: input.reason, transactionID: input.transactionID })
+  await auditIdentityDecision({ payload, req, event: 'identity.sign_in_denied', user: input.user, provider: input.provider, reason: input.reason, transactionID: input.transactionID })
 }
 
 /** Emergency lockouts already stop credential verification after five failures. For account-state denials, keep one audit event per account and reason in the lockout window. */
