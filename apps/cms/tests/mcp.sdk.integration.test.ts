@@ -570,6 +570,29 @@ test('ENG-017 content-write tools require scope and preserve draft review bounda
   } finally { await Promise.all([readonly.transport.close(), writer.transport.close()]) }
 })
 
+test('MCP canonical review tools enforce ownership, revisions, and review-only boundaries', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-review-editor-${randomUUID()}@example.test`, name: 'MCP Review Editor', roles: ['editor'] }, overrideAccess: true })
+  const other = await payload.create({ collection: 'users', data: { email: `mcp-review-other-${randomUUID()}@example.test`, name: 'MCP Review Other', roles: ['editor'] }, overrideAccess: true })
+  const [editorSession, otherSession] = await Promise.all([sessionFor(editor.id), sessionFor(other.id)])
+  tokens.set('mcp-review-editor', { clientId: 'mcp-review-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('mcp-review-other', { clientId: 'mcp-review-other-client', userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [writer, stranger] = await Promise.all([clientFor('mcp-review-editor'), clientFor('mcp-review-other')])
+  try {
+    const tools = await writer.client.listTools()
+    expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set']))
+    expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
+    const started = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'SDK canonical review' } })) as { id: string; revision: number; checks: Array<{ name: string }> }
+    expect(started).toMatchObject({ revision: 0, checks: [] })
+    const status = resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: started.id } })) as { id: string; checks: Array<{ name: string }>; comments: unknown[]; privatePreviewURL: string | null }
+    expect(status).toMatchObject({ id: started.id, checks: [expect.objectContaining({ name: 'contract-and-tree', status: 'passed', errors: [] })], comments: [], privatePreviewURL: null })
+    expect(resultJson(await writer.client.callTool({ name: 'list_change_sets', arguments: {} }))).toMatchObject({ items: [expect.objectContaining({ id: started.id })] })
+    expect(resultJson(await stranger.client.callTool({ name: 'get_review_status', arguments: { id: started.id } }))).toEqual({ error: 'not_found' })
+    expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: 1 } }))).toEqual({ error: 'revision_conflict' })
+    expect(resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: started.id, expectedRevision: started.revision } }))).toEqual({ error: 'write_failed' })
+    expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: started.revision } }))).toMatchObject({ state: 'discarded', revision: 1 })
+  } finally { await Promise.all([writer.transport.close(), stranger.transport.close()]) }
+})
+
 test('ENG-017 creates and updates draft pages only through an explicit revisioned change set', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-page@example.test', name: 'MCP Page Editor', roles: ['editor'] }, overrideAccess: true })
   const section = await payload.create({ collection: 'sections', data: { name: 'MCP pages', summary: 'Synthetic section that accepts standard pages for MCP mutation testing.', slug: 'mcp-pages', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
