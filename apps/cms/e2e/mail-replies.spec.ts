@@ -5,6 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
+const mcpStructured = <T>(result: unknown) => ((result as { structuredContent?: T; toolResult?: { structuredContent?: T } }).structuredContent ?? (result as { toolResult?: { structuredContent?: T } }).toolResult?.structuredContent) as T
 
 async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -280,25 +281,28 @@ test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK del
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   let transport: StreamableHTTPClientTransport | undefined
+  const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
   try {
     const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1`)).json() as { deepLead: string }
     const identity = await (await page.request.post(`${origin}/__e2e/mcp-identity`)).json() as { bearer: string }
     const client = new Client({ name: 'e2e-bound-mail', version: '1.0.0' })
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
     transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
     await client.connect(transport)
     const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: 'SDK joined subject', body: 'SDK joined body' } }) as unknown as { structuredContent: { draft: { id: string; confirmationURL: string } } }
-    const draft = prepared.structuredContent.draft
+    const draft = mcpStructured<{ draft: { id: string; confirmationURL: string } }>(prepared).draft
     await page.goto(new URL(draft.confirmationURL).pathname + new URL(draft.confirmationURL).search)
     const reply = page.locator('[data-mail-reply-composer]')
     await expect(reply.getByRole('region', { name: 'Exact reply review' })).toContainText('SDK joined body')
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
-    const status = await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } }) as unknown as { structuredContent: { grantID: string } }
-    const sent = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID: status.structuredContent.grantID } }) as unknown as { structuredContent: { messageID: string } }
-    expect(sent.structuredContent.messageID).toEqual(expect.any(String))
+    const status = await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })
+    const grantID = mcpStructured<{ grantID: string }>(status).grantID
+    const sent = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })
+    expect(mcpStructured<{ messageID: string }>(sent).messageID).toEqual(expect.any(String))
     const deliveries = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
     expect(deliveries.deliveries).toHaveLength(1)
-    await expect(client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID: status.structuredContent.grantID } })).rejects.toThrow()
-  } finally { await transport?.close().catch(() => undefined); await context.close() }
+    await expect(client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })).rejects.toThrow()
+  } finally { await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }
 })
 
 test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through the real handler', async ({ browser }) => {
