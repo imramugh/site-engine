@@ -6,6 +6,7 @@ describe('ENG-033 local mail authorization digest', () => {
     expect(normalizeBody(draft.body)).toBe('One\nTwo')
     expect(authorizationDigest(draft)).toBe(authorizationDigest({ ...draft, recipient: 'lead@example.test', attachmentHashes: ['a', 'b'] }))
     expect(authorizationDigest({ ...draft, body: 'Changed' })).not.toBe(authorizationDigest(draft))
+    expect(authorizationDigest({ ...draft, attachments: [{ source: 'asset', sourceID: 'asset-1', filename: 'brief.pdf', mimeType: 'application/pdf', size: 4, sha256: 'a'.repeat(64) }] })).not.toBe(authorizationDigest({ ...draft, attachments: [{ source: 'asset', sourceID: 'asset-1', filename: 'renamed.pdf', mimeType: 'application/pdf', size: 4, sha256: 'a'.repeat(64) }] }))
   })
   it('rejects expired, revoked, consumed and changed draft grants', () => {
     const grant = { digest: authorizationDigest(draft), draftRevision: 1, expiresAt: '2099-01-01T00:00:00.000Z' }

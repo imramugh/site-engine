@@ -1059,6 +1059,15 @@ export interface MailDraft {
   sender: string;
   subject: string;
   body: string;
+  attachments?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   attachmentHashes?:
     | {
         [k: string]: unknown;
@@ -1068,8 +1077,20 @@ export interface MailDraft {
     | number
     | boolean
     | null;
+  assistantClientIDHash?: string | null;
+  assistantActor?: (string | null) | User;
+  assistantOAuthSessionID?: string | null;
   revision: number;
-  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
+  state:
+    | 'prepared'
+    | 'authorized'
+    | 'canceled'
+    | 'revoked'
+    | 'expired'
+    | 'consumed'
+    | 'sent'
+    | 'failed'
+    | 'delivery-unknown';
   updatedAt: string;
   createdAt: string;
 }
@@ -1147,6 +1168,10 @@ export interface MailAuthorization {
   digest: string;
   draftRevision: number;
   authorizedBy: string | User;
+  humanConfirmationSessionID?: string | null;
+  assistantClientIDHash?: string | null;
+  assistantActor?: (string | null) | User;
+  assistantOAuthSessionID?: string | null;
   expiresAt: string;
   revokedAt?: string | null;
   consumedAt?: string | null;
@@ -2343,7 +2368,11 @@ export interface MailDraftsSelect<T extends boolean = true> {
   sender?: T;
   subject?: T;
   body?: T;
+  attachments?: T;
   attachmentHashes?: T;
+  assistantClientIDHash?: T;
+  assistantActor?: T;
+  assistantOAuthSessionID?: T;
   revision?: T;
   state?: T;
   updatedAt?: T;
@@ -2393,6 +2422,10 @@ export interface MailAuthorizationsSelect<T extends boolean = true> {
   digest?: T;
   draftRevision?: T;
   authorizedBy?: T;
+  humanConfirmationSessionID?: T;
+  assistantClientIDHash?: T;
+  assistantActor?: T;
+  assistantOAuthSessionID?: T;
   expiresAt?: T;
   revokedAt?: T;
   consumedAt?: T;
