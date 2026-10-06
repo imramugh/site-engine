@@ -5,7 +5,7 @@ import ipaddr from 'ipaddr.js'
 import nodemailer from 'nodemailer'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
-import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, type Fetcher } from './mail-provider-adapters'
+import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, type Fetcher, type VerifiedAttachment } from './mail-provider-adapters'
 import { mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 export const mailboxAreas = ['leads', 'careers', 'notifications'] as const
@@ -133,6 +133,8 @@ export type AreaMailMessage = {
   /** An explicitly confirmed first outbound message for this record. */
   initialOutbound?: boolean
   outboundRFCMessageID?: string
+  /** Only reply confirmation passes server-verified bytes here. */
+  attachments?: readonly VerifiedAttachment[]
 }
 
 async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
@@ -141,6 +143,16 @@ async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
   const mailboxID = relationID(mapping.docs[0].mailbox)
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
   return { mapping: mapping.docs[0], mailboxID, mailbox }
+}
+
+export async function assertAreaAttachmentDelivery(payload: Payload, area: MailboxArea) {
+  try {
+    const { mailbox } = await currentAreaMailbox(payload, area)
+    if (mailbox.health !== 'connected' || (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google')) throw new Error('reply_attachments_not_supported')
+  } catch (error) {
+    if (error instanceof Error && error.message === 'reply_attachments_not_supported') throw error
+    throw new Error('reply_attachments_not_supported')
+  }
 }
 
 async function groundedProviderThread(payload: Payload, message: AreaMailMessage, mailbox: StoredMailbox) {
@@ -164,6 +176,7 @@ export async function sendAreaMail(
   if (mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(initial.mapping.senderAddress))) throw new Error('mailbox_not_ready')
 
   if (mailbox.provider === 'smtp') {
+    if (message.attachments?.length) throw new Error('reply_attachments_not_supported')
     const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, headers: message.threadID ? { 'In-Reply-To': message.threadID } : undefined })
     return { provider: 'smtp' as const, messageID: result.messageId?.slice(0, 500) ?? null }
   }
@@ -189,6 +202,7 @@ export async function sendAreaMail(
     ...(mailbox.provider === 'google' && message.providerRFCMessageID ? { rfcMessageID: message.providerRFCMessageID, ...(message.providerRFCReferences ? { rfcReferences: message.providerRFCReferences } : {}) } : {}),
     ...(mailbox.provider === 'google' && message.providerThreadID ? { threadID: message.providerThreadID } : {}),
     ...(mailbox.provider === 'google' && message.outboundRFCMessageID ? { outboundRFCMessageID: message.outboundRFCMessageID } : {}),
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
     ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
