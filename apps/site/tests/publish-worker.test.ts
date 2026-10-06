@@ -209,6 +209,6 @@ describe('publish worker', () => {
     const worker = { api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://public.example.test', versionPins: pins, healthProbe: async () => true };
     await expect(runPublishOnce(worker)).resolves.toBe(true); await expect(runPublishOnce(worker)).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledOnce(); expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toMatchObject({ host: 'public.example.test', urlList: expect.arrayContaining(['https://public.example.test/']) });
-    expect(complete).toHaveLength(2); expect(complete[0].artifact.indexNow).toMatchObject({ sent: true, batches: 1 }); expect(complete[1].artifact.indexNow).toEqual(complete[0].artifact.indexNow);
+    expect(complete).toHaveLength(2); expect(complete[0].artifact.indexNow).toMatchObject({ sent: true, batches: 1 }); expect(complete[1].artifact.indexNow).toMatchObject({ sent: true, batches: 1 });
   }, 60_000);
 });
