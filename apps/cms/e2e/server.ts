@@ -210,6 +210,7 @@ let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
 let localOwnerID: string | undefined
+let leadOwnerID: string | undefined
 let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
 let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
@@ -335,6 +336,7 @@ async function seed(): Promise<void> {
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06'), recoveryHash('synthetic-identity-owner-code-07')] }, overrideAccess: true })
   const leadOwner = await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
+  leadOwnerID = String(leadOwner.id)
   const leadEditor = await payload.create({ collection: 'users', data: { email: 'lead-editor.synthetic@example.test', name: 'Synthetic Lead Editor', roles: ['editor'] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
@@ -502,7 +504,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const deepLead = deep ? await payload.create({ collection: 'inquiries', data: { name: 'Deep linked assistant lead', email: `deep-link-${mailbox.id}@example.test`, message: 'A direct confirmation target that is outside the first lead page.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `deep-link-${mailbox.id}`, stage: 'new' }, overrideAccess: true }) : undefined
       if (deepLead) await payload.update({ collection: 'inquiries', id: deepLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
       const preparedTarget = deepLead?.id ?? firstEditableLeadID!
-      const preparedDraft = prepared ? await prepareReply(payload, 'lead', preparedTarget, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }, { clientIDHash: 'a'.repeat(64), actorID: localOwnerID!, oauthSessionID: 'fixture-assistant-origin-session' }) : undefined
+      const preparedDraft = prepared ? await prepareReply(payload, 'lead', preparedTarget, leadOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }, { clientIDHash: 'a'.repeat(64), actorID: leadOwnerID!, oauthSessionID: 'fixture-assistant-origin-session' }) : undefined
       json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(deepLead ? { deepLead: deepLead.id, deepLeadName: deepLead.name } : {}), ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
     })().catch(() => { response.writeHead(500); response.end() })
     return

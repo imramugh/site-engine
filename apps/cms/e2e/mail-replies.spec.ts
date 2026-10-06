@@ -263,12 +263,13 @@ test('ENG-033 opens an assistant deep link beyond the first lead page and lets t
     const detail = page.getByRole('complementary', { name: 'Lead details' })
     await expect(detail).toContainText(fixture.deepLeadName)
     const reply = page.locator('[data-mail-reply-composer]')
-    await expect(reply.getByText('Prepared by assistant')).toBeVisible()
     const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('prepared by a connected assistant')
     await expect(review).toContainText('Fixture OAuth reply B')
     await expect(review).toContainText('MCP prepared exact body')
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
-    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toBeVisible()
+    await expect(reply.getByRole('status')).toContainText('Return to the connected assistant to send')
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
   } finally { await context.close() }
 })
 
