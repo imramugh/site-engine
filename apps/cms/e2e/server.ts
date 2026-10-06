@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -20,6 +20,7 @@ import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
+import { buildSnapshot } from '../../site/scripts/build-snapshot.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
@@ -713,13 +714,19 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         if (action === 'fail') return withPayloadTransaction(payload, inner => failPreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), String(body.errorCode), undefined, body.diagnostics))
         throw new Error('Unsupported failed-preview worker action.')
       }
-      const render = async () => {
-        const error = new Error('Generated structured data must contain schema.org @context and an @graph array.') as Error & { diagnostics?: unknown[] }
-        error.diagnostics = [{ code: 'STRUCTURED_DATA_INVALID', path: `structuredData.${onPageReviewPageID}`, pageId: onPageReviewPageID, blockId: onPageReviewBlockID, message: error.message }]
-        throw error
+      const components = mkdtempSync(join(temporaryDirectory, 'malformed-structured-data-theme-'))
+      try {
+        const starterLayout = createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro')
+        cpSync(dirname(starterLayout), components, { recursive: true })
+        const layout = join(components, 'Layout.astro')
+        const source = readFileSync(layout, 'utf8')
+        writeFileSync(layout, source.replace("set:html={JSON.stringify(schema).replaceAll('<', '\\\\u003c')}", "set:html={'{'}"))
+        const render = (input: Record<string, unknown>) => buildSnapshot({ ...input, themeComponentsRoot: components } as Parameters<typeof buildSnapshot>[0])
+        try { await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, render, heartbeatMs: 60_000, signal: undefined }) }
+        catch (error) { if (!(error instanceof Error) || error.message !== 'BUILD_FAILED') throw error }
+      } finally {
+        rmSync(components, { recursive: true, force: true })
       }
-      try { await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, render, heartbeatMs: 60_000, signal: undefined }) }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'BUILD_FAILED') throw error }
       const failed = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true })
       if (failed.status !== 'failed') throw new Error('Structured-data diagnostic job did not fail.')
       return { id, status: failed.status }
