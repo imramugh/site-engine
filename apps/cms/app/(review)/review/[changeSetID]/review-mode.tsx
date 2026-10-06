@@ -6,7 +6,7 @@ import styles from './review-mode.module.css'
 
 type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
-type Data = { review: ReviewModeData; fresh: boolean }
+type Data = { review?: ReviewModeData; failedPreview?: { id: string; name: string; state: string; revision: number; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; fresh: boolean }
 
 function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 760 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
@@ -97,6 +97,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
     return () => media.removeEventListener('change', update)
   }, [])
   const review = data?.review
+  if (data?.failedPreview) return <main><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}</section></main>
   const rememberAvailable = useCallback((pane: 'live' | 'proposed', found: Set<string>) => setAvailableByPane((current) => {
     const previous = current[pane]
     if (previous.size === found.size && [...found].every((id) => previous.has(id))) return current
