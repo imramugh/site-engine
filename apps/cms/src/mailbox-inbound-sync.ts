@@ -77,6 +77,13 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   const active = await currentMailbox(payload, mailboxID)
   if (active.provider !== mailbox.provider || active.health !== 'connected' || active.credentialRevision !== refreshed.credentialRevision) throw new Error('mailbox_configuration_changed')
   const cursor = active.inboundCursorRevision === active.credentialRevision ? active.inboundCursor : undefined
+  let persistedCursor = active.inboundCursor
+  const persistCursor = async (next: string | null) => {
+    aborted(signal)
+    const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: active.id } }, { credentialRevision: { equals: active.credentialRevision } }, { health: { equals: 'connected' } }, { inboundCursor: { equals: persistedCursor ?? null } }, { inboundCursorRevision: { equals: active.inboundCursorRevision ?? null } }] }, data: { inboundCursor: next, inboundCursorRevision: active.credentialRevision }, overrideAccess: true, context: internal })
+    if (saved.docs.length !== 1) throw new Error('mailbox_configuration_changed')
+    persistedCursor = next
+  }
   let nextCursor: string | null = null
   let processed = 0
 
@@ -115,12 +122,14 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
       const offset = position.offset ?? 0
       if (offset > uniqueIDs.length) throw new Error('provider_malformed_response')
       const pendingIDs = uniqueIDs.slice(offset, offset + googleBatchSize)
-      for (const id of pendingIDs) {
+      for (const [index, id] of pendingIDs.entries()) {
         aborted(signal)
         const message = await adapter.message(refreshed.accessToken, id)
         await unchanged(payload, active)
         await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, rfcMessageID: message.rfcMessageID, rfcReferences: message.rfcReferences, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
         processed += 1
+        const completed = offset + index + 1
+        if (completed < uniqueIDs.length) await persistCursor(JSON.stringify({ historyID: position.historyID, ...(position.pageToken ? { pageToken: position.pageToken } : {}), offset: completed }))
       }
       const nextOffset = offset + pendingIDs.length
       nextCursor = JSON.stringify(nextOffset < uniqueIDs.length
@@ -130,8 +139,6 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
           : { historyID: page.historyID })
     }
   }
-  aborted(signal)
-  const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: active.id } }, { credentialRevision: { equals: active.credentialRevision } }, { health: { equals: 'connected' } }, { inboundCursor: { equals: active.inboundCursor ?? null } }, { inboundCursorRevision: { equals: active.inboundCursorRevision ?? null } }] }, data: { inboundCursor: nextCursor, inboundCursorRevision: active.credentialRevision }, overrideAccess: true, context: internal })
-  if (saved.docs.length !== 1) throw new Error('mailbox_configuration_changed')
+  await persistCursor(nextCursor)
   return { skipped: false as const, processed }
 }

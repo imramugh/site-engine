@@ -216,6 +216,30 @@ test('Gmail hydrates a durable intra-page batch without omitting IDs or advancin
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '200' })
   expect([...new Set(hydrated)].sort()).toEqual(ids.slice().sort())
+  expect(hydrated.filter((id) => id === 'gmail-batch-1')).toHaveLength(1)
+})
+
+test('Gmail checkpoints each hydrated ID before an abort and resumes at the next ID', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-checkpoint@example.test', name: 'Gmail checkpoint', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, 'gmail-checkpoint-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, 'gmail-checkpoint-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'gmail-checkpoint@example.test', historyId: '100' }) : Response.json({ sendAs: [{ sendAsEmail: 'gmail-checkpoint@example.test', verificationStatus: 'accepted' }] }))
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: JSON.stringify({ historyID: '100' }), inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  const controller = new AbortController(); const fetched: string[] = []; let abortSecond = true
+  const fetcher = async (url: string) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'access' })
+    if (url.includes('/history?')) return Response.json({ historyId: '101', history: [{ messagesAdded: [{ message: { id: 'checkpoint-1' } }, { message: { id: 'checkpoint-2' } }] }] })
+    const id = url.includes('checkpoint-1') ? 'checkpoint-1' : 'checkpoint-2'; fetched.push(id)
+    if (id === 'checkpoint-2' && abortSecond) controller.abort()
+    return Response.json({ id, threadId: 'unmatched-checkpoint', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'unmatched-checkpoint@example.test' }, { name: 'To', value: 'gmail-checkpoint@example.test' }, { name: 'Subject', value: id }], body: { data: Buffer.from(id).toString('base64url') } } })
+  }
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher, controller.signal)).rejects.toThrow('sync_aborted')
+  let stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '100', offset: 1 })
+  abortSecond = false
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 1 })
+  stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '101' })
+  expect(fetched.filter((id) => id === 'checkpoint-1')).toHaveLength(1)
 })
 
 test('overlapping polls compare their original cursor before one can save over the other', async () => {
