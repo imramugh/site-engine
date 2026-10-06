@@ -637,6 +637,9 @@ export const MailDrafts: CollectionConfig = {
     { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
     { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
+    // Set only by the trusted MCP preparation path. These immutable values bind
+    // a browser confirmation to the assistant identity that prepared it.
+    { name: 'assistantClientIDHash', type: 'text', maxLength: 64 }, { name: 'assistantActor', type: 'relationship', relationTo: 'users' }, { name: 'assistantOAuthSessionID', type: 'text', maxLength: 128 },
     { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'canceled', 'revoked', 'expired', 'consumed', 'sent', 'failed', 'delivery-unknown'] },
   ],
   hooks: {
@@ -665,6 +668,7 @@ export const MailAuthorizations: CollectionConfig = {
   fields: [
     { name: 'draft', type: 'relationship', relationTo: 'mail-drafts', required: true }, { name: 'digest', type: 'text', required: true },
     { name: 'draftRevision', type: 'number', required: true }, { name: 'authorizedBy', type: 'relationship', relationTo: 'users', required: true },
+    { name: 'humanConfirmationSessionID', type: 'text', maxLength: 128 }, { name: 'assistantClientIDHash', type: 'text', maxLength: 64 }, { name: 'assistantActor', type: 'relationship', relationTo: 'users' }, { name: 'assistantOAuthSessionID', type: 'text', maxLength: 128 },
     { name: 'expiresAt', type: 'date', required: true }, { name: 'revokedAt', type: 'date' }, { name: 'consumedAt', type: 'date' },
   ],
 }

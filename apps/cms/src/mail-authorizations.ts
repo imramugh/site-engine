@@ -3,6 +3,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 import { hasFreshAuthentication, hashOpaqueToken, sessionIsUsable } from './identity'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
+import { isRetryableSQLiteError } from './sqlite'
 
 export type MailGrant = { recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; lead: string; application?: string; threadID?: string; revision: number }
 export const normalizeBody = (body: string) => body.replace(/\r\n/g, '\n').trim()
@@ -12,28 +13,29 @@ export const authorizationDigest = (draft: MailGrant) => createHash('sha256').up
 export const authorizationUsable = (grant: { digest: string; expiresAt: string; revokedAt?: string | null; consumedAt?: string | null; draftRevision: number }, draft: MailGrant, now = new Date()) => !grant.revokedAt && !grant.consumedAt && new Date(grant.expiresAt) > now && grant.draftRevision === draft.revision && grant.digest === authorizationDigest(draft)
 
 type Actor = { id: string; sessionToken?: string }
-type DraftDocument = MailGrant & { id: string; state: string; application?: string; threadID: string }
+type DraftDocument = MailGrant & { id: string; state: string; application?: string; threadID: string; assistantClientIDHash?: string; assistantActor?: string; assistantOAuthSessionID?: string }
 const relationID = (value: unknown) => typeof value === 'string' ? value : String((value as { id?: string } | null)?.id ?? '')
 const grantActorID = (grant: Record<string, unknown>) => relationID(grant.authorizedBy)
 const draftGrant = (draft: Record<string, unknown>): DraftDocument => {
   const lead = relationID(draft.lead); const application = relationID(draft.application)
-  return { id: String(draft.id), threadID: String(draft.threadID), recipient: String(draft.recipient), sender: String(draft.sender), subject: String(draft.subject), body: String(draft.body), attachmentHashes: Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : [], lead: lead || application, application: application || undefined, revision: Number(draft.revision), state: String(draft.state) }
+  return { id: String(draft.id), threadID: String(draft.threadID), recipient: String(draft.recipient), sender: String(draft.sender), subject: String(draft.subject), body: String(draft.body), attachmentHashes: Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : [], lead: lead || application, application: application || undefined, revision: Number(draft.revision), state: String(draft.state), ...(typeof draft.assistantClientIDHash === 'string' ? { assistantClientIDHash: draft.assistantClientIDHash } : {}), ...(relationID(draft.assistantActor) ? { assistantActor: relationID(draft.assistantActor) } : {}), ...(typeof draft.assistantOAuthSessionID === 'string' ? { assistantOAuthSessionID: draft.assistantOAuthSessionID } : {}) }
 }
 const consumptionLocks = new Map<string, Promise<void>>()
 
-async function freshAuthorizedActor(payload: Payload, actor: Actor, draft: DraftDocument, req: PayloadRequest): Promise<boolean> {
-  if (!actor.sessionToken) return false
+async function freshAuthorizedSession(payload: Payload, actor: Actor, draft: DraftDocument, req: PayloadRequest): Promise<string | undefined> {
+  if (!actor.sessionToken) return undefined
   const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(actor.sessionToken) } }, limit: 1, depth: 0, overrideAccess: true, req })
   const session = sessions.docs[0]
   const sessionUserID = typeof session?.user === 'string' ? session.user : session?.user?.id
-  if (!session || sessionUserID !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) return false
+  if (!session || sessionUserID !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) return undefined
   try {
     const user = await payload.findByID({ collection: 'users', id: actor.id, depth: 0, overrideAccess: true, req })
-    if (user.disabled) return false
+    if (user.disabled) return undefined
     const roles = user.roles ?? []
-    return roles.includes('owner') || (!draft.application && roles.includes('sales')) || (Boolean(draft.application) && roles.includes('hiring'))
-  } catch { return false }
+    return roles.includes('owner') || (!draft.application && roles.includes('sales')) || (Boolean(draft.application) && roles.includes('hiring')) ? String(session.id) : undefined
+  } catch (error) { if (isRetryableSQLiteError(error)) throw error; return undefined }
 }
+async function freshAuthorizedActor(payload: Payload, actor: Actor, draft: DraftDocument, req: PayloadRequest): Promise<boolean> { return Boolean(await freshAuthorizedSession(payload, actor, draft, req)) }
 
 async function exclusivelyConsume<T>(grantID: string, operation: () => Promise<T>): Promise<T> {
   const previous = consumptionLocks.get(grantID) ?? Promise.resolve()
@@ -53,14 +55,15 @@ export async function authorizeMailDraft(payload: Payload, actor: Actor, draftID
   if (expiresAt <= new Date()) throw new Error('authorization_expired')
   return withPayloadTransaction(payload, async (req) => {
     const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
-    if (!await freshAuthorizedActor(payload, actor, draft, req)) throw new Error('mail_authorization_required')
+    const confirmationSessionID = await freshAuthorizedSession(payload, actor, draft, req)
+    if (!confirmationSessionID) throw new Error('mail_authorization_required')
     if (!draft.application) await assertLeadAcceptsOutbound(payload, draft.lead, req)
     else await payload.findByID({ collection: 'applications', id: draft.application, depth: 0, overrideAccess: true, req })
     if (draft.state !== 'prepared') throw new Error('draft_not_prepared')
     const digest = authorizationDigest(draft)
     const active = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draft.id } }, { revokedAt: { exists: false } }, { consumedAt: { exists: false } }] }, depth: 0, overrideAccess: true, req })
     await Promise.all(active.docs.map((existing) => payload.update({ collection: 'mail-authorizations', id: existing.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true, req })))
-    const grant = await payload.create({ collection: 'mail-authorizations', data: { draft: draft.id, digest, draftRevision: draft.revision, authorizedBy: actor.id, expiresAt: expiresAt.toISOString() }, overrideAccess: true, req })
+    const grant = await payload.create({ collection: 'mail-authorizations', data: { draft: draft.id, digest, draftRevision: draft.revision, authorizedBy: actor.id, humanConfirmationSessionID: confirmationSessionID, expiresAt: expiresAt.toISOString(), ...(draft.assistantClientIDHash && draft.assistantActor && draft.assistantOAuthSessionID ? { assistantClientIDHash: draft.assistantClientIDHash, assistantActor: draft.assistantActor, assistantOAuthSessionID: draft.assistantOAuthSessionID } : {}) } as never, overrideAccess: true, req })
     await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'authorized' }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_granted', user: actor.id, actor: actor.id, detail: { draft: draft.id, grant: grant.id, digest } }, overrideAccess: true, req })
     return grant

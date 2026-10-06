@@ -379,8 +379,9 @@ export async function handleMcp(request: Request): Promise<Response> {
     const allowed = target === 'lead' ? leads && identity.scopes.includes(leadsReplyScope) && roles.some((role) => role === 'owner' || role === 'sales') : careers && identity.scopes.includes(careersReplyScope) && roles.some((role) => role === 'owner' || role === 'hiring')
     if (!allowed) return denied(target === 'lead' ? leadsReplyScope : careersReplyScope)
     try {
-      const draft = await prepareReply(payload, target, id, identity.userId, { sender, subject, body, ...(threadID ? { threadID } : {}) })
-      return structured({ draft: { id: String(draft.id), target, revision: Number(draft.revision), state: 'prepared' as const } })
+      const draft = await prepareReply(payload, target, id, identity.userId, { sender, subject, body, ...(threadID ? { threadID } : {}) }, { clientIDHash: auditClient(identity.clientId), actorID: identity.userId, oauthSessionID: identity.sessionId })
+      const path = target === 'lead' ? '/leads' : '/applications'
+      return structured({ draft: { id: String(draft.id), target, revision: Number(draft.revision), state: 'prepared' as const, confirmationURL: `${origin.origin}${path}?draft=${encodeURIComponent(String(draft.id))}` } })
     } catch (error) { return mutationFailure(error, 'reply_preparation_failed') }
   })
   const writeSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentWriteScope] }], requiredScopes: [contentWriteScope], effectiveUserRequired: true }
