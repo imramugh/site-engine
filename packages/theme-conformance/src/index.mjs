@@ -204,7 +204,7 @@ function fixture() {
         mediaId: id(201),
       }),
       block(16, "gallery", { mediaIds: [id(201)] }),
-      block(17, "logoStrip", { mediaIds: [id(202)] }),
+      { ...block(17, "logoStrip", { mediaIds: [id(202)] }), appearance: { ...appearance, logoTone: "inverse" } },
       block(18, "video", {
         mediaId: id(203),
         posterMediaId: id(204),
@@ -440,6 +440,9 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
               (element) => element.dataset.logoTone,
             ),
           ).size === 2,
+        inverseLogoStrip:
+          !requireTokenCoverage ||
+          [...document.querySelectorAll('[data-logo-tone="inverse"] [data-block-type="logoStrip"] img')].some((image) => getComputedStyle(image).filter !== "none"),
         motionIntents:
           !requireTokenCoverage ||
           new Set([...document.querySelectorAll("[data-motion-intent], [class*='motion-']")].flatMap((element) => [element.dataset.motionIntent, ...[...element.classList].filter((name) => /^motion-(none|subtle|ambient|signature)$/.test(name)).map((name) => name.slice(7))]).filter(Boolean)).size === 4,
@@ -592,6 +595,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             !state.optionalEmpty ||
             !state.backgrounds ||
             !state.logoTones ||
+            !state.inverseLogoStrip ||
             !state.motionIntents
           )
             throw new Error(
