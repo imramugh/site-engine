@@ -26,7 +26,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ target:
       return message.docs[0] ? { id: String(thread.providerConversationID), subject: String(message.docs[0].subject) } : undefined
     })).then(items => items.filter((item): item is { id: string; subject: string } => Boolean(item)))
   }
-  const prepared = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'prepared' } }] }, sort: '-updatedAt', limit: 1, depth: 0, overrideAccess: true })
+  const selectedDraft = new URL(request.url).searchParams.get('draft')
+  const prepared = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'prepared' } }, ...(selectedDraft ? [{ id: { equals: selectedDraft } }] : [])] }, sort: '-updatedAt', limit: 1, depth: 0, overrideAccess: true })
   const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string } | undefined
   return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body, threadID: draft.threadID } : null, canAuthorize: true }, { headers: noStore })
 }

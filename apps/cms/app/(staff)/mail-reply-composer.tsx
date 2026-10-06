@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import styles from './mail-reply-composer.module.css'
 
 type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string }
@@ -9,7 +10,8 @@ type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: s
 
 export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 'application'; id: string; recipient: string }) {
   const formID = useId()
-  const endpoint = `/api/mail-replies/${target}/${id}`
+  const requestedDraft = useSearchParams().get('draft')
+  const endpoint = `/api/mail-replies/${target}/${id}${requestedDraft ? `?draft=${encodeURIComponent(requestedDraft)}` : ''}`
   const [options, setOptions] = useState<Options | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reload, setReload] = useState(0)
