@@ -885,9 +885,9 @@ export const IntegrationConfigurations: CollectionConfig = {
   // integration route. Payload's generic REST and Admin CRUD must not bypass it.
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
-    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
     { name: 'monthlyCapMicroUsd', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
     { name: 'monthlyUsageMicroUsd', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
     { name: 'usageMonth', type: 'text', maxLength: 7, admin: { readOnly: true } },
@@ -911,9 +911,9 @@ export const AIJobDefaults: CollectionConfig = {
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
-    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
   ],
 }
 
@@ -1198,15 +1198,15 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'requestDigest', type: 'text', required: true, maxLength: 64, admin: { readOnly: true } },
     { name: 'input', type: 'textarea', required: true, maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
     { name: 'imageDataUrl', type: 'textarea', maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
-    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
     { name: 'maxOutputTokens', type: 'number', required: true, min: 1, max: 8192, admin: { readOnly: true } },
     { name: 'configurationSnapshot', type: 'json', required: true, admin: { readOnly: true } },
     { name: 'state', type: 'select', required: true, options: ['queued', 'running', 'completed', 'manual-review', 'failed'], defaultValue: 'queued', admin: { readOnly: true } },
     { name: 'leaseToken', type: 'text', admin: { hidden: true } }, { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
     { name: 'dispatchStartedAt', type: 'date', admin: { readOnly: true } }, { name: 'result', type: 'textarea', access: { read: () => false }, admin: { hidden: true } },
     { name: 'resultDigest', type: 'text', maxLength: 64, admin: { readOnly: true } }, { name: 'costStatus', type: 'select', options: ['actual', 'reserved'], admin: { readOnly: true } },
-    { name: 'usedProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } }, { name: 'fallbackUsed', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
+    { name: 'usedProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } }, { name: 'fallbackUsed', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
     { name: 'failureCode', type: 'text', maxLength: 64, admin: { readOnly: true } },
   ],
 }
