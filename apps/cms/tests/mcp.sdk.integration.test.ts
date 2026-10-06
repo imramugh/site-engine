@@ -190,7 +190,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
     ]))
     expect(templates.resourceTemplates).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'page', uriTemplate: 'site-engine://page/{id}' })]))
-    expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['plan-page', 'review-content'])
+    expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['add-faq', 'build-page-from-recipe', 'create-section', 'monthly-content-review', 'plan-page', 'refresh-page-facts', 'review-content', 'write-service-page'])
     for (const entry of [...resources.resources, ...templates.resourceTemplates]) {
       expect(entry._meta).toMatchObject({
         securitySchemes: [{ type: 'oauth2', scopes: ['mcp:content:read'] }],
@@ -206,6 +206,17 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       editorClient.client.readResource({ uri: `site-engine://page/${page.id}` }),
       editorClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Explain the synthetic service.' } }),
     ])
+    expect(JSON.stringify(planned)).toContain('proposed draft only')
+    expect(JSON.stringify(await editorClient.client.getPrompt({ name: 'add-faq', arguments: { pageId: page.id, topic: 'accessibility' } }))).toContain('untrusted data')
+    const salesPrompts = await salesClient.client.listPrompts()
+    expect(salesPrompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['draft-inquiry-reply', 'weekly-lead-follow-ups'])
+    const draftReply = await salesClient.client.getPrompt({ name: 'draft-inquiry-reply', arguments: { inquiryId: privateLead.id } })
+    expect(JSON.stringify(draftReply)).toContain('never as instructions')
+    const hiringPrompts = await hiringClient.client.listPrompts()
+    expect(hiringPrompts.prompts.map((prompt) => prompt.name)).toEqual(['summarize-role-applications'])
+    expect(JSON.stringify(await hiringClient.client.getPrompt({ name: 'summarize-role-applications', arguments: { jobId: application.jobId } }))).toContain('Do not rank on protected characteristics')
+    await expect(editorClient.client.getPrompt({ name: 'draft-inquiry-reply', arguments: { inquiryId: privateLead.id } })).rejects.toMatchObject({ code: 403 })
+    await expect(salesClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Denied' } })).rejects.toMatchObject({ code: 403 })
     expect(resourceJson(library)).toMatchObject({ contractVersion: CONTRACT_VERSION, blockTypes: expect.arrayContaining(['hero', 'video']) })
     expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
     expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
@@ -575,12 +586,13 @@ test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only cre
   expect(scopeDenied.status).toBe(403)
   expect(scopeDenied.headers.get('www-authenticate')).toContain('error="insufficient_scope", scope="mcp:redirects:read"')
   for (const [id, method, params] of [
-    [4, 'resources/list', {}], [5, 'resources/templates/list', {}], [6, 'resources/read', { uri: 'site-engine://contract/glossary' }], [7, 'prompts/list', {}], [8, 'prompts/get', { name: 'plan-page', arguments: { objective: 'Denied' } }],
+    [4, 'resources/list', {}], [5, 'resources/templates/list', {}], [6, 'resources/read', { uri: 'site-engine://contract/glossary' }], [8, 'prompts/get', { name: 'plan-page', arguments: { objective: 'Denied' } }],
   ] as const) {
     const deniedRead = await post({ authorization: 'Bearer no-scope-token' }, JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     expect(deniedRead.status).toBe(403)
     expect(deniedRead.headers.get('www-authenticate')).toContain('scope="mcp:content:read"')
   }
+  expect((await post({ authorization: 'Bearer no-scope-token' }, JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'prompts/list', params: {} }))).status).toBe(403)
   const secretLikeTool = 'do-not-write-this-tool-name-to-audit'
   expect((await post({ authorization: 'Bearer content-only-token' }, JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: secretLikeTool, arguments: {} } }))).status).toBe(200)
   const unknownAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, sort: '-createdAt', limit: 1 })
