@@ -99,6 +99,17 @@ async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixtur
 }
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
+  it('keeps captured media metadata private and rejects tampered original asset captures', () => {
+    const base = baseline()
+    const asset = { id: randomUUID(), filename: 'public-media.png', mimeType: 'image/png', width: 4, height: 4, alt: 'Public media', decorative: false }
+    const captured = { ...asset, caption: 'Internal caption', credit: 'Internal credit', tags: ['internal'] }
+    const change = { collection: 'assets', id: asset.id, before: null, after: captured, beforeHash: null, afterHash: canonicalHash(captured) }
+    const candidate = buildCandidate(base, [change] as never, [`assets:${asset.id}`], versions)
+    expect(candidate.media).toEqual(expect.arrayContaining([expect.objectContaining(asset)]))
+    expect(JSON.stringify(candidate.media)).not.toMatch(/caption|credit|tags/)
+    expect(() => buildCandidate(base, [{ ...change, after: { ...captured, tags: ['tampered'] } }] as never, [`assets:${asset.id}`], versions)).toThrow('captured change is invalid')
+  })
+
   it('freezes a future approved release without advancing or exposing the publish queue, and retries exactly once', async () => {
     const current = await fixture('scheduled')
     const published = await installPublishedBaseline(current)
