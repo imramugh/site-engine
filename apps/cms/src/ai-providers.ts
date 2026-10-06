@@ -6,7 +6,7 @@ import { withPayloadTransaction } from './auth-transaction'
 /** Money is always an integer count of one-millionths of a US dollar. */
 export type MicroUsd = number
 export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; maxOutputTokens: number }
-export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string }
+export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string; azureResourceEndpoint: string | null; azureApiVersion: string | null }
 export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' }
 export const providerCapabilities: Record<IntegrationProvider, ProviderCapability> = {
   // Image request serialization has not been implemented in this adapter yet.
@@ -39,7 +39,8 @@ function pricingFor(config: StoredConfiguration): Pricing | undefined {
 }
 function sameSnapshot(config: StoredConfiguration, snapshot: AIConfigurationSnapshot): boolean {
   const pricing = pricingFor(config)
-  return config.id === snapshot.id && config.provider === snapshot.provider && config.model === snapshot.model && config.credentialFingerprint === snapshot.credentialFingerprint && (config.monthlyCapMicroUsd ?? null) === snapshot.monthlyCapMicroUsd && Boolean(config.encryptedCredential) && config.health !== 'revoked' && pricing?.inputMicroUsdPerMillionTokens === snapshot.inputMicroUsdPerMillionTokens && pricing.outputMicroUsdPerMillionTokens === snapshot.outputMicroUsdPerMillionTokens && pricing.source === snapshot.pricingSource && pricing.asOf === snapshot.pricingAsOf
+  const azureResource = config.provider === 'azure-openai' ? azureResourceEndpoint(config.azureResourceEndpoint) : undefined
+  return config.id === snapshot.id && config.provider === snapshot.provider && config.model === snapshot.model && config.credentialFingerprint === snapshot.credentialFingerprint && (config.monthlyCapMicroUsd ?? null) === snapshot.monthlyCapMicroUsd && Boolean(config.encryptedCredential) && config.health !== 'revoked' && pricing?.inputMicroUsdPerMillionTokens === snapshot.inputMicroUsdPerMillionTokens && pricing.outputMicroUsdPerMillionTokens === snapshot.outputMicroUsdPerMillionTokens && pricing.source === snapshot.pricingSource && pricing.asOf === snapshot.pricingAsOf && (config.provider !== 'azure-openai' || (azureResource === snapshot.azureResourceEndpoint && (config.azureApiVersion ?? null) === snapshot.azureApiVersion))
 }
 function costPartMicroUsd(tokens: number, rate: MicroUsd): MicroUsd | undefined {
   if (!Number.isSafeInteger(tokens) || tokens < 0) return undefined
@@ -53,7 +54,7 @@ function costMicroUsd(inputTokens: number, outputTokens: number, pricing: Pricin
   return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : undefined
 }
 function requestBody(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): Record<string, unknown> {
-  if (provider === 'openai') return { model, max_output_tokens: maxOutputTokens, input: [{ role: 'user', content: [{ type: 'input_text', text: input }] }] }
+  if (provider === 'openai' || provider === 'azure-openai') return { model, max_output_tokens: maxOutputTokens, input: [{ role: 'user', content: [{ type: 'input_text', text: input }] }] }
   if (provider === 'anthropic') return { model, max_tokens: maxOutputTokens, messages: [{ role: 'user', content: input }] }
   if (provider === 'google-gemini') return { contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { maxOutputTokens } }
   return { model, max_tokens: maxOutputTokens, messages: [{ role: 'user', content: input }] }
@@ -63,7 +64,7 @@ function requestBody(provider: IntegrationProvider, model: string, input: string
 function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): number { return Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8') }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, signal?: AbortSignal, azureEndpoint?: string | null, azureApiVersion?: string | null): Request {
   const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens))
-  if (provider === 'azure-openai') { const resource = azureResourceEndpoint(azureEndpoint); if (!resource) throw new Error('azure endpoint'); const url = new URL(`${resource}/openai/v1/responses`); if (azureApiVersion) url.searchParams.set('api-version', azureApiVersion); return new Request(url, { method: 'POST', signal, headers: { 'api-key': credential, 'content-type': 'application/json' }, body }) }
+  if (provider === 'azure-openai') { const resource = azureResourceEndpoint(azureEndpoint); if (!resource || azureApiVersion) throw new Error('azure endpoint'); return new Request(`${resource}/openai/v1/responses`, { method: 'POST', signal, headers: { 'api-key': credential, 'content-type': 'application/json' }, body }) }
   if (provider === 'openai') return new Request(providerCapabilities.openai.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
   if (provider === 'anthropic') return new Request(providerCapabilities.anthropic.endpoint, { method: 'POST', signal, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body })
   if (provider === 'google-gemini') return new Request(`${providerCapabilities['google-gemini'].endpoint}/${encodeURIComponent(model)}:generateContent`, { method: 'POST', signal, headers: { 'x-goog-api-key': credential, 'content-type': 'application/json' }, body })
@@ -80,7 +81,7 @@ function geminiUsage(details: Record<string, unknown> | undefined): TokenUsage |
   return { inputTokens, outputTokens: candidates + thoughts }
 }
 function parsed(provider: IntegrationProvider, body: Record<string, unknown>): { output: string; usage?: TokenUsage } | undefined {
-  if (provider === 'openai') { const output = Array.isArray(body.output) ? body.output.filter((item) => (item as Record<string, unknown>).type === 'message').flatMap((item) => Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content : []).filter((part) => (part as Record<string, unknown>).type === 'output_text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
+  if (provider === 'openai' || provider === 'azure-openai') { const output = Array.isArray(body.output) ? body.output.filter((item) => (item as Record<string, unknown>).type === 'message').flatMap((item) => Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content : []).filter((part) => (part as Record<string, unknown>).type === 'output_text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
   if (provider === 'anthropic') { const output = Array.isArray(body.content) ? body.content.filter((part) => (part as Record<string, unknown>).type === 'text').map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usage as Record<string, unknown> | undefined; return output ? { output, usage: usage(details?.input_tokens, details?.output_tokens) } : undefined }
   if (provider === 'google-gemini') { const candidate = Array.isArray(body.candidates) ? body.candidates[0] as Record<string, unknown> | undefined : undefined; const content = candidate?.content as Record<string, unknown> | undefined; const output = Array.isArray(content?.parts) ? content.parts.filter((part) => (part as Record<string, unknown>).thought !== true).map((part) => text((part as Record<string, unknown>).text)).filter(Boolean).join('') : ''; const details = body.usageMetadata as Record<string, unknown> | undefined; return output ? { output, usage: geminiUsage(details) } : undefined }
   const choice = Array.isArray(body.choices) ? body.choices[0] as Record<string, unknown> | undefined : undefined; const message = choice?.message as Record<string, unknown> | undefined; const output = text(message?.content); const details = body.usage as Record<string, unknown> | undefined
