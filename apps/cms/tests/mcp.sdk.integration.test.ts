@@ -138,6 +138,10 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.update({ collection: 'users', id: editor.id, data: { emergencyTotpSecret: 'never-expose-this-secret' }, overrideAccess: true })
   const frozen = structuredClone(neutralFixture)
   frozen.styleGuide = { bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 }
+  frozen.pages[0]!.updatedAt = '2025-01-01T12:00:00.000Z'
+  const frozenHero = frozen.pages[0]!.blocks.find((block) => block.type === 'hero')
+  assert.ok(frozenHero)
+  frozenHero.body = '# Extra heading. This frozen phrase is a deterministic style warning.'
   await publishFrozenSnapshot(owner.id, frozen)
   const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
@@ -148,7 +152,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_templates', 'move_block', 'move_item', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section'])
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
@@ -192,6 +196,16 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(structuredJson(appearance)).toEqual({ appearance: AppearanceOptions })
     expect(structuredJson(search)).toMatchObject({ items: [expect.objectContaining({ id: page.id, title: 'SDK page' })] })
     await expect(editorClient.client.callTool({ name: 'list_templates', arguments: { unknown: true } })).resolves.toMatchObject({ isError: true })
+    const [pageAudit, stalePages, publishedStyle] = await Promise.all([
+      approverClient.client.callTool({ name: 'audit_page', arguments: { id: frozen.pages[0]!.id } }),
+      approverClient.client.callTool({ name: 'list_stale_pages', arguments: {} }),
+      approverClient.client.callTool({ name: 'get_style_guide', arguments: {} }),
+    ])
+    expect(structuredJson(pageAudit)).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
+    expect(structuredJson(stalePages)).toMatchObject({ source: 'frozen-published-snapshot', items: [expect.objectContaining({ id: frozen.pages[0]!.id, reviewAgeDays: expect.any(Number) })] })
+    expect(structuredJson(publishedStyle)).toEqual({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 })
+    await expect(approverClient.client.callTool({ name: 'audit_page', arguments: { id: frozen.pages[0]!.id, unknown: true } })).resolves.toMatchObject({ isError: true })
+    await expect(salesClient.client.callTool({ name: 'list_stale_pages', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(ownerClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(editorClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const firstLeadResult = await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 1 } })
