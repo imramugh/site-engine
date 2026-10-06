@@ -661,6 +661,7 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     retiringManifest.settings.sections = [retiringHomeSection, { ...retiringHomeSection, id: String(retiringSection.id), slug: String(retiringSection.slug), pageIds: [String(retiringPage.id)], landingPageId: undefined, allowedTemplates: ['standard'] }]
     retiringManifest.pages = [retiringHomePage, { ...retiringHomePage, id: String(retiringPage.id), sectionId: String(retiringSection.id), slug: String(retiringPage.slug), title: String(retiringPage.title), summary: String(retiringPage.summary), template: 'standard', blocks: retiringPage.blocks as never }]
     await publishFrozenSnapshot(editor.id, retiringManifest)
+    const retiringPublishedHash = await publishedHash()
     const sectionSet = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Archive structural section' } })) as { id: string; revision: number }
     const staleSectionHash = (await readSection(retiringSection.id)).sectionHash
     await payload.update({ collection: 'sections', id: retiringSection.id, data: { summary: 'Concurrent section metadata change.' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
@@ -669,6 +670,31 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: retiringSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionSet.revision, expectedSectionHash: (await readSection(retiringSection.id)).sectionHash, redirectTo: '/' } }))).toMatchObject({ archived: true, pageIds: [retiringPage.id], redirects: [{ to: '/' }], section: { pageIds: [], landingPageId: null } })
     expect((await payload.findByID({ collection: 'pages', id: String(retiringPage.id), depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('archived')
     expect(await payload.findByID({ collection: 'sections', id: retiringSection.id, depth: 0, draft: true, overrideAccess: true })).toMatchObject({ pageIds: [] })
+    expect(await publishedHash()).toBe(retiringPublishedHash)
+
+    const mixedSection = await payload.create({ collection: 'sections', data: { name: 'Mixed archive section', summary: 'A section containing an existing archived page and active parent and child pages.', slug: `mixed-section-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, overrideAccess: true, context: { editorialInternal: true } })
+    const mixedParent = await payload.create({ collection: 'pages', data: { title: 'Mixed active parent', summary: 'A synthetic active parent page for mixed archive section coverage.', slug: `mixed-parent-${randomUUID().slice(0, 8)}`, sectionId: mixedSection.id, template: 'standard', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    const mixedChild = await payload.create({ collection: 'pages', data: { title: 'Mixed active child', summary: 'A synthetic active child page for mixed archive section coverage.', slug: `mixed-child-${randomUUID().slice(0, 8)}`, sectionId: mixedSection.id, parentId: mixedParent.id, template: 'standard', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    const alreadyArchived = await payload.create({ collection: 'pages', data: { title: 'Previously archived', summary: 'A synthetic archived page that must not be archived or redirected a second time.', slug: `previously-archived-${randomUUID().slice(0, 8)}`, sectionId: mixedSection.id, template: 'standard', blocks: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'pages', id: alreadyArchived.id, data: { status: 'archived' }, draft: true, overrideAccess: true, context: { archiveInternal: true, editorialInternal: true } })
+    await payload.update({ collection: 'sections', id: mixedSection.id, data: { pageIds: [mixedParent.id, mixedChild.id] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.create({ collection: 'redirects', data: { from: '/previously-archived', to: '/legacy' }, overrideAccess: true, context: { editorialInternal: true } })
+    const mixedManifest = structuredClone(neutralFixture)
+    const mixedHomeSection = { ...mixedManifest.settings.sections[0]! }
+    const mixedHomePage = { ...mixedManifest.pages[0]! }
+    mixedManifest.settings.sections = [mixedHomeSection, { ...mixedHomeSection, id: String(mixedSection.id), slug: String(mixedSection.slug), pageIds: [String(mixedParent.id), String(mixedChild.id)], landingPageId: undefined, allowedTemplates: ['standard'] }]
+    mixedManifest.pages = [
+      mixedHomePage,
+      { ...mixedHomePage, id: String(mixedParent.id), sectionId: String(mixedSection.id), slug: String(mixedParent.slug), title: String(mixedParent.title), summary: String(mixedParent.summary), template: 'standard', blocks: [] },
+      { ...mixedManifest.pages[0]!, id: String(mixedChild.id), sectionId: String(mixedSection.id), parentId: String(mixedParent.id), slug: String(mixedChild.slug), title: String(mixedChild.title), summary: String(mixedChild.summary), template: 'standard', blocks: [] },
+    ]
+    await publishFrozenSnapshot(editor.id, mixedManifest)
+    const mixedPublishedHash = await publishedHash()
+    const mixedSet = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Archive mixed structural section' } })) as { id: string; revision: number }
+    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: mixedSection.id, changeSetId: mixedSet.id, expectedChangeSetRevision: mixedSet.revision, expectedSectionHash: (await readSection(mixedSection.id)).sectionHash, redirectTo: '/' } }))).toMatchObject({ archived: true, pageIds: [mixedChild.id, mixedParent.id], redirects: [{ to: '/' }, { to: '/' }] })
+    expect((await payload.findByID({ collection: 'pages', id: alreadyArchived.id, depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('archived')
+    expect((await payload.find({ collection: 'redirects', where: { from: { equals: '/previously-archived' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]).toMatchObject({ to: '/legacy' })
+    expect(await publishedHash()).toBe(mixedPublishedHash)
   } finally { await Promise.all([writer.transport.close(), readonly.transport.close()]) }
 })
 
