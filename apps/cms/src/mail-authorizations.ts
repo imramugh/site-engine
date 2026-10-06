@@ -6,9 +6,13 @@ import { assertLeadAcceptsOutbound } from './lead-outbound'
 
 export type MailGrant = { recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; lead: string; application?: string; threadID?: string; revision: number }
 export const normalizeBody = (body: string) => body.replace(/\r\n/g, '\n').trim()
-export const authorizationDigest = (draft: MailGrant) => createHash('sha256').update(JSON.stringify({
-  recipient: draft.recipient.trim().toLowerCase(), sender: draft.sender.trim().toLowerCase(), subject: draft.subject.trim(), body: normalizeBody(draft.body), attachmentHashes: [...draft.attachmentHashes].sort(), lead: draft.lead, targetKind: draft.application ? 'application' : 'lead', threadID: draft.threadID ?? '', revision: draft.revision, assistantClientIDHash: 'assistantClientIDHash' in draft ? String((draft as DraftDocument).assistantClientIDHash ?? '') : '', assistantActor: 'assistantActor' in draft ? String((draft as DraftDocument).assistantActor ?? '') : '', assistantOAuthSessionID: 'assistantOAuthSessionID' in draft ? String((draft as DraftDocument).assistantOAuthSessionID ?? '') : '',
-})).digest('hex')
+export const authorizationDigest = (draft: MailGrant) => {
+  const assistant = draft as DraftDocument
+  const source = assistant.assistantClientIDHash && assistant.assistantActor && assistant.assistantOAuthSessionID
+    ? { assistantClientIDHash: assistant.assistantClientIDHash, assistantActor: assistant.assistantActor, assistantOAuthSessionID: assistant.assistantOAuthSessionID }
+    : {}
+  return createHash('sha256').update(JSON.stringify({ recipient: draft.recipient.trim().toLowerCase(), sender: draft.sender.trim().toLowerCase(), subject: draft.subject.trim(), body: normalizeBody(draft.body), attachmentHashes: [...draft.attachmentHashes].sort(), lead: draft.lead, targetKind: draft.application ? 'application' : 'lead', threadID: draft.threadID ?? '', revision: draft.revision, ...source })).digest('hex')
+}
 export const authorizationUsable = (grant: { digest: string; expiresAt: string; revokedAt?: string | null; consumedAt?: string | null; draftRevision: number }, draft: MailGrant, now = new Date()) => !grant.revokedAt && !grant.consumedAt && new Date(grant.expiresAt) > now && grant.draftRevision === draft.revision && grant.digest === authorizationDigest(draft)
 
 type Actor = { id: string; sessionToken?: string }

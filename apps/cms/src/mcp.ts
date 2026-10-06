@@ -385,11 +385,16 @@ export async function handleMcp(request: Request): Promise<Response> {
     } catch (error) { return mutationFailure(error, 'reply_preparation_failed') }
   })
   server.registerTool('send_reply', { title: 'Send human-confirmed reply', description: 'Deliver exactly one prepared reply only after the same authenticated human has confirmed its immutable envelope in the CMS. This is an external side effect.', inputSchema: z.object({ draftID: z.string().uuid(), grantID: z.string().uuid() }).strict(), outputSchema: z.object({ provider: z.string(), messageID: z.string() }).passthrough(), annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, _meta: { securitySchemes: [{ type: 'oauth2', scopes: [leadsReadScope, leadsReplyScope] }, { type: 'oauth2', scopes: [careersReadScope, careersReplyScope] }], authorization: { requiredScopes: ['mcp:leads:read + mcp:leads:reply OR mcp:careers:read + mcp:careers:reply'], effectiveUserRequired: true } } }, async ({ draftID, grantID }) => {
-    if (!((leads && identity.scopes.includes(leadsReplyScope) && roles.some((role) => role === 'owner' || role === 'sales')) || (careers && identity.scopes.includes(careersReplyScope) && roles.some((role) => role === 'owner' || role === 'hiring')))) return denied('mcp:leads:reply or mcp:careers:reply')
     try {
       const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true }) as { draft?: string | { id?: string } }
       const boundDraft = typeof grant.draft === 'string' ? grant.draft : grant.draft?.id
       if (boundDraft !== draftID) return { isError: true, ...text({ error: 'authorization_not_usable' }) }
+      const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true }) as { application?: unknown }
+      const application = Boolean(draft.application)
+      const targetAllowed = application
+        ? careers && identity.scopes.includes(careersReadScope) && identity.scopes.includes(careersReplyScope) && roles.some((role) => role === 'owner' || role === 'hiring')
+        : leads && identity.scopes.includes(leadsReadScope) && identity.scopes.includes(leadsReplyScope) && roles.some((role) => role === 'owner' || role === 'sales')
+      if (!targetAllowed) return denied(application ? `${careersReadScope} ${careersReplyScope}` : `${leadsReadScope} ${leadsReplyScope}`)
       const delivery = await sendMcpReply(payload, { userID: identity.userId, clientIDHash: auditClient(identity.clientId), oauthSessionID: identity.sessionId }, grantID)
       return structured({ provider: delivery.provider, messageID: delivery.messageID })
     } catch (error) { return mutationFailure(error, 'reply_send_failed', ['authorization_not_usable', 'mail_authorization_required', 'reply_attachments_not_supported']) }
