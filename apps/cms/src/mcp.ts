@@ -55,7 +55,7 @@ const mutationFailure = (error: unknown, fallback: string, known: readonly strin
 const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' ? value.id : undefined
 const structuralPageHash = (record: Record<string, unknown>) => canonicalHash({ ...pageEditorProjection(record), sectionId: relationID(record.sectionId), parentId: relationID(record.parentId), template: record.template })
 const storedPageIDs = (record: Record<string, unknown>) => Array.isArray(record.pageIds) ? record.pageIds.map(relationID).filter((id): id is string => Boolean(id)) : []
-const nonArchived = (record: Record<string, unknown>) => (record._status ?? record.status) !== 'archived'
+const nonArchived = (record: Record<string, unknown>) => record.status !== 'archived' && record._status !== 'archived'
 const structuralSectionHash = (record: Record<string, unknown>, pages: readonly Record<string, unknown>[] = []) => canonicalHash({ name: record.name, slug: record.slug, summary: record.summary ?? null, allowedTemplates: record.allowedTemplates ?? [], landingPageId: relationID(record.landingPageId) ?? null, pageIds: storedPageIDs(record), pages: pages.filter(nonArchived).map(page => ({ id: page.id, hash: structuralPageHash(page) })).sort((left, right) => String(left.id).localeCompare(String(right.id))) })
 /** This is the exact optimistic-concurrency hash required by structural tools. */
 const page = (value: Record<string, unknown>) => ({ id: value.id, title: value.title, slug: value.slug, summary: value.summary, template: value.template, blocks: Array.isArray(value.blocks) ? value.blocks : [], sectionId: relationID(value.sectionId), parentId: relationID(value.parentId) ?? null, pageHash: pageEditorHash(pageEditorProjection(value)), structuralHash: structuralPageHash(value) })
@@ -537,12 +537,13 @@ export async function handleMcp(request: Request): Promise<Response> {
         const found = await payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
         const pages = (found.docs as unknown as Array<Record<string, unknown>>).filter(page => relationID(page.sectionId) === sectionId)
         if (structuralSectionHash(sectionRecord, pages) !== expectedSectionHash) throw new Error('STALE_SECTION_EDIT')
+        const activePages = pages.filter(nonArchived)
         const savedSection = await payload.update({ collection: 'sections', id: sectionId, data: { pageIds: [], landingPageId: null }, draft: true, user: current as never, overrideAccess: false, req })
         delete (req.context as Record<string, unknown>).editorialInternal
         const depth = (candidate: Record<string, unknown>) => { let value = 0; let parent = typeof candidate.parentId === 'string' ? candidate.parentId : undefined; const ids = new Set<string>(); while (parent && !ids.has(parent)) { ids.add(parent); value += 1; parent = pages.find(page => page.id === parent)?.parentId as string | undefined }; return value }
         const redirects: unknown[] = []
-        for (const candidate of [...pages].sort((left, right) => depth(right) - depth(left))) redirects.push((await archivePage({ payload, req, pageID: String(candidate.id), target: redirectTo })).redirect ?? null)
-        return { section: section(savedSection as unknown as Record<string, unknown>), pageIds: pages.map(candidate => String(candidate.id)), redirects }
+        for (const candidate of [...activePages].sort((left, right) => depth(right) - depth(left))) redirects.push((await archivePage({ payload, req, pageID: String(candidate.id), target: redirectTo })).redirect ?? null)
+        return { section: section(savedSection as unknown as Record<string, unknown>), pageIds: activePages.map(candidate => String(candidate.id)), redirects }
       })
       return text({ ...result, archived: true })
     } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'STALE_SECTION_EDIT']) }
