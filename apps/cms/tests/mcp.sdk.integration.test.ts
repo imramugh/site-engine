@@ -171,13 +171,14 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }, navigation: { header: [{ kind: 'page', id: page.id, label: 'SDK page', style: 'link' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable navigation reference.', style: 'link' }], footer: { columns: [{ kind: 'links', heading: 'Resources', links: [{ kind: 'page', id: page.id, label: 'SDK page' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable footer reference.' }] }], copyright: '© {year} MCP' } } }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const salesReplyClient = await clientFor('sales-reply-token'); const salesWriteClient = await clientFor('sales-write-token'); const hiringClient = await clientFor('hiring-token'); const hiringWriteClient = await clientFor('hiring-write-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
-    expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_ai_suggestion', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'suggest_alt', 'suggest_faq', 'suggest_meta', 'suggest_summary', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
+    expect(editorTools.tools.map((tool) => tool.name)).not.toContain('approve_change_set')
+    expect(editorTools.tools.map((tool) => tool.name)).not.toContain('publish')
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply', 'suggest_summary', 'suggest_meta', 'suggest_faq', 'suggest_alt'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
+      expect(tool._meta).toMatchObject({ limits: { approve: false, publish: false } })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
     for (const name of ['list_applications', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:careers:read'] }], authorization: { requiredScopes: ['mcp:careers:read'] } })
@@ -643,7 +644,7 @@ test('MCP returns a retryable HTTP response when its request audit is blocked by
   try { expect((await client.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_change_set' })])) } finally { await client.client.close() }
 }, 15_000)
 
-test('MCP mutation returns a retryable tool error when a writer locks SQLite after its request audit', async () => {
+test('MCP mutation returns an ambiguous terminal audit failure when a writer locks SQLite after request audit', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-mutation-busy-${randomUUID()}@example.test`, name: 'MCP Mutation Busy', roles: ['editor'] }, overrideAccess: true })
   const session = await sessionFor(editor.id)
   tokens.set('mcp-mutation-busy-token', { clientId: 'mcp-mutation-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
@@ -663,10 +664,8 @@ test('MCP mutation returns a retryable tool error when a writer locks SQLite aft
     return result
   }) as typeof payload.create
   try {
-    const response = await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })
-    expect(response).toMatchObject({ isError: true })
-    const blocked = resultJson(response)
-    expect(blocked).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await expect(sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })).rejects.toThrow(/audit_recording_failed.*operationMayHaveCompleted/)
+    await lock?.rollback(); lock = undefined
     expect((await payload.count({ collection: 'change-sets', overrideAccess: true })).totalDocs).toBe(beforeSets.totalDocs)
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
   } finally {
@@ -1037,7 +1036,7 @@ test('MCP media search retains tagged used assets past the first 100 results', a
   } finally { await sdk.transport.close() }
 }, 180_000)
 
-test('MCP update_media reports a retryable SQLite writer lock without a partial mutation', async () => {
+test('MCP update_media reports an ambiguous terminal audit failure without a partial mutation', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-busy-${randomUUID()}@example.test`, name: 'MCP Media Busy', roles: ['editor'] }, overrideAccess: true })
   const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
   const asset = await payload.create({ collection: 'assets', data: { alt: 'Original locked media metadata', decorative: false, tags: ['before-lock'] }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media-busy.png', size: bytes.length }, user: editor, overrideAccess: false })
@@ -1058,12 +1057,12 @@ test('MCP update_media reports a retryable SQLite writer lock without a partial 
     return result
   }) as typeof payload.create
   try {
-    const blocked = await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })
-    expect(blocked).toMatchObject({ isError: true })
-    expect(resultJson(blocked)).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await expect(sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })).rejects.toThrow(/audit_recording_failed.*operationMayHaveCompleted/)
     await lock?.rollback(); lock = undefined
     expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original locked media metadata', tags: ['before-lock'] })
     expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ revision: set.revision })
+    expect(structuredJson(await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Fresh metadata persists', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } }))).toMatchObject({ draft: { changeSetRevision: set.revision + 1 } })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Fresh metadata persists', tags: ['after-lock'] })
   } finally {
     ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
     await lock?.rollback(); external.close()
