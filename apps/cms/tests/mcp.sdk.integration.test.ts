@@ -35,6 +35,7 @@ let oauthOrigin = ''
 let introspections = 0
 let mcpServer: ReturnType<typeof createServer>
 let oauthServer: ReturnType<typeof createServer>
+let remoteImageImporter: ((url: string) => Promise<{ data: Buffer; mimetype: string; name: string; size: number }>) | undefined
 
 function requestFrom(incoming: IncomingMessage, origin: string, body: Buffer): Request {
   return new Request(`${origin}${incoming.url}`, { method: incoming.method, headers: incoming.headers as HeadersInit, body: body.length ? new Uint8Array(body) : undefined })
@@ -113,7 +114,7 @@ beforeAll(async () => {
   process.env.OAUTH_INTROSPECTION_SECRET = 'mcp-sdk-secret'
   const mcp = await startServer(async (incoming, outgoing) => {
     const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
-    await respond(outgoing, await handleMcp(requestFrom(incoming, mcpOrigin, Buffer.concat(chunks))))
+    await respond(outgoing, await handleMcp(requestFrom(incoming, mcpOrigin, Buffer.concat(chunks)), { remoteImageImporter }))
   })
   mcpServer = mcp.server; mcpOrigin = mcp.origin
   process.env.PAYLOAD_PUBLIC_SERVER_URL = mcpOrigin
@@ -174,7 +175,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -469,7 +470,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(await editorClient.client.callTool({ name: 'update_section', arguments: { id: createdSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionAfterUpdate.revision - 1, name: 'stale section' } }))).toEqual({ error: 'revision_conflict' })
     expect(recipeReplay.blocks.map((block) => block.id)).toEqual(recipePage.blocks.map((block) => block.id))
     const text = JSON.stringify([sections, found, selected, redirects]); expect(text).not.toContain('private@example.test'); expect(text).not.toContain('never-expose-this-secret')
-    expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ id: expect.any(String), settingsHash: expect.stringMatching(/^[a-f0-9]{64}$/), navigationHash: expect.stringMatching(/^[a-f0-9]{64}$/), siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_block_library', arguments: {} }))).toMatchObject({ blockTypes: expect.arrayContaining(['hero']) })
     expect(resultJson(await ownerClient.client.callTool({ name: 'list_installed_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_page_quality', arguments: { id: frozen.pages[0]!.id } }))).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, styleGuide: expect.objectContaining({ bannedPhrases: ['frozen phrase'] }) })
@@ -486,6 +487,70 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
   } finally { await Promise.all([editorClient.transport.close(), qualityWriterClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), ownerPersonalClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
+}, 15_000)
+
+test('MCP site and theme tools keep Owner draft mutations revisioned and scoped', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-site-owner-${randomUUID()}@example.test`, name: 'MCP Site Owner', roles: ['owner'] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-site-editor-${randomUUID()}@example.test`, name: 'MCP Site Editor', roles: ['editor'] }, overrideAccess: true })
+  const [ownerSession, editorSession] = await Promise.all([sessionFor(owner.id), sessionFor(editor.id)])
+  const ownerToken = `mcp-site-owner-${randomUUID()}`; const editorToken = `mcp-site-editor-${randomUUID()}`
+  tokens.set(ownerToken, { clientId: `mcp-site-owner-client-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] })
+  tokens.set(editorToken, { clientId: `mcp-site-editor-client-${randomUUID()}`, userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [ownerSdk, editorSdk] = await Promise.all([clientFor(ownerToken), clientFor(editorToken)])
+  try {
+    const names = (await ownerSdk.client.listTools()).tools.map(tool => tool.name)
+    expect(names).toEqual(expect.arrayContaining(['update_nav_overrides', 'update_site_settings', 'list_themes', 'get_theme_compatibility', 'switch_theme', 'update_theme_settings', 'create_redirect']))
+    await expect(editorSdk.client.callTool({ name: 'get_site_settings', arguments: {} })).resolves.toMatchObject({ isError: true })
+    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; homepageId: string }
+    const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP site controls' } })) as { id: string; revision: number }
+    const add = [{ location: 'header' as const, reference: { kind: 'page' as const, id: state.homepageId, label: `MCP ${randomUUID()}` } }]
+    const updated = structuredJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } })) as { revision: number; draft: { navigation?: unknown } }
+    expect(updated).toMatchObject({ changeSetId: created.id, revision: created.revision + 1, draft: { navigation: expect.any(Object) } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } }))).toEqual({ error: 'revision_conflict' })
+    const redirect = structuredJson(await ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: updated.revision, requestKey: randomUUID(), from: `/mcp-site-${randomUUID()}`, to: '/' } })) as { revision: number; draft: { from: string; to: string } }
+    expect(redirect).toMatchObject({ revision: updated.revision + 1, draft: { to: '/' } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'list_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
+    await expect(ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: redirect.revision, requestKey: randomUUID(), from: '/bad redirect', to: '/' } })).resolves.toMatchObject({ isError: true })
+  } finally { await Promise.all([ownerSdk.transport.close(), editorSdk.transport.close()]) }
+}, 15_000)
+
+test('MCP rolls back captured owner settings when its injected readiness evaluator fails', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-readiness-owner-${randomUUID()}@example.test`, name: 'MCP Readiness Owner', roles: ['owner'] }, overrideAccess: true })
+  const session = await sessionFor(owner.id)
+  const token = `mcp-readiness-owner-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-readiness-owner-client-${randomUUID()}`, userId: owner.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const ownerSdk = await clientFor(token)
+  const rejected = await startServer(async (incoming, outgoing) => {
+    const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+    await respond(outgoing, await handleMcp(requestFrom(incoming, rejected.origin, Buffer.concat(chunks)), {
+      evaluateChangeSetQuality: async () => ({ checks: [{ name: 'injected-readiness', status: 'failed', errors: [{ collection: 'site-settings', id: 'injected', message: 'Injected readiness failure.' }] }], warnings: [] }),
+    }))
+  })
+  const rejectedClient = new Client({ name: 'mcp-sdk-readiness-rollback', version: '1.0.0' })
+  const rejectedTransport = new StreamableHTTPClientTransport(new URL(`${rejected.origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } })
+  try {
+    await rejectedClient.connect(rejectedTransport)
+    const state = resultJson(await rejectedClient.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; siteName: string }
+    const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP readiness rollback' } })) as { id: string; revision: number }
+    const [beforeSet, beforeSettings, beforeThemes] = await Promise.all([
+      payload.findByID({ collection: 'change-sets', id: created.id, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+      payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+    ])
+    const response = await rejectedClient.callTool({ name: 'update_site_settings', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, settings: { siteName: `${state.siteName} rollback` } } })
+    expect(resultJson(response)).toEqual({ error: 'write_failed' })
+    const [afterSet, afterSettings, afterThemes] = await Promise.all([
+      payload.findByID({ collection: 'change-sets', id: created.id, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+      payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+    ])
+    expect({ revision: afterSet.revision, changes: afterSet.changes }).toEqual({ revision: beforeSet.revision, changes: beforeSet.changes })
+    expect(afterSettings.docs.map(doc => capturedSnapshot('site-settings', doc as unknown as Record<string, unknown>))).toEqual(beforeSettings.docs.map(doc => capturedSnapshot('site-settings', doc as unknown as Record<string, unknown>)))
+    expect(afterThemes.docs.map(doc => capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>))).toEqual(beforeThemes.docs.map(doc => capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>)))
+  } finally {
+    await Promise.all([ownerSdk.transport.close(), rejectedTransport.close()])
+    await new Promise<void>((resolve) => rejected.server.close(() => resolve()))
+  }
 }, 15_000)
 
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {
@@ -969,6 +1034,48 @@ test('MCP update_media reports a retryable SQLite writer lock without a partial 
     await lock?.rollback(); external.close()
     await sdk.transport.close()
   }
+}, 15_000)
+
+test('MCP SDK URL media sources use the shared create and immutable replacement pipelines', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-url-editor-${randomUUID()}@example.test`, name: 'MCP URL Editor', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(editor.id)
+  const token = `mcp-url-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-url-client-${randomUUID()}`, userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const first = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#112233' } }).png().toBuffer()
+  const second = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#445566' } }).png().toBuffer()
+  let imports = 0
+  remoteImageImporter = async (url) => {
+    imports += 1
+    if (url.includes('private')) throw new Error('unsafe_remote_url')
+    const data = url.includes('replacement') ? second : first
+    return { data, mimetype: 'image/png', name: url.includes('replacement') ? 'replacement.png' : 'uploaded.png', size: data.length }
+  }
+  const sdk = await clientFor(token)
+  try {
+    const set = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP URL media' } })) as { id: string; revision: number }
+    const denied = await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Rejected URL', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://private.example.test/a.png' } } })
+    expect(denied).toMatchObject({ isError: true })
+    expect((await payload.find({ collection: 'assets', limit: 0, overrideAccess: true })).totalDocs).toBeGreaterThanOrEqual(0)
+    const uploaded = resultJson(await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'URL sourced media', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })) as { draft: { assetId: string; changeSetRevision: number } }
+    const before = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
+    const section = await payload.create({ collection: 'sections', data: { name: `URL media ${randomUUID()}`, summary: 'Synthetic section for an MCP URL media reference.', slug: `url-media-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+    await payload.create({ collection: 'pages', data: { title: `URL media use ${randomUUID()}`, summary: 'Synthetic page proving the URL-created asset can be referenced.', slug: `url-media-use-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'media', mediaId: uploaded.draft.assetId, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
+    const currentRevision = (await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true }) as unknown as { revision: number }).revision
+    const stale = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: set.revision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
+    expect(resultJson(stale)).toEqual({ error: 'revision_conflict' })
+    const replacementCall = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: currentRevision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
+    expect(resultJson(replacementCall)).not.toEqual(expect.objectContaining({ error: expect.any(String) }))
+    const replaced = resultJson(replacementCall) as { draft: { changeSetRevision: number } }
+    expect(replaced.draft.changeSetRevision).toBeGreaterThan(uploaded.draft.changeSetRevision)
+    const after = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
+    expect(after.currentFileVersion).not.toBe(before.currentFileVersion)
+    expect((await payload.find({ collection: 'asset-file-versions', where: { parentAsset: { equals: uploaded.draft.assetId } }, limit: 10, overrideAccess: true })).totalDocs).toBe(1)
+    tokens.set(`${token}-read`, { clientId: `mcp-url-read-${randomUUID()}`, userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read'] })
+    const readOnly = await clientFor(`${token}-read`)
+    await expect(readOnly.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: replaced.draft.changeSetRevision, alt: 'No scope', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })).rejects.toThrow()
+    await readOnly.transport.close()
+    expect(imports).toBe(3)
+  } finally { remoteImageImporter = undefined; await sdk.transport.close() }
 }, 15_000)
 
 test('MCP media tools use scoped effective users and revisioned metadata writes', async () => {

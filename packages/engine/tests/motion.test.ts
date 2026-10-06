@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { effectiveMotion, mountMotionRuntime, resolveMotionPreset } from '../src/motion.js';
+import { effectiveMotion, mountMotionRuntime, resolveDeclaredMotionPreset, resolveMotionPreset } from '../src/motion.js';
 
 describe('ENG-015 motion preference', () => {
   it('gives explicit reduce precedence and uses OS only without a choice', () => {
@@ -22,6 +22,13 @@ describe('ENG-015 motion preference', () => {
     expect(resolveMotionPreset('subtle', 'removed-preset', supported, new Map([['subtle', 'fade']]))).toBe('fade');
     expect(resolveMotionPreset('ambient', 'removed-preset', supported, new Map([['subtle', 'fade']]))).toBeUndefined();
     expect(resolveMotionPreset('subtle', 'removed-preset', supported, new Map([['subtle', 'zoom']]))).toBeUndefined();
+  });
+
+  it('uses only declared target fallbacks when projecting across themes', () => {
+    const supported = new Set(['subtle', 'fade']);
+    expect(resolveDeclaredMotionPreset('subtle', 'foreign', supported)).toBeUndefined();
+    expect(resolveDeclaredMotionPreset('subtle', 'foreign', supported, new Map([['subtle', 'fade']]))).toBe('fade');
+    expect(resolveDeclaredMotionPreset('none', 'fade', supported, new Map([['none', 'fade']]))).toBeUndefined();
   });
 
   it('tears down listeners and leaves each effect still', () => {

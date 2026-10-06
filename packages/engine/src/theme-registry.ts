@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { ThemeInstallSchema, ThemeSelectionSchema, SiteSnapshotSchema, ThemeManifestSchema } from '@site-engine/contract';
+import { ThemeInstallSchema, ThemeSelectionSchema, SiteSnapshotSchema, ThemeManifestSchema, type Block, type ThemeManifest } from '@site-engine/contract';
+import { resolveDeclaredMotionPreset, type ResolvedMotionPreset } from './motion.js';
 
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? "null";
 export const manifestDigest = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
@@ -43,15 +44,47 @@ export function verifyInstalledThemeSelection(input: unknown, registry: ThemeReg
   return installed;
 }
 export function verifyThemeSelection(snapshot: unknown, registry: ThemeRegistry) { const selection = SiteSnapshotSchema.parse(snapshot).settings.theme; return selection ? verifyInstalledThemeSelection(selection, registry) : undefined; }
+
+export type MotionProjectionAction = 'intent-fallback' | 'still';
+export type MotionProjection = { block: Block; motionPreset: ResolvedMotionPreset; action?: MotionProjectionAction; reason?: 'unsupported-motion-preset' | 'no-declared-motion-fallback' | 'motion-still-zone' };
+
+/** Standard blocks that must remain still regardless of a theme's preset list. */
+export const standardMotionStillZones = new Set<Block['type']>(['contact', 'incidentBar']);
+
+/**
+ * Creates a render-only block for a target theme. The source block is never
+ * changed, which keeps a reviewed snapshot and its content hash immutable.
+ * A target renderer consequently never receives a foreign explicit preset.
+ */
+export function projectThemeMotion(block: Block, manifest: Pick<ThemeManifest, 'motion'>): MotionProjection {
+  const sourcePreset = block.appearance.motionPreset;
+  const still = block.hidden || block.appearance.motionIntent === 'none' || standardMotionStillZones.has(block.type);
+  const supported = new Set(manifest.motion?.presets ?? []);
+  const fallbacks = new Map(Object.entries(manifest.motion?.intentFallbacks ?? {}));
+  const motionPreset = still ? undefined : resolveDeclaredMotionPreset(block.appearance.motionIntent, sourcePreset, supported, fallbacks);
+  const { motionPreset: _sourcePreset, ...appearance } = block.appearance;
+  // Target renderers may derive their own default from intent. A still
+  // projection must therefore carry `none`, not merely omit the preset.
+  const projected = { ...block, appearance: { ...appearance, motionIntent: motionPreset ? block.appearance.motionIntent : 'none', ...(motionPreset ? { motionPreset } : {}) } } as Block;
+  if (!sourcePreset || sourcePreset === motionPreset) return { block: projected, motionPreset };
+  if (still) return { block: projected, motionPreset, action: 'still', reason: 'motion-still-zone' };
+  return motionPreset
+    ? { block: projected, motionPreset, action: 'intent-fallback', reason: 'unsupported-motion-preset' }
+    : { block: projected, motionPreset, action: 'still', reason: 'no-declared-motion-fallback' };
+}
+
 export function compatibilityReport(snapshot: unknown, manifest: InstalledTheme["manifest"]) {
   const parsed = SiteSnapshotSchema.parse(snapshot);
   const supported = new Set(manifest.standardBlocks);
-  const fallback = manifest.motion?.intentFallbacks ?? {};
   const actions = [];
   if (manifest.contract !== parsed.settings.contractVersion) actions.push({ action: 'contract-version', pageID: '', blockID: '', reason: 'theme-contract-mismatch' });
   for (const page of parsed.pages) for (const block of page.blocks) {
     if (!supported.has(block.type)) actions.push({ action: 'hide', pageID: page.id, blockID: block.id, reason: 'unsupported-standard-block' });
-    else if (block.appearance.motionIntent !== 'none' && !block.appearance.motionPreset && !fallback[block.appearance.motionIntent]) actions.push({ action: 'intent-fallback', pageID: page.id, blockID: block.id, reason: 'no-declared-motion-fallback' });
+    else {
+      const projection = projectThemeMotion(block, manifest);
+      if (projection.action) actions.push({ action: projection.action, pageID: page.id, blockID: block.id, reason: projection.reason });
+      else if (block.appearance.motionIntent !== 'none' && !block.appearance.motionPreset && !manifest.motion?.intentFallbacks?.[block.appearance.motionIntent]) actions.push({ action: 'still', pageID: page.id, blockID: block.id, reason: 'no-declared-motion-fallback' });
+    }
   }
   return { compatible: actions.every(item => item.action !== 'hide' && item.action !== 'contract-version'), actions };
 }
