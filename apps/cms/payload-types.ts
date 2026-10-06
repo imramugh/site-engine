@@ -93,6 +93,7 @@ export interface Config {
     'notification-preferences': NotificationPreference;
     'notification-user-preferences': NotificationUserPreference;
     'urgent-contacts': UrgentContact;
+    'mail-conversation-suggestions': MailConversationSuggestion;
     'mail-drafts': MailDraft;
     'mail-threads': MailThread;
     'mail-thread-messages': MailThreadMessage;
@@ -141,6 +142,7 @@ export interface Config {
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
     'notification-user-preferences': NotificationUserPreferencesSelect<false> | NotificationUserPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
+    'mail-conversation-suggestions': MailConversationSuggestionsSelect<false> | MailConversationSuggestionsSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
     'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
@@ -1030,6 +1032,24 @@ export interface UrgentContact {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-conversation-suggestions".
+ */
+export interface MailConversationSuggestion {
+  id: string;
+  mailbox: string | MailboxConfiguration;
+  provider: 'smtp' | 'microsoft' | 'google';
+  providerConversationID: string;
+  sender: string;
+  recipient: string;
+  subject: string;
+  target: 'lead' | 'application';
+  adoptedAt?: string | null;
+  adoptedBy?: (string | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mail-drafts".
  */
 export interface MailDraft {
@@ -1586,6 +1606,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'urgent-contacts';
         value: string | UrgentContact;
+      } | null)
+    | ({
+        relationTo: 'mail-conversation-suggestions';
+        value: string | MailConversationSuggestion;
       } | null)
     | ({
         relationTo: 'mail-drafts';
@@ -2291,6 +2315,23 @@ export interface UrgentContactsSelect<T extends boolean = true> {
   email?: T;
   mobile?: T;
   enabled?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-conversation-suggestions_select".
+ */
+export interface MailConversationSuggestionsSelect<T extends boolean = true> {
+  mailbox?: T;
+  provider?: T;
+  providerConversationID?: T;
+  sender?: T;
+  recipient?: T;
+  subject?: T;
+  target?: T;
+  adoptedAt?: T;
+  adoptedBy?: T;
   updatedAt?: T;
   createdAt?: T;
 }

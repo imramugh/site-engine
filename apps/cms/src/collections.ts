@@ -597,6 +597,17 @@ const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read'
   if (hiring) return { application: { exists: true } }
   return false
 }
+/** Routing metadata only: unmatched messages are never attached automatically. */
+export const MailConversationSuggestions: CollectionConfig = {
+  slug: 'mail-conversation-suggestions', admin: { hidden: true, group: 'Private' },
+  access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ target: { equals: 'lead' } } as never) : hasRole(req.user as never, ['hiring']) ? ({ target: { equals: 'application' } } as never) : false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true }, { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] }, { name: 'providerConversationID', type: 'text', required: true, maxLength: 500 },
+    { name: 'sender', type: 'email', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'subject', type: 'text', required: true, maxLength: 500 }, { name: 'target', type: 'select', required: true, options: ['lead', 'application'] },
+    { name: 'adoptedAt', type: 'date' }, { name: 'adoptedBy', type: 'relationship', relationTo: 'users' },
+  ],
+}
+
 export const MailThreads: CollectionConfig = {
   slug: 'mail-threads', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
   fields: [
