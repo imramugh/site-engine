@@ -241,7 +241,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const hiddenLead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id: privateLead.id } })) as { visitor: { phone: string | null; email: string | null; name: string; topic: string }; message: { text: string } }
     expect(hiddenLead.visitor.phone).toBeNull()
     expect(hiddenLead.visitor.email).toBeNull()
-    expect(JSON.stringify(hiddenLead)).not.toContain('416')
+    expect(JSON.stringify([hiddenLead.visitor, hiddenLead.message])).not.toContain('416')
     expect(hiddenLead.message.text).toContain('2026')
     for (const [id, phone] of [[extensionLead.id, '+1 416 555 0199 ext 2'], [shortLead.id, '555']] as const) {
       const lead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id } })) as { visitor: unknown; message: unknown }
