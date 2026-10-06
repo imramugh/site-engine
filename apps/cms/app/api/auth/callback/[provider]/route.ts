@@ -5,6 +5,7 @@ import { cookieName, hashOpaqueToken, newOpaqueToken, readCookie, SESSION_ABSOLU
 import { withPayloadTransaction } from '../../../../../src/auth-transaction'
 import { configuredProvider, validateCallback } from '../../../../../src/oidc'
 import { auditCallbackDenial, auditIdentityDecision } from '../../../../../src/identity-audit'
+import { isRetryableSQLiteError } from '../../../../../src/sqlite'
 
 const validProvider = (value: string): value is IdentityProvider => value === 'google' || value === 'microsoft'
 
@@ -82,6 +83,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     response.cookies.delete(cookieName(OIDC_TRANSACTION_COOKIE))
     return response
   } catch (error) {
+    if (isRetryableSQLiteError(error)) return new NextResponse('Sign-in is temporarily unavailable. Restart sign-in and try again.', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '1' } })
     if (error instanceof CallbackFailure) {
       await auditCallbackDenial(payload, { transactionID: String(transaction.id), provider, reason: error.reason, user: error.userID })
       return new NextResponse(error.message, { status: error.status })
