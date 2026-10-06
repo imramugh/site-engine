@@ -479,6 +479,7 @@ export const Inquiries: CollectionConfig = {
     }
     if (req.context.leadSpamLifecycle !== true && data.stage !== undefined && (!leadStages.includes(data.stage) || !canTransitionLead((originalDoc.stage ?? 'new') as LeadStage, data.stage))) throw new Error('That lead-stage transition is not allowed.')
     for (const field of ['notes', 'nextAction']) if (data[field] !== undefined && data[field] !== null && (typeof data[field] !== 'string' || data[field].length > 5_000)) throw new Error(`Invalid ${field}.`)
+    if (data.nextActionDueAt !== undefined && data.nextActionDueAt !== null && (typeof data.nextActionDueAt !== 'string' || Number.isNaN(new Date(data.nextActionDueAt).valueOf()))) throw new Error('Invalid next action due date.')
     if (data.assignee !== undefined && data.assignee !== originalDoc.assignee) data.assignee = await validateLeadAssignee(req.payload, data.assignee)
     return data
   }], beforeDelete: [async ({ id, req }) => {
@@ -507,6 +508,7 @@ export const Inquiries: CollectionConfig = {
     { name: 'notes', type: 'textarea' },
     { name: 'assignee', type: 'relationship', relationTo: 'users' },
     { name: 'nextAction', type: 'textarea' },
+    { name: 'nextActionDueAt', type: 'date', admin: { description: 'Optional follow-up due date.' } },
   ],
 }
 

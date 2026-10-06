@@ -347,6 +347,8 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(failed).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED', attempts: 1 })
     const alerts = await payload.find({ collection: 'notification-outbox', where: { sourceID: { equals: String(lease!.id) } }, limit: 1, depth: 0, overrideAccess: true })
     expect(alerts.docs[0]).toMatchObject({ kind: 'publish-or-integration-failed', recipientRules: ['owner'], channels: ['email'], state: 'queued' })
+    const failureAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'publish.failed' } }, limit: 1, sort: '-createdAt', depth: 0, overrideAccess: true })
+    expect(failureAudit.docs[0]).toMatchObject({ detail: { publishJob: String(lease!.id), errorCode: 'LEASE_EXPIRED', buildLink: `/operations?publish=${String(lease!.id)}` } })
     const other = await fixture('invalid-health')
     const failedSnapshot = typeof failed.snapshot === 'object' ? failed.snapshot as unknown as { id: string; manifest: ReturnType<typeof baseline> } : await payload.findByID({ collection: 'publish-snapshots', id: String(failed.snapshot), overrideAccess: true }) as unknown as { id: string; manifest: ReturnType<typeof baseline> }
     const prepared = await prepareRedirectApproval(other, failedSnapshot.manifest, failedSnapshot.id, 1, '/invalid-health')
@@ -359,6 +361,12 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
   it('rolls back snapshots/outbox and keeps delivery outside a claim/retry transaction', async () => {
     const current = await fixture('rollback')
     await expect(withPayloadTransaction(payload, async req => { req.headers = current.headers; await approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions, initialBaseline: current.baseline }); throw new Error('rollback') })).rejects.toThrow('rollback')
+    const rolledBackSnapshots = await payload.find({ collection: 'publish-snapshots', where: { changeSet: { equals: current.set.id } }, limit: 0, pagination: false, overrideAccess: true })
+    const rolledBackOutbox = await payload.find({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, limit: 0, pagination: false, overrideAccess: true })
+    const approvalAudits = await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.change_set_approved' } }, limit: 0, pagination: false, overrideAccess: true })
+    expect(rolledBackSnapshots.totalDocs).toBe(0)
+    expect(rolledBackOutbox.totalDocs).toBe(0)
+    expect(approvalAudits.docs.some((audit) => (typeof audit.detail === 'object' && audit.detail !== null && !Array.isArray(audit.detail) ? audit.detail.changeSet : undefined) === current.set.id)).toBe(false)
     const approved = await fixture('worker')
     await approve(approved)
     const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req))

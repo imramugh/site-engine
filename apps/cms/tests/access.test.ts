@@ -13,6 +13,7 @@ describe('role matrix (ENG-007)', () => {
 
   it('classifies SQLite lock backpressure as retryable (ENG-036)', () => {
     expect(isRetryableSQLiteError(new Error('SQLITE_BUSY: database is locked'))).toBe(true)
+    expect(isRetryableSQLiteError({ code: 'SQLITE_BUSY' })).toBe(true)
     expect(isRetryableSQLiteError(new Error('validation failed'))).toBe(false)
   })
 

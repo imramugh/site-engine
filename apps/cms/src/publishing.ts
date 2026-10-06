@@ -25,6 +25,11 @@ const idOf = (value: unknown) => typeof value === 'string' ? value : value && ty
 const keysEqual = (left: readonly string[], right: readonly string[]) => stable([...left].sort()) === stable([...right].sort())
 const requireTransaction = (req: PayloadRequest, operation: string) => { if (!req.transactionID) throw new Error(`${operation} must run inside a database transaction.`) }
 const cleanErrorCode = (value: string) => /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : 'PUBLISH_FAILED'
+async function recordPublishFailure(payload: Payload, req: PayloadRequest, job: Record<string, unknown>, errorCode: string) {
+  const id = String(job.id)
+  await payload.create({ collection: 'audit-events', data: { event: 'publish.failed', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(job.snapshot), errorCode: cleanErrorCode(errorCode), buildLink: `/operations?publish=${id}` } }, overrideAccess: true, req })
+  await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
+}
 export function scheduledPublicationTime(value: unknown, now = Date.now()): string | undefined {
   if (value === undefined) return undefined
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) throw new Error('scheduledFor must be a UTC ISO timestamp.')
@@ -377,7 +382,7 @@ export async function claimNextPublishJob(payload: Payload, req: PayloadRequest,
   if (job.status === 'processing' && expired && Number(job.attempts ?? 0) >= maxAttempts) {
     const failed = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: job.id } }, { status: { equals: 'processing' } }, { leaseExpiresAt: { less_than_equal: now.toISOString() } }] }, data: { status: 'failed', errorCode: 'LEASE_EXPIRED', lastError: 'LEASE_EXPIRED', leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
     if (!failed.docs[0]) throw new Error('The publish lease is no longer current.')
-    await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${job.id}`, sourceType: 'publish-job', sourceID: job.id, payload: { publishJob: job.id, errorCode: 'LEASE_EXPIRED' } })
+    await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, 'LEASE_EXPIRED')
     return null
   }
   const leaseToken = randomUUID()
@@ -394,7 +399,7 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   const nextAttemptAt = terminal ? undefined : new Date(now.getTime() + 1_000 * 2 ** Math.max(0, Number(job.attempts) - 1)).toISOString()
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: terminal ? 'failed' : 'pending', errorCode: cleanErrorCode(errorCode), lastError: cleanErrorCode(errorCode), nextAttemptAt, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
-  if (terminal) await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
+  if (terminal) await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, errorCode)
   return updated.docs[0]
 }
 

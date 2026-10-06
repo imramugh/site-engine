@@ -8,7 +8,7 @@ import { MailThreadTimeline } from '../mail-thread-timeline'
 
 type Assignee = { id: string; name: string; email: string }
 type Stage = 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost'
-type Lead = { id: string; email: string; name?: string; telephone?: string; company?: string; topic: string; message: string; stage: Stage; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; assignee?: string | null; consentBasis?: string; consentedAt?: string; createdAt?: string; updatedAt?: string }
+type Lead = { id: string; email: string; name?: string; telephone?: string; company?: string; topic: string; message: string; stage: Stage; urgent?: boolean; sourcePage: string; notes?: string; nextAction?: string; nextActionDueAt?: string; assignee?: string | null; consentBasis?: string; consentedAt?: string; createdAt?: string; updatedAt?: string }
 type PipelineGroup = { leads: Lead[]; totalDocs: number; hasMore: boolean }
 type Data = { leads: Lead[]; pipeline: Record<Stage, PipelineGroup>; assignees: Assignee[]; sourcePages: string[]; spamTotalDocs: number; canDeleteSpam: boolean; page: number; totalPages: number; totalDocs: number; hasNextPage: boolean; hasPrevPage: boolean }
 type Filters = { stage: string; urgent: boolean; assignee: string; sourcePage: string; received: string; page: number }
@@ -56,11 +56,12 @@ function LeadCard({ lead, active, onOpen }: { lead: Lead; active: boolean; onOpe
   </button>
 }
 
-function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, onPurge }: { lead: Lead; assignees: Assignee[]; saving: boolean; owner: boolean; onClose: () => void; onSave: (update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) => Promise<void>; onSpam: () => Promise<void>; onPurge: () => Promise<void> }) {
+function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, onPurge }: { lead: Lead; assignees: Assignee[]; saving: boolean; owner: boolean; onClose: () => void; onSave: (update: { stage: Stage; assignee: string | null; notes: string; nextAction: string; nextActionDueAt: string | null }) => Promise<void>; onSpam: () => Promise<void>; onPurge: () => Promise<void> }) {
   const [stage, setStage] = useState(lead.stage)
   const [assignee, setAssignee] = useState(lead.assignee ?? '')
   const [notes, setNotes] = useState(lead.notes ?? '')
   const [nextAction, setNextAction] = useState(lead.nextAction ?? '')
+  const [nextActionDueAt, setNextActionDueAt] = useState(lead.nextActionDueAt ? lead.nextActionDueAt.slice(0, 10) : '')
   const [confirm, setConfirm] = useState(false)
   return <aside className={styles.detail} aria-label="Lead details" data-lead-detail>
     <header className={styles.detailHeader}>
@@ -78,11 +79,12 @@ function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, o
     <section className={styles.message}><h3>Inquiry</h3><p>{lead.message}</p></section>
     <MailReplyComposer key={lead.id} target="lead" id={lead.id} recipient={lead.email} />
     <MailThreadTimeline key={lead.id} target="lead" id={lead.id} />
-    <form className={styles.editForm} onSubmit={(event) => { event.preventDefault(); void onSave({ stage, assignee: assignee || null, notes, nextAction }) }}>
+    <form className={styles.editForm} onSubmit={(event) => { event.preventDefault(); void onSave({ stage, assignee: assignee || null, notes, nextAction, nextActionDueAt: nextActionDueAt ? new Date(`${nextActionDueAt}T12:00:00Z`).toISOString() : null }) }}>
       <label>Stage<select value={stage} onChange={(event) => setStage(event.target.value as Stage)}>{transitions[lead.stage].map((value) => <option key={value} value={value}>{stageLabels[value]}</option>)}</select></label>
       <label>Active assignee<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="">Unassigned</option>{assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
       <label>Notes<textarea rows={4} maxLength={5000} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
       <label>Next action<textarea rows={3} maxLength={5000} value={nextAction} onChange={(event) => setNextAction(event.target.value)} /></label>
+      <label>Follow-up due date<input type="date" value={nextActionDueAt} onChange={(event) => setNextActionDueAt(event.target.value)} /></label>
       <button className={styles.primary} disabled={saving}>Save lead details</button>
       <button type="button" className={styles.danger} disabled={saving} onClick={() => void onSpam()}>Mark as spam</button>
       {owner&&<><button type="button" className={styles.danger} onClick={()=>setConfirm(true)}>Permanently delete inquiry</button>{confirm && <PermanentDeleteDialog kind="inquiry" identity={`${displayName(lead)} (${lead.email})`} busy={saving} onConfirm={onPurge} onCancel={() => setConfirm(false)} />}</>}
@@ -141,7 +143,7 @@ export function LeadDashboard({ owner = false }: { owner?: boolean }) {
     } catch { setError('The manual lead could not be created. Try again.') }
     finally { setSaving(false) }
   }
-  async function saveLead(update: { stage: Stage; assignee: string | null; notes: string; nextAction: string }) {
+  async function saveLead(update: { stage: Stage; assignee: string | null; notes: string; nextAction: string; nextActionDueAt: string | null }) {
     if (!active) return
     setSaving(true); setMessage(''); setError('')
     try {

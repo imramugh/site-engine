@@ -53,6 +53,7 @@ function view(inquiry: Record<string, unknown>) {
     sourcePage: String(inquiry.sourcePage ?? ''),
     notes: typeof inquiry.notes === 'string' ? inquiry.notes : undefined,
     nextAction: typeof inquiry.nextAction === 'string' ? inquiry.nextAction : undefined,
+    nextActionDueAt: typeof inquiry.nextActionDueAt === 'string' ? inquiry.nextActionDueAt : undefined,
     assignee: typeof assignee === 'string' ? assignee : assignee && typeof assignee === 'object' && 'id' in assignee ? String(assignee.id) : null,
     consentBasis: typeof inquiry.consentBasis === 'string' ? inquiry.consentBasis : undefined,
     consentedAt: typeof inquiry.consentedAt === 'string' ? inquiry.consentedAt : undefined,

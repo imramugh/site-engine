@@ -9,8 +9,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
+import { AppearanceOptions, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { canonicalHash } from '../src/publishing'
+import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -146,10 +148,11 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'list_applications', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_page'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_templates', 'move_block', 'move_item', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section'])
+    expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
-      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -157,6 +160,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     for (const name of ['list_leads', 'list_applications', 'get_lead', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?.outputSchema).toBeDefined()
     expect((await salesClient.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_leads' })]))
     await expect(salesClient.client.listResources()).rejects.toMatchObject({ code: 403 })
+    await expect(salesClient.client.callTool({ name: 'get_tree', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const [resources, templates, prompts] = await Promise.all([editorClient.client.listResources(), editorClient.client.listResourceTemplates(), editorClient.client.listPrompts()])
     expect(resources.resources.map((entry) => entry.uri).sort()).toEqual(expect.arrayContaining([
       'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
@@ -173,6 +177,21 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
     expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
     expect(resourceJson(scopedPage)).toMatchObject({ id: page.id, title: 'SDK page' })
+    const [tree, blockTypes, templateCatalog, presets, appearance, search] = await Promise.all([
+      editorClient.client.callTool({ name: 'get_tree', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_block_types', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_templates', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_section_presets', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_appearance_options', arguments: {} }),
+      editorClient.client.callTool({ name: 'search_content', arguments: { query: 'synthetic' } }),
+    ])
+    expect(structuredJson(tree)).toMatchObject({ sections: [expect.objectContaining({ id: section.id, slug: 'mcp' })], pages: [expect.objectContaining({ id: page.id, template: 'standard', status: expect.any(String) })] })
+    expect(structuredJson(blockTypes)).toMatchObject({ blockTypes: expect.arrayContaining([expect.objectContaining({ type: 'hero', allowedTemplates: expect.arrayContaining(['standard']) })]) })
+    expect(structuredJson(templateCatalog)).toEqual({ templates: TemplateSchema.options.map((template) => ({ template, allowedBlocks: [...TemplateAllowedBlocks[template]] })) })
+    expect(structuredJson(presets)).toEqual({ presets: SectionPresets })
+    expect(structuredJson(appearance)).toEqual({ appearance: AppearanceOptions })
+    expect(structuredJson(search)).toMatchObject({ items: [expect.objectContaining({ id: page.id, title: 'SDK page' })] })
+    await expect(editorClient.client.callTool({ name: 'list_templates', arguments: { unknown: true } })).resolves.toMatchObject({ isError: true })
     await expect(ownerClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(editorClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const firstLeadResult = await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 1 } })
@@ -190,7 +209,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(JSON.stringify(hiddenLead)).not.toContain('416')
     expect(hiddenLead.message.text).toContain('2026')
     for (const [id, phone] of [[extensionLead.id, '+1 416 555 0199 ext 2'], [shortLead.id, '555']] as const) {
-      expect(JSON.stringify(resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id } })))).not.toContain(phone)
+      const lead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id } })) as { visitor: unknown; message: unknown }
+      expect(JSON.stringify([lead.visitor, lead.message])).not.toContain(phone)
     }
     await payload.create({ collection: 'mcp-privacy-settings', data: { key: 'active', hidePhone: false }, overrideAccess: true })
     const visibleLead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id: privateLead.id } })) as { visitor: { phone: string | null }; message: { text: string } }
@@ -215,6 +235,123 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(found)).toEqual([expect.objectContaining({ id: page.id, title: 'SDK page' })])
     expect(resultJson(selected)).toEqual(expect.objectContaining({ id: page.id, blocks: [expect.objectContaining({ type: 'hero', heading: 'MCP block' })] }))
     expect(resultJson(redirects)).toEqual([expect.objectContaining({ from: '/sdk-page', to: '/mcp/sdk-page', status: 301 })])
+    await expect(approverClient.client.callTool({ name: 'update_block', arguments: {} })).rejects.toMatchObject({ code: 403 })
+    const blockSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP block update' } })) as { id: string; revision: number }
+    const beforeBlockUpdate = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const beforeBlockDraft = pageEditorProjection(beforeBlockUpdate)
+    const originalBlock = beforeBlockDraft.blocks.find((block) => block.id === '11111111-1111-4111-8111-111111111111')
+    assert.ok(originalBlock)
+    const replacement = { ...originalBlock, heading: 'MCP block revised through SDK' }
+    const blockUpdate = structuredJson(await editorClient.client.callTool({ name: 'update_block', arguments: { pageId: page.id, blockId: originalBlock.id, changeSetId: blockSet.id, expectedChangeSetRevision: blockSet.revision, expectedPageHash: pageEditorHash(beforeBlockDraft), block: replacement } })) as { draft: { pageId: string; changeSetId: string; pageHash: string; changeSetRevision: number }; checks: Array<{ name: string; status: string; errors: unknown[] }> }
+    expect(blockUpdate).toMatchObject({ draft: { pageId: page.id, changeSetId: blockSet.id, changeSetRevision: blockSet.revision + 1 }, checks: [{ name: 'contract-and-tree', status: 'passed', errors: [] }] })
+    const afterBlockUpdate = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterBlockUpdate).blocks).toEqual(expect.arrayContaining([expect.objectContaining({ id: originalBlock.id, heading: 'MCP block revised through SDK' })]))
+    const blockAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.tool_result' } }, overrideAccess: true, limit: 100 })
+    const blockAuditEvent = blockAudit.docs.find((event) => (event.detail as Record<string, unknown> | undefined)?.tool === 'update_block')
+    expect(blockAuditEvent).toMatchObject({
+      user: expect.objectContaining({ id: editor.id }),
+      actor: expect.objectContaining({ id: editor.id }),
+      detail: expect.objectContaining({
+        clientIdHash: expect.any(String), tool: 'update_block', scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'], result: 'draft_saved',
+        batch: { pageId: page.id, blockId: originalBlock.id, changeSetId: blockSet.id },
+        diff: { blocks: [expect.objectContaining({ id: originalBlock.id, before: expect.objectContaining({ heading: 'MCP block' }), after: expect.objectContaining({ heading: 'MCP block revised through SDK' }) })] },
+      }),
+    })
+    expect(JSON.stringify(blockAuditEvent)).not.toContain('editor-client')
+    const beforeStale = pageEditorProjection(afterBlockUpdate)
+    const setAfterUpdate = await payload.findByID({ collection: 'change-sets', id: blockSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    const staleResult = resultJson(await editorClient.client.callTool({ name: 'update_block', arguments: { pageId: page.id, blockId: originalBlock.id, changeSetId: blockSet.id, expectedChangeSetRevision: setAfterUpdate.revision, expectedPageHash: '0'.repeat(64), block: { ...replacement, heading: 'stale hash must not persist' } } }))
+    expect(staleResult).toEqual({ error: 'stale_page_edit' })
+    const afterStale = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const setAfterStale = await payload.findByID({ collection: 'change-sets', id: blockSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    expect(pageEditorProjection(afterStale)).toEqual(beforeStale)
+    expect(setAfterStale.revision).toBe(setAfterUpdate.revision)
+    const nestedUnknownResult = resultJson(await editorClient.client.callTool({ name: 'update_block', arguments: { pageId: page.id, blockId: originalBlock.id, changeSetId: blockSet.id, expectedChangeSetRevision: setAfterStale.revision, expectedPageHash: pageEditorHash(beforeStale), block: { ...replacement, appearance: { ...replacement.appearance, unexpectedNestedField: true } } } }))
+    expect(nestedUnknownResult).toEqual({ error: 'write_failed' })
+    const afterNestedUnknown = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterNestedUnknown)).toEqual(beforeStale)
+    const structuralSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP structural blocks' } })) as { id: string; revision: number }
+    const beforeAdd = pageEditorProjection(afterNestedUnknown)
+    const addResult = structuredJson(await editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: structuralSet.revision, expectedPageHash: pageEditorHash(beforeAdd), index: 1, block: { type: 'callout' } } })) as { draft: { pageHash: string; changeSetRevision: number }; checks: Array<{ name: string; status: string }> }
+    expect(addResult).toMatchObject({ draft: { changeSetRevision: structuralSet.revision + 1 }, checks: [{ name: 'contract-and-tree', status: 'passed' }] })
+    const afterAddRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterAdd = pageEditorProjection(afterAddRecord)
+    const added = afterAdd.blocks.find((block) => block.type === 'callout')
+    assert.ok(added)
+    const setAfterAdd = await payload.findByID({ collection: 'change-sets', id: structuralSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    const invalidReorder = resultJson(await editorClient.client.callTool({ name: 'reorder_blocks', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), blockIds: [added.id, added.id] } }))
+    expect(invalidReorder).toEqual({ error: 'invalid_order' })
+    const afterInvalidReorder = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterInvalidReorder)).toEqual(afterAdd)
+    await expect(editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), index: 2, block: { type: 'media' } } })).resolves.toMatchObject({ isError: true })
+    const afterForbiddenAdd = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterForbiddenAdd)).toEqual(afterAdd)
+    const reorderResult = structuredJson(await editorClient.client.callTool({ name: 'reorder_blocks', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), blockIds: [added.id, originalBlock.id] } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(reorderResult).toMatchObject({ draft: { changeSetRevision: setAfterAdd.revision + 1 }, checks: [{ status: 'passed' }] })
+    const afterReorderRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterReorder = pageEditorProjection(afterReorderRecord)
+    expect(afterReorder.blocks.map((block) => block.id)).toEqual([added.id, originalBlock.id])
+    const setAfterReorder = await payload.findByID({ collection: 'change-sets', id: structuralSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    const removeResult = structuredJson(await editorClient.client.callTool({ name: 'remove_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterReorder.revision, expectedPageHash: pageEditorHash(afterReorder), blockId: added.id } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(removeResult).toMatchObject({ draft: { changeSetRevision: setAfterReorder.revision + 1 }, checks: [{ status: 'passed' }] })
+    const afterRemove = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterRemove).blocks.map((block) => block.id)).toEqual([originalBlock.id])
+    const structuralAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.tool_result' } }, overrideAccess: true, limit: 100 })
+    for (const tool of ['add_block', 'reorder_blocks', 'remove_block']) expect(structuralAudit.docs.find((event) => (event.detail as Record<string, unknown> | undefined)?.tool === tool)).toMatchObject({ detail: expect.objectContaining({ result: 'draft_saved', batch: expect.any(Object), diff: expect.any(Object) }) })
+    const itemSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP list items' } })) as { id: string; revision: number }
+    const beforeFaq = pageEditorProjection(afterRemove)
+    const addFaq = structuredJson(await editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: itemSet.revision, expectedPageHash: pageEditorHash(beforeFaq), index: 1, block: { type: 'faq' } } })) as { draft: { changeSetRevision: number } }
+    const afterFaqRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterFaq = pageEditorProjection(afterFaqRecord)
+    const faq = afterFaq.blocks.find((block) => block.type === 'faq')
+    assert.ok(faq)
+    const addItem = structuredJson(await editorClient.client.callTool({ name: 'add_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: addFaq.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterFaq), blockId: faq.id, index: 1, item: { question: 'Second SDK question?', answer: 'A second answer created through the MCP SDK item tool.' } } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(addItem).toMatchObject({ checks: [{ status: 'passed' }] })
+    const afterAddItemRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterAddItem = pageEditorProjection(afterAddItemRecord)
+    const faqAfterAdd = afterAddItem.blocks.find((block) => block.id === faq.id) as typeof faq
+    expect(faqAfterAdd.items).toHaveLength(2)
+    const updateItem = structuredJson(await editorClient.client.callTool({ name: 'update_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: addItem.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterAddItem), blockId: faq.id, index: 1, item: { question: 'Updated SDK question?', answer: 'The updated answer remains a valid FAQ item.' } } })) as { draft: { changeSetRevision: number } }
+    const afterUpdateItemRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterUpdateItem = pageEditorProjection(afterUpdateItemRecord)
+    const moveItem = structuredJson(await editorClient.client.callTool({ name: 'move_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: updateItem.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterUpdateItem), blockId: faq.id, fromIndex: 1, toIndex: 0 } })) as { draft: { changeSetRevision: number } }
+    const afterMoveItemRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterMoveItem = pageEditorProjection(afterMoveItemRecord)
+    expect((afterMoveItem.blocks.find((block) => block.id === faq.id) as typeof faq).items[0]).toMatchObject({ question: 'Updated SDK question?' })
+    const beforeInvalidItem = structuredClone(afterMoveItem)
+    expect(resultJson(await editorClient.client.callTool({ name: 'update_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: moveItem.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterMoveItem), blockId: faq.id, index: 9, item: { question: 'Invalid index?', answer: 'This must not persist.' } } }))).toEqual({ error: 'invalid_item_index' })
+    await expect(editorClient.client.callTool({ name: 'add_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: moveItem.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterMoveItem), blockId: faq.id, index: 2, item: { question: 'Unknown field?', answer: 'This must not persist.', unknown: true } } })).resolves.toMatchObject({ isError: true })
+    expect(resultJson(await editorClient.client.callTool({ name: 'update_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: moveItem.draft.changeSetRevision, expectedPageHash: '0'.repeat(64), blockId: faq.id, index: 0, item: { question: 'Stale?', answer: 'This must not persist.' } } }))).toEqual({ error: 'stale_page_edit' })
+    const afterRejectedItems = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterRejectedItems)).toEqual(beforeInvalidItem)
+    const removeItem = structuredJson(await editorClient.client.callTool({ name: 'remove_item', arguments: { pageId: page.id, changeSetId: itemSet.id, expectedChangeSetRevision: moveItem.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterMoveItem), blockId: faq.id, index: 1 } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(removeItem).toMatchObject({ checks: [{ status: 'passed' }] })
+    const itemAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.tool_result' } }, overrideAccess: true, limit: 100 })
+    for (const tool of ['add_item', 'update_item', 'move_item', 'remove_item']) expect(itemAudit.docs.find((event) => (event.detail as Record<string, unknown> | undefined)?.tool === tool)).toMatchObject({ detail: expect.objectContaining({ result: 'draft_saved', batch: expect.any(Object), diff: expect.any(Object) }) })
+    const contentSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP documented content' } })) as { id: string; revision: number }
+    const contentBeforeRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const contentBefore = pageEditorProjection(contentBeforeRecord)
+    const copied = structuredJson(await editorClient.client.callTool({ name: 'copy_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: contentSet.revision, expectedPageHash: pageEditorHash(contentBefore), sourcePageId: page.id, sourceBlockId: faq.id, index: 2 } })) as { draft: { changeSetRevision: number } }
+    const afterCopyRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterCopy = pageEditorProjection(afterCopyRecord); const copiedBlock = afterCopy.blocks[2]!; expect(copiedBlock.id).not.toBe(faq.id)
+    const moved = structuredJson(await editorClient.client.callTool({ name: 'move_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: copied.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterCopy), blockId: copiedBlock.id, toIndex: 1 } })) as { draft: { changeSetRevision: number } }
+    const afterMoveRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterMove = pageEditorProjection(afterMoveRecord)
+    const hidden = structuredJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: moved.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterMove), blockId: copiedBlock.id, hidden: true } })) as { draft: { changeSetRevision: number } }
+    const afterHideRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterHide = pageEditorProjection(afterHideRecord); expect(afterHide.blocks.find((block) => block.id === copiedBlock.id)?.hidden).toBe(true)
+    const pageFieldsResult = structuredJson(await editorClient.client.callTool({ name: 'update_page_fields', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: hidden.draft.changeSetRevision, expectedPageHash: pageEditorHash(afterHide), fields: { title: 'SDK page revised fields' } } })) as { draft: { changeSetRevision: number } }
+    const afterFieldsRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterFields = pageEditorProjection(afterFieldsRecord); expect(afterFields.title).toBe('SDK page revised fields')
+    expect(resultJson(await editorClient.client.callTool({ name: 'update_page_fields', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: '0'.repeat(64), fields: { title: 'stale must not persist' } } }))).toEqual({ error: 'stale_page_edit' })
+    const afterStaleFields = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; expect(pageEditorProjection(afterStaleFields)).toEqual(afterFields)
+    const fixedID = '22222222-2222-4222-8222-222222222222'
+    const { default: sharp } = await import('sharp'); const fixedAssetBytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#155e75' } }).png().toBuffer()
+    const fixedAsset = await payload.create({ collection: 'assets', data: { alt: 'Fixed SDK test image' }, file: { data: fixedAssetBytes, mimetype: 'image/png', name: 'fixed-sdk.png', size: fixedAssetBytes.length }, overrideAccess: true })
+    await payload.update({ collection: 'pages', id: page.id, data: { blocks: [...afterFields.blocks, { id: fixedID, type: 'media', mediaId: fixedAsset.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const beforeFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; const beforeFixed = pageEditorProjection(beforeFixedRecord)
+    expect(resultJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } }))).toEqual({ error: 'fixed_block' })
+    const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; expect(pageEditorProjection(afterFixedRecord)).toEqual(beforeFixed)
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
     const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [{ type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' } }, { type: 'faq' }] }
     const recipePage = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as { id: string; blocks: Array<{ id: string; type: string; appearance: Record<string, string> }> }
@@ -222,6 +359,13 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(recipePage.blocks[0]?.appearance).toMatchObject({ background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' })
     const recipeReplay = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as typeof recipePage
     expect(recipeReplay.id).toBe(recipePage.id)
+    const sectionSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP section' } })) as { id: string; revision: number }
+    const createdSection = resultJson(await editorClient.client.callTool({ name: 'create_section', arguments: { changeSetId: sectionSet.id, expectedChangeSetRevision: sectionSet.revision, requestKey: randomUUID(), name: 'SDK created section', slug: `sdk-created-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] } })) as { id: string; name: string }
+    expect(createdSection).toMatchObject({ name: 'SDK created section' })
+    const sectionAfterCreate = await payload.findByID({ collection: 'change-sets', id: sectionSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    expect(resultJson(await editorClient.client.callTool({ name: 'update_section', arguments: { id: createdSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionAfterCreate.revision, name: 'SDK updated section' } }))).toMatchObject({ id: createdSection.id, name: 'SDK updated section' })
+    const sectionAfterUpdate = await payload.findByID({ collection: 'change-sets', id: sectionSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    expect(resultJson(await editorClient.client.callTool({ name: 'update_section', arguments: { id: createdSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionAfterUpdate.revision - 1, name: 'stale section' } }))).toEqual({ error: 'revision_conflict' })
     expect(recipeReplay.blocks.map((block) => block.id)).toEqual(recipePage.blocks.map((block) => block.id))
     const text = JSON.stringify([sections, found, selected, redirects]); expect(text).not.toContain('private@example.test'); expect(text).not.toContain('never-expose-this-secret')
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
@@ -241,7 +385,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
   } finally { await Promise.all([editorClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), ownerPersonalClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
-})
+}, 15_000)
 
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {
   const user = await payload.create({ collection: 'users', data: { email: 'mcp-disabled@example.test', name: 'MCP Disabled', roles: ['editor'], disabled: true }, overrideAccess: true })

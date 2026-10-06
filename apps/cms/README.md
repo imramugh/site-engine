@@ -9,6 +9,16 @@ have Payload drafts; saving a draft does not invoke a public-site publish action
 mounted database directory. SQLite is not claimed to support multi-writer deployment;
 capacity or multi-instance needs require a separately tested migration.
 
+### SQLite writer limits
+
+Run exactly one CMS process against a mounted database directory. WAL permits concurrent
+readers, but SQLite still permits one writer at a time. A competing writer waits for the
+configured five-second `busy_timeout`; when that deadline expires, application code must
+classify `SQLITE_BUSY` as retryable and return controlled backpressure instead of treating
+the write as successful. Keep external provider work outside database transactions, use
+the existing bounded internal worker batches, and do not add a second CMS, direct database
+writer, or network filesystem-backed database without a separately tested database plan.
+
 For production, create and review an expand/contract migration with `pnpm migrate:create`,
 commit it, back up the database, then apply it with `pnpm migrate`. The migration command is
 the deployment hook; production config disables schema push. Initial enrollment is created
