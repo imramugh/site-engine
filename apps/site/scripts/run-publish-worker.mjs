@@ -23,7 +23,7 @@ export function createPublishAPI({ cmsOrigin, token, fetchImpl = fetch, timeoutM
     try { return await response.json(); } catch { throw new WorkerError('INVALID_CMS_RESPONSE'); }
   };
 }
-function claim(value, pins) {
+export function validatePublishClaim(value, pins) {
   if (value?.job === null) return null; const job = value?.job;
   if (!uuid.test(job?.id ?? '') || typeof job?.leaseToken !== 'string' || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now() || !value?.contentHash || typeof value?.versionPins?.themeVersion !== 'string' || value?.versionPins?.engineVersion !== pins.engineVersion || !compatibleContractVersion(value?.versionPins?.contractVersion)) throw new WorkerError('INVALID_CLAIM');
   const snapshot = SiteSnapshotSchema.parse(value.snapshot); if (hash(snapshot) !== value.contentHash || snapshot.settings.contractVersion !== value.versionPins.contractVersion) throw new WorkerError('INVALID_CLAIM');
@@ -36,11 +36,27 @@ async function externalHealthProbe(origin, expected, signal) {
 }
 function validLease(lease, identity, signal) { return !signal?.aborted && lease?.id === identity.id && lease?.leaseToken === identity.leaseToken && Number.isFinite(Date.parse(lease?.leaseExpiresAt ?? '')) && Date.parse(lease.leaseExpiresAt) > Date.now(); }
 /** @param {{ api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, buildRoot: string, releasesRoot: string, publicOrigin: string, healthOrigin?: string, versionPins: Record<string, string>, registry?: Map<string, unknown>, render?: typeof buildSnapshot, signal?: AbortSignal, healthProbe?: (proof: { jobID: string, sequence: number, contentHash: string, versionPins: Record<string, string> }) => Promise<boolean>, indexNowPublisher?: (options: { releasesRoot: string, jobID: string, sequence: number, contentHash: string, publicOrigin: string }) => Promise<Record<string, unknown>> }} options */
-export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, healthProbe, indexNowPublisher = publishActivatedReleaseIndexNow }) {
-  const input = claim(await api('claim', {}, signal), versionPins); if (!input) return false;
+export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, healthProbe, indexNowPublisher = publishActivatedReleaseIndexNow, claimed, leaseRenewIntervalMs = 15_000 }) {
+  const input = validatePublishClaim(claimed ?? await api('claim', {}, signal), versionPins); if (!input) return false;
   verifyThemeSelection(input.snapshot, registry);
-  const identity = { id: input.job.id, leaseToken: input.job.leaseToken }; let scratch;
+  const identity = { id: input.job.id, leaseToken: input.job.leaseToken }; let scratch; let renewing; let leaseFailure;
+  const leaseController = new AbortController(); const workSignal = signal ? AbortSignal.any([signal, leaseController.signal]) : leaseController.signal;
+  const renewLease = async () => {
+    if (leaseFailure) throw leaseFailure;
+    if (!renewing) renewing = (async () => {
+      try {
+        const renewed = await api('renew', identity, workSignal);
+        if (!validLease(renewed?.job, identity, workSignal)) throw new WorkerError('LEASE_LOST');
+      } catch (error) {
+        leaseFailure = error instanceof WorkerError ? error : new WorkerError('LEASE_LOST'); leaseController.abort(leaseFailure); throw leaseFailure;
+      } finally { renewing = undefined; }
+    })();
+    return renewing;
+  };
+  const leaseHeartbeat = setInterval(() => { void renewLease().catch(() => {}); }, leaseRenewIntervalMs);
   try {
+    await renewLease();
+    await api('log', { ...identity, stage: 'building' }, workSignal);
     let artifact; let manifest;
     const prior = join(resolve(releasesRoot), `release-${input.job.sequence}-${identity.id}`);
     try { await lstat(prior); manifest = await verifyPublicArtifact(prior, input.pins); artifact = prior; }
@@ -48,24 +64,27 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
       if (error?.code !== 'ENOENT') throw error;
       await mkdir(buildRoot, { recursive: true }); scratch = await mkdtemp(join(resolve(buildRoot), '.publish-build-'));
       const source = join(scratch, 'snapshot.json'); await writeFile(source, stable(input.snapshot));
-      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', themeSelection: input.snapshot.settings.theme, versionPins: input.versionPins, signal });
+      const built = await render({ input: source, outputRoot: scratch, publicOrigin: normalizePublicOrigin(publicOrigin), basePath: '/', themeSelection: input.snapshot.settings.theme, versionPins: input.versionPins, signal: workSignal });
       manifest = await verifyPublicArtifact(built.output, input.pins); artifact = built.output;
     }
+    if (workSignal.aborted) throw leaseFailure ?? new WorkerError('LEASE_LOST');
+    await api('log', { ...identity, stage: 'built' }, workSignal);
     const expectedProof = { jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, versionPins: input.versionPins };
-    const probe = healthProbe ?? ((expected) => externalHealthProbe(normalizePublicOrigin(healthOrigin), expected, signal));
+    const probe = healthProbe ?? ((expected) => externalHealthProbe(normalizePublicOrigin(healthOrigin), expected, workSignal));
+    await api('log', { ...identity, stage: 'activating' }, workSignal);
     await activatePublicRelease({ releasesRoot, artifact, jobID: identity.id, sequence: input.job.sequence, pins: input.pins, health: () => probe(expectedProof), assertLease: async () => {
-      const renewed = await api('renew', identity, signal); if (!validLease(renewed?.job, identity, signal)) throw new WorkerError('LEASE_LOST'); return true;
+      await renewLease(); return true;
     } });
     let indexNow;
     try { indexNow = await indexNowPublisher({ releasesRoot, jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, publicOrigin }); }
     catch { indexNow = { sent: false, reason: 'ancillary-failure' }; }
     const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }], indexNow };
-    await api('complete', { ...identity, artifact: evidence }, signal); return true;
+    await api('complete', { ...identity, artifact: evidence }, workSignal); return true;
   } catch (error) {
     if (error?.code !== 'LEASE_LOST') { try { await api('fail', { ...identity, errorCode: error?.code ?? 'BUILD_FAILED' }, signal); } catch {} }
     throw error instanceof WorkerError ? error : new WorkerError('BUILD_FAILED');
   }
-  finally { if (scratch) await rm(scratch, { recursive: true, force: true }); }
+  finally { clearInterval(leaseHeartbeat); if (scratch) await rm(scratch, { recursive: true, force: true }); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const controller = new AbortController(); for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => controller.abort());

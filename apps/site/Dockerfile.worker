@@ -18,4 +18,4 @@ RUN pnpm install --frozen-lockfile --filter @site-engine/site... \
 ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 PREVIEW_ARTIFACT_ROOT=/artifacts PUBLISH_ROLE=preview
 USER 10001:10001
 WORKDIR /workspace/apps/site
-CMD ["sh", "-c", "if [ \"$PUBLISH_ROLE\" = publish ]; then exec node scripts/run-publish-worker.mjs; fi; exec node scripts/run-preview-worker.mjs"]
+CMD ["sh", "-c", "if [ \"$PUBLISH_ROLE\" = publish-dispatcher ]; then exec node scripts/run-publish-dispatcher.mjs; fi; if [ \"$PUBLISH_ROLE\" = publish ] && [ -n \"$PUBLISH_WEBHOOK_PORT\" ]; then exec node scripts/run-publish-webhook-receiver.mjs; fi; if [ \"$PUBLISH_ROLE\" = publish ]; then exec node scripts/run-publish-worker.mjs; fi; exec node scripts/run-preview-worker.mjs"]

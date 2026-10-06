@@ -15,6 +15,8 @@ type Preview = { status?: string; revision?: number; changeHash?: string; includ
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[]; indexNow?: { sent?: boolean; reason?: string; batches?: number; status?: number; replayed?: boolean } }
 export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
+export const PUBLISH_STAGES = ['dispatched', 'building', 'built', 'activating'] as const
+type PublishStage = typeof PUBLISH_STAGES[number]
 const MAX_PUBLISH_ATTEMPTS = 3
 const MAX_PUBLISH_WORKER_BODY_BYTES = 16 * 1024
 
@@ -29,6 +31,15 @@ async function recordPublishFailure(payload: Payload, req: PayloadRequest, job: 
   const id = String(job.id)
   await payload.create({ collection: 'audit-events', data: { event: 'publish.failed', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(job.snapshot), errorCode: cleanErrorCode(errorCode), buildLink: `/operations?publish=${id}` } }, overrideAccess: true, req })
   await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
+}
+export async function recordPublishStage(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, stage: string, now = new Date()) {
+  requireTransaction(req, 'Publish stage')
+  if (!(PUBLISH_STAGES as readonly string[]).includes(stage)) throw new Error('Unknown publish stage.')
+  const job = await payload.findByID({ collection: 'publish-outbox', id, depth: 1, overrideAccess: true, req }) as unknown as Record<string, unknown>
+  if (job.status !== 'processing' || job.leaseToken !== leaseToken || !job.leaseExpiresAt || new Date(String(job.leaseExpiresAt)).getTime() <= now.getTime()) throw new Error('The publish lease is no longer current.')
+  const snapshot = job.snapshot as Record<string, unknown> | undefined
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_stage', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(snapshot), sequence: Number(job.sequence), stage: stage as PublishStage, attempt: Number(job.attempts), correlationID: String(job.correlationID) } }, overrideAccess: true, req })
+  return job
 }
 export function scheduledPublicationTime(value: unknown, now = Date.now()): string | undefined {
   if (value === undefined) return undefined
@@ -453,6 +464,9 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks, ...(artifact.indexNow ? { indexNow: artifact.indexNow } : {}) }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: 'completed', completedAt: now.toISOString(), completionEvidence: artifact, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  const changeSet = job.changeSet as unknown as Record<string, unknown> | undefined
+  const reviewer = idOf((snapshot as unknown as Record<string, unknown>).approvedBy)
+  await payload.create({ collection: 'audit-events', data: { event: 'publish.completed', user: reviewer, actor: reviewer, detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: snapshotID, release: release.id, sequence: Number(job.sequence), actor: idOf(changeSet?.actor), reviewer, publishTime: now.toISOString(), result: 'deployed', correlationID: String(job.correlationID) } }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_indexnow', detail: { publishOutbox: id, release: release.id, ...(artifact.indexNow ?? { sent: false, reason: 'not-reported' }) } }, overrideAccess: true, req, context: { editorialInternal: true } })
   const changeSetID = idOf(job.changeSet)
   if (!changeSetID) throw new Error('Publish job is missing its change set.')
