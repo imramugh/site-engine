@@ -8,6 +8,7 @@ import { mediaFocalContractVersion, mediaWorkspace } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
 import { isRetryableSQLiteError } from './sqlite'
 import { replaceAssetFile } from './media-ingestion'
+import { importPublicImage } from './media-url-ingestion'
 
 type Current = { id: string; roles?: string[]; disabled?: boolean }
 
@@ -21,8 +22,10 @@ const qualityError = z.union([
 const qualityCheck = z.object({ name: z.string(), status: z.enum(['passed', 'failed']), errors: z.array(qualityError) }).strict()
 const updateOutput = z.object({ draft: z.object({ assetId: z.string().uuid(), changeSetId: z.string().uuid(), changeSetRevision: z.number().int().nonnegative() }).strict(), checks: z.array(qualityCheck) }).strict()
 const uploadSource = z.object({ filename: z.string().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp']), dataBase64: z.string().min(4).max(16_384).regex(/^[A-Za-z0-9+/]+={0,2}$/) }).strict()
-const uploadInput = z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), alt: z.string().max(240), decorative: z.boolean(), caption: z.string().max(300).optional(), credit: z.string().max(240).optional(), tags: z.array(z.string().min(1).max(80)).max(12).optional(), focalX: z.number().finite().min(0).max(100), focalY: z.number().finite().min(0).max(100), source: uploadSource }).strict()
-const replaceInput = z.object({ id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), idempotencyKey: z.string().uuid(), source: uploadSource }).strict()
+const remoteSource = z.object({ url: z.string().url().max(2048) }).strict()
+const mediaSource = z.union([uploadSource, remoteSource])
+const uploadInput = z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), alt: z.string().max(240), decorative: z.boolean(), caption: z.string().max(300).optional(), credit: z.string().max(240).optional(), tags: z.array(z.string().min(1).max(80)).max(12).optional(), focalX: z.number().finite().min(0).max(100), focalY: z.number().finite().min(0).max(100), source: mediaSource }).strict()
+const replaceInput = z.object({ id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), idempotencyKey: z.string().uuid(), source: mediaSource }).strict()
 
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(code === 'temporarily_unavailable' ? { error: code, retryAfterSeconds: 1 } : { error: code }) }] })
@@ -33,7 +36,8 @@ const editableSet = async (payload: Payload, req: Parameters<typeof withPayloadT
   const actor = typeof set.actor === 'string' ? set.actor : set.actor?.id
   if (set.revision !== revision || actor !== current.id || !['open', 'changes-requested'].includes(String(set.state))) throw new Error('revision_conflict')
 }
-const decoded = (source: z.infer<typeof uploadSource>) => {
+const decoded = async (source: z.infer<typeof mediaSource>) => {
+  if ('url' in source) return importPublicImage(source.url)
   const data = Buffer.from(source.dataBase64, 'base64')
   if (!data.length || data.length > 12 * 1024) throw new Error('payload_too_large')
   return { data, mimetype: source.mimeType, name: source.filename, size: data.length }
@@ -75,13 +79,13 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
-  server.registerTool('upload_media', { title: 'Upload media', description: 'Create a small raster image in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; use the authenticated media upload handoff for ordinary images. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
+  server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
         const focal = await mediaFocalContractVersion(payload, await loadInitialPreviewBaseline(), req)
-        const file = decoded(source)
+        const file = await decoded(source)
         const asset = await payload.create({ collection: 'assets', data: { ...metadata, ...(focal ? { focalX: canonicalFocalPoint(metadata.focalX), focalY: canonicalFocalPoint(metadata.focalY) } : {}) }, file, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focal } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
@@ -95,7 +99,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
     try {
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
-        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file: decoded(source), user: current, req })
+        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file: await decoded(source), user: current, req })
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
         return { replacement, revision: changed.revision, checks: quality.checks }
