@@ -446,8 +446,21 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
             const image = document.querySelector(`:is([data-logo-tone="${tone}"][data-block-type="logoStrip"], [data-logo-tone="${tone}"][data-block="logoStrip"], [data-logo-tone="${tone}"] [data-block-type="logoStrip"], [data-logo-tone="${tone}"] [data-block="logoStrip"]) img`);
             if (!(image instanceof HTMLImageElement)) return false;
             await image.decode();
+            const rectangle = image.getBoundingClientRect();
+            if (!rectangle.width || !rectangle.height || !image.getClientRects().length) return false;
+            for (let element = image; element instanceof HTMLElement; element = element.parentElement) {
+              const style = getComputedStyle(element);
+              if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return false;
+            }
             const host = image.closest('[data-logo-tone]');
-            const background = getComputedStyle(host).backgroundColor.match(/\d+(?:\.\d+)?/g)?.map(Number) || [255, 255, 255];
+            const rgba = (value) => {
+              const channels = value.match(/\d+(?:\.\d+)?/g)?.map(Number);
+              return channels?.length >= 3 ? [channels[0], channels[1], channels[2], channels[3] ?? 1] : [0, 0, 0, 0];
+            };
+            const layers = [];
+            for (let element = host; element instanceof HTMLElement; element = element.parentElement) layers.push(rgba(getComputedStyle(element).backgroundColor));
+            let background = [255, 255, 255];
+            for (const [red, green, blue, alpha] of layers.reverse()) background = [red * alpha + background[0] * (1 - alpha), green * alpha + background[1] * (1 - alpha), blue * alpha + background[2] * (1 - alpha)];
             const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
             const context = canvas.getContext('2d'); if (!context) return false;
             context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; context.fillRect(0, 0, canvas.width, canvas.height);
