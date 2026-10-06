@@ -98,8 +98,8 @@ export async function refreshMailboxOAuth(mailbox: any, fetcher: Fetcher = fetch
 
 export async function refreshAndPersistMailboxOAuth(payload: Payload, mailbox: any, fetcher: Fetcher = fetch) {
   const refreshed = await refreshMailboxOAuth(mailbox, fetcher)
-  if (!refreshed.encryptedCredential) return refreshed
+  if (!refreshed.encryptedCredential) return { ...refreshed, credentialRevision: mailbox.credentialRevision }
   const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: mailbox.id } }, { credentialRevision: { equals: mailbox.credentialRevision } }] }, data: { encryptedCredential: refreshed.encryptedCredential, credentialRevision: randomBytes(8).toString('hex') }, overrideAccess: true, context: { mailboxInternal: true } })
   if (saved.docs.length !== 1) throw new Error('credential_changed')
-  return refreshed
+  return { ...refreshed, credentialRevision: saved.docs[0].credentialRevision }
 }

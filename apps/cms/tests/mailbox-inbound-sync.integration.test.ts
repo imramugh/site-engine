@@ -111,3 +111,82 @@ test('Gmail history hydrates a matched MIME message before advancing its durable
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '101' })
 })
+
+test('Gmail keeps its original start history ID through every history page', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-pages@example.test', name: 'Gmail pages', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, 'gmail-pages-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, 'gmail-pages-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'gmail-pages@example.test', historyId: '100' }) : Response.json({ sendAs: [{ sendAsEmail: 'gmail-pages@example.test', verificationStatus: 'accepted' }] }))
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: JSON.stringify({ historyID: '100' }), inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  const fetcher = async (url: string) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-access' })
+    if (url.includes('/history?')) return Response.json(url.includes('pageToken=second-page') ? { historyId: '102', history: [{ messagesAdded: [{ message: { id: 'second-message' } }] }] } : { historyId: '101', nextPageToken: 'second-page', history: [{ messagesAdded: [{ message: { id: 'first-message' } }] }] })
+    const id = url.includes('/messages/first-message?') ? 'first-message' : url.includes('/messages/second-message?') ? 'second-message' : undefined
+    if (id) return Response.json({ id, threadId: 'gmail-pages-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'unmatched-pages@example.test' }, { name: 'To', value: 'gmail-pages@example.test' }, { name: 'Subject', value: id }], body: { data: Buffer.from(id).toString('base64url') } } })
+    throw new Error(`unexpected ${url}`)
+  }
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 1 })
+  let stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '100', pageToken: 'second-page' })
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 1 })
+  stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '102' })
+})
+
+test('Gmail refuses an oversized history page without advancing its cursor', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-large@example.test', name: 'Gmail large', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, 'gmail-large-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, 'gmail-large-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'gmail-large@example.test', historyId: '100' }) : Response.json({ sendAs: [{ sendAsEmail: 'gmail-large@example.test', verificationStatus: 'accepted' }] }))
+  const originalCursor = JSON.stringify({ historyID: '100' })
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: originalCursor, inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  let messageFetches = 0
+  await expect(syncMailboxInbound(payload, mailbox.id, async (url) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-access' })
+    if (url.includes('/history?')) return Response.json({ historyId: '101', history: [{ messagesAdded: Array.from({ length: 501 }, (_, index) => ({ message: { id: `message-${index}` } })) }] })
+    if (url.includes('/messages/')) { messageFetches += 1; return Response.json({}) }
+    throw new Error(`unexpected ${url}`)
+  })).rejects.toThrow('provider_page_too_large')
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(stored.inboundCursor).toBe(originalCursor)
+  expect(messageFetches).toBe(0)
+})
+
+test('credential refresh rotation retains the durable Gmail history cursor', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-rotation@example.test', name: 'Gmail rotation', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, 'gmail-rotation-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, 'gmail-rotation-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'setup-refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'gmail-rotation@example.test', historyId: '100' }) : Response.json({ sendAs: [{ sendAsEmail: 'gmail-rotation@example.test', verificationStatus: 'accepted' }] }))
+  const originalCursor = JSON.stringify({ historyID: '100' })
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: originalCursor, inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  let historyURL = ''
+  await expect(syncMailboxInbound(payload, mailbox.id, async (url) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'rotated-access', refresh_token: 'rotated-refresh' })
+    if (url.includes('/history?')) { historyURL = url; return Response.json({ historyId: '101', history: [] }) }
+    throw new Error(`unexpected ${url}`)
+  })).resolves.toMatchObject({ processed: 0 })
+  expect(historyURL).toContain('startHistoryId=100')
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '101' })
+  expect(stored.inboundCursorRevision).toBe(stored.credentialRevision)
+  expect(stored.credentialRevision).not.toBe(mailbox.credentialRevision)
+})
+
+test('overlapping polls compare their original cursor before one can save over the other', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'sync-overlap@example.test', name: 'Sync overlap', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, 'sync-overlap-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'sync-overlap-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'refresh' }) : Response.json({ mail: 'sync-overlap@example.test' }))
+  const originalCursor = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=original'
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: originalCursor, inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  let deltaCalls = 0
+  const fetcher = async (url: string) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
+    if (url.includes('/delta')) {
+      const call = ++deltaCalls
+      return Response.json({ value: [], '@odata.deltaLink': `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=overlap-${call}` })
+    }
+    throw new Error(`unexpected ${url}`)
+  }
+  const results = await Promise.allSettled([syncMailboxInbound(payload, mailbox.id, fetcher), syncMailboxInbound(payload, mailbox.id, fetcher)])
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(2)
+  expect(results.filter(result => result.status === 'rejected')).toHaveLength(0)
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(stored.inboundCursor).toContain('overlap-2')
+})
