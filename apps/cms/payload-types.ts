@@ -1059,6 +1059,15 @@ export interface MailDraft {
   sender: string;
   subject: string;
   body: string;
+  attachments?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   attachmentHashes?:
     | {
         [k: string]: unknown;
@@ -2359,6 +2368,7 @@ export interface MailDraftsSelect<T extends boolean = true> {
   sender?: T;
   subject?: T;
   body?: T;
+  attachments?: T;
   attachmentHashes?: T;
   assistantClientIDHash?: T;
   assistantActor?: T;
