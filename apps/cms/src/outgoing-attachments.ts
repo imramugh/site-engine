@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import type { Payload } from 'payload'
-import { readResume } from './applications'
+import { readResume, validateResume } from './applications'
 import { mediaFilePath } from './media'
 
 const maxCount = 5
@@ -29,8 +29,10 @@ export async function resolveOutgoingAttachments(payload: Payload, input: { targ
     if (source === 'asset') {
       const sourceID = (item as { id?: unknown }).id
       if (typeof sourceID !== 'string' || !id.test(sourceID)) throw new Error('invalid_reply_attachments')
-      const asset = await payload.findByID({ collection: 'assets', id: sourceID, depth: 0, user: actor as never, overrideAccess: false }) as { deletedAt?: unknown; currentFile?: unknown }
-      const file = asset.currentFile as { filename?: unknown; originalFilename?: unknown; mimeType?: unknown; filesize?: unknown } | undefined
+      const asset = await payload.findByID({ collection: 'assets', id: sourceID, depth: 0, user: actor as never, overrideAccess: false }) as { deletedAt?: unknown; currentFile?: unknown; filename?: unknown; originalFilename?: unknown; mimeType?: unknown; filesize?: unknown }
+      const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile)
+        ? asset.currentFile as { filename?: unknown; originalFilename?: unknown; mimeType?: unknown; filesize?: unknown }
+        : asset
       const filename = safeName(file?.originalFilename) ?? safeName(file?.filename)
       const mimeType = typeof file?.mimeType === 'string' ? file.mimeType : ''
       if (asset.deletedAt || !filename || !allowed.has(mimeType) || !safeName(file?.filename)) throw new Error('attachment_not_available')
@@ -43,6 +45,7 @@ export async function resolveOutgoingAttachments(payload: Payload, input: { targ
       const application = await payload.findByID({ collection: 'applications', id: input.targetID, depth: 0, overrideAccess: true }) as { resumeKey?: unknown }
       if (typeof application.resumeKey !== 'string') throw new Error('attachment_not_available')
       const bytes = await readResume(application.resumeKey); const mimeType = bytes.subarray(0, 5).equals(Buffer.from('%PDF-')) ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      validateResume({ data: bytes, mimetype: mimeType, size: bytes.length, name: `resume.${mimeType === 'application/pdf' ? 'pdf' : 'docx'}` })
       output.push({ source: 'application-resume', sourceID: input.targetID, filename: 'resume.' + (mimeType === 'application/pdf' ? 'pdf' : 'docx'), mimeType, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
     } else throw new Error('invalid_reply_attachments')
     total += output.at(-1)!.size
