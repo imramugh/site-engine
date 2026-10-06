@@ -20,6 +20,7 @@
     "lint": "corepack pnpm@12.8.1 -r --if-present lint",
     "check:boundaries": "tsx packages/checks/src/assert-boundaries.ts",
     "check:provenance": "tsx packages/checks/src/assert-provenance.ts",
+    "conformance:starter": "node scripts/theme-conformance.mjs",
     "check": "corepack pnpm@12.8.1 build:packages && corepack pnpm@12.8.1 lint && corepack pnpm@12.8.1 typecheck && corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 check:boundaries && corepack pnpm@12.8.1 check:provenance",
     "build:packages": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/oauth build"
   },
