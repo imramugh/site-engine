@@ -53,12 +53,12 @@ export async function publishIndexNowAfterActivation({ urls, publicOrigin, baseP
 const sitemapURLs = xml => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match => match[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
 /** Stores an attempt marker before the network call. An unknown result is never
  * replayed, because a dropped acknowledgement may still have been accepted. */
-export async function publishActivatedReleaseIndexNow({ releasesRoot, jobID, sequence, contentHash, publicOrigin, fetchImpl }) {
+export async function publishActivatedReleaseIndexNow({ releasesRoot, jobID, sequence, contentHash, publicOrigin, fetchImpl, writeFileImpl = writeFile }) {
   let proof; try { proof = await publicReleaseProof(releasesRoot); } catch { return { sent: false, reason: 'not-active' }; }
   if (proof.jobID !== jobID || proof.sequence !== sequence || proof.contentHash !== contentHash) return { sent: false, reason: 'superseded' };
   const root = resolve(releasesRoot); const marker = join(root, `.indexnow-${sequence}-${jobID}.json`);
-  try { await writeFile(marker, JSON.stringify({ state: 'attempting', jobID, sequence, contentHash }) + '\n', { flag: 'wx', mode: 0o600 }); }
+  try { await writeFileImpl(marker, JSON.stringify({ state: 'attempting', jobID, sequence, contentHash }) + '\n', { flag: 'wx', mode: 0o600 }); }
   catch (error) { if (error?.code !== 'EEXIST') throw error; try { return JSON.parse(await readFile(marker, 'utf8')); } catch { return { sent: false, reason: 'outcome-unknown' }; } }
   let result; try { result = await publishIndexNowAfterActivation({ urls: sitemapURLs(await readFile(join(root, 'current', 'sitemap.xml'), 'utf8')), publicOrigin, basePath: '/', fetchImpl }); } catch { result = { sent: false, reason: 'outcome-unknown' }; }
-  await writeFile(marker, JSON.stringify({ ...result, jobID, sequence, contentHash }) + '\n', { mode: 0o600 }); return result;
+  await writeFileImpl(marker, JSON.stringify({ ...result, jobID, sequence, contentHash }) + '\n', { mode: 0o600 }); return result;
 }
