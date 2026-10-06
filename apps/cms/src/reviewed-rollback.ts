@@ -9,13 +9,19 @@ import { loadThemeRegistry, verifyInstalledThemeSelection } from '@site-engine/e
 /** Reverse approved captures into a new draft. Public removals keep their working
  * copies and media bytes; a guarded tombstone is reviewed like any other change.
  * No published snapshot is mutated and no retention decision is undone. */
-export async function captureReviewedRollback(payload: Payload, req: PayloadRequest, actorID: string, name: string, baseline: SiteSnapshot, approved: CapturedChange[]) {
+export async function captureReviewedRollback(payload: Payload, req: PayloadRequest, actorID: string, name: string, baseline: SiteSnapshot, approved: CapturedChange[], previous?: SiteSnapshot) {
   const keys = new Set(approved.map(change => `${change.collection}:${change.id}`))
   const pending = await payload.find({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, limit: 0, pagination: false, depth: 0, overrideAccess: true, req })
   if (pending.docs.some(set => (Array.isArray(set.changes) ? set.changes as CapturedChange[] : []).some(change => keys.has(`${change.collection}:${change.id}`)))) throw new Error('Rollback conflicts with a pending editorial change. Resolve or discard that change first.')
   const changes: CapturedChange[] = approved.map(change => {
     const normalize = (value: Record<string, unknown> | null) => value === null ? null : change.collection === 'assets' ? structuredClone(value) : snapshot(change.collection, value)
-    const before = normalize(change.after), after = normalize(change.before)
+    const before = normalize(change.after)
+    // A singleton can be first materialized in the CMS after the site already
+    // has immutable settings. Restore those published values, not a deletion.
+    const priorSingleton = change.collection === 'site-settings' ? previous?.settings
+      : change.collection === 'theme-settings' && previous?.settings.theme ? { selection: previous.settings.theme, settings: previous.settings.themeSettings }
+      : change.collection === 'style-guides' ? previous?.styleGuide : undefined
+    const after = normalize(change.before ?? (priorSingleton as Record<string, unknown> | undefined) ?? null)
     return { collection: change.collection, id: change.id, before, after, beforeHash: before ? canonicalHash(before) : null, afterHash: after ? canonicalHash(after) : null }
   })
   // Publication derives redirects when pages move or are archived. Reversing

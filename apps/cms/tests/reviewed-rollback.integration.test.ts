@@ -130,4 +130,34 @@ describe('ENG-010 reviewed rollback', () => {
     const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' }); await payload.update({ collection: 'pages', id: added.id, data: { title: 'Later draft edit' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
     await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'submit' }))).rejects.toThrow(/stale|conflict/i)
   })
+  it('turns an initially created style guide into a guarded reviewed removal', async () => {
+    const before = fixture(), after = structuredClone(before)
+    delete before.styleGuide
+    after.styleGuide = { bannedPhrases: ['synthetic banned phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn', maximumSentenceWords: 24, minimumReadingEase: 42 }
+    await seed(after)
+    const guide: any = await payload.create({ collection: 'style-guides', data: after.styleGuide, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await release(before, [])
+    const current = await release(after, [capture(null, guide, 'style-guides')])
+
+    const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
+    const change = set.changes.find((item: any) => item.collection === 'style-guides')
+    expect(change).toMatchObject({ id: guide.id, after: null, retainedDraftHash: expect.any(String) })
+    expect(candidate(after, set).styleGuide).toBeUndefined()
+    expect(await payload.findByID({ collection: 'style-guides', id: guide.id, draft: true, overrideAccess: true })).toMatchObject({ bannedPhrases: ['synthetic banned phrase'], canadianSpelling: 'warn' })
+  })
+  it('restores the prior published site name when the current singleton was first captured as created', async () => {
+    const before = fixture(), after = structuredClone(before)
+    before.settings.siteName = 'Prior published site name'
+    after.settings.siteName = 'Current first-created site name'
+    await seed(after)
+    const settings: any = await payload.create({ collection: 'site-settings', data: { siteName: after.settings.siteName, defaultLocale: after.settings.defaultLocale, homepageId: after.settings.homepageId }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    await release(before, [])
+    const current = await release(after, [capture(null, settings, 'site-settings')])
+
+    const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
+    const change = set.changes.find((item: any) => item.collection === 'site-settings')
+    expect(change).toMatchObject({ id: settings.id, before: expect.objectContaining({ siteName: after.settings.siteName }), after: expect.objectContaining({ siteName: before.settings.siteName }) })
+    expect(candidate(after, set).settings.siteName).toBe(before.settings.siteName)
+    expect(await payload.findByID({ collection: 'site-settings', id: settings.id, draft: true, overrideAccess: true })).toMatchObject({ siteName: before.settings.siteName })
+  })
 })

@@ -10,7 +10,7 @@ import { isRetryableSQLiteError } from './sqlite'
 type Current = { id: string; roles?: Role[] | null; disabled?: boolean | null }
 const text = (value: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (name: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(name === 'temporarily_unavailable' ? { error: name, retryAfterSeconds: 1 } : { error: name }) }] })
-const rollback = z.object({ releaseID: z.string().uuid(), sequence: z.number().int().positive(), enabled: z.boolean(), note: z.string() }).nullable()
+const rollback = z.object({ releaseID: z.string().uuid(), sequence: z.number().int().positive(), enabled: z.boolean(), note: z.string(), changes: z.array(z.object({ key: z.string(), label: z.string() }).strict()) }).strict().nullable()
 const diff = z.object({ label: z.string(), entries: z.array(z.object({ record: z.string(), field: z.string(), before: z.string(), after: z.string() }).strict()), truncated: z.boolean(), pages: z.number().int().nonnegative() }).nullable()
 const change = z.object({ id: z.string(), createdAt: z.string(), title: z.string(), detail: z.string(), status: z.string(), category: z.string(), source: z.string(), diff, rollback }).strict()
 
@@ -36,13 +36,13 @@ export function registerChangeLogTools(input: { server: McpServer; payload: Payl
       return text({ items: rows.map((row) => ({ id: row.id, createdAt: row.createdAt, title: row.title, detail: row.detail, status: row.status, category: row.category, source: row.source, diff: row.diff, rollback: row.rollback })) })
     } catch (cause) { return failure(cause) }
   })
-  server.registerTool('request_rollback', { title: 'Prepare rollback for review', description: 'Prepare a rollback as a reviewable draft change set. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ releaseID: z.string().uuid() }).strict(), outputSchema: z.object({ changeSet: z.object({ id: z.string().uuid(), name: z.string(), state: z.literal('open'), revision: z.number().int().nonnegative() }).strict() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes as unknown[], authorization: writeSecurity } }, async ({ releaseID }) => {
+  server.registerTool('request_rollback', { title: 'Prepare rollback for review', description: 'Prepare a rollback as a reviewable draft change set. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ releaseID: z.string().uuid(), mode: z.enum(['release', 'change']).optional(), changeKeys: z.array(z.string()).min(1).optional() }).strict(), outputSchema: z.object({ changeSet: z.object({ id: z.string().uuid(), name: z.string(), state: z.literal('open'), revision: z.number().int().nonnegative() }).strict() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes as unknown[], authorization: writeSecurity } }, async ({ releaseID, mode, changeKeys }) => {
     if (!write) return error('role_access_required'); if (!owner()) return error('owner_access_required')
     try {
       const set = await withPayloadTransaction(payload, async (req) => {
         const actor = await canonicalOwner(payload, current, sessionID, req)
         req.user = actor as never
-        return prepareReviewedRollbackCore(payload, req, actor, releaseID)
+        return prepareReviewedRollbackCore(payload, req, actor, releaseID, { mode, changeKeys })
       })
       return text({ changeSet: { id: String(set.id), name: String(set.name), state: 'open', revision: Number(set.revision) } })
     } catch (cause) { return failure(cause) }

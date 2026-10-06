@@ -173,8 +173,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       const merged = change.before === null
         ? structuredClone(change.after)
         : mergeCapturedChange(styleGuide, change)
-      if (!merged) throw new Error('Style guide cannot be removed.')
-      styleGuide = merged
+      styleGuide = merged ?? undefined
     }
     if (change.collection === 'assets') {
       validateCapturedAssetIntegrity(change)
@@ -221,7 +220,8 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   // Contract upgrades are only caused by the reviewed theme selection itself.
   // Ordinary content edits keep the immutable baseline pin intact.
   const contractVersion = selectedThemeTransition ? selectedTheme?.contract : base.settings.contractVersion
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  const { styleGuide: _priorStyleGuide, ...baseFields } = structuredClone(base)
+  const candidate = SiteSnapshotSchema.parse({ ...baseFields, settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const occupiedPaths = new Set(newRoutes.map(route => route.path))

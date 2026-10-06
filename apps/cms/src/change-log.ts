@@ -103,7 +103,7 @@ export async function prepareReviewedRollbackCore(payload:Payload,req:PayloadReq
   const sequence=Number(latest.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
   const currentSnapshot=record(latest.snapshot),previousSnapshot=record(previous?.snapshot)
   if(!previous||!currentSnapshot.manifest||!previousSnapshot.manifest)throw new Error('An earlier immutable release is required for rollback.')
-  return captureReviewedRollback(payload,req,actor.id,request.mode==='change'?`Rollback change from release #${sequence}`:`Rollback release #${sequence}`,SiteSnapshotSchema.parse(currentSnapshot.manifest),changes as CapturedChange[])
+  return captureReviewedRollback(payload,req,actor.id,request.mode==='change'?`Rollback change from release #${sequence}`:`Rollback release #${sequence}`,SiteSnapshotSchema.parse(currentSnapshot.manifest),changes as CapturedChange[],SiteSnapshotSchema.parse(previousSnapshot.manifest))
 }
 
 export async function prepareReviewedRollback(payload:Payload,actor:Actor,headers:Headers,releaseID:string,request:RollbackRequest={}){

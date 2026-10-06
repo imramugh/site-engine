@@ -16,7 +16,7 @@ async function packedConsumer() {
   const directory = await mkdtemp(join(tmpdir(), 'starter-packed-consumer-')); temporary.push(directory)
   const tarballs = join(directory, 'tarballs'); const store = join(directory, 'store'); const cache = join(directory, 'cache'); await mkdir(tarballs)
   for (const packageDirectory of ['packages/contract', 'packages/engine', 'packages/theme-starter']) await pnpm(join(root, packageDirectory), ['pack', '--pack-destination', tarballs])
-  const zodDirectory = dirname(createRequire(import.meta.url).resolve('zod/package.json'))
+  const zodDirectory = dirname(createRequire(join(root, 'packages/contract/package.json')).resolve('zod/package.json'))
   await pnpm(zodDirectory, ['pack', '--pack-destination', tarballs])
   const files = await readdir(tarballs)
   const tarball = (name: string) => join(tarballs, files.find(file => file.startsWith(name) && file.endsWith('.tgz'))!)
