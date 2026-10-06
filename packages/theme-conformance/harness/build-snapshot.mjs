@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { parseSiteSnapshot } from '@site-engine/contract';
 import { deriveRoutes } from '@site-engine/engine';
-import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
+import { normalizeBasePath, normalizePublicOrigin } from './site-config.mjs';
 import { writeIndexNowVerificationFile } from './indexnow.mjs';
 import { nginxRedirectInclude } from './redirect-artifact.mjs';
 
@@ -33,7 +33,7 @@ function referencedMedia(snapshot) {
 async function copyReferencedMedia(snapshot, output) {
   const references = new Set(referencedMedia(snapshot));
   if (!references.size) { await rm(join(output, 'media'), { recursive: true, force: true }); return; }
-  const bundledRoot = resolve(new URL('../public/media/', import.meta.url).pathname);
+  const bundledRoot = resolve(new URL('./public/media/', import.meta.url).pathname);
   const uploadedRoot = resolve(process.env.SITE_MEDIA_DIR || bundledRoot);
   const destination = join(output, 'media'); await rm(destination, { recursive: true, force: true }); await mkdir(destination, { recursive: true });
   const copied = new Map();
@@ -139,7 +139,7 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
   // Astro writes prerender intermediates to <root>/.astro independently of its
   // cacheDir. Separate source roots prevent simultaneous jobs deleting each
   // other's intermediates. Copy only reviewed renderer inputs, never .env/data.
-  const sourceRoot = new URL('..', import.meta.url);
+  const sourceRoot = new URL('.', import.meta.url);
   const renderRoot = join(staged, '..', 'renderer');
   await mkdir(renderRoot);
   for (const name of ['src', 'public', 'astro.config.mjs', 'site-config.mjs', 'tsconfig.json', 'package.json']) {
@@ -149,7 +149,19 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
   const componentsRoot = await trustedThemeComponentsRoot(themeComponentsRoot);
   await copyThemeComponents(componentsRoot, themeComponents);
   await copyStarterAssets(componentsRoot, dirname(renderRoot));
-  await symlink(fileURLToPath(new URL('node_modules', sourceRoot)), join(renderRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  // Build a tiny public dependency view. pnpm does not always expose a
+  // package's dependencies at the consumer root, so resolve each declared
+  // dependency from this installed package rather than assuming a checkout.
+  const dependencyRoot = join(renderRoot, 'node_modules');
+  const localRequire = createRequire(import.meta.url);
+  await mkdir(dependencyRoot);
+  await symlink(dirname(localRequire.resolve('astro/package.json')), join(dependencyRoot, 'astro'), process.platform === 'win32' ? 'junction' : 'dir');
+  const scoped = join(dependencyRoot, '@site-engine');
+  await mkdir(scoped);
+  for (const name of ['contract', 'engine', 'theme-starter']) {
+    const entry = fileURLToPath(import.meta.resolve(`@site-engine/${name}`));
+    await symlink(dirname(dirname(entry)), join(scoped, name), process.platform === 'win32' ? 'junction' : 'dir');
+  }
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {
     let timedOut = false; let aborted = false; let forceTimer;

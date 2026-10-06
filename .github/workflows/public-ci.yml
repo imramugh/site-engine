@@ -6,6 +6,7 @@ on:
     branches: [main]
   schedule:
     - cron: '17 4 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,6 +43,8 @@ jobs:
       - run: corepack enable && corepack prepare pnpm@12.8.1 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm conformance:starter
+      - run: pnpm test:theme-conformance-package
       - run: pnpm check
       - run: pnpm build
       - run: pnpm test:e2e
@@ -54,3 +57,9 @@ jobs:
             artifacts/playwright
             artifacts/playwright-cms
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: eng-038-starter-conformance
+          path: artifacts/theme-starter-conformance
+          if-no-files-found: warn
