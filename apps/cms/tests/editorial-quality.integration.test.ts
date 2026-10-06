@@ -8,8 +8,8 @@ import sharp from 'sharp'
 import { SiteSnapshotSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { transitionChangeSet } from '../src/editorial'
-import { changeSetHash } from '../src/publishing'
+import { markStaleIfNeeded, transitionChangeSet } from '../src/editorial'
+import { canonicalHash, changeSetHash } from '../src/publishing'
 import { prepareReviewPreview } from '../src/review-preview'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-quality-'))
@@ -110,6 +110,24 @@ describe('editorial quality captures all portable change collections', () => {
     } finally {
       process.env.INITIAL_PUBLISH_BASELINE_FILE = contract14BaselineFile
     }
+  })
+
+  it('keeps legacy metadata-free asset captures nonstale and discardable', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `legacy-metadata-owner-${randomUUID()}@example.test`, name: 'Legacy metadata owner', roles: ['owner'] }, overrideAccess: true })
+    const data = await raster()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Legacy metadata original', decorative: false }, file: { data, mimetype: 'image/png', name: `legacy-metadata-${randomUUID()}.png`, size: data.length }, overrideAccess: true, context: { editorialInternal: true } })
+    const set = await payload.create({ collection: 'change-sets', data: { name: 'Legacy metadata capture', actor: owner.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    await withPayloadTransaction(payload, async (req) => { req.user = owner as never; req.headers.set('x-site-engine-change-set', set.id); await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Legacy metadata changed', decorative: false, tags: ['captured'] }, user: owner, overrideAccess: false, req }) })
+    const captured = await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true }) as unknown as { changes: Array<{ collection: string; id: string; before: Record<string, unknown>; after: Record<string, unknown>; beforeHash: string; afterHash: string }> }
+    const change = captured.changes.find((item) => item.collection === 'assets' && item.id === asset.id)!
+    for (const image of [change.before, change.after]) { delete image.caption; delete image.credit; delete image.tags }
+    change.beforeHash = canonicalHash(change.before); change.afterHash = canonicalHash(change.after)
+    await payload.update({ collection: 'change-sets', id: set.id, data: { changes: captured.changes }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'assets', id: asset.id, data: { tags: ['outside-legacy-capture'] }, overrideAccess: true, context: { editorialInternal: true } })
+    const unchanged = await withPayloadTransaction(payload, req => markStaleIfNeeded(payload, captured as never, req))
+    expect(unchanged).toMatchObject({ state: 'open' })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'discard' }))
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Legacy metadata original', tags: ['outside-legacy-capture'] })
   })
 
   it('accepts a valid style guide and rejects malformed captured assets and style guides', async () => {

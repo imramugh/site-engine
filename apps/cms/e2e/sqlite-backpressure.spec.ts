@@ -11,6 +11,12 @@ async function editor(browser: Browser) {
   return { context, page: await context.newPage() }
 }
 
+async function sessionLastSeen(session: Awaited<ReturnType<typeof editor>>): Promise<string> {
+  const response = await session.page.request.get('/__e2e/session/state')
+  expect(response.status(), await response.text()).toBe(200)
+  return (await response.json() as { lastSeenAt: string }).lastSeenAt
+}
+
 test('ENG-036 returns retryable backpressure from the authenticated direct-edit route and recovers after lock release', async ({ browser }) => {
   test.setTimeout(30_000)
   const session = await editor(browser)
@@ -25,6 +31,8 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     const set = await created.json() as { id: string }
     const body = { pageID, blockID, field: 'heading', value: 'Saved after SQLite lock release', expectedValueHash: createHash('sha256').update(heading!).digest('hex'), changeSetID: set.id }
     const before = await session.page.request.get(`/api/pages/${pageID}?draft=true`).then((response) => response.json()) as { blocks: Array<{ id: string; heading?: string }> }
+    const aged = await session.page.request.post('/__e2e/session/age-last-seen')
+    expect(aged.status(), await aged.text()).toBe(204)
     const lock = await session.page.request.post('/__e2e/sqlite-lock')
     expect(lock.status(), await lock.text()).toBe(204)
     const started = Date.now()
@@ -33,14 +41,12 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     expect(blocked.headers()['retry-after']).toBe('1')
     expect(await blocked.json()).toEqual({ error: 'Saving is temporarily busy. Please retry.' })
     expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
-    // A held writer lock can also make this read take Payload's retryable
-    // error path when its sliding session refresh is due. WAL can otherwise
-    // serve the read. Assert either documented response, then prove rollback
-    // only after releasing the lock when the page can be read reliably.
+    // The forced sliding refresh must not make Payload's generated REST route
+    // treat a verified session as anonymous when the writer lock rejects only
+    // that non-authoritative timestamp update.
     const lockedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
-    expect([200, 503]).toContain(lockedRead.status())
-    if (lockedRead.status() === 503) await expect(lockedRead.json()).resolves.toEqual({ error: 'Authentication is temporarily unavailable. Please retry.' })
-    else expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
+    expect(lockedRead.status(), await lockedRead.text()).toBe(200)
+    expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
     const released = await session.page.request.post('/__e2e/sqlite-lock/release')
     expect(released.status(), await released.text()).toBe(204)
     const unchangedResponse = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
@@ -49,6 +55,29 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     expect(unchanged.blocks.find((block) => block.id === blockID)?.heading).toBe(before.blocks.find((block) => block.id === blockID)?.heading)
     const retried = await session.page.request.post('/api/editorial/direct-edit', { headers: { origin, 'content-type': 'application/json' }, data: body })
     expect(retried.status(), await retried.text()).toBe(200)
+  } finally { await session.page.request.post('/__e2e/sqlite-lock/release').catch(() => undefined); await session.context.close() }
+})
+
+test('ENG-036 keeps a verified session usable while a writer defers its sliding refresh', async ({ browser }) => {
+  test.setTimeout(30_000)
+  const session = await editor(browser)
+  try {
+    const aged = await session.page.request.post('/__e2e/session/age-last-seen')
+    expect(aged.status(), await aged.text()).toBe(204)
+    const before = await sessionLastSeen(session)
+    const lock = await session.page.request.post('/__e2e/sqlite-lock')
+    expect(lock.status(), await lock.text()).toBe(204)
+
+    const lockedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect(lockedRead.status(), await lockedRead.text()).toBe(200)
+    expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
+    expect(await sessionLastSeen(session)).toBe(before)
+
+    const released = await session.page.request.post('/__e2e/sqlite-lock/release')
+    expect(released.status(), await released.text()).toBe(204)
+    const refreshedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect(refreshedRead.status(), await refreshedRead.text()).toBe(200)
+    expect(Date.parse(await sessionLastSeen(session))).toBeGreaterThan(Date.parse(before))
   } finally { await session.page.request.post('/__e2e/sqlite-lock/release').catch(() => undefined); await session.context.close() }
 })
 

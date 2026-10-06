@@ -27,7 +27,9 @@ function ReviewFrame({ title, src, width, changed, active, variant, onReady }: {
   }, [width])
   const decorate = useCallback((scroll = false) => {
     const doc = frame.current?.contentDocument
-    if (!doc) return
+    // A navigating iframe can expose a Document before its head is parsed.
+    // Its load event will retry decoration once the page is available.
+    if (!doc?.head || doc.readyState === 'loading') return
     let style = doc.getElementById('site-engine-review-highlights')
     if (!style) {
       style = doc.createElement('style'); style.id = 'site-engine-review-highlights'

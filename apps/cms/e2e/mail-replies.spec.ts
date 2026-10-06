@@ -1,10 +1,14 @@
 import { expect, test, type Browser } from '@playwright/test'
 import { createRequire } from 'node:module'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
+const mcpStructured = <T>(result: unknown) => ((result as { structuredContent?: T; toolResult?: { structuredContent?: T } }).structuredContent ?? (result as { toolResult?: { structuredContent?: T } }).toolResult?.structuredContent) as T
+const mcpResult = <T>(result: unknown) => mcpStructured<T>(result) ?? JSON.parse(((result as { content?: Array<{ text?: string }>; toolResult?: { content?: Array<{ text?: string }> } }).content ?? (result as { toolResult?: { content?: Array<{ text?: string }> } }).toolResult?.content)?.find(item => item.text)?.text ?? '{}') as T
 
-async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true) {
+async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true, attachments: Array<{ filename: string; mimeType: string; size: number; sha256: string }> = []) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -13,7 +17,7 @@ async function composer(browser: Browser, sendFails = false, threads: Array<{ id
     if (route.request().method() === 'GET') return route.fulfill({ json: { senders: [{ address: 'team@example.test', label: 'Team mailbox' }], threads, canAuthorize: true } })
     const body = route.request().postDataJSON()
     requests.push(body.action)
-    if (body.action === 'prepare') return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'team@example.test', recipient: 'notes-a.synthetic@example.test', subject: body.subject.trim(), body: body.body.trim() } } })
+    if (body.action === 'prepare') return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'team@example.test', recipient: 'notes-a.synthetic@example.test', subject: body.subject.trim(), body: body.body.trim(), attachments } } })
     if (body.action === 'send' && sendFails) return route.fulfill({ status: 503, json: { error: 'Provider acknowledgement was lost.' } })
     return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
   })
@@ -50,6 +54,22 @@ test('ENG-020/033 reviews the persisted envelope, reconfirms edits, and cannot r
     expect(requests).toEqual(['prepare', 'authorize', 'cancel', 'prepare', 'authorize', 'send'])
     await page.addScriptTag({ path: axe })
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  } finally { await context.close() }
+})
+
+
+test('ENG-033 renders the immutable attachment descriptors before confirmation', async ({ browser }) => {
+  const attachment = { filename: 'brief.pdf', mimeType: 'application/pdf', size: 27, sha256: 'a'.repeat(64) }
+  const { context, reply, requests } = await composer(browser, false, [], true, [attachment])
+  try {
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('Attachments included in this exact confirmation')
+    await expect(review).toContainText('brief.pdf')
+    await expect(review).toContainText('application/pdf')
+    await expect(review).toContainText('27 bytes')
+    await expect(review).toContainText('SHA-256 ' + attachment.sha256)
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    expect(requests).toEqual(['prepare', 'authorize'])
   } finally { await context.close() }
 })
 
@@ -99,9 +119,11 @@ test('ENG-020 selects only a scoped provider conversation before explicit confir
     await expect(reply.getByLabel('Reply subject')).toHaveValue('Thread B')
     await reply.getByLabel('Reply message').fill('Approved body')
     await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await expect(reply.getByRole('region', { name: 'Exact reply review' })).toContainText('Approved body')
     expect(requests).toEqual(['prepare'])
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
     await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
     expect(requests).toEqual(['prepare', 'authorize', 'send'])
     await expect(page.getByRole('option', { name: /unrelated/i })).toHaveCount(0)
   } finally { await context.close() }
@@ -165,20 +187,21 @@ test('ENG-020 clears delayed reply state when switching records', async ({ brows
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   let optionLoads = 0
-  await page.route('**/api/mail-replies/lead/**', async route => {
-    if (route.request().method() === 'GET') {
-      optionLoads += 1
-      return route.fulfill({ json: { senders: [{ address: optionLoads === 1 ? 'first@example.test' : 'second@example.test', label: 'Scoped mailbox' }], threads: [], canAuthorize: true } })
-    }
-    const body = route.request().postDataJSON()
-    if (body.action === 'prepare') {
-      await new Promise(resolve => setTimeout(resolve, 300))
-      return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'first@example.test', recipient: 'notes-a.synthetic@example.test', subject: 'Old subject', body: 'Old body' } } })
-    }
-    return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
-  })
   try {
     await page.goto('/leads')
+    await expect(page.getByRole('button', { name: /First editable lead/ })).toBeVisible()
+    await page.route('**/api/mail-replies/lead/**', async route => {
+      if (route.request().method() === 'GET') {
+        optionLoads += 1
+        return route.fulfill({ json: { senders: [{ address: optionLoads === 1 ? 'first@example.test' : 'second@example.test', label: 'Scoped mailbox' }], threads: [], canAuthorize: true } })
+      }
+      const body = route.request().postDataJSON()
+      if (body.action === 'prepare') {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'first@example.test', recipient: 'notes-a.synthetic@example.test', subject: 'Old subject', body: 'Old body' } } })
+      }
+      return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
+    })
     await page.getByRole('button', { name: /First editable lead/ }).click()
     const firstReply = page.locator('[data-mail-reply-composer]')
     await expect(firstReply.getByLabel('Reply sender')).toHaveValue('first@example.test')
@@ -249,5 +272,149 @@ test('ENG-020 displays an assistant-prepared envelope, retains it for editing, a
     expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-thread-b' })
     expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture OAuth reply B\r\n')
     expect(after.deliveries.at(-1)?.mime).toContain('Edited MCP prepared body')
+  } finally { await context.close() }
+})
+
+test('ENG-033 opens an assistant deep link beyond the first lead page and lets the real browser session confirm its exact envelope', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?prepared=1&deep=1`)).json() as { deepLead: string; deepLeadName: string; preparedDraft: string }
+    expect(fixture).toMatchObject({ deepLead: expect.any(String), preparedDraft: expect.any(String) })
+    await page.goto(`/leads?lead=${encodeURIComponent(fixture.deepLead)}&draft=${encodeURIComponent(fixture.preparedDraft)}`)
+    const detail = page.getByRole('complementary', { name: 'Lead details' })
+    await expect(detail).toContainText(fixture.deepLeadName)
+    const reply = page.locator('[data-mail-reply-composer]')
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('prepared by a connected assistant')
+    await expect(review).toContainText('Fixture OAuth reply B')
+    await expect(review).toContainText('MCP prepared exact body')
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await expect(reply.getByRole('status')).toContainText('Return to the connected assistant to send')
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
+  } finally { await context.close() }
+})
+
+test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK delivery', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  let transport: StreamableHTTPClientTransport | undefined
+  const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  try {
+    const fixtureResponse = await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1&attachment=1`)
+    expect(fixtureResponse.ok(), await fixtureResponse.text()).toBe(true)
+    const fixture = await fixtureResponse.json() as { deepLead: string; attachment: { source: 'asset'; sourceID: string; filename: string; mimeType: string; size: number; sha256: string; bytes: string } }
+    const identity = await (await page.request.post(`${origin}/__e2e/mcp-identity`)).json() as { bearer: string }
+    const client = new Client({ name: 'e2e-bound-mail', version: '1.0.0' })
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
+    await client.connect(transport)
+    const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: 'SDK joined subject', body: 'SDK joined body', attachments: [{ source: fixture.attachment.source, id: fixture.attachment.sourceID }] } }) as unknown as { structuredContent: { draft: { id: string; confirmationURL: string } } }
+    const draft = mcpStructured<{ draft: { id: string; confirmationURL: string; attachments: Array<{ source: string; sourceID: string; filename: string; mimeType: string; size: number; sha256: string }> } }>(prepared).draft
+    expect(draft.attachments).toEqual([{ source: fixture.attachment.source, sourceID: fixture.attachment.sourceID, filename: fixture.attachment.filename, mimeType: fixture.attachment.mimeType, size: fixture.attachment.size, sha256: fixture.attachment.sha256 }])
+    await page.goto(new URL(draft.confirmationURL).pathname + new URL(draft.confirmationURL).search)
+    const reply = page.locator('[data-mail-reply-composer]')
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('SDK joined body')
+    await expect(review).toContainText(fixture.attachment.filename)
+    await expect(review).toContainText(fixture.attachment.mimeType)
+    await expect(review).toContainText(`${fixture.attachment.size} bytes`)
+    await expect(review).toContainText(`SHA-256 ${fixture.attachment.sha256}`)
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    const status = await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })
+    const grantID = mcpStructured<{ grantID: string }>(status).grantID
+    const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+    const sent = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })
+    expect(sent.isError).not.toBe(true)
+    expect(mcpResult<{ messageID: string }>(sent).messageID).toEqual(expect.any(String))
+    const deliveries = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ mime: string }> }
+    expect(deliveries.deliveries).toHaveLength(before.deliveries.length + 1)
+    const encoded = deliveries.deliveries.at(-1)!.mime.match(/Content-Disposition: attachment; filename="sdk-reply-attachment\.png"\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)\r\n--/)
+    expect(encoded?.[1]).toBeDefined()
+    expect(Buffer.from(encoded![1].replace(/\r\n/g, ''), 'base64')).toEqual(Buffer.from(fixture.attachment.bytes, 'base64'))
+    await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } }).catch(() => undefined)
+    expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length + 1)
+  } finally { await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }
+})
+
+test('ENG-033 refuses mutated, deleted, or role-revoked SDK attachments after browser confirmation without consuming a grant', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  const state = async (body: object) => (await page.request.post(`${origin}/__e2e/mail-reply-attachment-state`, { data: body })).json() as Promise<{ grant?: { consumedAt: string | null; revokedAt: string | null } }>
+  const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  let transport: StreamableHTTPClientTransport | undefined
+  try {
+    const identity = await (await page.request.post(`${origin}/__e2e/mcp-identity`)).json() as { bearer: string }
+    const client = new Client({ name: 'e2e-bound-mail-negative', version: '1.0.0' })
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
+    await client.connect(transport)
+    for (const action of ['mutate-asset', 'delete-asset', 'revoke-role'] as const) {
+      const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1&attachment=1`)).json() as { deepLead: string; attachment: { source: 'asset'; sourceID: string } }
+      const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: `SDK negative ${action}`, body: 'Confirmed before state changes.', attachments: [{ source: fixture.attachment.source, id: fixture.attachment.sourceID }] } })
+      const draft = mcpStructured<{ draft: { id: string; confirmationURL: string } }>(prepared).draft
+      await page.goto(new URL(draft.confirmationURL).pathname + new URL(draft.confirmationURL).search)
+      await page.locator('[data-mail-reply-composer]').getByRole('button', { name: 'Confirm exact reply' }).click()
+      const grantID = mcpStructured<{ grantID: string }>(await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })).grantID
+      const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+      await state(action === 'revoke-role' ? { action } : { action, assetID: fixture.attachment.sourceID })
+      const result = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } }).catch(() => undefined)
+      if (result) expect(result.isError).toBe(true)
+      expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length)
+      expect((await state({ action: 'grant-state', grantID })).grant).toMatchObject({ consumedAt: null, revokedAt: null })
+      if (action === 'revoke-role') await state({ action: 'restore-role' })
+    }
+  } finally { await state({ action: 'restore-role' }).catch(() => undefined); await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }
+})
+
+test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through the real handler', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-sales-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await reply.getByLabel('Reply subject').fill('Sales-confirmed reply')
+    await reply.getByLabel('Reply message').fill('Sales exact body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toBeVisible()
+    await reply.getByRole('button', { name: 'Cancel confirmation and edit' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
+  } finally { await context.close() }
+})
+
+test('ENG-033 lets a fresh Hiring user cancel then send one confirmed application reply through the real handler', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-hiring-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+    await page.goto('/applications')
+    await page.getByRole('button', { name: /^Applications/ }).click()
+    await page.getByRole('button', { name: /Synthetic candidate/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await expect(reply.getByLabel('Existing conversation')).toHaveValue('fixture-oauth-application-thread')
+    await reply.getByLabel('Reply message').fill('Canceled hiring body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Cancel confirmation and edit' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
+    await reply.getByLabel('Reply message').fill('Confirmed hiring body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
+    const after = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    expect(after.deliveries).toHaveLength(before.deliveries.length + 1)
+    expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-application-thread' })
+    expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture hiring reply\r\n')
+    expect(after.deliveries.at(-1)?.mime).toContain('Confirmed hiring body')
   } finally { await context.close() }
 })

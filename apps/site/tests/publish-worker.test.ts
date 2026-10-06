@@ -1,11 +1,13 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, readlink, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import { createPublishAPI, runPublishOnce } from '../scripts/run-publish-worker.mjs';
+import { publishActivatedReleaseIndexNow } from '../scripts/indexnow.mjs';
 import { createPublicServer } from '../scripts/public-server.mjs';
+import { publicReleaseProof } from '../scripts/public-release.mjs';
 import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
 const roots: string[] = []; const pins = { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' };
@@ -199,5 +201,33 @@ describe('publish worker', () => {
     const neverRender = vi.fn(async () => { throw new Error('reclaimed release must not rebuild'); });
     await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, render: neverRender, healthProbe: async () => true })).resolves.toBe(true);
     expect(neverRender).not.toHaveBeenCalled(); expect(completed).toHaveLength(2); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
+  }, 60_000);
+  it('notifies IndexNow only after the activated public release and replays completion without a duplicate request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const complete: any[] = [];
+    vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('SITE_INDEXNOW_ENABLED', 'true'); vi.stubEnv('SITE_INDEXNOW_KEY', 'abcdefghi'); vi.stubEnv('SITE_INDEXNOW_ENDPOINT', 'https://indexnow.example/indexnow'); vi.stubEnv('SITE_INDEXNOW_ALLOWED_HOSTS', 'indexnow.example');
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 })); vi.stubGlobal('fetch', fetch);
+    let lease = job.leaseToken;
+    const api = async (action: string, body: Record<string, unknown> = {}) => action === 'claim' ? { job: { ...job, leaseToken: lease }, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job: { ...job, leaseToken: body.leaseToken } } : action === 'complete' ? (complete.push(body), lease = 'c'.repeat(36), { job: { status: 'completed' } }) : { job: {} };
+    const worker = { api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://public.example.test', versionPins: pins, healthProbe: async () => true };
+    await expect(runPublishOnce(worker)).resolves.toBe(true); await expect(runPublishOnce(worker)).resolves.toBe(true);
+    expect(fetch).toHaveBeenCalledOnce(); expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toMatchObject({ host: 'public.example.test', urlList: expect.arrayContaining(['https://public.example.test/']) });
+    expect(complete).toHaveLength(2); expect(complete[0].artifact.indexNow).toMatchObject({ sent: true, batches: 1 }); expect(complete[1].artifact.indexNow).toMatchObject({ sent: true, batches: 1 });
+  }, 60_000);
+  it('completes a healthy activated release when the IndexNow attempt marker cannot be written', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const complete: any[] = []; const fail: any[] = [];
+    const api = async (action: string, body: Record<string, unknown> = {}) => {
+      if (action === 'claim') return { job, snapshot, contentHash, versionPins: pins };
+      if (action === 'renew') return { job: { ...job, leaseToken: body.leaseToken } };
+      if (action === 'complete') { complete.push(body); return { job: { status: 'completed' } }; }
+      if (action === 'fail') { fail.push(body); return { job: {} }; }
+      return { job: {} };
+    };
+    const releasesRoot = join(root, 'releases');
+    const indexNowPublisher = (options: { releasesRoot: string, jobID: string, sequence: number, contentHash: string, publicOrigin: string }) => publishActivatedReleaseIndexNow({ ...options, fetchImpl: fetch, writeFileImpl: async () => { throw new Error('attempt marker storage unavailable'); } });
+    await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: 'https://public.example.test', versionPins: pins, healthProbe: async () => true, indexNowPublisher })).resolves.toBe(true);
+    expect(await readlink(join(releasesRoot, 'current'))).toBe(`release-${job.sequence}-${job.id}`);
+    expect(await readFile(join(releasesRoot, 'current', 'healthz'), 'utf8')).toContain('ok');
+    await expect(publicReleaseProof(releasesRoot)).resolves.toMatchObject({ jobID: job.id, sequence: job.sequence, contentHash });
+    expect(complete).toHaveLength(1); expect(complete[0].artifact.indexNow).toEqual({ sent: false, reason: 'ancillary-failure' }); expect(fail).toEqual([]);
   }, 60_000);
 });

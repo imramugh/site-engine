@@ -1,5 +1,6 @@
-import { lstat, writeFile } from 'node:fs/promises';
+import { lstat, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { publicReleaseProof } from './public-release.mjs';
 
 const MAX_URLS_PER_REQUEST = 10_000;
 const enabled = () => process.env.SITE_INDEXNOW_ENABLED === 'true' && process.env.NODE_ENV === 'production';
@@ -24,20 +25,40 @@ export async function writeIndexNowVerificationFile({ output, key = process.env.
 }
 
 /** Invoke only after the immutable artifact is activated at its public origin. */
-export async function publishIndexNowAfterActivation({ urls, publicOrigin, basePath }) {
+const pause = milliseconds => new Promise(done => setTimeout(done, milliseconds));
+export async function publishIndexNowAfterActivation({ urls, publicOrigin, basePath, fetchImpl = fetch }) {
   if (!enabled()) return { sent: false, reason: 'disabled' };
   if (basePath !== '/') return { sent: false, reason: 'preview' };
   const key = process.env.SITE_INDEXNOW_KEY;
   const endpointValue = process.env.SITE_INDEXNOW_ENDPOINT;
   if (!validKey(key) || !endpointValue) return { sent: false, reason: 'unconfigured' };
-  const endpoint = allowedEndpoint(endpointValue);
-  const origin = new URL(publicOrigin);
-  const publicURLs = [...new Set(urls)].map((value) => new URL(value));
-  if (publicURLs.some((value) => value.origin !== origin.origin || value.protocol !== 'https:')) throw new Error('IndexNow URLs must use the configured HTTPS public origin.');
+  let endpoint; let origin; let publicURLs;
+  try { endpoint = allowedEndpoint(endpointValue); origin = new URL(publicOrigin); publicURLs = [...new Set(urls)].map((value) => new URL(value)); } catch { return { sent: false, reason: 'invalid-configuration' }; }
+  if (origin.protocol !== 'https:' || publicURLs.some((value) => value.origin !== origin.origin || value.protocol !== 'https:')) return { sent: false, reason: 'invalid-urls' };
   const batches = Array.from({ length: Math.ceil(publicURLs.length / MAX_URLS_PER_REQUEST) }, (_, index) => publicURLs.slice(index * MAX_URLS_PER_REQUEST, (index + 1) * MAX_URLS_PER_REQUEST));
   for (const batch of batches) {
-    const response = await fetch(endpoint, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000), headers: { 'content-type': 'application/json' }, body: JSON.stringify({ host: origin.hostname, key, keyLocation: new URL(`/${key}.txt`, origin).href, urlList: batch.map(String) }) });
-    if (!response.ok) throw new Error(`IndexNow rejected the activation hook (${response.status}).`);
+    let accepted = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let response;
+      try { response = await fetchImpl(endpoint, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000), headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({ host: origin.hostname, key, keyLocation: new URL(`/${key}.txt`, origin).href, urlList: batch.map(String) }) }); } catch { return { sent: false, reason: 'outcome-unknown', batches: batches.length }; }
+      if (response.status === 200 || response.status === 202) { accepted = true; break; }
+      if ((response.status === 429 || response.status >= 500) && attempt < 2) { await response.body?.cancel(); await pause(100 * (attempt + 1)); continue; }
+      await response.body?.cancel(); return { sent: false, reason: 'rejected', status: response.status, batches: batches.length };
+    }
+    if (!accepted) return { sent: false, reason: 'rejected', batches: batches.length };
   }
   return { sent: true, batches: batches.length };
+}
+
+const sitemapURLs = xml => [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match => match[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
+/** Stores an attempt marker before the network call. An unknown result is never
+ * replayed, because a dropped acknowledgement may still have been accepted. */
+export async function publishActivatedReleaseIndexNow({ releasesRoot, jobID, sequence, contentHash, publicOrigin, fetchImpl, writeFileImpl = writeFile }) {
+  let proof; try { proof = await publicReleaseProof(releasesRoot); } catch { return { sent: false, reason: 'not-active' }; }
+  if (proof.jobID !== jobID || proof.sequence !== sequence || proof.contentHash !== contentHash) return { sent: false, reason: 'superseded' };
+  const root = resolve(releasesRoot); const marker = join(root, `.indexnow-${sequence}-${jobID}.json`);
+  try { await writeFileImpl(marker, JSON.stringify({ state: 'attempting', jobID, sequence, contentHash }) + '\n', { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error?.code !== 'EEXIST') throw error; try { return JSON.parse(await readFile(marker, 'utf8')); } catch { return { sent: false, reason: 'outcome-unknown' }; } }
+  let result; try { result = await publishIndexNowAfterActivation({ urls: sitemapURLs(await readFile(join(root, 'current', 'sitemap.xml'), 'utf8')), publicOrigin, basePath: '/', fetchImpl }); } catch { result = { sent: false, reason: 'outcome-unknown' }; }
+  await writeFileImpl(marker, JSON.stringify({ ...result, jobID, sequence, contentHash }) + '\n', { mode: 0o600 }); return result;
 }

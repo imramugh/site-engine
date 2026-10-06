@@ -11,7 +11,8 @@ configuration, or credentials.
   `list_appearance_options`, `get_block_library`, and `list_sections`.
 - Draft editing: named change sets; section creation and updates; page creation and recipe creation; whole
   block updates; block add, move, hide, copy, remove, and reorder; validated
-  page-field updates; and item add, update, move, and remove for
+  page-field updates; page duplication, moves, template changes, and archive
+  operations; and item add, update, move, and remove for
   contract-defined item lists.
 - Scoped reads: redirects, site settings, installed themes, frozen page
   quality, deterministic current-draft page audits, stale current-draft pages, current style
@@ -24,9 +25,7 @@ The server exposes no approval or publication tool.
 
 ## Planned
 
-- Content structure operations beyond the current page and block workflows,
-  including section archiving, page moves or duplication, template changes,
-  and navigation overrides.
+- Navigation overrides.
 - Media lifecycle tools, quality suggestions, review-history queries, and
   additional site or theme draft operations.
 - Scoped lead and careers workflow mutations that require their own privacy,
