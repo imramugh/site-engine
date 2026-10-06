@@ -500,13 +500,12 @@ test('MCP site and theme tools keep Owner draft mutations revisioned and scoped'
     const names = (await ownerSdk.client.listTools()).tools.map(tool => tool.name)
     expect(names).toEqual(expect.arrayContaining(['update_nav_overrides', 'update_site_settings', 'list_themes', 'get_theme_compatibility', 'switch_theme', 'update_theme_settings', 'create_redirect']))
     await expect(editorSdk.client.callTool({ name: 'get_site_settings', arguments: {} })).resolves.toMatchObject({ isError: true })
-    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; navigation?: unknown }
+    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; homepageId: string }
     const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP site controls' } })) as { id: string; revision: number }
-    const currentNavigation = state.navigation as { footer?: Record<string, unknown> } | undefined
-    const navigation = { ...currentNavigation, footer: { ...(currentNavigation?.footer ?? {}), copyright: `© {year} MCP ${randomUUID()}` } }
-    const updated = structuredJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, navigation } })) as { revision: number; draft: { navigation?: unknown } }
-    expect(updated).toMatchObject({ changeSetId: created.id, revision: created.revision + 1, draft: { navigation } })
-    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, navigation } }))).toEqual({ error: 'revision_conflict' })
+    const add = [{ location: 'header' as const, reference: { kind: 'page' as const, id: state.homepageId, label: `MCP ${randomUUID()}` } }]
+    const updated = structuredJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } })) as { revision: number; draft: { navigation?: unknown } }
+    expect(updated).toMatchObject({ changeSetId: created.id, revision: created.revision + 1, draft: { navigation: expect.any(Object) } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } }))).toEqual({ error: 'revision_conflict' })
     const redirect = structuredJson(await ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: updated.revision, requestKey: randomUUID(), from: `/mcp-site-${randomUUID()}`, to: '/' } })) as { revision: number; draft: { from: string; to: string } }
     expect(redirect).toMatchObject({ revision: updated.revision + 1, draft: { to: '/' } })
     expect(resultJson(await ownerSdk.client.callTool({ name: 'list_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })

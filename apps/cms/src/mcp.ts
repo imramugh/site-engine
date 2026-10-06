@@ -521,13 +521,13 @@ export async function handleMcp(request: Request): Promise<Response> {
     return set
   }
   const ownerWriteFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'stale_settings', 'theme_not_installed', 'theme_incompatible'])
-  const changeSetResult = async (id: string, doc: Record<string, unknown>) => {
-    const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true }) as { revision?: number }
-    const quality = await withPayloadTransaction(payload, async (req) => {
-      req.user = current as never
-      const latest = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as { changes?: unknown[] }
-      return changeSetQuality(payload, req, Array.isArray(latest.changes) ? latest.changes as Parameters<typeof changeSetQuality>[2] : [])
-    })
+  const checkedMutation = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, id: string, doc: Record<string, unknown>) => {
+    const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as { revision?: number; changes?: unknown[] }
+    const quality = await changeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
+    // Drafts deliberately retain readiness blockers for review. Contract/tree
+    // failures are impossible after collection validation, but fail closed if
+    // a future capture/check implementation detects one before commit.
+    if (quality.checks.some(check => check.status === 'failed')) throw new Error('draft_checks_failed')
     return { changeSetId: id, revision: Number(set.revision ?? 0), draft: doc, checks: quality.checks, warnings: quality.warnings }
   }
   const siteWrite = async (changeSetId: string, expectedChangeSetRevision: number, expectedSettingsHash: string, data: Record<string, unknown>) => {
@@ -540,19 +540,42 @@ export async function handleMcp(request: Request): Promise<Response> {
         const existing = found.docs[0] as unknown as Record<string, unknown> | undefined
         const before = capturedSnapshot('site-settings', existing) ?? {}
         if (canonicalHash(before) !== expectedSettingsHash) throw new Error('stale_settings')
-        const allowed = new Set(['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'searchEnabled', 'crawlerPolicy'])
+        const allowed = new Set(['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'navigationOps', 'seoDescription', 'searchEnabled', 'crawlerPolicy'])
         if (!Object.keys(data).length || Object.keys(data).some(key => !allowed.has(key))) throw new Error('invalid_settings')
-        const next = { ...before, ...data, key: 'active' }
-        return existing
-          ? payload.update({ collection: 'site-settings', id: String(existing.id), data: next, draft: true, user: current as never, overrideAccess: false, req })
-          : payload.create({ collection: 'site-settings', data: next, draft: true, user: current as never, overrideAccess: false, req })
+        const operations = data.navigationOps as { add?: Array<{ location: 'header' | 'footer'; reference: { kind: 'page' | 'section'; id: string; label: string; style?: 'link' | 'button' } }>; remove?: string[] } | undefined
+        const nextData = { ...data }; delete nextData.navigationOps
+        let navigation = before.navigation
+        if (operations) {
+          const currentNav = navigation && typeof navigation === 'object' ? structuredClone(navigation as { header?: unknown[]; footer?: { columns?: unknown[]; bottomLinks?: unknown[]; copyright?: unknown } }) : { header: [], footer: { columns: [] } }
+          const header = Array.isArray(currentNav.header) ? currentNav.header : []; const footer = currentNav.footer && typeof currentNav.footer === 'object' ? currentNav.footer : { columns: [] }
+          const removals = new Set((operations.remove ?? []).map(path => path.replace(/^\/+|\/+$/g, '')))
+          if (removals.size) {
+            const pages = await payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
+            const ids = new Set(pages.docs.filter(page => removals.has(String(page.slug))).map(page => String(page.id)))
+            currentNav.header = header.filter((item: unknown) => !item || typeof item !== 'object' || !ids.has(String((item as { id?: unknown }).id)))
+            const removeLinks = (links: unknown) => Array.isArray(links) ? links.filter(item => !item || typeof item !== 'object' || !ids.has(String((item as { id?: unknown }).id))) : links
+            footer.bottomLinks = removeLinks(footer.bottomLinks) as unknown[] | undefined
+            footer.columns = (Array.isArray(footer.columns) ? footer.columns.map((column: unknown) => column && typeof column === 'object' ? { ...(column as Record<string, unknown>), links: removeLinks((column as { links?: unknown }).links) } : column) : []) as unknown[]
+          }
+          for (const add of operations.add ?? []) {
+            if (add.location === 'header') currentNav.header = [...(currentNav.header ?? []), { ...add.reference, style: add.reference.style ?? 'link' }]
+            else footer.bottomLinks = [...(Array.isArray(footer.bottomLinks) ? footer.bottomLinks : []), { kind: add.reference.kind, id: add.reference.id, label: add.reference.label }]
+          }
+          currentNav.footer = footer; navigation = currentNav
+        }
+        const next = { ...before, ...nextData, ...(operations ? { navigation } : {}), key: 'active' }
+        const doc = existing
+          ? payload.update({ collection: 'site-settings', id: String(existing.id), data: next as never, draft: true, user: current as never, overrideAccess: false, req })
+          : payload.create({ collection: 'site-settings', data: next as never, draft: true, user: current as never, overrideAccess: false, req })
+        return checkedMutation(req, changeSetId, capturedSnapshot('site-settings', await doc as unknown as Record<string, unknown>) ?? {})
       })
-      return structured(await changeSetResult(changeSetId, capturedSnapshot('site-settings', result as unknown as Record<string, unknown>) ?? {}))
+      return structured(result)
     } catch (error) { return ownerWriteFailure(error) }
   }
   const siteSettingsInput = z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), settings: z.object({}).catchall(z.unknown()) }).strict()
   server.registerTool('update_site_settings', { title: 'Update site settings', description: `Owner-only update of site settings through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: siteSettingsInput, annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings }) => siteWrite(changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings))
-  server.registerTool('update_nav_overrides', { title: 'Update navigation overrides', description: `Owner-only navigation update through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), navigation: z.unknown() }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, navigation }) => siteWrite(changeSetId, expectedChangeSetRevision, expectedSettingsHash, { navigation }))
+  const navigationReference = z.object({ kind: z.enum(['page', 'section']), id: z.string().uuid(), label: z.string().min(1).max(80), style: z.enum(['link', 'button']).optional() }).strict()
+  server.registerTool('update_nav_overrides', { title: 'Update navigation overrides', description: `Owner-only add/remove of extra header or footer links through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), add: z.array(z.object({ location: z.enum(['header', 'footer']), reference: navigationReference }).strict()).max(6).optional(), remove: z.array(z.string().regex(/^\/[a-z0-9-]+\/$/)).max(12).optional() }).strict().refine(value => Boolean(value.add?.length || value.remove?.length), { message: 'Provide at least one add or remove operation.' }), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, add, remove }) => siteWrite(changeSetId, expectedChangeSetRevision, expectedSettingsHash, { navigationOps: { add, remove } }))
   server.registerTool('switch_theme', { title: 'Switch theme', description: `Owner-only draft theme selection through an explicit revisioned change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSelectionHash: z.string().regex(/^[a-f0-9]{64}$/), id: z.string().min(1).max(120), version: z.string().min(1).max(120) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSelectionHash, id, version }) => {
     if (!write) return denied(contentWriteScope); if (!owner) return ownerDenied()
     try {
@@ -570,9 +593,10 @@ export async function handleMcp(request: Request): Promise<Response> {
         if (manifest && !compatibilityReport(manifest, installed.manifest).compatible) throw new Error('theme_incompatible')
         const selection = { id: installed.manifest.name, version: installed.manifest.version, contract: installed.manifest.contract, manifestDigest: installed.manifestDigest }
         const settings = { ...(setting?.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}), [selection.id]: (setting?.settings as Record<string, unknown> | undefined)?.[selection.id] ?? {} }
-        return setting ? payload.update({ collection: 'theme-settings', id: String(setting.id), data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req }) : payload.create({ collection: 'theme-settings', data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req })
+        const doc = setting ? await payload.update({ collection: 'theme-settings', id: String(setting.id), data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req }) : await payload.create({ collection: 'theme-settings', data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req })
+        return checkedMutation(req, changeSetId, capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>) ?? {})
       })
-      return structured(await changeSetResult(changeSetId, capturedSnapshot('theme-settings', result as unknown as Record<string, unknown>) ?? {}))
+      return structured(result)
     } catch (error) { return ownerWriteFailure(error) }
   })
   server.registerTool('update_theme_settings', { title: 'Update theme settings', description: `Owner-only theme settings update through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), settings: z.object({}).catchall(z.unknown()) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings }) => {
@@ -590,9 +614,10 @@ export async function handleMcp(request: Request): Promise<Response> {
         if (canonicalHash(before) !== expectedSettingsHash) throw new Error('stale_settings')
         const installed = getInstalledTheme(await loadThemeRegistry(), selection.id, typeof selection.version === 'string' ? selection.version : '')
         if (!installed || Object.keys(settings).some(key => !installed.manifest.settingKeys.includes(key))) throw new Error('theme_not_installed')
-        return payload.update({ collection: 'theme-settings', id: String(setting.id), data: { settings: { ...allSettings, [selection.id]: settings } }, draft: true, user: current as never, overrideAccess: false, req })
+        const doc = await payload.update({ collection: 'theme-settings', id: String(setting.id), data: { settings: { ...allSettings, [selection.id]: settings } }, draft: true, user: current as never, overrideAccess: false, req })
+        return checkedMutation(req, changeSetId, capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>) ?? {})
       })
-      return structured(await changeSetResult(changeSetId, capturedSnapshot('theme-settings', result as unknown as Record<string, unknown>) ?? {}))
+      return structured(result)
     } catch (error) { return ownerWriteFailure(error) }
   })
   const redirectWriteSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [redirectsWriteScope] }], requiredScopes: [redirectsWriteScope], effectiveUserRequired: true }
@@ -604,9 +629,10 @@ export async function handleMcp(request: Request): Promise<Response> {
         const candidate = normalizedRedirect({ from, to })
         const existing = await payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
         validateRedirectSet([...existing.docs.map(item => ({ from: String(item.from), to: String(item.to), status: 301 })), candidate])
-        return payload.create({ collection: 'redirects', data: { id: requestKey, ...candidate }, draft: true, user: current as never, overrideAccess: false, req })
+        const doc = await payload.create({ collection: 'redirects', data: { id: requestKey, ...candidate }, draft: true, user: current as never, overrideAccess: false, req })
+        return checkedMutation(req, changeSetId, redirect(doc as unknown as Record<string, unknown>))
       })
-      return structured(await changeSetResult(changeSetId, redirect(result as unknown as Record<string, unknown>)))
+      return structured(result)
     } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable']) }
   })
   const currentPage = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageId: string, expectedPageHash: string) => {
