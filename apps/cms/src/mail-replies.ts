@@ -28,13 +28,13 @@ export async function sendReply(payload: Payload, actor: { id: string; sessionTo
   const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
   const mailboxID = mapping.docs[0] && (typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id)
   const mailbox = mailboxID ? await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) : undefined
-  let providerReply: { providerThreadID: string; providerMessageID: string; providerMailboxID: string; provider: 'microsoft' | 'google'; providerTarget: { collection: 'inquiries' | 'applications'; id: string } } | undefined
+  let providerReply: { providerThreadID: string; providerMessageID: string; providerMailboxID: string; provider: 'microsoft' | 'google'; providerTarget: { collection: 'inquiries' | 'applications'; id: string }; providerRFCMessageID?: string; providerRFCReferences?: string; providerSubject: string } | undefined
   if (mailbox && (mailbox.provider === 'microsoft' || mailbox.provider === 'google')) {
     const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ [pendingApplication ? 'application' : 'lead']: { equals: pendingApplication || pendingDraft.lead } }, { mailbox: { equals: mailboxID } }, { provider: { equals: mailbox.provider } }, { providerConversationID: { equals: String(pendingDraft.threadID) } }] }, limit: 1, depth: 0, overrideAccess: true })
     if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
     const messages = await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.docs[0].id } }, sort: '-receivedAt', limit: 1, depth: 0, overrideAccess: true })
-    if (!messages.docs[0]?.providerMessageID) throw new Error('mailbox_thread_not_grounded')
-    providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: { collection: pendingApplication ? 'applications' : 'inquiries', id: String(pendingApplication || pendingDraft.lead) } }
+    if (!messages.docs[0]?.providerMessageID || (mailbox.provider === 'google' && !messages.docs[0].rfcMessageID) || String(messages.docs[0]?.subject) !== String(pendingDraft.subject)) throw new Error('mailbox_thread_not_grounded')
+    providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: { collection: pendingApplication ? 'applications' : 'inquiries', id: String(pendingApplication || pendingDraft.lead) }, ...(mailbox.provider === 'google' ? { providerRFCMessageID: String(messages.docs[0].rfcMessageID), ...(messages.docs[0].rfcReferences ? { providerRFCReferences: String(messages.docs[0].rfcReferences) } : {}) } : {}), providerSubject: String(messages.docs[0].subject) }
   }
   const grant = await consumeMailAuthorization(payload, actor, grantID)
   const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id

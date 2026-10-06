@@ -1095,6 +1095,8 @@ export interface MailThreadMessage {
   lead?: (string | null) | Inquiry;
   application?: (string | null) | Application;
   providerMessageID: string;
+  rfcMessageID?: string | null;
+  rfcReferences?: string | null;
   direction: 'inbound' | 'outbound';
   sender: string;
   recipient: string;
@@ -2325,6 +2327,8 @@ export interface MailThreadMessagesSelect<T extends boolean = true> {
   lead?: T;
   application?: T;
   providerMessageID?: T;
+  rfcMessageID?: T;
+  rfcReferences?: T;
   direction?: T;
   sender?: T;
   recipient?: T;

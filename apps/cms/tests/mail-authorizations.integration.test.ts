@@ -238,7 +238,7 @@ describe('local mail authorization transactions', () => {
     const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, owner.sessionToken, async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'team@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'team@example.test', verificationStatus: 'accepted' }] }))
     const lead = await payload.create({ collection: 'inquiries', data: { email: 'threaded@example.test', message: 'Threaded', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
     const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'google', providerConversationID: 'google-thread' }, overrideAccess: true })
-    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'google-message', direction: 'inbound', sender: lead.email, recipient: 'team@example.test', subject: 'Original', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'google-message', rfcMessageID: '<google-message@example.test>', rfcReferences: '<root@example.test>', direction: 'inbound', sender: lead.email, recipient: 'team@example.test', subject: 'Reply', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
     await (payload as any).create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'team@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
     const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Reply', body: 'Approved body', threadID: 'google-thread' })
     const grant = await authorizeMailDraft(payload, owner, draft.id, future())
@@ -254,6 +254,8 @@ describe('local mail authorization transactions', () => {
       await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'google', messageID: 'sent-id' })
       expect(sent.threadId).toBe('google-thread')
       expect(Buffer.from(sent.raw, 'base64url').toString()).toContain('To: threaded@example.test\r\nFrom: team@example.test\r\nSubject: Reply')
+      expect(Buffer.from(sent.raw, 'base64url').toString()).toContain('In-Reply-To: <google-message@example.test>\r\nReferences: <root@example.test> <google-message@example.test>')
+      expect(Buffer.from(sent.raw, 'base64url').toString()).not.toContain('In-Reply-To: google-message')
       expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'sent' })
       await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
     } finally { setReplyDeliveryForTest() }
@@ -272,7 +274,10 @@ describe('local mail authorization transactions', () => {
     await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('mailbox_thread_not_grounded')
     expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
     const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'google', providerConversationID: 'missing-thread' }, overrideAccess: true })
-    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'provider-message', direction: 'inbound', sender: lead.email, recipient: 'retry@example.test', subject: 'Original', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    const providerMessage = await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'provider-message', direction: 'inbound', sender: lead.email, recipient: 'retry@example.test', subject: 'Retry', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('mailbox_thread_not_grounded')
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+    await payload.update({ collection: 'mail-thread-messages', id: providerMessage.id, data: { rfcMessageID: '<provider-message@example.test>' }, overrideAccess: true, context: { mailboxInternal: true } })
     let sent: { raw?: string; threadId?: string } | undefined
     setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
       if (url.includes('/token')) return Response.json({ access_token: 'access' })

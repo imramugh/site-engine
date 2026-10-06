@@ -93,7 +93,7 @@ test('Gmail history hydrates a matched MIME message before advancing its durable
     if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail-sync@example.test', historyId: '100' })
     if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail-sync@example.test', verificationStatus: 'accepted' }] })
     if (url.includes('/history?')) return Response.json(phase === 'malformed' ? { historyId: '102', history: [{ messagesAdded: [{ message: { id: 'bad-message' } }] }] } : { historyId: '101', history: [{ messagesAdded: [{ message: { id: 'gmail-message' } }] }] })
-    if (url.includes('/messages/gmail-message?')) return Response.json({ id: 'gmail-message', threadId: 'gmail-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'gmail-visitor@example.test' }, { name: 'To', value: 'gmail-sync@example.test' }, { name: 'Subject', value: '<b>Safe reply</b>' }], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('<p>Hello</p>\u0000', 'utf8').toString('base64url') } }, { filename: '<b>resume.pdf</b>', mimeType: 'application/pdf', body: { attachmentId: 'a', size: 42 } }] } })
+    if (url.includes('/messages/gmail-message?')) return Response.json({ id: 'gmail-message', threadId: 'gmail-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'gmail-visitor@example.test' }, { name: 'To', value: 'gmail-sync@example.test' }, { name: 'Subject', value: '<b>Safe reply</b>' }, { name: 'Message-ID', value: '<gmail-original@example.test>' }, { name: 'References', value: '<root@example.test>' }], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('<p>Hello</p>\u0000', 'utf8').toString('base64url') } }, { filename: '<b>resume.pdf</b>', mimeType: 'application/pdf', body: { attachmentId: 'a', size: 42 } }] } })
     if (url.includes('/messages/bad-message?')) return Response.json({ id: 'bad-message', threadId: '' })
     throw new Error(`unexpected ${url}`)
   }
@@ -105,7 +105,7 @@ test('Gmail history hydrates a matched MIME message before advancing its durable
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '101' })
   const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'gmail-message' } }, overrideAccess: true })).docs[0] as any
-  expect(message).toMatchObject({ subject: 'Safe reply', body: 'Hello', attachmentMetadata: [{ name: 'resume.pdf', contentType: 'application/pdf', size: 42 }] })
+  expect(message).toMatchObject({ subject: 'Safe reply', body: 'Hello', rfcMessageID: '<gmail-original@example.test>', rfcReferences: '<root@example.test>', attachmentMetadata: [{ name: 'resume.pdf', contentType: 'application/pdf', size: 42 }] })
   phase = 'malformed'
   await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).rejects.toThrow('provider_malformed_response')
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any

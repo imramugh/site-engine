@@ -108,7 +108,7 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
       for (const id of pendingIDs) {
         const message = await adapter.message(refreshed.accessToken, id)
         await unchanged(payload, active)
-        await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
+        await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, rfcMessageID: message.rfcMessageID, rfcReferences: message.rfcReferences, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
         processed += 1
       }
       const nextOffset = offset + pendingIDs.length

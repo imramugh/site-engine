@@ -7,6 +7,8 @@ export type Envelope = {
   body: string;
   threadID?: string;
   replyMessageID?: string;
+  rfcMessageID?: string;
+  rfcReferences?: string;
 };
 const maximum = 262_144;
 const timeout = 10_000;
@@ -30,7 +32,17 @@ const opaque = (value: unknown) =>
   typeof value === "string" &&
   value.length > 0 &&
   value.length <= 500 &&
-  !controls.test(value);
+    !controls.test(value);
+const rfcMessageID = (value: unknown) => {
+  const id = String(value ?? "").trim();
+  return /^<[^<>\s]{1,480}>$/.test(id) ? id : undefined;
+};
+const rfcReferences = (value: unknown) => {
+  const references = String(value ?? "").match(/<[^<>\s]{1,480}>/g) ?? [];
+  return references.length && references.join(" ").length <= 4000
+    ? [...new Set(references)].join(" ")
+    : undefined;
+};
 function fail(status: number): never {
   if (status === 401) throw new Error("provider_unauthorized");
   if (status === 403) throw new Error("provider_forbidden");
@@ -326,6 +338,8 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
     date: Number.isFinite(date) ? new Date(date).toISOString() : "",
     sender: address(header("from")),
     recipient: address(header("to")),
+    rfcMessageID: rfcMessageID(header("message-id")),
+    rfcReferences: rfcReferences(header("references")),
     attachments,
   };
 }
@@ -335,13 +349,14 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
       checkedEnvelope(input);
       checkedSender(verifiedSender, input);
       if (
-        (input.threadID && !input.replyMessageID) ||
+        (input.threadID && !input.rfcMessageID) ||
         (input.threadID && !opaque(input.threadID)) ||
-        (input.replyMessageID && !opaque(input.replyMessageID))
+        (input.rfcMessageID && !rfcMessageID(input.rfcMessageID)) ||
+        (input.rfcReferences && !rfcReferences(input.rfcReferences))
       )
         throw new Error("invalid_envelope");
-      const reply = input.replyMessageID
-        ? `In-Reply-To: ${input.replyMessageID}\r\nReferences: ${input.replyMessageID}\r\n`
+      const reply = input.rfcMessageID
+        ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[input.rfcReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
         : "";
       const raw = Buffer.from(
         `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,

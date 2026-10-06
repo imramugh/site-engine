@@ -127,6 +127,9 @@ export type AreaMailMessage = {
   providerMailboxID?: string
   provider?: 'microsoft' | 'google'
   providerTarget?: { collection: 'inquiries' | 'applications'; id: string }
+  providerRFCMessageID?: string
+  providerRFCReferences?: string
+  providerSubject?: string
 }
 
 async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
@@ -144,7 +147,7 @@ async function groundedProviderThread(payload: Payload, message: AreaMailMessage
   const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: mailbox.id } }, { provider: { equals: message.provider } }, { providerConversationID: { equals: message.providerThreadID } }, { [targetField]: { equals: message.providerTarget.id } }] }, limit: 1, depth: 0, overrideAccess: true })
   if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
   const linked = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: thread.docs[0].id } }, { mailbox: { equals: mailbox.id } }, { providerMessageID: { equals: message.providerMessageID } }] }, limit: 1, depth: 0, overrideAccess: true })
-  if (!linked.docs[0]) throw new Error('mailbox_thread_not_grounded')
+  if (!linked.docs[0] || message.subject !== message.providerSubject || message.providerSubject !== linked.docs[0].subject || (message.provider === 'google' && (!message.providerRFCMessageID || message.providerRFCMessageID !== linked.docs[0].rfcMessageID))) throw new Error('mailbox_thread_not_grounded')
 }
 
 export async function sendAreaMail(
@@ -177,7 +180,8 @@ export async function sendAreaMail(
     recipient: message.recipient,
     subject: message.subject,
     body: message.body,
-    ...(message.providerMessageID ? { replyMessageID: message.providerMessageID } : {}),
+    ...(mailbox.provider === 'microsoft' && message.providerMessageID ? { replyMessageID: message.providerMessageID } : {}),
+    ...(mailbox.provider === 'google' && message.providerRFCMessageID ? { rfcMessageID: message.providerRFCMessageID, ...(message.providerRFCReferences ? { rfcReferences: message.providerRFCReferences } : {}) } : {}),
     ...(mailbox.provider === 'google' && message.providerThreadID ? { threadID: message.providerThreadID } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
