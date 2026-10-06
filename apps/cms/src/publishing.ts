@@ -99,6 +99,11 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
   return merged
 }
 
+function validateCapturedAssetIntegrity(change: Change): void {
+  if (change.before !== null && (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash)) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
+  if (change.after !== null && change.afterHash !== null && canonicalHash(change.after) !== change.afterHash) throw new Error('The captured change is invalid. Refresh the change set before approval.')
+}
+
 export function buildCandidate(base: SiteSnapshot, changes: Change[], includedChangeKeys: readonly string[], versions: Versions): SiteSnapshot {
   const pages = new Map(base.pages.map((page) => [page.id, structuredClone(page)]))
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
@@ -159,6 +164,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       styleGuide = merged
     }
     if (change.collection === 'assets') {
+      validateCapturedAssetIntegrity(change)
       const publicChange: Change = { ...change, before: change.before && publicAssetSnapshot(change.before), after: change.after && publicAssetSnapshot(change.after), beforeHash: change.before ? canonicalHash(publicAssetSnapshot(change.before)) : null, afterHash: change.after ? canonicalHash(publicAssetSnapshot(change.after)) : null }
       const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, publicChange)
       if (merged === null) media.delete(change.id)
