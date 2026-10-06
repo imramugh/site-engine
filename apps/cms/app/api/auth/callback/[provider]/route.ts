@@ -15,7 +15,7 @@ class CallbackFailure extends Error {
   }
 }
 
-export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {
+async function GETHandler(request: Request, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params
   const state = new URL(request.url).searchParams.get('state')
   if (!state || !validProvider(provider)) return new NextResponse('Invalid sign-in response.', { status: 400 })
@@ -89,5 +89,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
       return new NextResponse(error.message, { status: error.status })
     }
     return new NextResponse('Identity verification failed.', { status: 401 })
+  }
+}
+
+/** Denial auditing is database-backed too; contention must never be reported
+ * as an invalid credential or invite. */
+export async function GET(request: Request, context: { params: Promise<{ provider: string }> }) {
+  try {
+    return await GETHandler(request, context)
+  } catch (error) {
+    if (isRetryableSQLiteError(error)) return new NextResponse('Sign-in is temporarily unavailable. Restart sign-in and try again.', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '1' } })
+    throw error
   }
 }
