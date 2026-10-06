@@ -100,7 +100,7 @@ test('ENG-037 lets only a fresh Owner manage retention in Operations and require
   await owner.page.goto('/leads')
   // Mail scenarios add enough recent leads to move this older fixture beyond
   // the first page. Use its source filter rather than assuming list position.
-  await owner.page.getByLabel('Source', { exact: true }).selectOption('/synthetic')
+  await owner.page.getByRole('combobox', { name: 'Source', exact: true }).selectOption('/synthetic')
   await owner.page.getByRole('button', { name: /new-lead\.synthetic@example\.test/ }).click()
   await owner.page.getByRole('button', { name: 'Permanently delete inquiry' }).click()
   const dialog = owner.page.getByRole('dialog', { name: 'Confirm permanent inquiry deletion' })
