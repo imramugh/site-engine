@@ -16,7 +16,7 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   if (!mapping.docs[0]) return Response.json({ senders: [], threads: [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
   const mailboxID = typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true })
-  const address = String(mapping.docs[0].senderAddress).toLowerCase(); const verified = String(mailbox.primaryAddress).toLowerCase() === address || (Array.isArray(mailbox.verifiedAliases) && mailbox.verifiedAliases.map(String).includes(address))
+  const address = String(mapping.docs[0].senderAddress).toLowerCase(); const verified = mailbox.health === 'connected' && (String(mailbox.primaryAddress).toLowerCase() === address || (Array.isArray(mailbox.verifiedAliases) && mailbox.verifiedAliases.map(String).includes(address)))
   let threads: Array<{ id: string; subject: string }> = []
   if (verified && (mailbox.provider === 'google' || mailbox.provider === 'microsoft')) {
     const found = await payload.find({ collection: 'mail-threads', where: { and: [{ [target]: { equals: id } }, { mailbox: { equals: mailboxID } }, { provider: { equals: mailbox.provider } }] }, limit: 50, sort: '-updatedAt', depth: 0, overrideAccess: true })

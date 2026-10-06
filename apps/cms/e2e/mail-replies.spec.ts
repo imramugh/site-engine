@@ -158,3 +158,38 @@ test('ENG-020 sends a confirmed initial OAuth message through the real handler',
     expect(delivered.mime).not.toContain('In-Reply-To:')
   } finally { await context.close() }
 })
+
+test('ENG-020 clears delayed reply state when switching records', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  let optionLoads = 0
+  await page.route('**/api/mail-replies/lead/**', async route => {
+    if (route.request().method() === 'GET') {
+      optionLoads += 1
+      return route.fulfill({ json: { senders: [{ address: optionLoads === 1 ? 'first@example.test' : 'second@example.test', label: 'Scoped mailbox' }], threads: [], canAuthorize: true } })
+    }
+    const body = route.request().postDataJSON()
+    if (body.action === 'prepare') {
+      await new Promise(resolve => setTimeout(resolve, 300))
+      return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'first@example.test', recipient: 'notes-a.synthetic@example.test', subject: 'Old subject', body: 'Old body' } } })
+    }
+    return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
+  })
+  try {
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const firstReply = page.locator('[data-mail-reply-composer]')
+    await expect(firstReply.getByLabel('Reply sender')).toHaveValue('first@example.test')
+    await firstReply.getByLabel('Reply subject').fill('Old subject')
+    await firstReply.getByLabel('Reply message').fill('Old body')
+    await firstReply.getByRole('button', { name: 'Prepare reply' }).click()
+    await page.getByRole('button', { name: /Timeline switch lead/ }).click()
+    const secondReply = page.locator('[data-mail-reply-composer]')
+    await expect(secondReply.getByLabel('Reply sender')).toHaveValue('second@example.test')
+    await expect(secondReply.getByRole('region', { name: 'Exact reply review' })).toHaveCount(0)
+    await expect(secondReply.getByRole('status')).toHaveCount(0)
+    await expect(secondReply.getByLabel('Reply subject')).toHaveValue('')
+    await expect(secondReply.getByLabel('Reply message')).toHaveValue('')
+  } finally { await context.close() }
+})

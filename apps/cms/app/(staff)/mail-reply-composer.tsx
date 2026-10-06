@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import styles from './mail-reply-composer.module.css'
 
 type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string }
@@ -22,19 +22,33 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [terminal, setTerminal] = useState<'sent' | 'unknown' | null>(null)
+  const requestGeneration = useRef(0)
 
   useEffect(() => {
+    const generation = ++requestGeneration.current
+    const current = () => requestGeneration.current === generation
     const controller = new AbortController()
+    setOptions(null)
     setLoadError('')
+    setSender('')
+    setSubject('')
+    setBody('')
+    setThreadID('')
+    setDraft(null)
+    setGrant('')
+    setStatus('')
+    setBusy(false)
+    setTerminal(null)
     void fetch(endpoint, { cache: 'no-store', signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error('Reply addresses could not be loaded.')
       const value = await response.json() as Options
+      if (!current()) return
       setOptions(value)
       setSender(value.senders[0]?.address ?? '')
       const threads = value.threads ?? []
       setThreadID(threads[0]?.id ?? '')
-      if (!subject && threads[0]?.subject) setSubject(threads[0].subject)
-    }).catch((error: unknown) => { if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : 'Reply addresses could not be loaded.') })
+      if (threads[0]?.subject) setSubject(threads[0].subject)
+    }).catch((error: unknown) => { if (!controller.signal.aborted && current()) setLoadError(error instanceof Error ? error.message : 'Reply addresses could not be loaded.') })
     return () => controller.abort()
   }, [endpoint, reload])
 
@@ -50,21 +64,26 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
 
   async function action(kind: 'prepare' | 'authorize' | 'edit' | 'send') {
     if (busy || terminal) return
+    const generation = requestGeneration.current
+    const current = () => requestGeneration.current === generation
     setBusy(true)
     setStatus('')
     try {
       if (kind === 'prepare') {
         const value = await call('prepare')
+        if (!current()) return
         if (!value.draft) throw new Error('The prepared reply was not returned.')
         setDraft(value.draft)
         setStatus('Review the exact reply before confirming.')
       } else if (kind === 'authorize') {
         const value = await call('authorize', draft?.id)
+        if (!current()) return
         if (!value.authorization) throw new Error('Confirmation was not returned.')
         setGrant(value.authorization.id)
         setStatus('Confirmed for this message only. Send within 10 minutes.')
       } else if (kind === 'edit') {
         if (grant) await call('cancel', grant)
+        if (!current()) return
         setGrant('')
         setDraft(null)
         setStatus('Any changes require a new confirmation.')
@@ -72,12 +91,13 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         // Do not offer a retry when a request may have reached the provider.
         setTerminal('unknown')
         await call('send', grant)
+        if (!current()) return
         setTerminal('sent')
         setStatus('Reply sent.')
       }
     } catch (error) {
-      setStatus(kind === 'send' ? 'Delivery could not be confirmed. Check the mailbox before preparing another reply; this confirmation cannot be reused.' : error instanceof Error ? error.message : 'The reply could not be processed.')
-    } finally { setBusy(false) }
+      if (current()) setStatus(kind === 'send' ? 'Delivery could not be confirmed. Check the mailbox before preparing another reply; this confirmation cannot be reused.' : error instanceof Error ? error.message : 'The reply could not be processed.')
+    } finally { if (current()) setBusy(false) }
   }
 
   return <section className={styles.composer} data-mail-reply-composer aria-labelledby={`${formID}-heading`}>
