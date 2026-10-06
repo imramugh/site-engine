@@ -35,6 +35,8 @@ const MAX_OUTPUT_TOKENS = 8_192
 // model and deliberately uses a very high bound.
 const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-test': 1_000_000 })
 export function supportsVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && Number.isSafeInteger(visionInputTokenUpperBounds[model]) }
+/** UI/API routing must not expose the deterministic test model. */
+export function supportsProductionVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && model === 'gpt-4.1-mini' }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const text = (value: unknown) => typeof value === 'string' ? value : undefined
