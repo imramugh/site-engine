@@ -333,3 +333,84 @@ export async function createNamedChangeSet(payload: Payload, req: PayloadRequest
   if (!hasRole(actor, ['owner', 'approver', 'editor'])) throw new Error('Editor role required.')
   return payload.create({ collection: 'change-sets', data: { id: randomUUID(), name, actor: actor.id, state: 'open', revision: 0, changes: [] }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Promise<Record<string, unknown>>
 }
+
+export type ChangeConflict = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; proposed: Record<string, unknown> | null; current: Record<string, unknown> | null; currentHash: string | null; canReapply: boolean }
+type ConflictChoice = { collection: CapturedCollection; id: string; currentHash: string | null; choice: 'retain-current' | 'reapply-proposed' }
+
+async function conflictsFor(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<ChangeConflict[]> {
+  const conflicts: ChangeConflict[] = []
+  for (const change of changes) {
+    let raw: Record<string, unknown> | undefined
+    try { raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { raw = undefined }
+    const current = currentChange(change.collection, raw, change.after)
+    const currentHash = hash(current)
+    if (currentHash !== change.afterHash) conflicts.push({ collection: change.collection, id: change.id, before: change.before, proposed: change.after, current, currentHash, canReapply: Boolean(change.before && change.after && raw) })
+  }
+  return conflicts
+}
+
+export async function changeSetConflicts(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string }) {
+  assertActor(input.actor)
+  const set = await loadSet(input.payload, input.id, input.req)
+  if (idOf(set.actor) !== input.actor.id) throw new Error('Only the editor who owns this change set can view or resolve conflicts.')
+  const current = await markStaleIfNeeded(input.payload, set, input.req)
+  if (current.state !== 'stale') return { state: String(current.state), revision: Number(current.revision ?? 0), conflicts: [] as ChangeConflict[] }
+  return { state: 'stale', revision: Number(current.revision ?? 0), conflicts: await conflictsFor(input.payload, input.req, Array.isArray(current.changes) ? current.changes as CapturedChange[] : []) }
+}
+
+function proposedDelta(collection: CapturedCollection, before: Record<string, unknown>, proposed: Record<string, unknown>) {
+  const update: Record<string, unknown> = {}
+  for (const field of mutableFields[collection]) {
+    if (stable(before[field]) === stable(proposed[field])) continue
+    // The stored editor copy is always a draft unless this explicitly archives it.
+    if (collection === 'pages' && field === 'status') update[field] = proposed[field] === 'archived' ? 'archived' : 'draft'
+    else update[field] = field in proposed ? proposed[field] : null
+  }
+  return update
+}
+
+/** Resolve only the records that changed after capture. Reapplying writes the
+ * captured field delta over the hash-guarded current draft; unrelated fields
+ * from another editor remain untouched. A subsequent refresh makes a new
+ * review candidate and clears all old preview/proof state. */
+export async function resolveChangeSetConflicts(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; resolutions: ConflictChoice[] }) {
+  const { payload, req, id } = input; assertActor(input.actor)
+  let set = await loadSet(payload, id, req)
+  if (idOf(set.actor) !== input.actor.id) throw new Error('Only the editor who owns this change set can resolve conflicts.')
+  set = await markStaleIfNeeded(payload, set, req)
+  if (set.state !== 'stale') throw new Error('Only a stale change set can be resolved.')
+  if (Number(set.revision ?? 0) !== input.expectedRevision) throw new Error('This change set changed. Reload the conflict comparison before resolving it.')
+  const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
+  const conflicts = await conflictsFor(payload, req, changes)
+  if (!conflicts.length) throw new Error('This stale change set has no content conflict. Refresh it instead.')
+  const keys = new Set<string>()
+  const byKey = new Map<string, ConflictChoice>(input.resolutions.map((resolution) => [`${resolution.collection}:${resolution.id}`, resolution]))
+  if (byKey.size !== input.resolutions.length) throw new Error('Each conflicting draft must have exactly one resolution.')
+  for (const conflict of conflicts) {
+    const key = `${conflict.collection}:${conflict.id}`; keys.add(key)
+    const resolution = byKey.get(key)
+    if (!resolution || resolution.currentHash !== conflict.currentHash) throw new Error('The draft changed while you were reviewing it. Reload the conflict comparison.')
+    if (resolution.choice === 'reapply-proposed' && !conflict.canReapply) throw new Error('This captured create, delete, or unavailable record can only retain the current draft.')
+  }
+  if ([...byKey.keys()].some((key) => !keys.has(key))) throw new Error('A resolution was supplied for a record that is not currently conflicted.')
+
+  const resolved: CapturedChange[] = []
+  let retained = 0; let reapplied = 0
+  for (const change of changes) {
+    const key = `${change.collection}:${change.id}`
+    const conflict = conflicts.find((item) => `${item.collection}:${item.id}` === key)
+    if (!conflict) { resolved.push(change); continue }
+    const choice = byKey.get(key)!
+    if (choice.choice === 'retain-current') { retained++; continue }
+    const raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    const data = proposedDelta(change.collection, change.before!, change.after!)
+    await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
+    const saved = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    const after = currentChange(change.collection, saved, change.after)
+    resolved.push({ ...change, before: conflict.current, beforeHash: conflict.currentHash, after, afterHash: hash(after) })
+    reapplied++
+  }
+  const next = await payload.update({ collection: 'change-sets', id, data: { changes: resolved, revision: Number(set.revision ?? 0) + 1, preview: null, quality: null }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_conflicts_resolved', user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, retained, reapplied } }, overrideAccess: true, req })
+  return next
+}

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
-import { transitionChangeSet } from '../src/editorial'
+import { changeSetConflicts, resolveChangeSetConflicts, transitionChangeSet } from '../src/editorial'
 import { withPayloadTransaction } from '../src/auth-transaction'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-safety-'))
@@ -94,4 +94,42 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     expect((await setFor(editor.id)).state).toBe('open')
     expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
   })
+  it('requires the owning editor to explicitly resolve a guarded stale draft without clobbering another field', async () => {
+    const { editor, page } = await fixture('resolve-reapply')
+    const other = await payload.create({ collection: 'users', data: { email: 'resolve-other@example.test', name: 'Other editor', roles: ['editor'] }, overrideAccess: true })
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Proposed title' }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Other editor current title', summary: 'Other editor current summary remains after resolution.' }, draft: true, user: other, overrideAccess: false })
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))).rejects.toThrow(/stale/i)
+    const view = await withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: editor, id: set.id }))
+    expect(view.conflicts).toEqual([expect.objectContaining({ collection: 'pages', id: page.id, before: expect.objectContaining({ title: 'Baseline' }), proposed: expect.objectContaining({ title: 'Proposed title' }), current: expect.objectContaining({ title: 'Other editor current title', summary: 'Other editor current summary remains after resolution.' }), canReapply: true })])
+    await expect(withPayloadTransaction(payload, req => resolveChangeSetConflicts({ payload, req, actor: other, id: set.id, expectedRevision: view.revision, resolutions: [] }))).rejects.toThrow(/Only the editor/i)
+    const resolved = await withPayloadTransaction(payload, req => resolveChangeSetConflicts({ payload, req, actor: editor, id: set.id, expectedRevision: view.revision, resolutions: view.conflicts.map((conflict) => ({ collection: conflict.collection, id: conflict.id, currentHash: conflict.currentHash, choice: 'reapply-proposed' as const })) }))
+    expect(resolved).toMatchObject({ state: 'stale', revision: view.revision + 1, preview: null, quality: null })
+    const current = await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })
+    expect(current).toMatchObject({ title: 'Proposed title', summary: 'Other editor current summary remains after resolution.' })
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'refresh' }))).resolves.toMatchObject({ state: 'open' })
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))).resolves.toMatchObject({ state: 'submitted' })
+    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.change_set_conflicts_resolved' } }, limit: 1, depth: 0, overrideAccess: true })
+    expect(audit.docs[0]).toMatchObject({ user: editor.id, actor: editor.id, detail: { changeSet: set.id, retained: 0, reapplied: 1 } })
+  })
+
+  it('keeps the current draft when the owner deliberately retains it and rejects a stale conflict hash', async () => {
+    const { editor, page } = await fixture('resolve-retain')
+    const other = await payload.create({ collection: 'users', data: { email: 'retain-other@example.test', name: 'Other editor', roles: ['editor'] }, overrideAccess: true })
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Original proposal' }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Current editor draft' }, draft: true, user: other, overrideAccess: false })
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))).rejects.toThrow(/stale/i)
+    const view = await withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: editor, id: set.id }))
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Current editor changed again' }, draft: true, user: other, overrideAccess: false })
+    await expect(withPayloadTransaction(payload, req => resolveChangeSetConflicts({ payload, req, actor: editor, id: set.id, expectedRevision: view.revision, resolutions: view.conflicts.map((conflict) => ({ collection: conflict.collection, id: conflict.id, currentHash: conflict.currentHash, choice: 'retain-current' as const })) }))).rejects.toThrow(/changed while you were reviewing/i)
+    expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Current editor changed again')
+    const currentView = await withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: editor, id: set.id }))
+    await withPayloadTransaction(payload, req => resolveChangeSetConflicts({ payload, req, actor: editor, id: set.id, expectedRevision: currentView.revision, resolutions: currentView.conflicts.map((conflict) => ({ collection: conflict.collection, id: conflict.id, currentHash: conflict.currentHash, choice: 'retain-current' as const })) }))
+    const resolved = await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })
+    expect(resolved.changes).toEqual([])
+    expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Current editor changed again')
+  })
+
 })

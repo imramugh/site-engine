@@ -1,7 +1,7 @@
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
-import { createNamedChangeSet, transitionChangeSet } from '../../../../src/editorial'
+import { changeSetConflicts, createNamedChangeSet, resolveChangeSetConflicts, transitionChangeSet } from '../../../../src/editorial'
 import { archivePage } from '../../../../src/redirect-lifecycle'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { changeSetHash, scheduledPublicationTime } from '../../../../src/publishing'
@@ -71,42 +71,43 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
-    const body = await request.json() as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown; scheduledFor?: unknown }
+    const body: unknown = await request.json()
     const { action } = await context.params
+    const requestBody = body as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown; scheduledFor?: unknown; expectedRevision?: unknown; resolutions?: unknown }
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
     const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
       req.headers = request.headers
       if (action === 'create') {
-        if (typeof body.name !== 'string') throw new Error('A change-set name is required.')
-        return createNamedChangeSet(payload, req, authenticated.user as never, body.name)
+        if (typeof requestBody.name !== 'string') throw new Error('A change-set name is required.')
+        return createNamedChangeSet(payload, req, authenticated.user as never, requestBody.name)
       }
-      if (action === 'comment' && typeof body.id === 'string' && typeof (body as { comment?: unknown }).comment === 'string') {
+      if (action === 'comment' && typeof requestBody.id === 'string' && typeof (body as { comment?: unknown }).comment === 'string') {
         const actor = authenticated.user as { id: string; roles?: string[] }
         if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
         const comment = (body as { comment: string }).comment.trim()
         if (!comment || comment.length > 2_000) throw new Error('A review comment must contain at most 2,000 characters.')
-        const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req })
+        const set = await payload.findByID({ collection: 'change-sets', id: requestBody.id, depth: 0, overrideAccess: true, req })
         const comments = Array.isArray(set.reviewComments) ? set.reviewComments : []
-        return payload.update({ collection: 'change-sets', id: body.id, data: { reviewComments: [...comments, { id: crypto.randomUUID(), author: actor.id, body: comment, createdAt: new Date().toISOString() }] }, overrideAccess: true, req, context: { editorialInternal: true } })
+        return payload.update({ collection: 'change-sets', id: requestBody.id, data: { reviewComments: [...comments, { id: crypto.randomUUID(), author: actor.id, body: comment, createdAt: new Date().toISOString() }] }, overrideAccess: true, req, context: { editorialInternal: true } })
       }
       if (action === 'archive') {
-        if (typeof body.id !== 'string') throw new Error('A page ID is required.')
+        if (typeof requestBody.id !== 'string') throw new Error('A page ID is required.')
         if (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'editor')) throw new Error('Editor role required.')
-        if (body.removeNavigationReference !== undefined && typeof body.removeNavigationReference !== 'boolean') throw new Error('Navigation removal confirmation must be a boolean.')
-        return archivePage({ payload, req, pageID: body.id, target: body.target, removeNavigationReference: body.removeNavigationReference })
+        if (requestBody.removeNavigationReference !== undefined && typeof requestBody.removeNavigationReference !== 'boolean') throw new Error('Navigation removal confirmation must be a boolean.')
+        return archivePage({ payload, req, pageID: requestBody.id, target: requestBody.target, removeNavigationReference: requestBody.removeNavigationReference })
       }
-      if (action === 'run-quality' && typeof body.id === 'string') {
+      if (action === 'run-quality' && typeof requestBody.id === 'string') {
         const actor = authenticated.user as { roles?: string[] }
         if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) throw new Error('Reviewer role required.')
-        return runReviewQuality({ payload, req, id: body.id })
+        return runReviewQuality({ payload, req, id: requestBody.id })
       }
-      if (action === 'approve' && typeof body.id === 'string') {
+      if (action === 'approve' && typeof requestBody.id === 'string') {
         if (!(await freshStaff(['owner', 'approver'])({ req }))) throw new Error('Fresh reviewer authentication is required before approval.')
-        const proof = approvalProof(body.proof)
+        const proof = approvalProof(requestBody.proof)
         if (!proof) throw new Error('The exact readiness proof displayed to the reviewer is required before approval.')
-        const set = await payload.findByID({ collection: 'change-sets', id: body.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }
+        const set = await payload.findByID({ collection: 'change-sets', id: requestBody.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }
         const preview = set.preview
         if (!preview || typeof preview.contentHash !== 'string' || !Array.isArray(preview.includedChangeKeys) || !preview.includedChangeKeys.every((key): key is string => typeof key === 'string') || typeof preview.jobID !== 'string') throw new Error('A ready private preview is required before approval.')
         const currentHash = changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])
@@ -119,11 +120,22 @@ export async function POST(request: Request, context: { params: Promise<{ action
         const jobLiveTheme = typeof pins.liveThemeVersion === 'string' ? pins.liveThemeVersion : pins.themeVersion
         const jobLiveContract = typeof pins.liveContractVersion === 'string' ? pins.liveContractVersion : pins.contractVersion
         if (proof.baselineSnapshotID !== (preview as { baselineSnapshotID?: unknown }).baselineSnapshotID || proof.baselineSequence !== (preview as { baselineSequence?: unknown }).baselineSequence || proof.versionPins.themeVersion !== pins.themeVersion || proof.versionPins.engineVersion !== pins.engineVersion || proof.versionPins.contractVersion !== pins.contractVersion || proofLiveTheme !== jobLiveTheme || proofLiveContract !== jobLiveContract) throw new Error('The reviewed readiness proof is stale. Reload the exact comparison and run readiness checks again.')
-        const scheduledFor = scheduledPublicationTime(body.scheduledFor)
-        return approveChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest, scheduledFor })
+        const scheduledFor = scheduledPublicationTime(requestBody.scheduledFor)
+        return approveChangeSet({ payload, req, actor: authenticated.user as never, id: requestBody.id, expectedRevision: proof.revision, expectedChangeHash: proof.changeHash, includedChangeKeys: proof.includedChangeKeys, previewContentHash: proof.contentHash, previewJobID: proof.previewJobID, versions: proof.versionPins, initialBaseline: initialBaseline?.manifest, scheduledFor })
       }
-      if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof body.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
-      return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: body.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })
+      if (action === 'resolve-conflicts') {
+        if (!requestBody || typeof requestBody !== 'object' || Object.keys(requestBody).some((key) => !['id', 'expectedRevision', 'resolutions'].includes(key))) throw new Error('A complete conflict resolution request is required.')
+        if (typeof requestBody.id !== 'string' || !Number.isInteger(requestBody.expectedRevision) || !Array.isArray(requestBody.resolutions)) throw new Error('A complete conflict resolution request is required.')
+        const resolutions = requestBody.resolutions.map((item) => {
+          if (!item || typeof item !== 'object' || Object.keys(item as Record<string, unknown>).some((key) => !['collection', 'id', 'currentHash', 'choice'].includes(key))) throw new Error('Each conflict resolution must be complete.')
+          const entry = item as Record<string, unknown>
+          if (typeof entry.collection !== 'string' || typeof entry.id !== 'string' || (entry.currentHash !== null && typeof entry.currentHash !== 'string') || (entry.choice !== 'retain-current' && entry.choice !== 'reapply-proposed')) throw new Error('Each conflict resolution must be complete.')
+          return { collection: entry.collection as never, id: entry.id, currentHash: entry.currentHash as string | null, choice: entry.choice }
+        })
+        return resolveChangeSetConflicts({ payload, req, actor: authenticated.user as never, id: requestBody.id, expectedRevision: requestBody.expectedRevision as number, resolutions: resolutions as never })
+      }
+      if (!['submit', 'request-changes', 'reject', 'discard', 'refresh'].includes(action) || typeof requestBody.id !== 'string') throw new Error('Unknown workflow action or missing change-set ID.')
+      return transitionChangeSet({ payload, req, actor: authenticated.user as never, id: requestBody.id, action: action as 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' })
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
@@ -137,12 +149,17 @@ export async function POST(request: Request, context: { params: Promise<{ action
 
 export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   const { action } = await context.params
-  if (!['list', 'preview-route'].includes(action)) return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
+  if (!['list', 'preview-route', 'conflicts'].includes(action)) return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
   try {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     if (!authenticated.user) return Response.json({ error: 'Authentication required.' }, { status: 401 })
     const actor = authenticated.user as { id: string; roles?: string[] }
+    if (action === 'conflicts') {
+      const id = new URL(request.url).searchParams.get('id')
+      if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: 'A change set is required.' }, { status: 400 })
+      return Response.json(await changeSetConflicts({ payload, req: { payload, headers: request.headers, user: authenticated.user } as never, actor: authenticated.user as never, id }), { headers: { 'Cache-Control': 'no-store' } })
+    }
     if (action === 'preview-route') {
       if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) return Response.json({ error: 'Reviewer role required.' }, { status: 403 })
       const id = new URL(request.url).searchParams.get('jobID')
