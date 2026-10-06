@@ -3,6 +3,8 @@ import type { SiteSnapshot } from '@site-engine/contract';
 /** Review the supported vendor tokens quarterly. Its version is emitted with
  * crawler-facing output so a release can be audited without guessing. */
 export const CRAWLER_POLICY_VERSION = '2026-10-05';
+export const CRAWLER_POLICY_REVIEWED_AT = '2026-10-05';
+export const CRAWLER_POLICY_NEXT_REVIEW_DUE = '2027-01-05';
 
 export type CrawlerMode = 'public' | 'preview';
 
