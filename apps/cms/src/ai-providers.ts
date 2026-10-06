@@ -28,15 +28,18 @@ const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
 // Vision billing is based on image processing, not compressed data-URL bytes.
 // These are reviewed worst-case input-token reservations for the only enabled
-// Responses vision model. The MCP adapter always resizes to at most 768×768;
-// 2,000 tokens is the reviewed conservative ceiling for that bounded input.
+// Responses vision model. OpenAI's image-vision cost guide (retrieved
+// 2026-10-06, #calculating-costs lines 3401-3444) specifies 32px patches,
+// no enlargement, ceil(patches * 1.62) plus one rounding token for
+// gpt-4.1-mini-2025-04-14. At our 768×768 MCP resize ceiling this is
+// ceil(576 * 1.62) + 1 = 935, so 2,000 is conservative.
 // Unlisted models fail closed until pricing review adds
 // their documented bound. `gpt-test` is the deterministic non-production test
 // model and deliberately uses a very high bound.
-const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-test': 1_000_000 })
+const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-4.1-mini-2025-04-14': 2_000, 'gpt-test': 1_000_000 })
 export function supportsVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && Number.isSafeInteger(visionInputTokenUpperBounds[model]) }
 /** UI/API routing must not expose the deterministic test model. */
-export function supportsProductionVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && model === 'gpt-4.1-mini' }
+export function supportsProductionVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && (model === 'gpt-4.1-mini' || model === 'gpt-4.1-mini-2025-04-14') }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const text = (value: unknown) => typeof value === 'string' ? value : undefined
