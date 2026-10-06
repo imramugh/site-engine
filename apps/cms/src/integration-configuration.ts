@@ -1,5 +1,5 @@
 import { withPayloadTransaction } from './auth-transaction'
-import { credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider } from './integrations'
+import { azureResourceEndpoint, credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider, integrationProviders } from './integrations'
 import { enqueueNotification } from './notification-settings'
 
 type PayloadLike = Parameters<typeof withPayloadTransaction>[0]
@@ -9,19 +9,23 @@ const defaultAuditWrite: AuditWrite = async ({ payload, req, event, actor, provi
   await payload.create({ collection: 'audit-events', data: { event, actor, detail: { provider, ...detail } }, overrideAccess: true, req: req as never })
 }
 
-type StoredConfiguration = { id: string; provider: IntegrationProvider; model: string; encryptedCredential: string | null; credentialFingerprint: string | null; health?: string | null; testedAt?: string | null; updatedAt?: string | null }
+type StoredConfiguration = { id: string; provider: IntegrationProvider; model: string; azureResourceEndpoint?: string | null; azureApiVersion?: string | null; encryptedCredential: string | null; credentialFingerprint: string | null; health?: string | null; testedAt?: string | null; updatedAt?: string | null }
 function snapshot(record: Record<string, unknown>): StoredConfiguration | undefined {
   if (typeof record.id !== 'string' || !integrationProvider(record.provider) || typeof record.model !== 'string' || !record.encryptedCredential || typeof record.encryptedCredential !== 'string' || !record.credentialFingerprint || typeof record.credentialFingerprint !== 'string' || record.health === 'revoked') return undefined
-  return { id: record.id, provider: record.provider, model: record.model, encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, testedAt: typeof record.testedAt === 'string' ? record.testedAt : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
+  const resource = record.provider === 'azure-openai' ? azureResourceEndpoint(record.azureResourceEndpoint) : null
+  if (record.provider === 'azure-openai' && (!resource || record.azureApiVersion)) return undefined
+  return { id: record.id, provider: record.provider, model: record.model, azureResourceEndpoint: resource, azureApiVersion: record.azureApiVersion === null || record.azureApiVersion === undefined ? null : String(record.azureApiVersion), encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, testedAt: typeof record.testedAt === 'string' ? record.testedAt : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
 }
-const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && ['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(value)
-const unchanged = (left: StoredConfiguration, right: StoredConfiguration) => left.id === right.id && left.provider === right.provider && left.model === right.model && left.encryptedCredential === right.encryptedCredential && left.credentialFingerprint === right.credentialFingerprint && left.updatedAt === right.updatedAt && right.health !== 'revoked'
+const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && integrationProviders.includes(value as IntegrationProvider)
+const unchanged = (left: StoredConfiguration, right: StoredConfiguration) => left.id === right.id && left.provider === right.provider && left.model === right.model && left.azureResourceEndpoint === right.azureResourceEndpoint && left.azureApiVersion === right.azureApiVersion && left.encryptedCredential === right.encryptedCredential && left.credentialFingerprint === right.credentialFingerprint && left.updatedAt === right.updatedAt && right.health !== 'revoked'
 
 export class IntegrationConfigurationStaleError extends Error { constructor() { super('INTEGRATION_CONFIGURATION_STALE') } }
 
 export type PricingConfiguration = { monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: number; outputMicroUsdPerMillionTokens: number; pricingSource: string; pricingAsOf: string }
-export async function configureIntegration(payload: PayloadLike, input: { provider: IntegrationProvider; model: string; credential: string; fallbackProvider: IntegrationProvider | null; pricing: PricingConfiguration; actor?: string }, auditWrite: AuditWrite = defaultAuditWrite) {
-  const data = { provider: input.provider, model: input.model, fallbackProvider: input.fallbackProvider, ...input.pricing, encryptedCredential: encryptCredential(input.credential, input.provider), credentialFingerprint: credentialFingerprint(input.credential), health: 'unknown' as const, testedAt: null }
+export async function configureIntegration(payload: PayloadLike, input: { provider: IntegrationProvider; model: string; credential: string; fallbackProvider: IntegrationProvider | null; pricing: PricingConfiguration; azureResourceEndpoint?: string | null; azureApiVersion?: string | null; actor?: string }, auditWrite: AuditWrite = defaultAuditWrite) {
+  const resource = input.provider === 'azure-openai' ? azureResourceEndpoint(input.azureResourceEndpoint) : null
+  if (input.provider === 'azure-openai' && (!resource || input.azureApiVersion)) throw new Error('AZURE_CONFIGURATION_INVALID')
+  const data = { provider: input.provider, model: input.model, fallbackProvider: input.fallbackProvider, azureResourceEndpoint: resource, azureApiVersion: null, ...input.pricing, encryptedCredential: encryptCredential(input.credential, input.provider), credentialFingerprint: credentialFingerprint(input.credential), health: 'unknown' as const, testedAt: null }
   return withPayloadTransaction(payload, async (req) => {
     const existing = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: input.provider } }, limit: 1, depth: 0, overrideAccess: true, req })
     const record = existing.docs[0] as unknown as Record<string, unknown> | undefined
@@ -51,7 +55,7 @@ export async function testIntegrationConnection(payload: PayloadLike, input: { p
   const expected = found.docs[0] && snapshot(found.docs[0] as unknown as Record<string, unknown>)
   if (!expected) throw new IntegrationConfigurationStaleError()
 
-  const result = await testConnection({ provider: expected.provider, encryptedCredential: expected.encryptedCredential!, model: expected.model }, transport)
+  const result = await testConnection({ provider: expected.provider, encryptedCredential: expected.encryptedCredential!, model: expected.model, azureResourceEndpoint: expected.azureResourceEndpoint, azureApiVersion: expected.azureApiVersion }, transport)
   const testedAt = (input.now ?? new Date()).toISOString()
   return withPayloadTransaction(payload, async (req) => {
     const current = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: input.provider } }, limit: 1, depth: 0, overrideAccess: true, req })

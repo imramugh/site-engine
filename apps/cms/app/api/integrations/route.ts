@@ -2,7 +2,7 @@ import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
-import { integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
+import { azureResourceEndpoint, integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
 import { serverSessionStrategy, SENSITIVE_REAUTH_SECONDS } from '../../../src/identity'
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
 import { configuredProvider } from '../../../src/oidc'
@@ -104,9 +104,10 @@ async function POSTHandler(request: Request) {
       return revoked ? privateJSON({ integration: publicIntegration(revoked as unknown as Record<string, unknown>) }) : failure()
     }
     const money = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
-    if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider)) || (body.monthlyCapMicroUsd !== null && body.monthlyCapMicroUsd !== undefined && !money(body.monthlyCapMicroUsd)) || !money(body.inputMicroUsdPerMillionTokens) || !money(body.outputMicroUsdPerMillionTokens) || typeof body.pricingSource !== 'string' || !body.pricingSource.trim() || body.pricingSource.length > 500 || typeof body.pricingAsOf !== 'string' || Number.isNaN(Date.parse(body.pricingAsOf))) return failure()
+    const azureResource = body.provider === 'azure-openai' ? azureResourceEndpoint(body.azureResourceEndpoint) : null
+    if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider)) || (body.monthlyCapMicroUsd !== null && body.monthlyCapMicroUsd !== undefined && !money(body.monthlyCapMicroUsd)) || !money(body.inputMicroUsdPerMillionTokens) || !money(body.outputMicroUsdPerMillionTokens) || typeof body.pricingSource !== 'string' || !body.pricingSource.trim() || body.pricingSource.length > 500 || typeof body.pricingAsOf !== 'string' || Number.isNaN(Date.parse(body.pricingAsOf)) || (body.provider === 'azure-openai' && (!azureResource || body.azureApiVersion))) return failure()
     const monthlyCapMicroUsd = typeof body.monthlyCapMicroUsd === 'number' ? body.monthlyCapMicroUsd : null
-    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
+    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, azureResourceEndpoint: azureResource, azureApiVersion: null, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
     return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? failure() }
 }

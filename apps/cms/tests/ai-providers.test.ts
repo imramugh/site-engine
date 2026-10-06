@@ -17,8 +17,8 @@ const pricing = { inputMicroUsdPerMillionTokens: 1_000_000, outputMicroUsdPerMil
 beforeAll(async () => { payload = await getPayload({ config }) }, 60_000)
 beforeEach(async () => { const db = payload.db as unknown as { client: { execute: (query: string) => Promise<unknown> } }; await db.client.execute('DELETE FROM provider_usage_reservations'); await db.client.execute('DELETE FROM integration_configurations') })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
-async function configured(provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral', model: string, credential: string, extra: Record<string, unknown> = {}) { return payload.create({ collection: 'integration-configurations', data: { provider, model, encryptedCredential: encryptCredential(credential, provider), credentialFingerprint: 'masked', health: 'unknown', ...pricing, ...extra } as never, overrideAccess: true }) }
-const job = (provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral', input = 'hello') => ({ provider, input, maxOutputTokens: 10 })
+async function configured(provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai', model: string, credential: string, extra: Record<string, unknown> = {}) { return payload.create({ collection: 'integration-configurations', data: { provider, model, encryptedCredential: encryptCredential(credential, provider), credentialFingerprint: 'masked', health: 'unknown', ...pricing, ...extra } as never, overrideAccess: true }) }
+const job = (provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai', input = 'hello') => ({ provider, input, maxOutputTokens: 10 })
 
 describe('ENG-023 provider monetary accounting', () => {
   it('bounds output for every provider and settles normalized token usage in micro-USD', async () => {
@@ -28,6 +28,40 @@ describe('ENG-023 provider monetary accounting', () => {
     for (const provider of ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] as const) await expect(executeConfiguredAIJob(payload, job(provider), { transport, now })).resolves.toMatchObject({ provider, usageCostMicroUsd: 8 })
     expect(observed[0]).toMatchObject({ url: 'https://api.openai.com/v1/responses', body: { max_output_tokens: 10 } }); expect(observed[1]).toMatchObject({ url: 'https://api.anthropic.com/v1/messages', body: { max_tokens: 10 } }); expect(observed[2]).toMatchObject({ url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini%20test%2Fmodel:generateContent', body: { generationConfig: { maxOutputTokens: 10 } } }); expect(observed[3]).toMatchObject({ url: 'https://openrouter.ai/api/v1/chat/completions', body: { max_tokens: 10 } }); expect(observed[4]).toMatchObject({ url: 'https://api.mistral.ai/v1/chat/completions', body: { model: 'mistral-small-latest', max_tokens: 10 } }); expect(observed[4]!.headers.get('authorization')).toBe('Bearer mistral-secret')
     for (const record of records) { const saved = await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true }); expect(saved).toMatchObject({ monthlyUsageMicroUsd: 8 }); expect(publicIntegration(saved as unknown as Record<string, unknown>)).not.toHaveProperty('encryptedCredential') }
+  })
+
+  it('uses the Azure GA resource endpoint with deployment-as-model, settles usage, and never exposes its key', async () => {
+    const secret = 'azure-key-that-must-not-leak'
+    const record = await configured('azure-openai', 'reviewed-deployment', secret, { azureResourceEndpoint: 'https://reviewed-resource.openai.azure.com/', azureApiVersion: null, monthlyCapMicroUsd: 200 })
+    const requests: Request[] = []
+    await expect(executeConfiguredAIJob(payload, job('azure-openai', 'private prompt'), { now, transport: async request => {
+      requests.push(request)
+      return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'safe Azure response' }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+    } })).resolves.toMatchObject({ provider: 'azure-openai', output: 'safe Azure response', usageCostMicroUsd: 8, usageCostStatus: 'actual' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.url).toBe('https://reviewed-resource.openai.azure.com/openai/v1/responses')
+    expect(requests[0]!.headers.get('api-key')).toBe(secret)
+    expect(requests[0]!.headers.get('authorization')).toBeNull()
+    expect(await requests[0]!.json()).toMatchObject({ model: 'reviewed-deployment', max_output_tokens: 10 })
+    const saved = await payload.findByID({ collection: 'integration-configurations', id: record.id, overrideAccess: true })
+    const reservations = await payload.find({ collection: 'provider-usage-reservations', where: { configuration: { equals: record.id } }, overrideAccess: true })
+    expect(JSON.stringify({ saved, reservations: reservations.docs, public: publicIntegration(saved as unknown as Record<string, unknown>) })).not.toContain(secret)
+    expect(reservations.docs[0]).toMatchObject({ state: 'settled', settledMicroUsd: 8, configModel: 'reviewed-deployment' })
+  })
+
+  it('fails closed for invalid Azure resource URLs and preserves the cap when a snapshotted resource changes', async () => {
+    for (const endpoint of ['http://reviewed-resource.openai.azure.com/', 'https://127.0.0.1/', 'https://reviewed-resource.openai.azure.com/openai/v1/responses', 'https://reviewed-resource.openai.azure.com/?target=internal', 'https://reviewed-resource.openai.azure.com.evil.test/']) {
+      let calls = 0
+      await expect(invokeProvider('azure-openai', 'secret', 'deployment', 'prompt', 10, async () => { calls += 1; return Response.json({}) }, 100, endpoint)).resolves.toEqual({ outcome: 'unavailable' })
+      expect(calls).toBe(0)
+    }
+    const record = await configured('azure-openai', 'deployment', 'secret', { azureResourceEndpoint: 'https://reviewed-resource.openai.azure.com/', azureApiVersion: null })
+    const snapshot = [{ id: record.id, provider: 'azure-openai' as const, model: 'deployment', credentialFingerprint: 'masked', monthlyCapMicroUsd: null, ...pricing, azureResourceEndpoint: 'https://reviewed-resource.openai.azure.com', azureApiVersion: null }]
+    await payload.update({ collection: 'integration-configurations', id: record.id, data: { azureResourceEndpoint: 'https://rotated-resource.openai.azure.com' } as never, overrideAccess: true })
+    let calls = 0
+    await expect(executeConfiguredAIJob(payload, job('azure-openai'), { now, configurationSnapshot: snapshot, transport: async () => { calls += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(0)
+    expect((await payload.find({ collection: 'provider-usage-reservations', where: { configuration: { equals: record.id } }, overrideAccess: true })).docs).toHaveLength(0)
   })
 
   it('fails closed for an unknown model price before transport', async () => {

@@ -721,9 +721,11 @@ export interface StyleGuide {
  */
 export interface IntegrationConfiguration {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai';
   model: string;
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
+  azureResourceEndpoint?: string | null;
+  azureApiVersion?: string | null;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   monthlyCapMicroUsd?: number | null;
   monthlyUsageMicroUsd?: number | null;
   usageMonth?: string | null;
@@ -1305,8 +1307,8 @@ export interface ConfiguredAiJob {
   idempotencyKey: string;
   requestDigest: string;
   input: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai';
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   maxOutputTokens: number;
   configurationSnapshot:
     | {
@@ -1324,7 +1326,7 @@ export interface ConfiguredAiJob {
   result?: string | null;
   resultDigest?: string | null;
   costStatus?: ('actual' | 'reserved') | null;
-  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
+  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   fallbackUsed?: boolean | null;
   failureCode?: string | null;
   updatedAt: string;
