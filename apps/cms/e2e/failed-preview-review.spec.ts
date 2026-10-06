@@ -11,7 +11,7 @@ test('reviewer sees a failed structured-data preview diagnostic and cannot appro
   const seeded = await page.request.post('/__e2e/failed-preview-review'); expect(seeded.ok(), await seeded.text()).toBeTruthy()
   const { id } = await seeded.json() as { id: string }
   await page.goto(`/review/${id}`)
-  await expect(page.getByRole('alert')).toContainText('Generated structured data')
+  await expect(page.getByRole('alert').filter({ hasText: 'Generated structured data' })).toContainText('Generated structured data')
   await expect(page.getByText('STRUCTURED_DATA_INVALID · structuredData.12345678-1234-4234-8234-1234567890ab · 12345678-1234-4234-8234-1234567890ac')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Return to Reviews' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Approve/ })).toHaveCount(0)

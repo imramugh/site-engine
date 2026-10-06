@@ -19,6 +19,7 @@ const styleGuidesMigration = '20261003_220000_style_guides'
 const sectionLandingMigration = '20261003_230000_section_landing_page'
 const siteIdentityMigration = '20261005_114210_site_identity_navigation_1_5'
 const crawlerPolicyMigration = '20261005_164500_crawler_policy_1_7'
+const previewRenderDiagnosticsMigration = '20261006_009000_preview_render_diagnostics'
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
@@ -231,6 +232,18 @@ describe('production migrations (ENG-036)', () => {
     expect((await sqlite.execute("SELECT name FROM pragma_table_info('sections') WHERE name = 'landing_page_id_id'")).rows).toHaveLength(1)
     expect((await sqlite.execute("SELECT name FROM pragma_table_info('_sections_v') WHERE name = 'version_landing_page_id_id'")).rows).toHaveLength(1)
     expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${sectionLandingMigration}'`)).rows).toHaveLength(1)
+    // Reconstruct an existing production database immediately before failed
+    // preview diagnostics existed. The real migrator must add the nullable
+    // evidence field without a development schema push.
+    for (const statement of [
+      'ALTER TABLE preview_render_jobs DROP COLUMN render_diagnostics',
+      `DELETE FROM payload_migrations WHERE name = '${previewRenderDiagnosticsMigration}'`,
+    ]) await sqlite.execute(statement)
+    const diagnosticsForward = migrate()
+    expect(diagnosticsForward.status, diagnosticsForward.stderr || diagnosticsForward.stdout).toBe(0)
+    const diagnosticColumns = await sqlite.execute("SELECT name FROM pragma_table_info('preview_render_jobs') WHERE name = 'render_diagnostics'")
+    expect(diagnosticColumns.rows.map((row) => row.name)).toEqual(['render_diagnostics'])
+    expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${previewRenderDiagnosticsMigration}'`)).rows).toHaveLength(1)
     await sqlite.close()
 
     } finally { rmSync(directory, { recursive: true, force: true }) }

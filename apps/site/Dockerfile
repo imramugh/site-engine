@@ -5,11 +5,12 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY patches ./patches
 COPY packages/contract ./packages/contract
 COPY packages/engine ./packages/engine
+COPY packages/checks ./packages/checks
 COPY packages/theme-starter ./packages/theme-starter
 COPY apps/site ./apps/site
 ARG SITE_PUBLIC_ORIGIN=https://example.invalid
 ARG SITE_CRAWLER_MODE=public
-RUN pnpm install --frozen-lockfile --filter @site-engine/site... && pnpm --filter @site-engine/contract build && pnpm --filter @site-engine/engine build && pnpm --filter @site-engine/theme-starter build && pnpm --filter @site-engine/site build
+RUN pnpm install --frozen-lockfile --filter @site-engine/site... && pnpm --filter @site-engine/contract build && pnpm --filter @site-engine/engine build && pnpm --filter @site-engine/checks build && pnpm --filter @site-engine/theme-starter build && pnpm --filter @site-engine/site build
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
 COPY --from=build /workspace/apps/site/dist /usr/share/nginx/html

@@ -24,7 +24,8 @@ function selectionFromJob(job: Record<string, unknown>) {
     includedChangeKeys: job.includedChangeKeys, baselineSnapshotID: idOf(job.baselineSnapshot), baselineSequence: job.baselineSequence,
     liveSnapshotID: idOf(job.liveSnapshot), liveSequence: job.liveSequence, liveManifestHash: job.liveManifestHash,
     proposedManifestHash: job.proposedManifestHash,
-    ...(completed ? { contentHash: canonicalHash(job.proposedManifest), artifactDigest: job.artifactDigest, versionPins: job.versionPins } : {}),
+    versionPins: job.versionPins,
+    ...(completed ? { contentHash: canonicalHash(job.proposedManifest), artifactDigest: job.artifactDigest } : {}),
   }
 }
 
@@ -177,7 +178,7 @@ export async function completePreviewRenderJob(payload: Payload, req: PayloadReq
     return job
   }
   if (!currentLease(job, leaseToken, now) || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || !/^[a-f0-9]{64}$/i.test(proof.artifactDigest)) throw new Error('Preview completion proof is invalid.')
-  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true, req })
   const preview = set.preview as { jobID?: string; revision?: number; changeHash?: string; baselineSequence?: number; includedChangeKeys?: string[] } | undefined
   if (preview?.jobID === id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.baselineSequence === job.baselineSequence && Array.isArray(preview.includedChangeKeys) && keysEqual(preview.includedChangeKeys, job.includedChangeKeys as string[])) {
@@ -191,12 +192,12 @@ type RenderDiagnostic = { code: string; path: string; message: string; pageId?: 
 function diagnostics(value: unknown): RenderDiagnostic[] | undefined {
   if (!Array.isArray(value) || value.length > 100) throw new Error('Preview failure request is invalid.')
   const result = value.map((item) => item && typeof item === 'object' ? item as Record<string, unknown> : undefined).map((item) => {
-    if (!item || !/^[A-Z][A-Z0-9_]{0,63}$/.test(String(item.code)) || typeof item.path !== 'string' || item.path.length > 300 || typeof item.message !== 'string' || item.message.length > 500 || (item.pageId !== undefined && typeof item.pageId !== 'string') || (item.blockId !== undefined && typeof item.blockId !== 'string')) throw new Error('Preview failure request is invalid.')
+    if (!item || !/^[A-Z][A-Z0-9_]{0,63}$/.test(String(item.code)) || typeof item.path !== 'string' || item.path.length > 300 || typeof item.message !== 'string' || item.message.length > 500 || (item.pageId !== undefined && (typeof item.pageId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.pageId))) || (item.blockId !== undefined && (typeof item.blockId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.blockId)))) throw new Error('Preview failure request is invalid.')
     return { code: String(item.code), path: item.path, message: item.message, ...(typeof item.pageId === 'string' ? { pageId: item.pageId } : {}), ...(typeof item.blockId === 'string' ? { blockId: item.blockId } : {}) }
   })
   return result
 }
-export async function failPreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, errorCode: string, now = new Date(), renderDiagnostics?: unknown) { requireTransaction(req, 'Preview failure'); const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req }); if (!currentLease(job, leaseToken, now) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)) throw new Error('Preview failure request is invalid.'); const safeDiagnostics = renderDiagnostics === undefined ? undefined : diagnostics(renderDiagnostics); const terminal = Number(job.attempts) >= MAX_ATTEMPTS; return payload.update({ collection: 'preview-render-jobs', id, data: { status: terminal ? 'failed' : 'pending', errorCode, ...(safeDiagnostics ? { renderDiagnostics: safeDiagnostics } : {}), nextAttemptAt: terminal ? null : new Date(now.getTime() + 1000 * 2 ** Math.max(0, Number(job.attempts) - 1)).toISOString(), leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } }) }
+export async function failPreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, errorCode: string, now = new Date(), renderDiagnostics?: unknown) { requireTransaction(req, 'Preview failure'); const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req }); if (!currentLease(job, leaseToken, now) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)) throw new Error('Preview failure request is invalid.'); const safeDiagnostics = renderDiagnostics === undefined ? undefined : diagnostics(renderDiagnostics); const terminal = Number(job.attempts) >= MAX_ATTEMPTS; return payload.update({ collection: 'preview-render-jobs', id, data: { status: terminal ? 'failed' : 'pending', errorCode, renderDiagnostics: safeDiagnostics ?? null, nextAttemptAt: terminal ? null : new Date(now.getTime() + 1000 * 2 ** Math.max(0, Number(job.attempts) - 1)).toISOString(), leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } }) }
 
 export function workerAuthorized(request: Request): boolean {
   const secret = process.env.PREVIEW_WORKER_TOKEN

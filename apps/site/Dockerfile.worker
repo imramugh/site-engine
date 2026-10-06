@@ -5,11 +5,13 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY patches ./patches
 COPY packages/contract ./packages/contract
 COPY packages/engine ./packages/engine
+COPY packages/checks ./packages/checks
 COPY packages/theme-starter ./packages/theme-starter
 COPY apps/site ./apps/site
 RUN pnpm install --frozen-lockfile --filter @site-engine/site... \
   && pnpm --filter @site-engine/contract build \
   && pnpm --filter @site-engine/engine build \
+  && pnpm --filter @site-engine/checks build \
   && pnpm --filter @site-engine/theme-starter build \
   && mkdir -p /workspace/apps/site/.astro /artifacts \
   && chown -R 10001:10001 /workspace/apps/site/.astro /artifacts

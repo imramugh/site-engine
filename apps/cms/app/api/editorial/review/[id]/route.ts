@@ -8,6 +8,11 @@ import { loadReviewModeData } from '../../../../../src/review-mode'
 
 export const dynamic = 'force-dynamic'
 const privateHeaders = { 'Cache-Control': 'private, no-store' }
+const versionPinsMatch = (preview: unknown, job: unknown) => {
+  if (!preview || typeof preview !== 'object' || !job || typeof job !== 'object') return false
+  const expected = preview as Record<string, unknown>; const actual = job as Record<string, unknown>
+  return ['themeVersion', 'engineVersion', 'contractVersion', 'liveThemeVersion', 'liveContractVersion'].every((field) => expected[field] === actual[field])
+}
 
 async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
@@ -31,7 +36,7 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
       const diagnostics = Array.isArray(job.renderDiagnostics) ? job.renderDiagnostics : []
       const jobSet = typeof job.changeSet === 'string' ? job.changeSet : job.changeSet && typeof job.changeSet === 'object' ? (job.changeSet as { id?: unknown }).id : undefined
-      if (job.status !== 'failed' || jobSet !== id || Number(job.reviewRevision) !== Number(set.revision) || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])) throw error
+      if (job.status !== 'failed' || jobSet !== id || Number(preview?.revision) !== Number(set.revision) || Number(job.reviewRevision) !== Number(set.revision) || preview?.changeHash !== job.changeHash || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) || !versionPinsMatch(preview?.versionPins, job.versionPins)) throw error
       failedPreview = { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), diagnostics }
     }
     const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })

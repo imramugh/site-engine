@@ -171,6 +171,25 @@ describe('durable preview rendering worker', () => {
     await expect(runPreviewOnce({ ...options(), api: async () => unsupportedContract, render })).rejects.toThrow('INVALID_CLAIM');
     expect(await runPreviewOnce({ ...options(), api: async () => ({ job: null }), render })).toBe(false);
   });
+
+  it('forwards at most 100 sanitized structured diagnostics from a renderer failure', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const api = async (action: string, body: Record<string, unknown> = {}) => { requests.push(body); return action === 'claim' ? claim() : { ok: true }; };
+    const validID = '11111111-1111-4111-8111-111111111111';
+    const render = async () => {
+      const error = new Error('structured failure') as Error & { diagnostics: unknown[] };
+      error.diagnostics = Array.from({ length: 101 }, (_value, index) => ({ code: `STRUCTURED_DATA_INVALID_${'X'.repeat(80)}`, path: `structuredData.${'p'.repeat(400)}`, message: 'm'.repeat(600), pageId: index === 0 ? validID : 'not-a-uuid', blockId: 'not-a-uuid' }));
+      throw error;
+    };
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('BUILD_FAILED');
+    const failure = requests.find((body) => body.errorCode === 'BUILD_FAILED')!;
+    const diagnostics = failure.diagnostics as Array<Record<string, unknown>>;
+    expect(diagnostics).toHaveLength(100);
+    expect(diagnostics[0]).toMatchObject({ code: 'STRUCTURED_DATA_INVALID_' + 'X'.repeat(40), pageId: validID });
+    expect(String(diagnostics[0]!.path)).toHaveLength(300);
+    expect(String(diagnostics[0]!.message)).toHaveLength(500);
+    expect(diagnostics.every((item) => item.blockId === undefined && (item.pageId === undefined || item.pageId === validID))).toBe(true);
+  });
 });
 
 describe('private worker API boundary', () => {
