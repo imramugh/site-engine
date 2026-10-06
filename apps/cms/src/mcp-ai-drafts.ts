@@ -47,9 +47,9 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
       if (expected && expected !== actual) return error('revision_conflict')
       const target = { collection, id, revision: actual } as Target
       const route = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: kind } }, limit: 1, depth: 0, overrideAccess: true })
-      const defaultRoute = route.docs[0] as unknown as { provider?: IntegrationProvider; fallbackProvider?: IntegrationProvider | null } | undefined
-      if (!defaultRoute?.provider) return error('ai_job_default_unavailable')
-      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: defaultRoute.provider, fallbackProvider: defaultRoute.fallbackProvider ?? null, input: envelope(kind, target, pageSource(record)), maxOutputTokens: 700, idempotencyKey })
+      const defaultRoute = route.docs[0] as unknown as { provider?: IntegrationProvider; model?: string; fallbackProvider?: IntegrationProvider | null } | undefined
+      if (!defaultRoute?.provider || typeof defaultRoute.model !== 'string' || !defaultRoute.model.trim()) return error('ai_job_default_unavailable')
+      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: defaultRoute.provider, model: defaultRoute.model, fallbackProvider: defaultRoute.fallbackProvider ?? null, input: envelope(kind, target, pageSource(record)), maxOutputTokens: 700, idempotencyKey })
       return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
     } catch (cause) {
       if (cause instanceof Error && cause.message === 'AI_JOB_UNAVAILABLE') return error('ai_provider_unavailable')
@@ -67,8 +67,8 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
     try {
       const asset = await payload.findByID({ collection: 'assets', id, depth: 0, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
       const route = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: 'alt' } }, limit: 1, depth: 0, overrideAccess: true })
-      const selected = route.docs[0] as unknown as { provider?: IntegrationProvider; fallbackProvider?: IntegrationProvider | null } | undefined
-      if (!selected?.provider || !providerCapabilities[selected.provider].imageInput) return error('image_input_unavailable')
+      const selected = route.docs[0] as unknown as { provider?: IntegrationProvider; model?: string; fallbackProvider?: IntegrationProvider | null } | undefined
+      if (!selected?.provider || typeof selected.model !== 'string' || !selected.model.trim() || !providerCapabilities[selected.provider].imageInput) return error('image_input_unavailable')
       const filename = typeof asset.filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/.test(asset.filename) ? asset.filename : ''
       const mime = typeof asset.mimeType === 'string' && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.mimeType) ? asset.mimeType : ''
       if (!filename || !mime) return error('image_input_unavailable')
@@ -81,7 +81,7 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
       const bytes = await sharp(original, { failOn: 'error', limitInputPixels: 16_000_000 }).rotate().resize({ width: 768, height: 768, fit: 'inside', withoutEnlargement: true }).webp({ quality: 70 }).toBuffer()
       if (!bytes.length || bytes.length > 350_000) return error('image_input_unavailable')
       const target = { collection: 'assets', id, revision: revision('assets', asset) } as Target
-      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: selected.provider, fallbackProvider: selected.fallbackProvider ?? null, input: envelope('alt', target, { instruction: 'Describe only visible image content for concise accessible alt text.' }), imageDataUrl: `data:image/webp;base64,${bytes.toString('base64')}`, maxOutputTokens: 240, idempotencyKey })
+      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: selected.provider, model: selected.model, fallbackProvider: selected.fallbackProvider ?? null, input: envelope('alt', target, { instruction: 'Describe only visible image content for concise accessible alt text.' }), imageDataUrl: `data:image/webp;base64,${bytes.toString('base64')}`, maxOutputTokens: 240, idempotencyKey })
       return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
     } catch { return error('image_input_unavailable') }
   })
