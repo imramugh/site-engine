@@ -479,6 +479,10 @@ export async function runThemeConformance() {
   );
   try {
     const installed = await consumer(temp);
+    // This legacy runtime gate imports the real site snapshot builder below.
+    // Build its workspace-only checks dependency after contract packaging and
+    // before that import; the packed conformance harness remains self-contained.
+    await pnpm(root, ["--filter", "@site-engine/checks", "build"]);
     const validator = join(
       installed,
       "node_modules/.bin/site-engine-validate-theme",

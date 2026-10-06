@@ -122,9 +122,9 @@ async function customThemeComponents(root: string): Promise<string> {
   await writeFile(join(components, 'nested/theme.css'), 'body { outline: 1px solid #123456; }\n');
   await writeFile(join(components, 'Layout.astro'), `---
 import './nested/theme.css';
-const { title, description } = Astro.props;
+const { title, description, schema } = Astro.props;
 ---
-<!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main><script>document.documentElement.dataset.customThemeEnhancement = 'active';</script></body></html>\n`);
+<!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} />{schema && <script type="application/ld+json" set:html={JSON.stringify(schema).replaceAll('<', '\\u003c')} />}</head><body data-custom-theme-layout="true"><main><slot /></main><script>document.documentElement.dataset.customThemeEnhancement = 'active';</script></body></html>\n`);
   await writeFile(join(components, 'BlockRenderer.astro'), `---
 const { block } = Astro.props;
 ---
