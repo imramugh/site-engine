@@ -6,10 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import sharp from 'sharp'
 import { SiteSnapshotSchema } from '@site-engine/contract'
+import { checkSiteSnapshot } from '@site-engine/checks'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { currentDraftReadiness, markStaleIfNeeded, transitionChangeSet } from '../src/editorial'
-import { canonicalHash, changeSetHash } from '../src/publishing'
+import { currentDraftReadiness, markStaleIfNeeded, snapshot, transitionChangeSet } from '../src/editorial'
+import { buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { prepareReviewPreview } from '../src/review-preview'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-quality-'))
@@ -156,5 +157,20 @@ describe('editorial quality captures all portable change collections', () => {
     const set = await setFor(owner.id)
     const report = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, set.changes as never, { asOf: '2026-10-06T00:00:00.000Z' }))
     expect({ blockers: returned.blockers?.map(issue => issue.code), warnings: returned.warnings?.map(issue => issue.code) }).toEqual({ blockers: report.blockers.map(issue => issue.code), warnings: report.warnings.map(issue => issue.code) })
+  })
+
+  it('matches static heading, link, and style diagnostics for a captured draft candidate', async () => {
+    const page = contract14Baseline.pages[0]!
+    const before = snapshot('pages', page as unknown as Record<string, unknown>)!
+    const changed = { ...before, blocks: [{ id: randomUUID(), type: 'hero', heading: 'Heading', body: '### skipped heading. forbidden phrase.', cta: { label: 'Broken', href: '/missing-route' }, hidden: false, appearance }] }
+    const changes = [
+      { collection: 'pages' as const, id: page.id, before, after: changed, beforeHash: canonicalHash(before), afterHash: canonicalHash(changed) },
+      { collection: 'style-guides' as const, id: randomUUID(), before: null, after: { bannedPhrases: ['forbidden phrase'], preferredTerms: [], canadianSpelling: 'off', maximumSentenceWords: 30, minimumReadingEase: 30 }, beforeHash: null, afterHash: null },
+    ]
+    const candidate = buildCandidate(contract14Baseline, changes, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: 'synthetic-theme', engineVersion: 'synthetic-engine', contractVersion: '1.4.0' })
+    const staticReport = checkSiteSnapshot(candidate, { asOf: '2026-10-06T00:00:00.000Z', style: candidate.styleGuide })
+    const draftReport = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, changes, { asOf: '2026-10-06T00:00:00.000Z' }))
+    expect(draftReport.issues.map(issue => issue.code)).toEqual(staticReport.issues.map(issue => issue.code))
+    expect(draftReport.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['HEADING_ORDER', 'INTERNAL_LINK_BROKEN', 'STYLE_BANNED_PHRASE']))
   })
 })

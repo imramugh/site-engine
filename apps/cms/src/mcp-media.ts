@@ -20,12 +20,13 @@ const qualityError = z.union([
   z.object({ code: z.string(), path: z.string(), message: z.string() }).strict(),
 ])
 const qualityCheck = z.object({ name: z.string(), status: z.enum(['passed', 'failed']), errors: z.array(qualityError) }).strict()
-const updateOutput = z.object({ draft: z.object({ assetId: z.string().uuid(), changeSetId: z.string().uuid(), changeSetRevision: z.number().int().nonnegative() }).strict(), checks: z.array(qualityCheck) }).strict()
+const updateOutput = z.object({ draft: z.object({ assetId: z.string().uuid(), changeSetId: z.string().uuid(), changeSetRevision: z.number().int().nonnegative() }).strict(), checks: z.array(qualityCheck), warnings: z.array(z.string()), readiness: z.unknown() }).strict()
 const uploadSource = z.object({ filename: z.string().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/), mimeType: z.enum(['image/avif', 'image/jpeg', 'image/png', 'image/webp']), dataBase64: z.string().min(4).max(16_384).regex(/^[A-Za-z0-9+/]+={0,2}$/) }).strict()
 const remoteSource = z.object({ url: z.string().url().max(2048) }).strict()
 const mediaSource = z.union([uploadSource, remoteSource])
 const uploadInput = z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), alt: z.string().max(240), decorative: z.boolean(), caption: z.string().max(300).optional(), credit: z.string().max(240).optional(), tags: z.array(z.string().min(1).max(80)).max(12).optional(), focalX: z.number().finite().min(0).max(100), focalY: z.number().finite().min(0).max(100), source: mediaSource }).strict()
 const replaceInput = z.object({ id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), idempotencyKey: z.string().uuid(), source: mediaSource }).strict()
+
 
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(code === 'temporarily_unavailable' ? { error: code, retryAfterSeconds: 1 } : { error: code }) }] })
