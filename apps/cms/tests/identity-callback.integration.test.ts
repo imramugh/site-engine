@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { createClient } from '@libsql/client'
 import { getPayload } from 'payload'
-import { cookieName, hashOpaqueToken, OIDC_TRANSACTION_COOKIE } from '../src/identity'
+import { cookieName, hashOpaqueToken, OIDC_TRANSACTION_COOKIE, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-identity-callback-'))
 const db = join(directory, 'cms.sqlite')
@@ -178,6 +179,34 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
     expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(sessionsBefore.totalDocs)
     expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(auditBefore.totalDocs)
   })
+
+  it('returns a sanitized retry response when an external SQLite writer blocks the post-verification transaction, then signs in after release', async () => {
+    const { invitation, request, state } = await createSignIn('writer-lock@example.test', 'writer-lock-subject')
+    const transaction = (await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(state) } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]!
+    const sessionsBefore = await payload.count({ collection: 'auth-sessions', overrideAccess: true })
+    const usersBefore = await payload.count({ collection: 'users', overrideAccess: true })
+    const external = createClient({ url: `file:${db}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute({ sql: 'UPDATE auth_transactions SET updated_at = updated_at WHERE id = ?', args: [String(transaction.id)] })
+      const blocked = await invoke(request())
+      expect(blocked.status).toBe(503)
+      expect(blocked.headers.get('Retry-After')).toBe('1')
+      expect(blocked.headers.get('Cache-Control')).toBe('no-store')
+      expect(blocked.headers.get('set-cookie')).toBeNull()
+      await expect(blocked.text()).resolves.toBe('Sign-in is temporarily unavailable. Restart sign-in and try again.')
+      expect((await payload.findByID({ collection: 'auth-transactions', id: transaction.id, overrideAccess: true })).consumedAt).toBeNull()
+      expect((await payload.findByID({ collection: 'invitations', id: invitation.id, overrideAccess: true })).acceptedAt).toBeNull()
+      expect((await payload.count({ collection: 'users', overrideAccess: true })).totalDocs).toBe(usersBefore.totalDocs)
+      expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(sessionsBefore.totalDocs)
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    const retried = await invoke(request())
+    expect(retried.status).toBe(307)
+    expect(retried.headers.get('set-cookie')).toContain(cookieName(SESSION_COOKIE))
+  }, 15_000)
 
   it('does not let an existing identity consume an invitation bound to another identity', async () => {
     const existing = await payload.create({

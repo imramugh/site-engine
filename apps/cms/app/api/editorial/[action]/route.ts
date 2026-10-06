@@ -1,4 +1,4 @@
-import { getPayload } from 'payload'
+import { getPayload, type Payload, type PayloadRequest } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { changeSetConflicts, createNamedChangeSet, resolveChangeSetConflicts, transitionChangeSet } from '../../../../src/editorial'
@@ -63,6 +63,29 @@ function approvalProof(value: unknown): ApprovalProof | undefined {
 
 const sameKeys = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
 
+type ApprovalDenialReason = 'reviewer_role_required' | 'fresh_authentication_required'
+
+class ApprovalAuthorizationDenied extends Error {
+  constructor(readonly userID: string, readonly reason: ApprovalDenialReason) {
+    super(reason === 'reviewer_role_required' ? 'Reviewer role required.' : 'Fresh reviewer authentication is required before approval.')
+  }
+}
+
+/** Keep denied approval evidence separate from the failed write transaction and
+ * deliberately exclude the submitted proof and request body. */
+async function auditApprovalDenial(payload: Payload, userID: string, reason: ApprovalDenialReason) {
+  await payload.create({
+    collection: 'audit-events',
+    data: { event: 'editorial.approval_denied', user: userID, actor: userID, detail: { reason } },
+    overrideAccess: true,
+  })
+}
+
+async function requireFreshApprover(payload: Payload, user: { id: string; roles?: string[] }, headers: Headers, req?: PayloadRequest) {
+  if (!user.roles?.some((role) => role === 'owner' || role === 'approver')) throw new ApprovalAuthorizationDenied(user.id, 'reviewer_role_required')
+  if (!(await freshStaff(['owner', 'approver'])({ req: req ?? { payload, user, headers } as never }))) throw new ApprovalAuthorizationDenied(user.id, 'fresh_authentication_required')
+}
+
 /** Server-owned lifecycle API. Collection REST updates are denied so clients
  * cannot forge state, actor, baseline, or review timestamps. */
 async function POSTHandler(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
@@ -75,7 +98,15 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
     const { action } = await context.params
     const requestBody = body as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown; scheduledFor?: unknown; expectedRevision?: unknown; resolutions?: unknown }
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
-    if (action === 'approve' && (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'approver') || !(await freshStaff(['owner', 'approver'])({ req: { payload, user: authenticated.user, headers: request.headers } as never })))) return Response.json({ error: 'Fresh reviewer authentication is required before approval.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+    if (action === 'approve') {
+      try {
+        await requireFreshApprover(payload, authenticated.user as { id: string; roles?: string[] }, request.headers)
+      } catch (error) {
+        if (!(error instanceof ApprovalAuthorizationDenied)) throw error
+        await auditApprovalDenial(payload, error.userID, error.reason)
+        return Response.json({ error: error.message }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+      }
+    }
     const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
@@ -105,7 +136,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
         return runReviewQuality({ payload, req, id: requestBody.id })
       }
       if (action === 'approve' && typeof requestBody.id === 'string') {
-        if (!(await freshStaff(['owner', 'approver'])({ req }))) throw new Error('Fresh reviewer authentication is required before approval.')
+        await requireFreshApprover(payload, authenticated.user as { id: string; roles?: string[] }, request.headers, req)
         const proof = approvalProof(requestBody.proof)
         if (!proof) throw new Error('The exact readiness proof displayed to the reviewer is required before approval.')
         const set = await payload.findByID({ collection: 'change-sets', id: requestBody.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }
@@ -140,6 +171,10 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    if (error instanceof ApprovalAuthorizationDenied) {
+      await auditApprovalDenial(await getPayload({ config }), error.userID, error.reason)
+      return Response.json({ error: error.message }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+    }
     const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
     if (backpressure) return backpressure
     const text = message(error)
