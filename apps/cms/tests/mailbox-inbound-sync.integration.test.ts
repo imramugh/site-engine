@@ -169,6 +169,40 @@ test('credential refresh rotation retains the durable Gmail history cursor', asy
   expect(stored.credentialRevision).not.toBe(mailbox.credentialRevision)
 })
 
+test('Gmail hydrates a durable intra-page batch without omitting IDs or advancing early', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-batch@example.test', name: 'Gmail batch', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, 'gmail-batch-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, 'gmail-batch-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'gmail-batch@example.test', historyId: '100' }) : Response.json({ sendAs: [{ sendAsEmail: 'gmail-batch@example.test', verificationStatus: 'accepted' }] }))
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundCursor: JSON.stringify({ historyID: '100' }), inboundCursorRevision: mailbox.credentialRevision }, overrideAccess: true, context: { mailboxInternal: true } })
+  let phase: 'normal' | 'crash' = 'normal'
+  const ids = Array.from({ length: 12 }, (_, index) => `gmail-batch-${index + 1}`)
+  const hydrated: string[] = []
+  const fetcher = async (url: string) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-access' })
+    if (url.includes('/history?')) return Response.json({ historyId: '200', history: [{ messagesAdded: ids.map((id) => ({ message: { id } })) }] })
+    const id = ids.find((candidate) => url.includes(`/messages/${candidate}?`))
+    if (id) {
+      if (phase === 'crash' && id === 'gmail-batch-11') return Response.json({ id, threadId: '' })
+      hydrated.push(id)
+      return Response.json({ id, threadId: 'gmail-batch-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'unmatched-batch@example.test' }, { name: 'To', value: 'gmail-batch@example.test' }, { name: 'Subject', value: id }], body: { data: Buffer.from(id).toString('base64url') } } })
+    }
+    throw new Error(`unexpected ${url}`)
+  }
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 10 })
+  let stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '100', offset: 10 })
+  expect(stored.inboundCursor.length).toBeLessThanOrEqual(1000)
+  phase = 'crash'
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).rejects.toThrow('provider_malformed_response')
+  stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '100', offset: 10 })
+  phase = 'normal'
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 2 })
+  stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '200' })
+  expect([...new Set(hydrated)].sort()).toEqual(ids.slice().sort())
+})
+
 test('overlapping polls compare their original cursor before one can save over the other', async () => {
   const owner = await payload.create({ collection: 'users', data: { email: 'sync-overlap@example.test', name: 'Sync overlap', roles: ['owner'] }, overrideAccess: true })
   const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, 'sync-overlap-session')).searchParams.get('state')!

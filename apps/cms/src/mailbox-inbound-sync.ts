@@ -4,18 +4,19 @@ import { gmailAdapter, gmailIdentity, microsoftAdapter, type Fetcher } from './m
 import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 type Mailbox = { id: string; provider: 'microsoft' | 'google' | 'smtp'; health: string; credentialRevision: string; inboundCursor?: string | null; inboundCursorRevision?: string | null }
-type GoogleCursor = { historyID: string; pageToken?: string }
+type GoogleCursor = { historyID: string; pageToken?: string; offset?: number }
 type SyncResult = { skipped: true; processed: number } | { skipped: false; processed: number }
 
 const internal = { mailboxInternal: true }
 const activeSyncs = new Map<string, Promise<unknown>>()
 const opaque = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500 && !/[\u0000-\u001f\u007f]/.test(value)
+const googleBatchSize = 10
 
 function googleCursor(value: unknown): GoogleCursor | undefined {
   if (typeof value !== 'string' || value.length > 1000) return undefined
   try {
     const parsed = JSON.parse(value) as GoogleCursor
-    return /^[0-9]{1,40}$/.test(parsed.historyID) && (!parsed.pageToken || opaque(parsed.pageToken)) ? parsed : undefined
+    return /^[0-9]{1,40}$/.test(parsed.historyID) && (!parsed.pageToken || opaque(parsed.pageToken)) && (parsed.offset === undefined || (Number.isSafeInteger(parsed.offset) && parsed.offset >= 0 && parsed.offset <= 500)) ? parsed : undefined
   } catch { return undefined }
 }
 
@@ -87,16 +88,35 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
     } else {
       const adapter = gmailAdapter(fetcher, 'sync@example.invalid')
       const page = await adapter.poll(refreshed.accessToken, position.historyID, position.pageToken)
-      const ids = page.entries.flatMap((entry) => Array.isArray((entry as { messagesAdded?: unknown }).messagesAdded) ? (entry as { messagesAdded: Array<{ message?: { id?: unknown } }> }).messagesAdded.map((item) => item.message?.id).filter((id): id is string => opaque(id)) : [])
+      const ids: string[] = []
+      for (const entry of page.entries) {
+        if (!entry || typeof entry !== 'object') throw new Error('provider_malformed_response')
+        const added = (entry as { messagesAdded?: unknown }).messagesAdded
+        if (added === undefined) continue
+        if (!Array.isArray(added)) throw new Error('provider_malformed_response')
+        for (const item of added) {
+          const id = (item as { message?: { id?: unknown } } | null)?.message?.id
+          if (typeof id !== 'string' || !opaque(id)) throw new Error('provider_malformed_response')
+          ids.push(id)
+        }
+      }
       const uniqueIDs = [...new Set(ids)]
       if (uniqueIDs.length > 500) throw new Error('provider_page_too_large')
-      for (const id of uniqueIDs) {
+      const offset = position.offset ?? 0
+      if (offset > uniqueIDs.length) throw new Error('provider_malformed_response')
+      const pendingIDs = uniqueIDs.slice(offset, offset + googleBatchSize)
+      for (const id of pendingIDs) {
         const message = await adapter.message(refreshed.accessToken, id)
         await unchanged(payload, active)
         await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
         processed += 1
       }
-      nextCursor = JSON.stringify(page.nextPageToken ? { historyID: position.historyID, pageToken: page.nextPageToken } : { historyID: page.historyID })
+      const nextOffset = offset + pendingIDs.length
+      nextCursor = JSON.stringify(nextOffset < uniqueIDs.length
+        ? { historyID: position.historyID, ...(position.pageToken ? { pageToken: position.pageToken } : {}), offset: nextOffset }
+        : page.nextPageToken
+          ? { historyID: position.historyID, pageToken: page.nextPageToken }
+          : { historyID: page.historyID })
     }
   }
   const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: active.id } }, { credentialRevision: { equals: active.credentialRevision } }, { health: { equals: 'connected' } }, { inboundCursor: { equals: active.inboundCursor ?? null } }, { inboundCursorRevision: { equals: active.inboundCursorRevision ?? null } }] }, data: { inboundCursor: nextCursor, inboundCursorRevision: active.credentialRevision }, overrideAccess: true, context: internal })

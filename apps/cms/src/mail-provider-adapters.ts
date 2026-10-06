@@ -223,23 +223,27 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
     },
     async poll(token: string, folderID: string, cursor?: string) {
       const response = await request(fetcher, graphDelta(folderID, cursor), {
-        headers: auth(token),
+        headers: { ...auth(token), Prefer: "odata.maxpagesize=100" },
       });
       if (!response.ok) fail(response.status);
       const value = await json(response);
       if (!Array.isArray(value.value))
         throw new Error("provider_malformed_response");
+      if (value.value.length > 500) throw new Error("provider_page_too_large");
       const next = value["@odata.nextLink"] ?? value["@odata.deltaLink"];
+      const messages = value.value.map((entry) => {
+        if (!entry || typeof entry !== "object")
+          throw new Error("provider_malformed_response");
+        const raw = entry as Record<string, unknown>;
+        if (raw["@removed"] !== undefined) return undefined;
+        const message = graphMessage(raw);
+        if (!message.messageId || !message.threadId)
+          throw new Error("provider_malformed_response");
+        return message;
+      });
       return {
         cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
-        messages: value.value
-          .slice(0, 500)
-          .filter(
-            (entry): entry is Record<string, unknown> =>
-              !!entry && typeof entry === "object",
-          )
-          .map(graphMessage)
-          .filter((entry) => entry.messageId && entry.threadId),
+        messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
       };
     },
   };
@@ -384,24 +388,25 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         throw new Error("invalid_cursor");
       const response = await request(
         fetcher,
-        `${gmail}/gmail/v1/users/me/history?startHistoryId=${encodeURIComponent(historyID)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+        `${gmail}/gmail/v1/users/me/history?startHistoryId=${encodeURIComponent(historyID)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}&maxResults=100`,
         { headers: auth(token) },
       );
       if (!response.ok) fail(response.status);
       const value = await json(response);
       if (
         typeof value.historyId !== "string" ||
+        !/^[0-9]{1,40}$/.test(value.historyId) ||
         (value.history !== undefined && !Array.isArray(value.history)) ||
         (value.nextPageToken !== undefined && !opaque(value.nextPageToken))
       )
         throw new Error("provider_malformed_response");
+      if (Array.isArray(value.history) && value.history.length > 500)
+        throw new Error("provider_page_too_large");
       return {
         historyID: value.historyId,
         nextPageToken:
           typeof value.nextPageToken === "string" ? value.nextPageToken : null,
-        entries: Array.isArray(value.history)
-          ? value.history.slice(0, 500)
-          : [],
+        entries: Array.isArray(value.history) ? value.history : [],
       };
     },
   };

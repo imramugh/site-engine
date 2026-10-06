@@ -25,6 +25,17 @@ describe('Graph delta provider contracts', () => {
     const malformed = microsoftAdapter(async () => Response.json({ value: 'not-an-array' }), 'staff@example.test')
     await expect(malformed.poll('token', 'inbox')).rejects.toThrow('provider_malformed_response')
   })
+
+  it('requests bounded pages and refuses oversized Graph or Gmail pages', async () => {
+    let headers: HeadersInit | undefined
+    const graph = microsoftAdapter(async (_url, init) => { headers = init.headers; return Response.json({ value: Array.from({ length: 501 }, () => ({})) }) }, 'staff@example.test')
+    await expect(graph.poll('token', 'inbox')).rejects.toThrow('provider_page_too_large')
+    expect(new Headers(headers).get('prefer')).toBe('odata.maxpagesize=100')
+    let gmailURL = ''
+    const gmail = gmailAdapter(async (url) => { gmailURL = url; return Response.json({ historyId: '22', history: Array.from({ length: 501 }, () => ({})) }) }, 'staff@example.test')
+    await expect(gmail.poll('token', '21')).rejects.toThrow('provider_page_too_large')
+    expect(gmailURL).toContain('maxResults=100')
+  })
 })
 
 describe('provider-shaped threaded reads', () => {
