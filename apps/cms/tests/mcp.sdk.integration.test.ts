@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createClient } from '@libsql/client'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
@@ -485,6 +486,22 @@ test('MCP cancels a chunked body over the limit before introspection, Payload, o
   const after = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, limit: 0 })
   expect(after.totalDocs).toBe(before.totalDocs)
 })
+
+test('MCP returns a retryable HTTP response when its request audit is blocked by an external SQLite writer', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-busy-${randomUUID()}@example.test`, name: 'MCP Busy', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-busy-token', { clientId: 'mcp-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+  const lock = await external.transaction('write')
+  try {
+    await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
+    const client = new Client({ name: 'mcp-sdk-busy', version: '1.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`${mcpOrigin}/mcp`), { requestInit: { headers: { authorization: 'Bearer mcp-busy-token' } } })
+    await expect(client.connect(transport)).rejects.toThrow(/temporarily_unavailable/)
+  } finally { await lock.rollback(); external.close() }
+  const client = await clientFor('mcp-busy-token')
+  try { expect((await client.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_change_set' })])) } finally { await client.client.close() }
+}, 15_000)
 
 test('ENG-017 content-write tools require scope and preserve draft review boundaries', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-write@example.test', name: 'MCP Writer', roles: ['editor'] }, overrideAccess: true })
