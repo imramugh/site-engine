@@ -409,6 +409,13 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect((await operations.GET(new Request('http://cms.test/api/operations?publish=not-a-job', { headers: owner.headers }))).status).toBe(400)
   })
 
+  it('refuses version pins that disagree with the reviewed candidate before creating publish work', async () => {
+    const current = await fixture('mismatched-pins')
+    await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: current.set.id, expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: current.included, previewContentHash: canonicalHash(current.candidate), versions: { ...versions, contractVersion: '1.4.0' }, initialBaseline: current.baseline }) })).rejects.toThrow('version pins do not match')
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(0)
+    expect((await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).state).toBe('submitted')
+  })
+
   it('returns a frozen immutable context when the private worker claims an approval', async () => {
     const current = await fixture('webhook-claim-context')
     const approved = await approve(current)

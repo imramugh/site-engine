@@ -36,7 +36,8 @@ function fixture() {
 }
 async function seed(manifest: any) {
   for (const s of manifest.settings.sections) await payload.create({ collection: 'sections', data: { ...s, pageIds: [], landingPageId: undefined }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
-  for (const p of manifest.pages) await payload.create({ collection: 'pages', data: { ...p, status: 'draft' }, draft: true, overrideAccess: true, context: { editorialInternal: true, reviewedSnapshotImport: true, archiveInternal: true } })
+  for (const p of manifest.pages) await payload.create({ collection: 'pages', data: { ...p, status: p.status === 'archived' ? 'archived' : 'draft' }, draft: true, overrideAccess: true, context: { editorialInternal: true, reviewedSnapshotImport: true, archiveInternal: true } })
+  for (const s of manifest.settings.sections) await payload.update({ collection: 'sections', id: s.id, data: { pageIds: s.pageIds, ...(s.landingPageId ? { landingPageId: s.landingPageId } : {}) }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
 }
 function capture(before: any | null, after: any | null, collection = 'pages') {
   const a = before && snapshot(collection as any, before), b = after && snapshot(collection as any, after)
@@ -84,6 +85,13 @@ describe('ENG-010 reviewed rollback', () => {
     const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
     expect(await payload.findByID({ collection: 'pages', id: target.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'draft' }); expect(candidate(after, set).pages).toEqual(expect.arrayContaining([expect.objectContaining({ id: target.id, status: before.pages[1].status })])); expect(set.changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'redirects', before: expect.objectContaining({ from: oldPath }), after: null })]))
   })
+  it('reverses an approved unarchive back to an archived draft', async () => {
+    const before = fixture(), after = structuredClone(before), target = { ...after.pages[0], id: randomUUID(), parentId: after.pages[0].id, slug: `unarchived-${randomUUID().slice(0, 8)}`, title: 'Unarchive rollback target', status: 'archived' }
+    before.pages.push(structuredClone(target)); after.pages.push(target); before.settings.sections[0].pageIds.push(target.id); after.settings.sections[0].pageIds.push(target.id); after.pages[1].status = 'published'
+    await seed(after); await release(before, []); const current = await release(after, [capture(before.pages[1], after.pages[1])])
+    const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
+    expect(await payload.findByID({ collection: 'pages', id: target.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'archived' }); expect(candidate(after, set).pages).toEqual(expect.arrayContaining([expect.objectContaining({ id: target.id, status: 'archived' })]))
+  })
   it('restores a renamed page old path and removes the colliding derived redirect', async () => {
     const before = fixture(), after = structuredClone(before), target = { ...after.pages[0], id: randomUUID(), slug: `old-${randomUUID().slice(0, 8)}`, title: 'Renamed rollback target', status: 'published' }
     before.pages.push(structuredClone(target)); after.pages.push(target); before.settings.sections[0].pageIds.push(target.id); after.settings.sections[0].pageIds.push(target.id); const oldPath = pathFor(before, target.id)
@@ -97,6 +105,16 @@ describe('ENG-010 reviewed rollback', () => {
     await expect(rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'change', changeKeys: ['pages:not-in-release'] })).rejects.toThrow('not included')
     await payload.create({ collection: 'change-sets', data: { name: 'Pending conflict', actor: owner.id, state: 'open', revision: 0, changes: [capture(before.pages[0], after.pages[0])] }, overrideAccess: true, context: { editorialInternal: true } })
     await expect(rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })).rejects.toThrow('pending editorial change')
+  })
+  it('does not overwrite a rejected or stale later draft while preparing rollback', async () => {
+    for (const state of ['rejected', 'stale']) {
+      const { before, after, current } = await currentPage((_before, value) => { value.pages[0].summary = `${state} approved summary` })
+      await payload.create({ collection: 'change-sets', data: { name: `${state} later edit`, actor: owner.id, state, revision: 1, changes: [capture(before.pages[0], after.pages[0])] }, overrideAccess: true, context: { editorialInternal: true } })
+      const later = `${state} later draft survives`
+      await payload.update({ collection: 'pages', id: after.pages[0].id, data: { summary: later }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+      await expect(rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })).rejects.toThrow('later draft edit')
+      expect(await payload.findByID({ collection: 'pages', id: after.pages[0].id, draft: true, overrideAccess: true })).toMatchObject({ summary: later })
+    }
   })
   it('submits a prepared rollback and discards another back to the approved draft', async () => {
     const { after, current } = await currentPage((_before, value) => { value.pages[0].summary = 'submit and discard current' })

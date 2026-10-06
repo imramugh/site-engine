@@ -47,6 +47,12 @@ export async function captureReviewedRollback(payload: Payload, req: PayloadRequ
     const found = await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
     const current = found.docs[0] as unknown as Record<string, unknown> | undefined
     if (change.collection === 'assets' && (!current || current.deletedAt)) throw new Error('A rollback asset is unavailable or in the deletion bin. Restore retained media through its lifecycle first; purged media cannot be recovered by rollback.')
+    if (current && change.before) {
+      const observed = currentChange(change.collection, current, change.before)!
+      // Older captures predate the materialized false default.
+      if (change.collection === 'pages' && observed.noindex === false && !('noindex' in change.before)) delete observed.noindex
+      if (canonicalHash(observed) !== canonicalHash(change.before)) throw new Error('Rollback conflicts with a later draft edit. Resolve that draft before preparing a reversal.')
+    }
     if (!change.after) {
       change.retainedDraftHash = canonicalHash(currentChange(change.collection, current, change.before))
       continue
@@ -55,7 +61,7 @@ export async function captureReviewedRollback(payload: Payload, req: PayloadRequ
       ? await assetRestoration(payload, req, current, change.after)
       : restoration(change.collection, change.after)
     if (change.collection === 'pages' && change.after.status === 'archived') data.status = 'archived'
-    const context = { editorialInternal: true, reviewedSnapshotImport: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) }
+    const context = { editorialInternal: true, reviewedSnapshotImport: true, ...(change.collection === 'pages' && change.after.status === 'archived' ? { archiveInternal: true } : {}), ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) }
     const saved = current
       ? await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context })
       : await payload.create({ collection: change.collection, data: { id: change.id, ...data }, draft: true, overrideAccess: true, req, context })

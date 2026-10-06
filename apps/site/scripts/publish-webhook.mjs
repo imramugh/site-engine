@@ -1,6 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
-const encoder = new TextEncoder();
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const PUBLISH_WEBHOOK_PATH = '/internal/publish-build';
 export const MAX_PUBLISH_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -55,12 +54,15 @@ export function parsePublishWebhookClaim(body) {
   return value;
 }
 
+/** @param {{url: string, secret: string, claim: any, nonce?: string, timestamp?: number, fetchImpl?: typeof fetch, signal?: AbortSignal}} options */
 export function publishWebhookRequest({ url, secret: secretValue, claim, nonce = randomUUID(), timestamp = Date.now(), fetchImpl = fetch, signal }) {
   const body = Buffer.from(JSON.stringify(claim)); const stamp = String(timestamp);
   return fetchImpl(new URL(PUBLISH_WEBHOOK_PATH, url), { method: 'POST', redirect: 'error', signal, headers: { 'content-type': 'application/json', 'x-publish-timestamp': stamp, 'x-publish-nonce': nonce, 'x-publish-signature': signPublishWebhook({ secret: secretValue, timestamp: stamp, nonce, body }), 'content-length': String(body.byteLength) }, body });
 }
 
-export async function handlePublishWebhook(request, { secret: secretValue, run, replay = createReplayGuard(), now = () => Date.now(), maxAgeMs = 60_000, signal } = {}) {
+/** @param {Request} request
+ * @param {{secret: string, run: (claim: any, signal?: AbortSignal) => Promise<unknown>, replay?: ReturnType<typeof createReplayGuard>, now?: () => number, maxAgeMs?: number, signal?: AbortSignal}} options */
+export async function handlePublishWebhook(request, { secret: secretValue, run, replay = createReplayGuard(), now = () => Date.now(), maxAgeMs = 60_000, signal }) {
   if (request.method !== 'POST' || new URL(request.url).pathname !== PUBLISH_WEBHOOK_PATH) return new Response('Not found.', { status: 404 });
   try {
     const body = await readBoundedBody(request); const timestamp = request.headers.get('x-publish-timestamp'); const nonce = request.headers.get('x-publish-nonce');

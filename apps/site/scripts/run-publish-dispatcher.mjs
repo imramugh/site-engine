@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { createPublishAPI, validatePublishClaim } from './run-publish-worker.mjs';
 import { publishWebhookRequest } from './publish-webhook.mjs';
 
+/** @param {{api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, webhookURL: string, secret: string, versionPins: Record<string, string>, timeoutMs?: number, fetchImpl?: typeof fetch, signal?: AbortSignal, heartbeat?: () => Promise<void>}} options */
 export async function dispatchPublishOnce({ api, webhookURL, secret, versionPins, timeoutMs = 120_000, fetchImpl = fetch, signal, heartbeat = async () => {} }) {
   const raw = await api('claim', {}, signal); await heartbeat(); const claim = validatePublishClaim(raw, versionPins); if (!claim) return false;
   await api('log', { id: claim.job.id, leaseToken: claim.job.leaseToken, stage: 'dispatched' }, signal);
