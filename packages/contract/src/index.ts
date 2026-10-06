@@ -99,6 +99,9 @@ export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, Bloc
     if (block.inquiryTopics && new Set(block.inquiryTopics.map((topic) => topic.value)).size !== block.inquiryTopics.length) ctx.addIssue({ code: 'custom', path: ['inquiryTopics'], message: 'Inquiry topic values must be unique.' });
   }
 });
+/** Theme and renderer inputs are inferred from the schemas rather than
+ * independently maintained interfaces. */
+export type Appearance = z.infer<typeof AppearanceSchema>;
 export type Block = z.infer<typeof BlockSchema>;
 const hrefUsesFragment = (href: string | undefined) => Boolean(href?.includes('#'));
 const linkUsesFragment = (link: z.infer<typeof LinkSchema> | undefined) => hrefUsesFragment(link?.href);
@@ -163,6 +166,9 @@ function requiredStringLength(length: number | null, field: string): number {
 export const CmsPageFieldConfig = Object.freeze({
   title: Object.freeze({ minLength: requiredStringLength(PageSchema.shape.title.minLength, 'title.min'), maxLength: requiredStringLength(PageSchema.shape.title.maxLength, 'title.max') }),
   summary: Object.freeze({ minLength: requiredStringLength(PageSchema.shape.summary.minLength, 'summary.min'), maxLength: requiredStringLength(PageSchema.shape.summary.maxLength, 'summary.max') }),
+  kicker: Object.freeze({ maxLength: requiredStringLength(PageSchema.shape.kicker.unwrap().maxLength, 'kicker.max') }),
+  lede: Object.freeze({ maxLength: requiredStringLength(PageSchema.shape.lede.unwrap().maxLength, 'lede.max') }),
+  seoDescription: Object.freeze({ maxLength: requiredStringLength(PageSchema.shape.seoDescription.unwrap().maxLength, 'seoDescription.max') }),
   templateOptions: TemplateSchema.options,
 });
 export const SectionSchema = z.object({ id, landingPageId: id.optional(), name: safeText(80), summary: safeText(300).optional(), slug: z.string().regex(/^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$/), allowedTemplates: z.array(TemplateSchema).min(1), pageIds: z.array(id).max(100) }).strict();
@@ -338,8 +344,18 @@ export const SiteSnapshotSchema = z.object({
     });
   });
 });
+export type Template = z.infer<typeof TemplateSchema>;
 export type Page = z.infer<typeof PageSchema>;
 export type Section = z.infer<typeof SectionSchema>;
+export type MediaReference = z.infer<typeof MediaReferenceSchema>;
+export type Redirect = z.infer<typeof RedirectSchema>;
+export type StyleGuide = z.infer<typeof StyleGuideSchema>;
+export type ChangeSet = z.infer<typeof ChangeSetSchema>;
+export type ThemeSelection = z.infer<typeof ThemeSelectionSchema>;
+export type ThemeManifest = z.infer<typeof ThemeManifestSchema>;
+export type ThemeInstall = z.infer<typeof ThemeInstallSchema>;
+export type SiteSettings = z.infer<typeof SiteSettingsSchema>;
+export type SiteSettingsDraft = z.infer<typeof SiteSettingsDraftSchema>;
 export type SiteSnapshot = z.infer<typeof SiteSnapshotSchema>;
 
 /** Formats public snapshot validation failures without serializing page or block content. */
