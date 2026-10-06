@@ -513,6 +513,45 @@ test('MCP site and theme tools keep Owner draft mutations revisioned and scoped'
   } finally { await Promise.all([ownerSdk.transport.close(), editorSdk.transport.close()]) }
 }, 15_000)
 
+test('MCP rolls back captured owner settings when its injected readiness evaluator fails', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-readiness-owner-${randomUUID()}@example.test`, name: 'MCP Readiness Owner', roles: ['owner'] }, overrideAccess: true })
+  const session = await sessionFor(owner.id)
+  const token = `mcp-readiness-owner-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-readiness-owner-client-${randomUUID()}`, userId: owner.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const ownerSdk = await clientFor(token)
+  const rejected = await startServer(async (incoming, outgoing) => {
+    const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+    await respond(outgoing, await handleMcp(requestFrom(incoming, rejected.origin, Buffer.concat(chunks)), {
+      evaluateChangeSetQuality: async () => ({ checks: [{ name: 'injected-readiness', status: 'failed', errors: [{ collection: 'site-settings', id: 'injected', message: 'Injected readiness failure.' }] }], warnings: [] }),
+    }))
+  })
+  const rejectedClient = new Client({ name: 'mcp-sdk-readiness-rollback', version: '1.0.0' })
+  const rejectedTransport = new StreamableHTTPClientTransport(new URL(`${rejected.origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } })
+  try {
+    await rejectedClient.connect(rejectedTransport)
+    const state = resultJson(await rejectedClient.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; siteName: string }
+    const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP readiness rollback' } })) as { id: string; revision: number }
+    const [beforeSet, beforeSettings, beforeThemes] = await Promise.all([
+      payload.findByID({ collection: 'change-sets', id: created.id, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+      payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+    ])
+    const response = await rejectedClient.callTool({ name: 'update_site_settings', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, settings: { siteName: `${state.siteName} rollback` } } })
+    expect(resultJson(response)).toEqual({ error: 'write_failed' })
+    const [afterSet, afterSettings, afterThemes] = await Promise.all([
+      payload.findByID({ collection: 'change-sets', id: created.id, depth: 0, overrideAccess: true }),
+      payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+      payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
+    ])
+    expect({ revision: afterSet.revision, changes: afterSet.changes }).toEqual({ revision: beforeSet.revision, changes: beforeSet.changes })
+    expect(afterSettings.docs.map(doc => capturedSnapshot('site-settings', doc as unknown as Record<string, unknown>))).toEqual(beforeSettings.docs.map(doc => capturedSnapshot('site-settings', doc as unknown as Record<string, unknown>)))
+    expect(afterThemes.docs.map(doc => capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>))).toEqual(beforeThemes.docs.map(doc => capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>)))
+  } finally {
+    await Promise.all([ownerSdk.transport.close(), rejectedTransport.close()])
+    await new Promise<void>((resolve) => rejected.server.close(() => resolve()))
+  }
+}, 15_000)
+
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {
   const user = await payload.create({ collection: 'users', data: { email: 'mcp-disabled@example.test', name: 'MCP Disabled', roles: ['editor'], disabled: true }, overrideAccess: true })
   const disabledSession = await sessionFor(user.id)

@@ -140,7 +140,11 @@ async function introspect(request: Request, resource: string): Promise<Introspec
 
 const challenge = (origin: string) => `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`
 
-export async function handleMcp(request: Request): Promise<Response> {
+/** The evaluator is injectable so the transaction boundary can be exercised
+ * through the protocol without weakening the production readiness check. */
+export type McpHandlerDependencies = { evaluateChangeSetQuality?: typeof changeSetQuality }
+
+export async function handleMcp(request: Request, dependencies: McpHandlerDependencies = {}): Promise<Response> {
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST', 'cache-control': 'no-store' } })
   const publicOrigin = process.env.PAYLOAD_PUBLIC_SERVER_URL
   let origin: URL
@@ -156,6 +160,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'www-authenticate': `${challenge(origin.origin)}, error="insufficient_scope", scope="${required}"`, 'cache-control': 'no-store' } })
   if (body.method === 'tools/list' && !identity.scopes.some((scope) => [contentReadScope, redirectsReadScope, redirectsWriteScope, leadsReadScope, careersReadScope].includes(scope))) return new Response(JSON.stringify({ error: 'insufficient_scope', required: 'mcp:content:read mcp:redirects:read mcp:redirects:write mcp:leads:read mcp:careers:read' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
+  const evaluateChangeSetQuality = dependencies.evaluateChangeSetQuality ?? changeSetQuality
   let current: Awaited<ReturnType<typeof payload.findByID>>
   try { current = await payload.findByID({ collection: 'users', id: identity.userId, overrideAccess: true }) } catch { return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } }) }
   if ((current as { disabled?: boolean }).disabled) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
@@ -523,7 +528,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   const ownerWriteFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'stale_settings', 'theme_not_installed', 'theme_incompatible'])
   const checkedMutation = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, id: string, doc: Record<string, unknown>) => {
     const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as { revision?: number; changes?: unknown[] }
-    const quality = await changeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
+    const quality = await evaluateChangeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
     // Drafts deliberately retain readiness blockers for review. Contract/tree
     // failures are impossible after collection validation, but fail closed if
     // a future capture/check implementation detects one before commit.
