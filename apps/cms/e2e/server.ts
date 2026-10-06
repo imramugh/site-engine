@@ -14,8 +14,9 @@ import sharp from 'sharp'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
-import { claimPreviewRenderJob, completePreviewRenderJob } from '../src/review-preview.js'
-import { canonicalHash } from '../src/publishing.js'
+import { claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob } from '../src/review-preview.js'
+import { buildCandidate, canonicalHash } from '../src/publishing.js'
+import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
@@ -631,6 +632,44 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/warning-only-review') {
+    void (async () => {
+      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const release = releases.docs[0] as unknown as { id?: string; sequence?: number; snapshot?: Record<string, unknown> } | undefined
+      const snapshot = release?.snapshot
+      if (!release || !snapshot || typeof snapshot !== 'object' || typeof snapshot.id !== 'string') throw new Error('Published review baseline is missing.')
+      const baseline = structuredClone(snapshot.manifest) as Record<string, unknown>
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const page = (baseline.pages as Array<Record<string, unknown>>).find((item) => item.id === onPageReviewPageID)
+      if (!page) throw new Error('Warning-only review page is missing from the published baseline.')
+      const before = structuredClone(page)
+      const after = structuredClone(page)
+      after.blocks = (after.blocks as Array<Record<string, unknown>>).map((block) => String(block.id) === onPageReviewBlockID ? { ...block, body: 'This warning-only preview uses a forbidden synthetic phrase.' } : block)
+      const warningPhrase = 'forbidden synthetic phrase'
+      const changes = [
+        { collection: 'pages', id: onPageReviewPageID, before, after, beforeHash: canonicalHash(before), afterHash: null },
+        { collection: 'style-guides', id: randomUUID(), before: baseline.styleGuide ?? null, after: { ...(baseline.styleGuide as Record<string, unknown> | undefined), bannedPhrases: [warningPhrase] }, beforeHash: baseline.styleGuide ? canonicalHash(baseline.styleGuide) : null, afterHash: null },
+      ]
+      const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+      const versionPins = { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String((baseline.settings as { contractVersion: string }).contractVersion) }
+      const proposedManifest = buildCandidate(baseline as never, changes as never, includedChangeKeys, versionPins)
+      const id = randomUUID(); const jobID = randomUUID(); const changeHash = canonicalHash(changes)
+      await payload.create({ collection: 'change-sets', data: { id, name: 'Warning-only readiness review', actor: String(source.actor), state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSnapshotID: snapshot.id, baselineSequence: Number(release.sequence), includedChangeKeys, versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: snapshot.id, liveSequence: Number(release.sequence), liveManifest: baseline, proposedManifest, liveManifestHash: canonicalHash(baseline), proposedManifestHash: canonicalHash(proposedManifest), versionPins, status: 'pending', attempts: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+      const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+      if (!job || String(job.id) !== jobID) throw new Error('Unable to claim warning-only review job.')
+      const api = async (action: string, body: Record<string, unknown> = {}) => {
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'renew') return { ok: true }
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        throw new Error('Unsupported warning-only worker action.')
+      }
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
+      await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id }))
+      return { id }
+    })().then((value) => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed warning-only review.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/second-page-review') {
     void (async () => {
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true })
@@ -640,6 +679,51 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const created = await payload.create({ collection: 'change-sets', data: { id: secondOnPageReviewSetID, name: 'Second pending page review', actor: source.actor, state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes: [{ ...sourceChange, after, afterHash: null }], quality: source.quality, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
       return { id: String(created.id) }
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
+    return
+  }
+  const staleFailedPreview = request.method === 'POST' ? /^\/__e2e\/failed-preview-review\/stale-baseline\/([0-9a-f-]{36})$/i.exec(request.url ?? '') : undefined
+  if (staleFailedPreview) {
+    void (async () => {
+      const set = await payload.findByID({ collection: 'change-sets', id: staleFailedPreview[1]!, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const preview = set.preview as Record<string, unknown> | undefined
+      if (!preview) throw new Error('Failed preview is missing.')
+      await payload.update({ collection: 'change-sets', id: String(set.id), data: { preview: { ...preview, baselineSequence: Number(preview.baselineSequence) + 1 } }, overrideAccess: true, context: { editorialInternal: true } })
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to stale failed preview.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/failed-preview-review') {
+    void (async () => {
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
+      const snapshot = release?.snapshot
+      if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published diagnostic baseline is missing.')
+      const manifest = structuredClone(snapshot.manifest) as typeof initialBaseline
+      const id = randomUUID(); const jobID = randomUUID(); const changes = source.changes as Array<Record<string, unknown>>; const changeHash = canonicalHash(changes)
+      const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+      const versionPins = { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: manifest.settings.contractVersion }
+      const manifestHash = canonicalHash(manifest)
+      await payload.create({ collection: 'change-sets', data: { id, name: 'Structured data diagnostic review', actor: String(source.actor), state: 'submitted', revision: 1, changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSnapshotID: snapshot.id, baselineSequence: Number(release.sequence), includedChangeKeys, liveManifestHash: manifestHash, proposedManifestHash: manifestHash, versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: snapshot.id, liveSequence: Number(release.sequence), liveManifest: manifest, proposedManifest: manifest, liveManifestHash: manifestHash, proposedManifestHash: manifestHash, versionPins, status: 'pending', attempts: 2 }, overrideAccess: true, context: { editorialInternal: true } })
+      const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+      if (!job || String(job.id) !== jobID) throw new Error('Unable to claim structured-data diagnostic job.')
+      const api = async (action: string, body: Record<string, unknown> = {}) => {
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'renew') return { ok: true }
+        if (action === 'fail') return withPayloadTransaction(payload, inner => failPreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), String(body.errorCode), undefined, body.diagnostics))
+        throw new Error('Unsupported failed-preview worker action.')
+      }
+      const render = async () => {
+        const error = new Error('Generated structured data must contain schema.org @context and an @graph array.') as Error & { diagnostics?: unknown[] }
+        error.diagnostics = [{ code: 'STRUCTURED_DATA_INVALID', path: `structuredData.${onPageReviewPageID}`, pageId: onPageReviewPageID, blockId: onPageReviewBlockID, message: error.message }]
+        throw error
+      }
+      try { await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, render, heartbeatMs: 60_000, signal: undefined }) }
+      catch (error) { if (!(error instanceof Error) || error.message !== 'BUILD_FAILED') throw error }
+      const failed = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true })
+      if (failed.status !== 'failed') throw new Error('Structured-data diagnostic job did not fail.')
+      return { id, status: failed.status }
+    })().then((value) => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed failed preview.') })
     return
   }
   // E2E-only external SQLite fault: the production direct-edit request still

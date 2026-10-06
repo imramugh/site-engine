@@ -93,6 +93,39 @@ async function reviewHeaders(role: 'owner' | 'editor') {
 }
 
 describe('ENG-030 immutable review preview jobs', () => {
+  it('shows bounded failed-render diagnostics only to reviewers and never creates an outbox item', async () => {
+    const current = await fixture('failed-render-diagnostics')
+    const job = await prepare(current)
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { status: 'failed', errorCode: 'BUILD_FAILED', renderDiagnostics: [{ code: 'STRUCTURED_DATA_INVALID', path: 'structuredData.page-id', blockId: 'block-id', message: 'Generated structured data must contain schema.org @context and an @graph array.' }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const response = await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers: current.headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ failedPreview: { id: current.set.id, diagnostics: [expect.objectContaining({ code: 'STRUCTURED_DATA_INVALID', path: 'structuredData.page-id', blockId: 'block-id' })] } })
+    expect((await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers: await reviewHeaders('editor') }), { params: Promise.resolve({ id: String(current.set.id) }) })).status).toBe(403)
+    const beforeOutbox = await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })
+    const denied = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof: {} }) }), { params: Promise.resolve({ action: 'approve' }) })
+    expect(denied.status).toBe(403)
+    expect((await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
+    const stale = await payload.findByID({ collection: 'change-sets', id: current.set.id, depth: 0, overrideAccess: true })
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { preview: { ...(stale.preview as Record<string, unknown>), versionPins: { themeVersion: 'stale-theme', engineVersion: 'engine-test-1', contractVersion: '1.0.0' } } }, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers: current.headers }), { params: Promise.resolve({ id: String(current.set.id) }) })).status).toBe(409)
+  })
+
+  it('keeps advisory readiness warnings distinct from blocking codes', async () => {
+    const current = await fixture('quality-severity')
+    current.live.styleGuide = { bannedPhrases: ['Synthetic forbidden wording'] }
+    const after = structuredClone(current.changes[0]!.after) as Record<string, unknown>
+    const blocks = structuredClone(after.blocks) as Array<Record<string, unknown>>
+    blocks[0] = { ...blocks[0], body: 'Synthetic forbidden wording.' }
+    current.changes[0]!.after = { ...after, blocks }
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: current.changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const job = await prepare(current, { manifest: current.live, sequence: 0, versions })
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    const result = await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
+    expect(result.report).toMatchObject({ publishable: true, blockers: [] })
+    expect(result.report.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_READING_LEVEL', severity: 'warning' })]))
+  })
+
   it('uses canonical engine routes for section landings and rejects cyclic ancestry', () => {
     const snapshot = baseline()
     const section = snapshot.settings.sections[0]!
@@ -273,10 +306,12 @@ describe('ENG-030 immutable review preview jobs', () => {
     const job = await prepare(current)
     const start = new Date('2026-10-03T19:00:00.000Z')
     let lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, start, 100))
-    for (let attempt = 1; attempt < 3; attempt++) {
-      await withPayloadTransaction(payload, req => failPreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), 'RENDER_TIMEOUT', new Date(start.getTime() + attempt * 10)))
-      lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, new Date(start.getTime() + attempt * 10 + 1_000 * 2 ** (attempt - 1)), 100))
-    }
+    await expect(withPayloadTransaction(payload, req => failPreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), 'BUILD_FAILED', start, [{ code: 'STRUCTURED_DATA_INVALID', path: 'structuredData.invalid', pageId: 'not-a-uuid', message: 'Invalid structured data.' }]))).rejects.toThrow('Preview failure request is invalid.')
+    await withPayloadTransaction(payload, req => failPreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), 'BUILD_FAILED', new Date(start.getTime() + 10), [{ code: 'STRUCTURED_DATA_INVALID', path: 'structuredData.valid', pageId: current.changes[0]!.id, blockId: current.live.pages[0]!.blocks[0]!.id, message: 'Invalid structured data.' }]))
+    lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, new Date(start.getTime() + 1_010), 100))
+    await withPayloadTransaction(payload, req => failPreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), 'RENDER_TIMEOUT', new Date(start.getTime() + 1_020)))
+    expect((await payload.findByID({ collection: 'preview-render-jobs', id: job.id, overrideAccess: true })).renderDiagnostics).toBeNull()
+    lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, new Date(start.getTime() + 3_020), 100))
     expect(lease?.attempts).toBe(3)
     expect(await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req, new Date(start.getTime() + 9_000), 100))).toBeNull()
     expect(await payload.findByID({ collection: 'preview-render-jobs', id: job.id, overrideAccess: true })).toMatchObject({ status: 'failed', errorCode: 'LEASE_EXPIRED' })

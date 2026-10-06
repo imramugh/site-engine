@@ -618,6 +618,16 @@ export const MailThreads: CollectionConfig = {
   hooks: { beforeChange: [({ data, originalDoc }) => { const lead = relationId(data.lead) ?? relationId(originalDoc?.lead); const application = relationId(data.application) ?? relationId(originalDoc?.application); if (Boolean(lead) === Boolean(application)) throw new Error('A mail thread must belong to one lead or application.'); return data }] },
 }
 
+/** Private operator record of an already-sent external reply; audit events retain metadata only. */
+export const ExternalReplies: CollectionConfig = {
+  slug: 'external-replies', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: staff(['owner', 'sales']), update: () => false, delete: () => false },
+  fields: [
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries', required: true }, { name: 'sentAt', type: 'date', required: true },
+    { name: 'subject', type: 'text', required: true, maxLength: 500 }, { name: 'summary', type: 'textarea', required: true, maxLength: 5000 },
+    { name: 'recordedBy', type: 'relationship', relationTo: 'users', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true },
+  ],
+}
+
 export const MailThreadMessages: CollectionConfig = {
   slug: 'mail-thread-messages', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) && hasRole(req.user as never, ['hiring']) ? ({ or: [{ lead: { exists: true } }, { application: { exists: true } }] } as never) : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
   fields: [
@@ -683,7 +693,7 @@ export const Applications: CollectionConfig = {
       return doc
     }],
   },
-  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'telephone', type: 'text', maxLength: 48 }, { name: 'linkedIn', type: 'text', maxLength: 500 }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }],
+  fields: [{ name: 'name', type: 'text', required: true }, { name: 'email', type: 'email', required: true }, { name: 'telephone', type: 'text', maxLength: 48 }, { name: 'linkedIn', type: 'text', maxLength: 500 }, { name: 'coverLetter', type: 'textarea', required: true }, { name: 'consent', type: 'checkbox', required: true }, { name: 'jobId', type: 'text', required: true }, { name: 'resumeKey', type: 'text', required: true }, { name: 'idempotencyKey', type: 'text', required: true, unique: true, admin: { hidden: true } }, { name: 'status', type: 'select', defaultValue: 'new', options: ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] }, { name: 'notes', type: 'textarea', maxLength: 5000 }],
 }
 
 /** Owner-controlled policy. The defaults are encoded in code so a missing row is safe. */
@@ -834,6 +844,7 @@ export const PreviewRenderJobs: CollectionConfig = {
     { name: 'completedAt', type: 'date', admin: { readOnly: true } },
     { name: 'artifactDigest', type: 'text', admin: { readOnly: true } },
     { name: 'errorCode', type: 'text', admin: { readOnly: true } },
+    { name: 'renderDiagnostics', type: 'json', admin: { readOnly: true } },
   ],
 }
 

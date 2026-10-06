@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { parseSiteSnapshot } from '@site-engine/contract';
+import { checkSiteSnapshot } from '@site-engine/checks';
 import { deriveRoutes } from '@site-engine/engine';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
 import { writeIndexNowVerificationFile } from './indexnow.mjs';
@@ -15,6 +16,27 @@ import { nginxRedirectInclude } from './redirect-artifact.mjs';
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 async function files(directory, root = directory) { const entries = await readdir(directory, { withFileTypes: true }); return (await Promise.all(entries.map(async entry => { if (entry.isSymbolicLink()) throw new Error('Artifact contains a symbolic link.'); return entry.isDirectory() ? files(join(directory, entry.name), root) : [[relative(root, join(directory, entry.name)), sha(await readFile(join(directory, entry.name)))]]; }))).flat(); }
+export class QualityDiagnosticError extends Error {
+  constructor(report) {
+    const diagnostics = report.blockers.map(({ code, path, pageId, blockId, message }) => ({ code, path, ...(pageId ? { pageId } : {}), ...(blockId ? { blockId } : {}), message }));
+    super(`Quality checks failed: ${diagnostics.map((item) => `${item.code} (${item.path}): ${item.message}`).join('; ')}`);
+    this.name = 'QualityDiagnosticError'; this.diagnostics = diagnostics;
+  }
+}
+function qualityError(report) { return report.publishable ? undefined : new QualityDiagnosticError(report); }
+export async function generatedStructuredData(snapshot, artifact, required) {
+  const routes = deriveRoutes(snapshot, snapshot.settings.homepageId).routes.filter(({ page }) => page.status === 'published');
+  const entries = await Promise.all(routes.map(async ({ page, canonicalPath }) => {
+    const relativePath = canonicalPath === '/' ? 'index.html' : join(canonicalPath.replace(/^\//, ''), 'index.html');
+    try {
+      const source = await readFile(join(artifact, relativePath), 'utf8');
+      const match = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i.exec(source);
+      if (!match) return required ? [page.id, undefined] : undefined;
+      try { return [page.id, JSON.parse(match[1])]; } catch { return [page.id, undefined]; }
+    } catch { return required ? [page.id, undefined] : undefined; }
+  }));
+  return Object.fromEntries(entries.filter(Boolean));
+}
 const safeFilename = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(value);
 function referencedMedia(snapshot) {
   const ids = new Set();
@@ -179,6 +201,10 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
   const normalizedOrigin = normalizePublicOrigin(publicOrigin); const normalizedBase = normalizeBasePath(basePath);
   const snapshot = parseSiteSnapshot(JSON.parse(await readFile(resolve(input), 'utf8')));
+  const style = snapshot.styleGuide;
+  const initialQuality = checkSiteSnapshot(snapshot, { style });
+  const initialQualityError = qualityError(initialQuality);
+  if (initialQualityError) throw initialQualityError;
   // Workers pass immutable pins for each render. The standalone renderer keeps
   // the legacy configured-version fallback only when no pins were supplied.
   const pins = versionPins === undefined
@@ -193,6 +219,9 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
+    const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, true) });
+    const renderedQualityError = qualityError(renderedQuality);
+    if (renderedQualityError) throw renderedQualityError;
     await copyReferencedMedia(snapshot, staged);
     const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
     if (symbol) {

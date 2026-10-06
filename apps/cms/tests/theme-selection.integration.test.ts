@@ -16,10 +16,10 @@ const directory = mkdtempSync(join(tmpdir(), 'site-engine-theme-selection-'))
 const registryFile = join(directory, 'theme-registry.json')
 const db = join(directory, 'cms.sqlite')
 const oldManifest = {
-  name: 'synthetic-theme', version: '2.4.6', contract: '1.0.0', entry: './dist/renderer.js',
+  name: 'synthetic-theme', version: '2.4.6', contract: '1.5.0', entry: './dist/renderer.js',
   standardBlocks: ['hero', 'faq'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} },
 }
-const manifest = { ...oldManifest, version: '2.4.7', contract: '1.1.0' }
+const manifest = { ...oldManifest, version: '2.4.7', contract: '1.6.0' }
 const registry = { themes: [{ manifest: oldManifest, installedAt: '2026-10-03T00:00:00.000Z' }, { manifest, installedAt: '2026-10-04T00:00:00.000Z' }] }
 
 process.env.DATABASE_URI = `file:${db}`
@@ -43,7 +43,18 @@ function baseline() {
   value.settings.sections[0]!.id = sectionID; value.settings.sections[0]!.pageIds = [pageID]
   value.pages[0]!.id = pageID; value.pages[0]!.sectionId = sectionID
   value.settings.homepageId = pageID
+  value.settings.contractVersion = '1.5.0'
   value.settings.themeSettings = { 'retained-theme': { tone: 'preserved' } }
+  const semanticAssets = Array.from({ length: 5 }, (_, index) => ({
+    id: randomUUID(), filename: `semantic-logo-${index}.svg`, mimeType: 'image/svg+xml' as const,
+    width: 100, height: 20, alt: `Synthetic semantic logo ${index + 1}`, decorative: false,
+  }))
+  value.media = semanticAssets
+  value.settings.logos = {
+    primaryLight: semanticAssets[0]!, primaryDark: semanticAssets[1]!,
+    fullLockupLight: semanticAssets[2]!, fullLockupDark: semanticAssets[3]!,
+    symbolLight: semanticAssets[4]!, symbolDark: semanticAssets[4]!,
+  }
   return value
 }
 
@@ -52,9 +63,9 @@ async function installPublishedBaseline(ownerID: string) {
   const oldTheme = getInstalledTheme(parseThemeRegistry(registry), oldManifest.name, oldManifest.version)!
   manifest.settings.theme = { id: oldManifest.name, version: oldManifest.version, contract: oldManifest.contract, manifestDigest: oldTheme.manifestDigest }
   const set = await payload.create({ collection: 'change-sets', data: { name: 'Synthetic baseline', actor: ownerID, state: 'published', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
-  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0', approvedBy: ownerID, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+  const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', manifest, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: oldManifest.contract, approvedBy: ownerID, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
   const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.0.0', checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: oldManifest.contract, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   return { manifest, snapshot }
 }
 
@@ -82,8 +93,10 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
 
     expect(settings.selection).toEqual(selection)
     expect(proposed.settings.theme).toEqual(selection)
-    expect(proposed.settings.contractVersion).toBe('1.1.0')
-    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.1.0', liveContractVersion: '1.0.0' })
+    expect(proposed.settings.contractVersion).toBe('1.6.0')
+    expect(proposed.settings.logos).toEqual(published.settings.logos)
+    expect(job.proposedManifestHash).toBe(canonicalHash(proposed))
+    expect(job.versionPins).toMatchObject({ themeVersion: manifest.version, liveThemeVersion: oldManifest.version, engineVersion: 'test-engine', contractVersion: '1.6.0', liveContractVersion: '1.5.0' })
     expect(proposed.settings.themeSettings).toEqual({ 'retained-theme': { tone: 'preserved' }, [manifest.name]: { tone: 'warm' } })
     expect((await payload.findByID({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })).manifest).toEqual(published)
     expect((await payload.find({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(1)
@@ -97,7 +110,7 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     const proof = (quality.quality as { proof: Record<string, unknown> }).proof
     const request = (value: unknown) => editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: `site_engine_session=${token}` }, body: JSON.stringify({ id: set.id, proof: value }) }), { params: Promise.resolve({ action: 'approve' }) })
     const tampered = structuredClone(proof) as { versionPins: Record<string, unknown> }
-    tampered.versionPins.liveContractVersion = '1.1.0'
+    tampered.versionPins.liveContractVersion = '1.6.0'
     expect((await request(tampered)).status).toBe(400)
     const omitted = structuredClone(proof) as { versionPins: Record<string, unknown> }
     delete omitted.versionPins.liveContractVersion
@@ -106,8 +119,8 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     expect(response.status).toBe(200)
     const approved = await response.json() as { snapshotID: string }
     const approvedSnapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID, overrideAccess: true })
-    expect(approvedSnapshot).toMatchObject({ contractVersion: '1.1.0', themeVersion: manifest.version })
-    expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.1.0')
+    expect(approvedSnapshot).toMatchObject({ contractVersion: '1.6.0', themeVersion: manifest.version })
+    expect((approvedSnapshot.manifest as typeof proposed).settings.contractVersion).toBe('1.6.0')
   })
 
   it('allows a new reviewed preview when the singleton matches the published theme, reuses its owned draft, and denies a foreign pending selection', async () => {
