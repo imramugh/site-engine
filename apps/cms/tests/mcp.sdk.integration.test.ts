@@ -174,7 +174,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -425,7 +425,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(await editorClient.client.callTool({ name: 'update_section', arguments: { id: createdSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionAfterUpdate.revision - 1, name: 'stale section' } }))).toEqual({ error: 'revision_conflict' })
     expect(recipeReplay.blocks.map((block) => block.id)).toEqual(recipePage.blocks.map((block) => block.id))
     const text = JSON.stringify([sections, found, selected, redirects]); expect(text).not.toContain('private@example.test'); expect(text).not.toContain('never-expose-this-secret')
-    expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ id: expect.any(String), settingsHash: expect.stringMatching(/^[a-f0-9]{64}$/), navigationHash: expect.stringMatching(/^[a-f0-9]{64}$/), siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_block_library', arguments: {} }))).toMatchObject({ blockTypes: expect.arrayContaining(['hero']) })
     expect(resultJson(await ownerClient.client.callTool({ name: 'list_installed_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_page_quality', arguments: { id: frozen.pages[0]!.id } }))).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, styleGuide: expect.objectContaining({ bannedPhrases: ['frozen phrase'] }) })
@@ -442,6 +442,32 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
   } finally { await Promise.all([editorClient.transport.close(), qualityWriterClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), ownerPersonalClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
+}, 15_000)
+
+test('MCP site and theme tools keep Owner draft mutations revisioned and scoped', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-site-owner-${randomUUID()}@example.test`, name: 'MCP Site Owner', roles: ['owner'] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-site-editor-${randomUUID()}@example.test`, name: 'MCP Site Editor', roles: ['editor'] }, overrideAccess: true })
+  const [ownerSession, editorSession] = await Promise.all([sessionFor(owner.id), sessionFor(editor.id)])
+  const ownerToken = `mcp-site-owner-${randomUUID()}`; const editorToken = `mcp-site-editor-${randomUUID()}`
+  tokens.set(ownerToken, { clientId: `mcp-site-owner-client-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] })
+  tokens.set(editorToken, { clientId: `mcp-site-editor-client-${randomUUID()}`, userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [ownerSdk, editorSdk] = await Promise.all([clientFor(ownerToken), clientFor(editorToken)])
+  try {
+    const names = (await ownerSdk.client.listTools()).tools.map(tool => tool.name)
+    expect(names).toEqual(expect.arrayContaining(['update_nav_overrides', 'update_site_settings', 'list_themes', 'get_theme_compatibility', 'switch_theme', 'update_theme_settings', 'create_redirect']))
+    await expect(editorSdk.client.callTool({ name: 'get_site_settings', arguments: {} })).resolves.toMatchObject({ isError: true })
+    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; navigation?: unknown }
+    const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP site controls' } })) as { id: string; revision: number }
+    const currentNavigation = state.navigation as { footer?: Record<string, unknown> } | undefined
+    const navigation = { ...currentNavigation, footer: { ...(currentNavigation?.footer ?? {}), copyright: `© {year} MCP ${randomUUID()}` } }
+    const updated = structuredJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, navigation } })) as { revision: number; draft: { navigation?: unknown } }
+    expect(updated).toMatchObject({ changeSetId: created.id, revision: created.revision + 1, draft: { navigation } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, navigation } }))).toEqual({ error: 'revision_conflict' })
+    const redirect = structuredJson(await ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: updated.revision, requestKey: randomUUID(), from: `/mcp-site-${randomUUID()}`, to: '/' } })) as { revision: number; draft: { from: string; to: string } }
+    expect(redirect).toMatchObject({ revision: updated.revision + 1, draft: { to: '/' } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'list_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
+    await expect(ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: redirect.revision, requestKey: randomUUID(), from: '/bad redirect', to: '/' } })).resolves.toMatchObject({ isError: true })
+  } finally { await Promise.all([ownerSdk.transport.close(), editorSdk.transport.close()]) }
 }, 15_000)
 
 test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only credentials, and enforces both rate limits', async () => {
