@@ -36,6 +36,7 @@ describe('ENG-012 public structured output', () => {
 
   it('uses the reviewed site description in llms.txt and organization profiles', () => {
     const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.5.0'
     snapshot.settings.seoDescription = 'A concise reviewed description for public discovery.'
     const model = publicModel(snapshot, snapshot.settings.homepageId)
     expect(llmsText(model, snapshot, 'https://public.example.test')).toContain('\n\nA concise reviewed description for public discovery.\n\n## Pages')
@@ -45,14 +46,15 @@ describe('ENG-012 public structured output', () => {
 
   it('uses the semantic symbol output and falls back to the primary logo', () => {
     const snapshot = structuredClone(neutralFixture)
-    const primary = { id: '10000000-0000-4000-8000-000000000091', filename: 'primary.svg', sha256: 'a'.repeat(64), alt: 'Primary', decorative: false, width: 64, height: 64, mimeType: 'image/svg+xml' }
+    snapshot.settings.contractVersion = '1.5.0'
+    const primary = { id: '10000000-0000-4000-8000-000000000091', filename: 'primary.svg', sha256: 'a'.repeat(64), alt: 'Primary', decorative: false, width: 64, height: 64, mimeType: 'image/svg+xml' as const }
     const symbol = { ...primary, id: '10000000-0000-4000-8000-000000000092', filename: 'symbol.svg' }
     snapshot.media.push(primary, symbol)
     snapshot.settings.logos = { primaryLight: primary, symbolLight: symbol }
     const model = publicModel(snapshot, snapshot.settings.homepageId)
     const schema = schemaForRoute(model.routes[0]!, model, snapshot, 'https://public.example.test')
     expect(schema['@graph'].find(item => item['@type'] === 'Organization')).toMatchObject({ logo: 'https://public.example.test/media/symbol.svg' })
-    delete snapshot.settings.logos.symbolLight
+    delete snapshot.settings.logos!.symbolLight
     expect(schemaForRoute(model.routes[0]!, model, snapshot, 'https://public.example.test')['@graph'].find(item => item['@type'] === 'Organization')).toMatchObject({ logo: 'https://public.example.test/media/primary.svg' })
   })
 });
