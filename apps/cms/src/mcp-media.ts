@@ -74,9 +74,9 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         const asset = await payload.update({ collection: 'assets', id, data: { alt, decorative, caption, credit, tags, ...(focalContract ? { focalX: canonicalFocalPoint(focalX), focalY: canonicalFocalPoint(focalY) } : {}) }, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focalContract } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
-        return { id: asset.id, revision: changed.revision, checks: quality.checks }
+        return { id: asset.id, revision: changed.revision, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness }
       })
-      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
+      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
   server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
