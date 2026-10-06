@@ -4,7 +4,7 @@ import { executeConfiguredAIJob, type AIConfigurationSnapshot, type ProviderFetc
 import { beginConfiguredAIJob, claimConfiguredAIJob, completeConfiguredAIJob, failUnbegunConfiguredAIJob, manualReviewConfiguredAIJob, renewConfiguredAIJob } from './configured-ai-job-lifecycle'
 import type { IntegrationProvider } from './integrations'
 
-type StoredJob = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; maxOutputTokens: number; configurationSnapshot: unknown }
+type StoredJob = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; imageDataUrl?: string | null; maxOutputTokens: number; configurationSnapshot: unknown }
 export type ClaimedConfiguredAIJob = { job: StoredJob; leaseToken: string }
 export type ConfiguredAIExecutionOptions = { transport: ProviderFetch; now?: Date; clock?: () => Date; timeoutMs?: number }
 
@@ -66,7 +66,7 @@ export async function executeClaimedConfiguredAIJob(payload: Payload, claim: Cla
   await renewConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
   await beginConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
   try {
-    const result = await executeConfiguredAIJob(payload, { provider: job.provider, fallbackProvider: job.fallbackProvider, input: job.input, maxOutputTokens: job.maxOutputTokens }, {
+    const result = await executeConfiguredAIJob(payload, { provider: job.provider, fallbackProvider: job.fallbackProvider, input: job.input, imageDataUrl: job.imageDataUrl ?? undefined, requiresImage: Boolean(job.imageDataUrl), maxOutputTokens: job.maxOutputTokens }, {
       transport: options.transport,
       now: clock(),
       timeoutMs: Math.min(options.timeoutMs ?? 15_000, 15_000),

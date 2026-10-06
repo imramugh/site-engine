@@ -5,12 +5,11 @@ import { withPayloadTransaction } from './auth-transaction'
 
 /** Money is always an integer count of one-millionths of a US dollar. */
 export type MicroUsd = number
-export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; maxOutputTokens: number }
+export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; imageDataUrl?: string; maxOutputTokens: number }
 export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string }
 export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' }
 export const providerCapabilities: Record<IntegrationProvider, ProviderCapability> = {
-  // Image request serialization has not been implemented in this adapter yet.
-  openai: { imageInput: false, endpoint: 'https://api.openai.com/v1/responses', auth: 'bearer' },
+  openai: { imageInput: true, endpoint: 'https://api.openai.com/v1/responses', auth: 'bearer' },
   anthropic: { imageInput: false, endpoint: 'https://api.anthropic.com/v1/messages', auth: 'x-api-key' },
   'google-gemini': { imageInput: false, endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', auth: 'x-api-key' },
   openrouter: { imageInput: false, endpoint: 'https://openrouter.ai/api/v1/chat/completions', auth: 'bearer' },
@@ -26,6 +25,14 @@ type Reservation = { id: string; config: StoredConfiguration; pricing: Pricing; 
 const SNAPSHOT_STALE = 'AI_JOB_SNAPSHOT_STALE'
 const TOKENS_PER_MILLION = 1_000_000n
 const MAX_OUTPUT_TOKENS = 8_192
+// Vision cost is based on processed pixels, never the compressed data-URL
+// length.  The MCP image path is capped at 768×768. These reviewed worst-case
+// reservations fail closed for unlisted models. For the listed production model,
+// ceil(768/32)^2 * 1.62 < 934 image tokens; 2,000 leaves headroom.
+// Reviewed 2026-10-06: https://developers.openai.com/api/docs/guides/images-vision#calculating-costs
+const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-4.1-mini-2025-04-14': 2_000, 'gpt-test': 1_000_000 })
+export function supportsVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && Number.isSafeInteger(visionInputTokenUpperBounds[model]) }
+export function supportsProductionVisionInput(provider: IntegrationProvider, model: string): boolean { return provider === 'openai' && (model === 'gpt-4.1-mini' || model === 'gpt-4.1-mini-2025-04-14') }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const text = (value: unknown) => typeof value === 'string' ? value : undefined
@@ -50,17 +57,25 @@ function costMicroUsd(inputTokens: number, outputTokens: number, pricing: Pricin
   const total = BigInt(input) + BigInt(output)
   return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : undefined
 }
-function requestBody(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): Record<string, unknown> {
-  if (provider === 'openai') return { model, max_output_tokens: maxOutputTokens, input: [{ role: 'user', content: [{ type: 'input_text', text: input }] }] }
+function requestBody(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string): Record<string, unknown> {
+  if (provider === 'openai') return { model, max_output_tokens: maxOutputTokens, input: [{ role: 'user', content: [{ type: 'input_text', text: input }, ...(imageDataUrl ? [{ type: 'input_image', image_url: imageDataUrl }] : [])] }] }
   if (provider === 'anthropic') return { model, max_tokens: maxOutputTokens, messages: [{ role: 'user', content: input }] }
   if (provider === 'google-gemini') return { contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { maxOutputTokens } }
   return { model, max_tokens: maxOutputTokens, messages: [{ role: 'user', content: input }] }
 }
 // The reservation includes serialized JSON framing and the requested completion budget.
 // Providers can bill internal reasoning beyond visible text; unreported usage retains the full reservation.
-function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): number { return Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8') }
-function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, signal?: AbortSignal): Request {
-  const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens))
+function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string): number | undefined {
+  // The request does carry the image data URL, but its compressed byte size is
+  // unrelated to vision token billing. Count the text/framing representation
+  // without it and add the reviewed model-specific pixel bound below.
+  const serialized = Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8')
+  if (!imageDataUrl) return serialized
+  const visual = supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : undefined
+  return visual !== undefined && Number.isSafeInteger(serialized + visual) ? serialized + visual : undefined
+}
+function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal): Request {
+  const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens, imageDataUrl))
   if (provider === 'openai') return new Request(providerCapabilities.openai.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
   if (provider === 'anthropic') return new Request(providerCapabilities.anthropic.endpoint, { method: 'POST', signal, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body })
   if (provider === 'google-gemini') return new Request(`${providerCapabilities['google-gemini'].endpoint}/${encodeURIComponent(model)}:generateContent`, { method: 'POST', signal, headers: { 'x-goog-api-key': credential, 'content-type': 'application/json' }, body })
@@ -83,11 +98,11 @@ function parsed(provider: IntegrationProvider, body: Record<string, unknown>): {
   return output ? { output, usage: usage(details?.prompt_tokens, details?.completion_tokens) } : undefined
 }
 /** Builds bounded provider requests and normalizes provider token counts; provider-reported money is deliberately ignored. */
-export async function invokeProvider(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, transport: ProviderFetch = fetch, timeoutMs = 15_000): Promise<Attempt> {
+export async function invokeProvider(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, transport: ProviderFetch = fetch, timeoutMs = 15_000, imageDataUrl?: string): Promise<Attempt> {
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')) }, timeoutMs) })
   try {
-    const response = await Promise.race([transport(requestFor(provider, credential, model, input, maxOutputTokens, controller.signal)), deadline])
+    const response = await Promise.race([transport(requestFor(provider, credential, model, input, maxOutputTokens, imageDataUrl, controller.signal)), deadline])
     if (!response.ok) return { outcome: response.status === 401 || response.status === 403 ? 'rejected' : 'unavailable' }
     const body = await Promise.race([response.json(), deadline]).catch(() => undefined) as Record<string, unknown> | undefined
     const result = body && parsed(provider, body)
@@ -199,7 +214,9 @@ async function reserve(
         current.model,
         job.input,
         job.maxOutputTokens,
+        job.imageDataUrl,
       );
+      if (requestInputTokens === undefined) return undefined
       const reservedMicroUsd = costMicroUsd(
         requestInputTokens,
         job.maxOutputTokens,
@@ -346,22 +363,24 @@ async function settle(
 }
 /** Executes an in-product job from encrypted persisted configuration without exposing credentials or provider diagnostics. */
 export async function executeConfiguredAIJob(payload: Payload, job: AIJob, options: { transport?: ProviderFetch; now?: Date; timeoutMs?: number; configurationSnapshot?: AIConfigurationSnapshot[]; executionKey?: (provider: IntegrationProvider) => string } = {}): Promise<AIJobResult> {
-  if (!job.input || job.input.length > 100_000 || !Number.isSafeInteger(job.maxOutputTokens) || job.maxOutputTokens < 1 || job.maxOutputTokens > MAX_OUTPUT_TOKENS) throw new Error('AI_JOB_UNAVAILABLE')
+  if (!job.input || job.input.length > 100_000 || (job.imageDataUrl !== undefined && (job.imageDataUrl.length < 1 || job.imageDataUrl.length > 500_000)) || !Number.isSafeInteger(job.maxOutputTokens) || job.maxOutputTokens < 1 || job.maxOutputTokens > MAX_OUTPUT_TOKENS) throw new Error('AI_JOB_UNAVAILABLE')
   const now = options.now ?? new Date()
   const attempt = async (provider: IntegrationProvider): Promise<Attempt & { usageCostMicroUsd?: MicroUsd | null; reservedMicroUsd?: MicroUsd; usageCostStatus?: 'actual' | 'reserved' }> => {
-    // AIJob has no image bytes or media reference. Sending text would silently downgrade an image job.
-    if (job.requiresImage && !providerCapabilities[provider].imageInput) return { outcome: 'unavailable' }
+    // An image job must retain its bounded durable pixels. Sending text alone
+    // would silently downgrade the requested visual suggestion.
+    if (job.requiresImage && !job.imageDataUrl) return { outcome: 'unavailable' }
     const snapshot = options.configurationSnapshot?.find(candidate => candidate.provider === provider)
     if (options.configurationSnapshot && !snapshot) return { outcome: 'rejected' }
     const config = snapshot ? await payload.findByID({ collection: 'integration-configurations', id: snapshot.id, depth: 0, overrideAccess: true }) as unknown as StoredConfiguration : await configuration(payload, provider)
     if (snapshot && (!config || !sameSnapshot(config, snapshot))) return { outcome: 'snapshot-stale' }
     if (!config || !config.encryptedCredential || config.health === 'revoked') return { outcome: config?.health === 'revoked' ? 'rejected' : 'unavailable' }
+    if (job.requiresImage && !supportsVisionInput(provider, config.model)) return { outcome: 'unavailable' }
     const reservation = await reserve(payload, config.id, provider, job, now, snapshot, options.executionKey?.(provider))
     if (reservation === 'snapshot-stale') return { outcome: 'snapshot-stale' }
     if (!reservation) return { outcome: 'unavailable' }
     let credential: string
     try { credential = decryptCredential(reservation.config.encryptedCredential!, provider) } catch { await settle(payload, reservation, undefined, 'rejected', now); return { outcome: 'rejected' } }
-    const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
+    const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs, job.imageDataUrl)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
     await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome === 'rejected' ? 'rejected' : 'unavailable', now)
     return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : { ...result, reservedMicroUsd: result.outcome === 'unavailable' ? reservation.reservedMicroUsd : 0, usageCostMicroUsd: null, usageCostStatus: result.outcome === 'unavailable' ? 'reserved' : 'actual' }

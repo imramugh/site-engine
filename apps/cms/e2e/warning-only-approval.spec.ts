@@ -9,8 +9,18 @@ test('a warning-only readiness report remains visible and approval queues public
   const seeded = await page.request.post('/__e2e/warning-only-review')
   expect(seeded.ok(), await seeded.text()).toBeTruthy()
   const { id } = await seeded.json() as { id: string }
+  const detail = await page.request.get(`/api/editorial/review/${id}`)
+  expect(detail.ok(), await detail.text()).toBeTruthy()
+  const { review } = await detail.json()
+  const report = review.quality.proof.report
+  expect(report.publishable).toBe(true)
+  expect(report.blockers).toEqual([])
+  expect(report.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', message: expect.stringContaining('forbidden synthetic phrase') })]))
   await page.goto(`/review/${id}`)
-  await expect(page.getByText('1 advisory warning')).toBeVisible()
+  // Other published fixture pages can contribute advisory findings. Verify the
+  // complete stored report is displayed without making its total depend on
+  // which unrelated browser journeys have published earlier in this suite.
+  await expect(page.getByText(`${report.warnings.length} advisory warning${report.warnings.length === 1 ? '' : 's'}`, { exact: true })).toBeVisible()
   await expect(page.locator('details').filter({ hasText: 'Content uses banned phrase' })).toContainText('forbidden synthetic phrase')
   const approve = page.getByRole('button', { name: 'Approve and queue publish' })
   await expect(approve).toBeEnabled()

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 const root = resolve(new URL("..", import.meta.url).pathname);
-const run = (cwd, args) => execFile("corepack", ["pnpm@12.8.1", ...args], { cwd, maxBuffer: 10_000_000 });
+const run = (cwd, args, options = {}) => execFile("corepack", ["pnpm@12.8.1", ...args], { cwd, maxBuffer: 10_000_000, ...options });
 const tarball = async (directory, destination) => { await run(join(root, directory), ["pack", "--pack-destination", destination]); };
 const file = async (directory, prefix) => {
   const items = await (await import("node:fs/promises")).readdir(directory);
@@ -26,14 +26,19 @@ try {
   const consumer = join(temp, "consumer"); await mkdir(consumer);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ name: "packed-theme-conformance-consumer", private: true, dependencies: { "@site-engine/contract": contract, "@site-engine/engine": engine, "@site-engine/theme-starter": starter, "@site-engine/theme-conformance": harness } }));
   await writeFile(join(consumer, "pnpm-workspace.yaml"), `overrides:\n  '@site-engine/contract': '${contract}'\n  '@site-engine/engine': '${engine}'\n  '@site-engine/theme-starter': '${starter}'\n  zod: '${zodTar}'\n`);
-  // Seed an isolated store first, then prove the packed consumer can be
-  // recreated with networking disabled. GitHub runners start with no package
-  // metadata cache, so an unseeded --offline install tests cache warmth rather
-  // than the published package boundary.
+  // Seed isolated package and policy-metadata caches, then prove the packed
+  // consumer can be recreated with networking disabled. The initial resolver
+  // fetch can retain abbreviated registry metadata; a second, online frozen
+  // install warms pnpm 12's full supply-chain-policy metadata before offline
+  // recreation. Keeping all pnpm state under this fixture prevents ambient
+  // developer caches from hiding an incomplete seed.
   const store = join(temp, "store");
-  await run(consumer, ["install", "--ignore-scripts", "--store-dir", store]);
+  const state = join(temp, "state");
+  const pnpmOptions = { env: { ...process.env, XDG_CACHE_HOME: join(temp, "cache") } };
+  await run(consumer, ["install", "--ignore-scripts", "--store-dir", store, "--state-dir", state], pnpmOptions);
+  await run(consumer, ["install", "--frozen-lockfile", "--ignore-scripts", "--store-dir", store, "--state-dir", state], pnpmOptions);
   await rm(join(consumer, "node_modules"), { recursive: true, force: true });
-  await run(consumer, ["install", "--offline", "--ignore-scripts", "--store-dir", store]);
+  await run(consumer, ["install", "--offline", "--ignore-scripts", "--store-dir", store, "--state-dir", state], pnpmOptions);
   const cli = join(consumer, "node_modules/@site-engine/theme-conformance/scripts/theme-conformance.mjs");
   const evidence = join(temp, "evidence");
   const positive = await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", evidence], { cwd: consumer });

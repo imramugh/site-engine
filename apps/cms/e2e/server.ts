@@ -36,6 +36,9 @@ import { createPublicServer } from '../../site/scripts/public-server.mjs'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+const eng016AIRoutingModel = 'gpt-4.1-mini'
+const eng016AIRoutingPricingSource = 'https://prices.example.test/vision-review'
+const eng016AIRoutingJobTypes = new Set(['summary', 'meta', 'faq', 'alt'])
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
 const clientSecret = 'synthetic-browser-secret'
@@ -144,6 +147,8 @@ initialBaseline.pages.push({ id: expiredApplicationJobID, sectionId: application
 const directEditSectionID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 initialBaseline.settings.sections.push({ id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing', 'standard'], pageIds: [directEditPageID, pageEditorPageID, approverEditorPageID] })
 initialBaseline.pages.push({ id: directEditPageID, sectionId: directEditSectionID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', template: 'landing', status: 'published', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
+initialBaseline.pages.push({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0016', sectionId: directEditSectionID, title: 'MCP browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'mcp-browser-page', template: 'landing', status: 'published', blocks: [{ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee1016', type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
+initialBaseline.settings.sections.find(section => section.id === directEditSectionID)!.pageIds.push('eeeeeeee-eeee-4eee-8eee-eeeeeeee0016')
 const onPageReviewSectionID = '12345678-1234-4234-8234-1234567890aa'
 initialBaseline.settings.sections.push({ id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'], pageIds: [onPageReviewPageID] })
 initialBaseline.pages.push({ id: onPageReviewPageID, sectionId: onPageReviewSectionID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', template: 'landing', status: 'published', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
@@ -248,7 +253,8 @@ let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
 let firstEditableApplicationID: string | undefined
 const mcpBearer = 'synthetic-e2e-mcp-bearer'
-let mcpIdentity: { userId: string; sessionId: string } | undefined
+let mcpIdentity: { userId: string; sessionId: string; scopes: string[] } | undefined
+let mcpEditorID: string | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -291,7 +297,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: mcpIdentity.scopes, userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
@@ -347,6 +353,7 @@ async function seed(): Promise<void> {
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
   const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
+  mcpEditorID = String(editor.id)
   const onPageEditor = await payload.create({ collection: 'users', data: { email: 'on-page-editor.synthetic@example.test', name: 'Synthetic On-page Editor', roles: ['editor'] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
@@ -392,6 +399,7 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageReviewerSessionToken), user: onPageReviewer.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing', 'standard'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'pages', data: { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0016', title: 'MCP browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'mcp-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee1016', type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'change-sets', data: { id: directEditSetID, name: 'Browser Editor draft', state: 'open', actor: editor.id, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   const onPageSection = await payload.create({ collection: 'sections', data: { id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: onPageReviewPageID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', sectionId: onPageSection.id, template: 'landing', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
@@ -521,6 +529,21 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/eng016-ai-routing-cleanup') {
+    void (async () => {
+      const configurations = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'openai' } }, limit: 1, depth: 0, overrideAccess: true })
+      const configuration = configurations.docs[0] as unknown as { id?: unknown; model?: unknown; pricingSource?: unknown; encryptedCredential?: unknown; health?: unknown } | undefined
+      if (configuration?.model !== eng016AIRoutingModel || configuration.pricingSource !== eng016AIRoutingPricingSource || typeof configuration.id !== 'string') return { cleaned: false }
+      if (configuration.encryptedCredential || configuration.health !== 'revoked') throw new Error('Revoke the fixture credential before cleanup.')
+      const defaults = await payload.find({ collection: 'ai-job-defaults', limit: 10, depth: 0, overrideAccess: true })
+      for (const candidate of defaults.docs as Array<{ id?: unknown; jobType?: unknown; provider?: unknown; model?: unknown; fallbackProvider?: unknown }>) {
+        if (typeof candidate.id === 'string' && typeof candidate.jobType === 'string' && eng016AIRoutingJobTypes.has(candidate.jobType) && candidate.provider === 'openai' && candidate.model === eng016AIRoutingModel && (candidate.fallbackProvider === null || candidate.fallbackProvider === undefined)) await payload.delete({ collection: 'ai-job-defaults', id: candidate.id, overrideAccess: true })
+      }
+      await payload.delete({ collection: 'integration-configurations', id: configuration.id, overrideAccess: true })
+      return { cleaned: true }
+    })().then((value) => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clean ENG-016 AI routing fixture.') })
+    return
+  }
   if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') {
     const deliveries = readFileSync(standaloneReplyDeliveryLedger, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { threadID: string | null; mime: string; messageID: string })
     json(response, { deliveries }); return
@@ -579,8 +602,17 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
-  if (request.method === 'POST' && request.url === '/__e2e/mcp-identity') {
-    void (async () => { const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: leadOwnerID!, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: leadOwnerID!, sessionId: String(session.id) }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/mcp-identity') {
+    void (async () => {
+      const query = new URL(request.url ?? '/', cmsOrigin).searchParams
+      const contentWriter = query.get('content') === 'write' && query.get('role') === 'editor'
+      const userID = contentWriter ? mcpEditorID : leadOwnerID
+      const scopes = contentWriter ? ['mcp:content:read', 'mcp:content:write'] : ['mcp:leads:read', 'mcp:leads:reply']
+      const now = new Date().toISOString()
+      const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: userID!, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+      mcpIdentity = { userId: userID!, sessionId: String(session.id), scopes }
+      json(response, { bearer: mcpBearer })
+    })().catch(() => { response.writeHead(500); response.end() }); return
   }
   const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
   if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {

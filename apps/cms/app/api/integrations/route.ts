@@ -7,6 +7,7 @@ import { serverSessionStrategy, SENSITIVE_REAUTH_SECONDS } from '../../../src/id
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
 import { configuredProvider } from '../../../src/oidc'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
+import { supportsProductionVisionInput } from '../../../src/ai-providers'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -59,8 +60,9 @@ async function GETHandler(request: Request) {
   const google = configuredProvider('google')
   const microsoft = configuredProvider('microsoft')
   const microsoftPublicIssuer = microsoft ? publicIssuer(microsoft.issuer) : null
-  const [records, googleUsers, microsoftUsers, emergencyOwners, emergencyUses, queued, delivered, failed] = await Promise.all([
+  const [records, aiJobDefaults, googleUsers, microsoftUsers, emergencyOwners, emergencyUses, queued, delivered, failed] = await Promise.all([
     payload.find({ collection: 'integration-configurations', sort: 'provider', limit: 20, depth: 0, overrideAccess: true }),
+    payload.find({ collection: 'ai-job-defaults', sort: 'jobType', limit: 10, depth: 0, overrideAccess: true }),
     payload.count({ collection: 'users', where: { provider: { equals: 'google' } }, overrideAccess: true }),
     payload.count({ collection: 'users', where: { provider: { equals: 'microsoft' } }, overrideAccess: true }),
     payload.count({ collection: 'users', where: { emergencyTotpSecret: { exists: true } }, overrideAccess: true }),
@@ -73,6 +75,8 @@ async function GETHandler(request: Request) {
   const oauthConfigured = Boolean(process.env.OAUTH_INTERNAL_ORIGIN && process.env.OAUTH_INTROSPECTION_SECRET && publicOrigin)
   return privateJSON({
     integrations: records.docs.map((doc) => publicIntegration(doc as unknown as Record<string, unknown>)),
+    aiJobDefaults: aiJobDefaults.docs.map((doc) => ({ jobType: doc.jobType, provider: doc.provider, model: doc.model, fallbackProvider: doc.fallbackProvider ?? null })),
+    productionVisionProviders: records.docs.map((doc) => doc as unknown as { provider?: IntegrationProvider; model?: string }).filter((item): item is { provider: IntegrationProvider; model: string } => Boolean(item.provider && typeof item.model === 'string' && supportsProductionVisionInput(item.provider, item.model))).map((item) => item.provider),
     capabilities: {
       identity: {
         google: { configured: Boolean(google), users: googleUsers.totalDocs, enrollment: 'invited-only', roleAssignment: 'manual' },
@@ -95,6 +99,25 @@ async function POSTHandler(request: Request) {
     if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return privateJSON({ error: 'Fresh Owner authentication is required.' }, 403)
     const body = await readBody(request)
     if (!isProvider(body.provider)) return failure()
+    if (body.action === 'configure-ai-default') {
+      const types = ['summary', 'meta', 'faq', 'alt', 'lead-reply']
+      if (typeof body.jobType !== 'string' || !types.includes(body.jobType) || typeof body.model !== 'string' || !body.model.trim() || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider))) return failure()
+      const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true })
+      const integration = configured.docs[0] as unknown as { model?: string; encryptedCredential?: string } | undefined
+      if (!integration?.encryptedCredential || integration.model !== body.model.trim()) return privateJSON({ error: 'Select the reviewed model configured for this provider before routing jobs.' }, 400)
+      if (body.fallbackProvider) {
+        const fallback = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.fallbackProvider } }, limit: 1, depth: 0, overrideAccess: true })
+        const fallbackIntegration = fallback.docs[0] as unknown as { model?: string; encryptedCredential?: string } | undefined
+        if (!fallbackIntegration?.encryptedCredential || !fallbackIntegration.model?.trim()) return privateJSON({ error: 'Configure the fallback provider before routing jobs to it.' }, 400)
+        if (body.jobType === 'alt' && !supportsProductionVisionInput(body.fallbackProvider, fallbackIntegration.model)) return privateJSON({ error: 'Select a reviewed production vision model for the image-alt fallback.' }, 400)
+      }
+      if (body.jobType === 'alt' && !supportsProductionVisionInput(body.provider, body.model.trim())) return privateJSON({ error: 'Select the reviewed production vision model before routing image alt text.' }, 400)
+      const existing = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: body.jobType } }, limit: 1, depth: 0, overrideAccess: true })
+      const data = { jobType: body.jobType, provider: body.provider, model: body.model.trim(), fallbackProvider: body.fallbackProvider ?? null }
+      const saved = existing.docs[0] ? await payload.update({ collection: 'ai-job-defaults', id: existing.docs[0].id, data: data as never, overrideAccess: true }) : await payload.create({ collection: 'ai-job-defaults', data: data as never, overrideAccess: true })
+      await payload.create({ collection: 'audit-events', data: { event: 'ai.job_default_configured', actor: user.id, detail: data }, overrideAccess: true })
+      return privateJSON({ aiJobDefault: { jobType: saved.jobType, provider: saved.provider, model: saved.model, fallbackProvider: saved.fallbackProvider ?? null } })
+    }
     if (body.action === 'test') {
       const tested = await testIntegrationConnection(payload, { provider: body.provider, actor: user.id })
       return privateJSON({ integration: publicIntegration(tested as unknown as Record<string, unknown>) })

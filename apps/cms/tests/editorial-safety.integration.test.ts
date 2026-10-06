@@ -94,6 +94,55 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     expect((await setFor(editor.id)).state).toBe('open')
     expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
   })
+  it('discards a created cross-section page tree after validating every capture before mutation', async () => {
+    const { editor, page } = await fixture('discard-cross-section-tree')
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Edited source page' }, draft: true, user: editor, overrideAccess: false })
+    const parent = await payload.create({ collection: 'pages', data: { title: 'Created parent', summary: 'A created parent which will move to a later-created section.', slug: 'created-parent', sectionId: page.sectionId, template: 'standard', blocks: [] }, draft: true, user: editor, overrideAccess: false })
+    const child = await payload.create({ collection: 'pages', data: { title: 'Created child', summary: 'A created child which must be deleted before its parent.', slug: 'created-child', sectionId: page.sectionId, parentId: parent.id, template: 'standard', blocks: [] }, draft: true, user: editor, overrideAccess: false })
+    const target = await payload.create({ collection: 'sections', data: { name: 'Later target', summary: 'A target section created after the pages it temporarily contains.', slug: 'later-target', allowedTemplates: ['standard'] }, draft: true, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'pages', id: child.id, data: { sectionId: target.id, parentId: null }, draft: true, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'pages', id: parent.id, data: { sectionId: target.id }, draft: true, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'pages', id: child.id, data: { parentId: parent.id }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    expect(set.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ collection: 'pages', id: page.id }),
+      expect.objectContaining({ collection: 'pages', id: parent.id }),
+      expect.objectContaining({ collection: 'pages', id: child.id }),
+      expect.objectContaining({ collection: 'sections', id: target.id }),
+    ]))
+
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }))).resolves.toMatchObject({ state: 'discarded' })
+    expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Baseline')
+    await expect(payload.findByID({ collection: 'pages', id: child.id, draft: true, overrideAccess: true })).rejects.toThrow()
+    await expect(payload.findByID({ collection: 'pages', id: parent.id, draft: true, overrideAccess: true })).rejects.toThrow()
+    await expect(payload.findByID({ collection: 'sections', id: target.id, draft: true, overrideAccess: true })).rejects.toThrow()
+  })
+
+  it('refuses to discard a created section while an uncaptured page still depends on it', async () => {
+    const { editor, page } = await fixture('discard-external-dependent')
+    const target = await payload.create({ collection: 'sections', data: { name: 'Captured target', summary: 'A created target with an uncaptured dependent page.', slug: 'captured-target', allowedTemplates: ['standard'] }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    const external = await payload.create({ collection: 'pages', data: { title: 'Outside change set', summary: 'This page must prevent a discard from leaving a dangling section relation.', slug: 'outside-change-set', sectionId: target.id, template: 'standard', blocks: [] }, draft: true, overrideAccess: true })
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }))).rejects.toThrow(/surviving page/i)
+    expect((await payload.findByID({ collection: 'sections', id: target.id, draft: true, overrideAccess: true })).id).toBe(target.id)
+    expect((await payload.findByID({ collection: 'pages', id: external.id, draft: true, overrideAccess: true }).then((record) => typeof record.sectionId === 'string' ? record.sectionId : record.sectionId?.id))).toBe(target.id)
+    expect((await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })).state).toBe('open')
+    // Keep the original fixture page live too: no mutation began before refusal.
+    expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Baseline')
+  })
+
+  it('refuses to discard a created page referenced by an uncaptured section landing relation', async () => {
+    const { editor } = await fixture('discard-section-landing-dependent')
+    const externalSection = await payload.create({ collection: 'sections', data: { name: 'External landing holder', summary: 'A pre-existing section that will acquire an uncaptured landing relation.', slug: 'external-landing-holder', allowedTemplates: ['standard'] }, draft: true, overrideAccess: true })
+    const createdPage = await payload.create({ collection: 'pages', data: { title: 'Captured landing', summary: 'A captured page that an outside section must prevent from being deleted.', slug: 'captured-landing', sectionId: externalSection.id, template: 'standard', blocks: [] }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    await payload.update({ collection: 'sections', id: externalSection.id, data: { landingPageId: createdPage.id }, draft: true, overrideAccess: true })
+
+    await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }))).rejects.toThrow(/surviving section/i)
+    expect((await payload.findByID({ collection: 'pages', id: createdPage.id, draft: true, overrideAccess: true })).id).toBe(createdPage.id)
+    expect((await payload.findByID({ collection: 'sections', id: externalSection.id, draft: true, overrideAccess: true }).then((record) => typeof record.landingPageId === 'string' ? record.landingPageId : record.landingPageId?.id))).toBe(createdPage.id)
+    expect((await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })).state).toBe('open')
+  })
   it('requires the owning editor to explicitly resolve a guarded stale draft without clobbering another field', async () => {
     const { editor, page } = await fixture('resolve-reapply')
     const other = await payload.create({ collection: 'users', data: { email: 'resolve-other@example.test', name: 'Other editor', roles: ['editor'] }, overrideAccess: true })

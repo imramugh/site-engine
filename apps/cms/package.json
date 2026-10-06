@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@libsql/client": "0.18.0",
-    "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@payloadcms/db-sqlite": "3.90.2",
     "@payloadcms/next": "3.90.2",
     "@payloadcms/richtext-lexical": "3.90.2",

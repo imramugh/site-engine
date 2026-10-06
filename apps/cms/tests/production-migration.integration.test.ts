@@ -20,10 +20,12 @@ const sectionLandingMigration = '20261003_230000_section_landing_page'
 const siteIdentityMigration = '20261005_114210_site_identity_navigation_1_5'
 const crawlerPolicyMigration = '20261005_164500_crawler_policy_1_7'
 const previewRenderDiagnosticsMigration = '20261006_009000_preview_render_diagnostics'
+const childTimeoutMs = 30_000
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'site-engine-migration-'))
+    let sqlite: ReturnType<typeof createClient> | undefined
     try {
     const databaseURI = `file:${join(directory, 'cms.sqlite')}`
     const environment: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'production', DATABASE_URI: databaseURI, PAYLOAD_SECRET: 'test-secret-that-is-long-enough-for-payload' }
@@ -31,17 +33,26 @@ describe('production migrations (ENG-036)', () => {
     const runtimeEnvironment: NodeJS.ProcessEnv = { ...environment, DATABASE_URI: runtimeDatabaseURI }
     const payloadBin = resolve(cmsRoot, 'node_modules/payload/bin.js')
     const tsxBin = resolve(cmsRoot, 'node_modules/tsx/dist/cli.mjs')
-    const migrate = (migrationEnvironment = environment) => spawnSync(process.execPath, [payloadBin, 'migrate', '--config', 'payload.config.ts'], { cwd: cmsRoot, env: migrationEnvironment, encoding: 'utf8' })
-    const initialMigration = migrate(environment)
-    expect(initialMigration.status, initialMigration.stderr || initialMigration.stdout).toBe(0)
+    const diagnostic = (stage: string, result: ReturnType<typeof spawnSync>) => `${stage} exited with ${result.status ?? 'no status'}${result.signal ? ` (${result.signal})` : ''}${result.error ? `: ${result.error.message}` : ''}\nstdout:\n${result.stdout || '(empty)'}\nstderr:\n${result.stderr || '(empty)'}`
+    const run = (stage: string, args: string[], childEnvironment: NodeJS.ProcessEnv) => {
+      const startedAt = Date.now()
+      process.stdout.write(`[production-migration] ${stage} started\n`)
+      const result = spawnSync(process.execPath, args, { cwd: cmsRoot, env: childEnvironment, encoding: 'utf8', timeout: childTimeoutMs, killSignal: 'SIGKILL', maxBuffer: 10_000_000 })
+      process.stdout.write(`[production-migration] ${stage} completed in ${Date.now() - startedAt}ms (status=${result.status ?? 'none'}${result.signal ? `, signal=${result.signal}` : ''})\n`)
+      if (result.error) throw new Error(diagnostic(`${stage} failed or exceeded ${childTimeoutMs}ms`, result))
+      return result
+    }
+    const migrate = (stage: string, migrationEnvironment = environment) => run(`migration: ${stage}`, [payloadBin, 'migrate', '--config', 'payload.config.ts'], migrationEnvironment)
+    const initialMigration = migrate('initial production schema', environment)
+    expect(initialMigration.status, diagnostic('migration: initial production schema', initialMigration)).toBe(0)
     // Keep the normal Payload runtime proof independent from the historical
     // upgrade fixture below: that fixture deliberately rewinds constraints which
     // the runtime verifier is meant to exercise on a current production schema.
-    const runtimeMigration = migrate(runtimeEnvironment)
-    expect(runtimeMigration.status, runtimeMigration.stderr || runtimeMigration.stdout).toBe(0)
-    const verify = spawnSync(process.execPath, [tsxBin, 'scripts/verify-production-migration.ts'], { cwd: cmsRoot, env: runtimeEnvironment, encoding: 'utf8' })
-    expect(verify.status, verify.stderr || verify.stdout).toBe(0)
-    const sqlite = createClient({ url: databaseURI })
+    const runtimeMigration = migrate('runtime production schema', runtimeEnvironment)
+    expect(runtimeMigration.status, diagnostic('migration: runtime production schema', runtimeMigration)).toBe(0)
+    const verify = run('runtime: production migration verifier', [tsxBin, 'scripts/verify-production-migration.ts'], runtimeEnvironment)
+    expect(verify.status, diagnostic('runtime: production migration verifier', verify)).toBe(0)
+    sqlite = createClient({ url: databaseURI })
     const tables = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('users', 'payload_migrations')")
     expect(tables.rows.map((row) => row.name)).toEqual(expect.arrayContaining(['users', 'payload_migrations']))
     const emptySchema = await sqlite.execute("SELECT name FROM pragma_table_info('publish_snapshots') WHERE name IN ('baseline_snapshot_id', 'baseline_sequence')")
@@ -59,8 +70,8 @@ describe('production migrations (ENG-036)', () => {
     expect(removedIdentityColumns.rows).toHaveLength(0)
     const retainedLegacyIdentity = await sqlite.execute("SELECT site_name, default_locale, search_enabled FROM site_settings WHERE id = '15000000-0000-4000-8000-000000000001'")
     expect(retainedLegacyIdentity.rows[0]).toMatchObject({ site_name: 'Legacy identity', default_locale: 'en-CA', search_enabled: 1 })
-    const identityUp = migrate()
-    expect(identityUp.status, identityUp.stderr || identityUp.stdout).toBe(0)
+    const identityUp = migrate('site identity upgrade')
+    expect(identityUp.status, diagnostic('migration: site identity upgrade', identityUp)).toBe(0)
     const restoredIdentityColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('legal_name', 'address_street_address', 'incident_label', 'navigation', 'logos_primary_light_id')")
     expect(restoredIdentityColumns.rows.map(row => row.name).sort()).toEqual(['address_street_address', 'incident_label', 'legal_name', 'logos_primary_light_id', 'navigation'])
     const upgradedLegacyIdentity = await sqlite.execute("SELECT site_name, legal_name, navigation FROM site_settings WHERE id = '15000000-0000-4000-8000-000000000001'")
@@ -76,8 +87,8 @@ describe('production migrations (ENG-036)', () => {
       "INSERT INTO pages (id, title, slug, section_id_id, summary, template, blocks) VALUES ('20000000-0000-4000-8000-000000000001', 'Legacy page', 'legacy-shared', '10000000-0000-4000-8000-000000000001', 'Synthetic legacy page used to prove the page slug migration preserves existing content.', 'standard', '[]')",
       `DELETE FROM payload_migrations WHERE name = '${scopedSlugMigration}'`,
     ]) await sqlite.execute(statement)
-    const forwardMigration = migrate()
-    expect(forwardMigration.status, forwardMigration.stderr || forwardMigration.stdout).toBe(0)
+    const forwardMigration = migrate('scoped page slugs upgrade')
+    expect(forwardMigration.status, diagnostic('migration: scoped page slugs upgrade', forwardMigration)).toBe(0)
     const indexes = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('pages_slug_idx', 'pages_section_parent_slug_idx')")
     expect(indexes.rows.map((row) => row.name)).toEqual(['pages_section_parent_slug_idx'])
     const retained = await sqlite.execute("SELECT id FROM pages WHERE id = '20000000-0000-4000-8000-000000000001'")
@@ -94,8 +105,8 @@ describe('production migrations (ENG-036)', () => {
       'CREATE UNIQUE INDEX publish_snapshots_content_hash_idx ON publish_snapshots (content_hash)',
       `DELETE FROM payload_migrations WHERE name = '${publishQueueMigration}'`,
     ]) await sqlite.execute(statement)
-    const queueForward = migrate()
-    expect(queueForward.status, queueForward.stderr || queueForward.stdout).toBe(0)
+    const queueForward = migrate('publish queue upgrade')
+    expect(queueForward.status, diagnostic('migration: publish queue upgrade', queueForward)).toBe(0)
     const queueColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('publish_snapshots') WHERE name IN ('baseline_snapshot_id', 'baseline_sequence')")
     expect(queueColumns.rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'baseline_snapshot_id' }), expect.objectContaining({ name: 'baseline_sequence', dflt_value: '0' })]))
     const queueIndexes = await sqlite.execute("SELECT name FROM pragma_index_list('publish_snapshots') WHERE name IN ('publish_snapshots_content_hash_idx', 'publish_snapshots_baseline_snapshot_idx')")
@@ -115,8 +126,8 @@ describe('production migrations (ENG-036)', () => {
       'PRAGMA foreign_keys=ON',
       `DELETE FROM payload_migrations WHERE name = '${inquiryPipelineMigration}'`,
     ]) await sqlite.execute(statement)
-    const inquiryForward = migrate()
-    expect(inquiryForward.status, inquiryForward.stderr || inquiryForward.stdout).toBe(0)
+    const inquiryForward = migrate('inquiry pipeline upgrade')
+    expect(inquiryForward.status, diagnostic('migration: inquiry pipeline upgrade', inquiryForward)).toBe(0)
     const upgradedInquiry = await sqlite.execute("SELECT email, message, stage, consent_basis, consented_at, idempotency_key FROM inquiries WHERE id = '30000000-0000-4000-8000-000000000001'")
     expect(upgradedInquiry.rows[0]).toMatchObject({ email: 'legacy@example.test', message: 'Synthetic legacy inquiry retained through an upgrade.', stage: 'contacted', consent_basis: 'unknown', consented_at: '2026-01-02T00:00:00.000Z', idempotency_key: 'legacy:30000000-0000-4000-8000-000000000001' })
     const outbox = await sqlite.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_outbox'")
@@ -131,8 +142,8 @@ describe('production migrations (ENG-036)', () => {
       'ALTER TABLE redirects DROP COLUMN last_hit_at',
       `DELETE FROM payload_migrations WHERE name = '${redirectLifecycleMigration}'`,
     ]) await sqlite.execute(statement)
-    const redirectForward = migrate()
-    expect(redirectForward.status, redirectForward.stderr || redirectForward.stdout).toBe(0)
+    const redirectForward = migrate('redirect lifecycle upgrade')
+    expect(redirectForward.status, diagnostic('migration: redirect lifecycle upgrade', redirectForward)).toBe(0)
     const redirectColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('redirects') WHERE name IN ('hit_count', 'last_hit_at')")
     expect(redirectColumns.rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'hit_count', dflt_value: '0' }), expect.objectContaining({ name: 'last_hit_at' })]))
     const redirectApplied = await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${redirectLifecycleMigration}'`)
@@ -147,8 +158,8 @@ describe('production migrations (ENG-036)', () => {
       "INSERT INTO assets (id, alt, caption, private, updated_at, created_at) VALUES ('30000000-0000-4000-8000-000000000001', 'Synthetic legacy asset', 'Legacy metadata', 1, '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')",
       `DELETE FROM payload_migrations WHERE name = '${mediaMigration}'`,
     ]) await sqlite.execute(statement)
-    const mediaForward = migrate()
-    expect(mediaForward.status, mediaForward.stderr || mediaForward.stdout).toBe(0)
+    const mediaForward = migrate('media library upgrade')
+    expect(mediaForward.status, diagnostic('migration: media library upgrade', mediaForward)).toBe(0)
     const legacyAsset = await sqlite.execute("SELECT alt, caption, private, filename FROM assets WHERE id = '30000000-0000-4000-8000-000000000001'")
     expect(legacyAsset.rows[0]).toMatchObject({ alt: 'Synthetic legacy asset', caption: 'Legacy metadata', private: 1, filename: null })
     // Reconstruct the legacy private-application table and prove the generated
@@ -163,8 +174,8 @@ describe('production migrations (ENG-036)', () => {
       "INSERT INTO applications (id, email, cover_letter, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000001', 'legacy-applicant@example.test', 'Synthetic legacy application retained through upgrade.', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')",
       `DELETE FROM payload_migrations WHERE name = '${applicationsMigration}'`,
     ]) await sqlite.execute(statement)
-    const applicationsForward = migrate()
-    expect(applicationsForward.status, applicationsForward.stderr || applicationsForward.stdout).toBe(0)
+    const applicationsForward = migrate('applications upgrade')
+    expect(applicationsForward.status, diagnostic('migration: applications upgrade', applicationsForward)).toBe(0)
     const legacyApplication = await sqlite.execute("SELECT name, email, job_id, resume_key, idempotency_key FROM applications WHERE id = '40000000-0000-4000-8000-000000000001'")
     expect(legacyApplication.rows[0]).toMatchObject({ name: 'Legacy applicant', email: 'legacy-applicant@example.test', job_id: 'legacy', resume_key: 'legacy', idempotency_key: 'legacy:40000000-0000-4000-8000-000000000001' })
     await expect(sqlite.execute("INSERT INTO applications (id, name, email, cover_letter, consent, job_id, resume_key, idempotency_key, status, updated_at, created_at) VALUES ('40000000-0000-4000-8000-000000000002', 'New applicant', 'new-applicant@example.test', 'Synthetic new application write after upgrade.', 1, 'job-1', 'key-1', 'new-key', 'new', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')")).resolves.toBeDefined()
@@ -181,8 +192,8 @@ describe('production migrations (ENG-036)', () => {
       `DELETE FROM payload_migrations WHERE name = '${siteIdentityMigration}'`,
       `DELETE FROM payload_migrations WHERE name = '${crawlerPolicyMigration}'`,
     ]) await sqlite.execute(statement)
-    const siteSettingsForward = migrate()
-    expect(siteSettingsForward.status, siteSettingsForward.stderr || siteSettingsForward.stdout).toBe(0)
+    const siteSettingsForward = migrate('site settings upgrade')
+    expect(siteSettingsForward.status, diagnostic('migration: site settings upgrade', siteSettingsForward)).toBe(0)
     const siteSettingsColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name IN ('key', 'site_name', 'default_locale')")
     expect(siteSettingsColumns.rows.map((row) => row.name)).toEqual(['key', 'site_name', 'default_locale'])
     const crawlerPolicyColumns = await sqlite.execute("SELECT name FROM pragma_table_info('site_settings') WHERE name = 'crawler_policy'")
@@ -202,8 +213,8 @@ describe('production migrations (ENG-036)', () => {
       'ALTER TABLE _pages_v DROP COLUMN version_noindex',
       `DELETE FROM payload_migrations WHERE name = '${searchControlsMigration}'`,
     ]) await sqlite.execute(statement)
-    const searchControlsForward = migrate()
-    expect(searchControlsForward.status, searchControlsForward.stderr || searchControlsForward.stdout).toBe(0)
+    const searchControlsForward = migrate('search controls upgrade')
+    expect(searchControlsForward.status, diagnostic('migration: search controls upgrade', searchControlsForward)).toBe(0)
     const searchColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('pages') WHERE name = 'noindex'")
     expect(searchColumns.rows).toEqual([expect.objectContaining({ name: 'noindex', dflt_value: 'false' })])
     const versionSearchColumns = await sqlite.execute("SELECT name, dflt_value FROM pragma_table_info('_pages_v') WHERE name = 'version_noindex'")
@@ -218,7 +229,8 @@ describe('production migrations (ENG-036)', () => {
       'DROP TABLE style_guides',
       `DELETE FROM payload_migrations WHERE name = '${styleGuidesMigration}'`,
     ]) await sqlite.execute(statement)
-    expect(migrate().status).toBe(0)
+    const styleGuidesForward = migrate('style guides upgrade')
+    expect(styleGuidesForward.status, diagnostic('migration: style guides upgrade', styleGuidesForward)).toBe(0)
     expect((await sqlite.execute("SELECT name FROM pragma_table_info('style_guides') WHERE name = 'key'")).rows).toHaveLength(1)
     for (const statement of [
       'DROP INDEX sections_landing_page_id_idx',
@@ -227,8 +239,8 @@ describe('production migrations (ENG-036)', () => {
       'ALTER TABLE _sections_v DROP COLUMN version_landing_page_id_id',
       `DELETE FROM payload_migrations WHERE name = '${sectionLandingMigration}'`,
     ]) await sqlite.execute(statement)
-    const landingForward = migrate()
-    expect(landingForward.status, landingForward.stderr || landingForward.stdout).toBe(0)
+    const landingForward = migrate('section landing page upgrade')
+    expect(landingForward.status, diagnostic('migration: section landing page upgrade', landingForward)).toBe(0)
     expect((await sqlite.execute("SELECT name FROM pragma_table_info('sections') WHERE name = 'landing_page_id_id'")).rows).toHaveLength(1)
     expect((await sqlite.execute("SELECT name FROM pragma_table_info('_sections_v') WHERE name = 'version_landing_page_id_id'")).rows).toHaveLength(1)
     expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${sectionLandingMigration}'`)).rows).toHaveLength(1)
@@ -239,13 +251,11 @@ describe('production migrations (ENG-036)', () => {
       'ALTER TABLE preview_render_jobs DROP COLUMN render_diagnostics',
       `DELETE FROM payload_migrations WHERE name = '${previewRenderDiagnosticsMigration}'`,
     ]) await sqlite.execute(statement)
-    const diagnosticsForward = migrate()
-    expect(diagnosticsForward.status, diagnosticsForward.stderr || diagnosticsForward.stdout).toBe(0)
+    const diagnosticsForward = migrate('preview render diagnostics upgrade')
+    expect(diagnosticsForward.status, diagnostic('migration: preview render diagnostics upgrade', diagnosticsForward)).toBe(0)
     const diagnosticColumns = await sqlite.execute("SELECT name FROM pragma_table_info('preview_render_jobs') WHERE name = 'render_diagnostics'")
     expect(diagnosticColumns.rows.map((row) => row.name)).toEqual(['render_diagnostics'])
     expect((await sqlite.execute(`SELECT name FROM payload_migrations WHERE name = '${previewRenderDiagnosticsMigration}'`)).rows).toHaveLength(1)
-    await sqlite.close()
-
-    } finally { rmSync(directory, { recursive: true, force: true }) }
+    } finally { await sqlite?.close(); rmSync(directory, { recursive: true, force: true }) }
   }, 120_000)
 })

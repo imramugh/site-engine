@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -171,13 +171,14 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }, navigation: { header: [{ kind: 'page', id: page.id, label: 'SDK page', style: 'link' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable navigation reference.', style: 'link' }], footer: { columns: [{ kind: 'links', heading: 'Resources', links: [{ kind: 'page', id: page.id, label: 'SDK page' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable footer reference.' }] }], copyright: '© {year} MCP' } } }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const salesReplyClient = await clientFor('sales-reply-token'); const salesWriteClient = await clientFor('sales-write-token'); const hiringClient = await clientFor('hiring-token'); const hiringWriteClient = await clientFor('hiring-write-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
-    expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_ai_suggestion', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'suggest_alt', 'suggest_faq', 'suggest_meta', 'suggest_summary', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
+    expect(editorTools.tools.map((tool) => tool.name)).not.toContain('approve_change_set')
+    expect(editorTools.tools.map((tool) => tool.name)).not.toContain('publish')
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply', 'suggest_summary', 'suggest_meta', 'suggest_faq', 'suggest_alt'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
+      expect(tool._meta).toMatchObject({ limits: { approve: false, publish: false } })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
     for (const name of ['list_applications', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:careers:read'] }], authorization: { requiredScopes: ['mcp:careers:read'] } })
@@ -643,7 +644,7 @@ test('MCP returns a retryable HTTP response when its request audit is blocked by
   try { expect((await client.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_change_set' })])) } finally { await client.client.close() }
 }, 15_000)
 
-test('MCP mutation returns a retryable tool error when a writer locks SQLite after its request audit', async () => {
+test('MCP mutation returns an ambiguous terminal audit failure when a writer locks SQLite after request audit', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-mutation-busy-${randomUUID()}@example.test`, name: 'MCP Mutation Busy', roles: ['editor'] }, overrideAccess: true })
   const session = await sessionFor(editor.id)
   tokens.set('mcp-mutation-busy-token', { clientId: 'mcp-mutation-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
@@ -663,10 +664,8 @@ test('MCP mutation returns a retryable tool error when a writer locks SQLite aft
     return result
   }) as typeof payload.create
   try {
-    const response = await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })
-    expect(response).toMatchObject({ isError: true })
-    const blocked = resultJson(response)
-    expect(blocked).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await expect(sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })).rejects.toThrow(/audit_recording_failed.*operationMayHaveCompleted/)
+    await lock?.rollback(); lock = undefined
     expect((await payload.count({ collection: 'change-sets', overrideAccess: true })).totalDocs).toBe(beforeSets.totalDocs)
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
   } finally {
@@ -817,7 +816,7 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     expect((await payload.find({ collection: 'redirects', where: { from: { equals: '/previously-archived' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]).toMatchObject({ to: '/legacy' })
     expect(await publishedHash()).toBe(mixedPublishedHash)
   } finally { await Promise.all([writer.transport.close(), readonly.transport.close()]) }
-})
+}, 15_000)
 
 test('MCP canonical review tools enforce ownership, revisions, and review-only boundaries', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-review-editor-${randomUUID()}@example.test`, name: 'MCP Review Editor', roles: ['editor'] }, overrideAccess: true })
@@ -1037,7 +1036,7 @@ test('MCP media search retains tagged used assets past the first 100 results', a
   } finally { await sdk.transport.close() }
 }, 180_000)
 
-test('MCP update_media reports a retryable SQLite writer lock without a partial mutation', async () => {
+test('MCP update_media reports an ambiguous terminal audit failure without a partial mutation', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-busy-${randomUUID()}@example.test`, name: 'MCP Media Busy', roles: ['editor'] }, overrideAccess: true })
   const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
   const asset = await payload.create({ collection: 'assets', data: { alt: 'Original locked media metadata', decorative: false, tags: ['before-lock'] }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media-busy.png', size: bytes.length }, user: editor, overrideAccess: false })
@@ -1058,12 +1057,12 @@ test('MCP update_media reports a retryable SQLite writer lock without a partial 
     return result
   }) as typeof payload.create
   try {
-    const blocked = await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })
-    expect(blocked).toMatchObject({ isError: true })
-    expect(resultJson(blocked)).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await expect(sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })).rejects.toThrow(/audit_recording_failed.*operationMayHaveCompleted/)
     await lock?.rollback(); lock = undefined
     expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original locked media metadata', tags: ['before-lock'] })
     expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ revision: set.revision })
+    expect(structuredJson(await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Fresh metadata persists', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } }))).toMatchObject({ draft: { changeSetRevision: set.revision + 1 } })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Fresh metadata persists', tags: ['after-lock'] })
   } finally {
     ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
     await lock?.rollback(); external.close()
@@ -1274,3 +1273,57 @@ test('MCP sends a human-confirmed careers reply with only careers read and reply
     expect(deliveries).toBe(1)
   } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
 })
+
+test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
+  process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+  const [{ encryptCredential }, executor] = await Promise.all([import('../src/integrations.js'), import('../src/configured-ai-job-execution.js')])
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-ai-editor-${randomUUID()}@example.test`, name: 'AI editor', roles: ['editor'] }, overrideAccess: true })
+  const stranger = await payload.create({ collection: 'users', data: { email: `mcp-ai-stranger-${randomUUID()}@example.test`, name: 'AI stranger', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `AI ${randomUUID()}`, slug: `ai-${randomUUID()}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const page = await payload.create({ collection: 'pages', data: { title: 'Neutral AI test', slug: `neutral-ai-${randomUUID()}`, summary: 'A neutral synthetic page.', sectionId: section.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+  const editorSession = await sessionFor(String(editor.id)); const strangerSession = await sessionFor(String(stranger.id))
+  const token = `mcp-ai-${randomUUID()}`; const strangerToken = `mcp-ai-stranger-${randomUUID()}`; const readOnlyToken = `mcp-ai-read-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-ai-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set(strangerToken, { clientId: `mcp-ai-stranger-${randomUUID()}`, userId: String(stranger.id), sessionId: String(strangerSession.id), scopes: ['mcp:content:read'] })
+  tokens.set(readOnlyToken, { clientId: `mcp-ai-read-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read'] })
+  const sdk = await clientFor(token); const foreign = await clientFor(strangerToken); const readonly = await clientFor(readOnlyToken)
+  const output = (value: string) => async () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: value }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+  try {
+    const hash = pageEditorHash(pageEditorProjection(page))
+    await expect(readonly.client.callTool({ name: 'suggest_summary', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    expect(resultJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID() } }))).toEqual({ error: 'ai_job_default_unavailable' })
+    const configuration = await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'test', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    for (const jobType of ['summary', 'meta', 'faq', 'alt'] as const) await payload.create({ collection: 'ai-job-defaults', data: { jobType, provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
+    const invoke = async (name: 'suggest_summary' | 'suggest_meta' | 'suggest_faq', text: string) => {
+      const idempotencyKey = randomUUID(); const queued = structuredJson(await sdk.client.callTool({ name, arguments: { id: page.id, expectedPageHash: hash, idempotencyKey } })) as { jobId: string; status: string; notApplied: boolean; created: boolean }
+      expect(queued).toMatchObject({ status: 'queued', notApplied: true, created: true })
+      const replay = structuredJson(await sdk.client.callTool({ name, arguments: { id: page.id, expectedPageHash: hash, idempotencyKey } })) as { jobId: string; created: boolean }
+      expect(replay).toMatchObject({ jobId: queued.jobId, created: false })
+      await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date(), transport: output(text) })
+      expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toMatchObject({ status: 'completed', notApplied: true, suggestion: { text, untrusted: true } })
+      return queued
+    }
+    const summary = await invoke('suggest_summary', 'A neutral suggested summary.')
+    await invoke('suggest_meta', 'A neutral metadata description.')
+    await invoke('suggest_faq', 'Q: Is this synthetic? A: Yes.')
+    expect(resultJson(await foreign.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: summary.jobId } }))).toEqual({ error: 'not_found' })
+    await expect(sdk.client.callTool({ name: 'suggest_faq', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID(), unexpected: true } })).resolves.toMatchObject({ isError: true })
+    const pixels = Buffer.alloc(512 * 512 * 3); let seed = 0x12345678
+    for (let i = 0; i < pixels.length; i += 1) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; pixels[i] = seed & 255 }
+    const image = await sharp(pixels, { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Original human alt text', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-alt-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    const queuedAlt = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })) as { jobId: string; notApplied: boolean }
+    const durable = await payload.findByID({ collection: 'configured-ai-jobs', id: queuedAlt.jobId, overrideAccess: true }) as unknown as { imageDataUrl: string }
+    expect(queuedAlt.notApplied).toBe(true); expect(durable.imageDataUrl.length).toBeGreaterThan(100_000); expect(durable.imageDataUrl.length).toBeLessThanOrEqual(500_000)
+    let request: Request | undefined
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date(), transport: async candidate => { request = candidate; return output('A blue rectangular image.')() } })
+    expect(await request?.json()).toMatchObject({ model: 'gpt-test', input: [{ content: [{ type: 'input_text' }, { type: 'input_image', image_url: expect.stringMatching(/^data:image\/webp;base64,/) }] }] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original human alt text' })
+    await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Changed after suggestion' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toMatchObject({ stale: true, notApplied: true, suggestion: { text: 'A blue rectangular image.', untrusted: true } })
+    await expect(foreign.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    await payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 86_400_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+    expect(resultJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toEqual({ error: 'not_found' })
+    expect(configuration.id).toBeTruthy()
+  } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
+}, 30_000)
