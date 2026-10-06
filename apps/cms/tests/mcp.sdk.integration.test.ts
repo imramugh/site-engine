@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
+import { AppearanceOptions, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { canonicalHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
@@ -147,7 +148,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'list_applications', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_sections', 'move_item', 'remove_block', 'remove_item', 'reorder_blocks', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_tree', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_templates', 'move_item', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page'])
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
@@ -159,6 +160,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     for (const name of ['list_leads', 'list_applications', 'get_lead', 'get_application']) expect(editorTools.tools.find((tool) => tool.name === name)?.outputSchema).toBeDefined()
     expect((await salesClient.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_leads' })]))
     await expect(salesClient.client.listResources()).rejects.toMatchObject({ code: 403 })
+    await expect(salesClient.client.callTool({ name: 'get_tree', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const [resources, templates, prompts] = await Promise.all([editorClient.client.listResources(), editorClient.client.listResourceTemplates(), editorClient.client.listPrompts()])
     expect(resources.resources.map((entry) => entry.uri).sort()).toEqual(expect.arrayContaining([
       'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
@@ -175,6 +177,21 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
     expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
     expect(resourceJson(scopedPage)).toMatchObject({ id: page.id, title: 'SDK page' })
+    const [tree, blockTypes, templateCatalog, presets, appearance, search] = await Promise.all([
+      editorClient.client.callTool({ name: 'get_tree', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_block_types', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_templates', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_section_presets', arguments: {} }),
+      editorClient.client.callTool({ name: 'list_appearance_options', arguments: {} }),
+      editorClient.client.callTool({ name: 'search_content', arguments: { query: 'synthetic' } }),
+    ])
+    expect(structuredJson(tree)).toMatchObject({ sections: [expect.objectContaining({ id: section.id, slug: 'mcp' })], pages: [expect.objectContaining({ id: page.id, template: 'standard', status: expect.any(String) })] })
+    expect(structuredJson(blockTypes)).toMatchObject({ blockTypes: expect.arrayContaining([expect.objectContaining({ type: 'hero', allowedTemplates: expect.arrayContaining(['standard']) })]) })
+    expect(structuredJson(templateCatalog)).toEqual({ templates: TemplateSchema.options.map((template) => ({ template, allowedBlocks: [...TemplateAllowedBlocks[template]] })) })
+    expect(structuredJson(presets)).toEqual({ presets: SectionPresets })
+    expect(structuredJson(appearance)).toEqual({ appearance: AppearanceOptions })
+    expect(structuredJson(search)).toMatchObject({ items: [expect.objectContaining({ id: page.id, title: 'SDK page' })] })
+    await expect(editorClient.client.callTool({ name: 'list_templates', arguments: { unknown: true } })).resolves.toMatchObject({ isError: true })
     await expect(ownerClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(editorClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const firstLeadResult = await ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 1 } })
