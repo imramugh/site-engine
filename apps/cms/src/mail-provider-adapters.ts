@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isSafeOutgoingAttachmentFilename } from './attachment-filename';
 /** Fixed official Graph and Gmail endpoints; adapters never accept provider URLs from callers. */
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 export type Envelope = {
@@ -63,7 +64,7 @@ function checkedAttachments(input: Envelope): readonly VerifiedAttachment[] {
   if (!Array.isArray(attachments) || attachments.length > attachmentCountMaximum) throw new Error('invalid_attachments');
   let total = 0;
   for (const attachment of attachments) {
-    if (!attachment || typeof attachment !== 'object' || !(attachment.bytes instanceof Uint8Array) || !/^[^\u0000-\u001f\u007f"\\\\/]{1,240}$/.test(attachment.filename) || !attachmentTypes.has(attachment.mimeType) || !Number.isSafeInteger(attachment.size) || attachment.size !== attachment.bytes.byteLength || attachment.size < 1 || attachment.size > attachmentMaximum || !/^[a-f0-9]{64}$/i.test(attachment.sha256) || createHash('sha256').update(attachment.bytes).digest('hex') !== attachment.sha256) throw new Error('invalid_attachments');
+    if (!attachment || typeof attachment !== 'object' || !(attachment.bytes instanceof Uint8Array) || !isSafeOutgoingAttachmentFilename(attachment.filename) || !attachmentTypes.has(attachment.mimeType) || !Number.isSafeInteger(attachment.size) || attachment.size !== attachment.bytes.byteLength || attachment.size < 1 || attachment.size > attachmentMaximum || !/^[a-f0-9]{64}$/i.test(attachment.sha256) || createHash('sha256').update(attachment.bytes).digest('hex') !== attachment.sha256) throw new Error('invalid_attachments');
     total += attachment.size;
     if (total > attachmentMaximum) throw new Error('invalid_attachments');
   }

@@ -93,4 +93,19 @@ describe('outgoing attachment resolution with Payload access', () => {
       expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'authorized' })
     } finally { setReplyDeliveryForTest() }
   })
+
+  it('refuses an invalid historical descriptor before delivery or consuming its confirmation', async () => {
+    const owner = await actor('owner'); const inquiry = await lead(); const document = await asset(owner)
+    const draft = await prepareReply(payload, 'lead', inquiry.id, owner.id, { sender: 'team@example.test', subject: 'Historical descriptor', body: 'Confirmed before validation.', attachments: [{ source: 'asset', id: document.id }] })
+    const grant = await authorizeReply(payload, owner, draft.id)
+    const stored = await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true }) as { attachments: Array<Record<string, unknown>> }
+    await payload.update({ collection: 'mail-drafts', id: draft.id, data: { attachments: [{ ...stored.attachments[0], filename: 'quoted"name.png' }] }, overrideAccess: true })
+    let calls = 0; setReplyDeliveryForTest(async () => { calls += 1; return { provider: 'google', messageID: 'must-not-send' } })
+    try {
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('attachment_not_available')
+      expect(calls).toBe(0)
+      expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+      expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'prepared' })
+    } finally { setReplyDeliveryForTest() }
+  })
 })
