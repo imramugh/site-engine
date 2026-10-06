@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import type { Payload } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 
 const relationID = (value: unknown) => typeof value === 'string' ? value : String((value as { id?: string } | null)?.id ?? '')
 const email = (value: unknown) => String(value ?? '').trim().toLowerCase()
+const addressHash = (value: unknown) => createHash('sha256').update(email(value)).digest('hex')
 
 /** Explicitly binds a safe, same-address suggestion; it never imports message content. */
 export async function adoptMailConversationSuggestion(payload: Payload, input: { suggestionID: string; target: 'lead' | 'application'; targetID: string; actor: string }) {
@@ -11,7 +13,7 @@ export async function adoptMailConversationSuggestion(payload: Payload, input: {
     if (suggestion.target !== input.target || suggestion.adoptedAt) throw new Error('suggestion_not_usable')
     const collection = input.target === 'lead' ? 'inquiries' : 'applications'
     const record = await payload.findByID({ collection, id: input.targetID, depth: 0, overrideAccess: true, req }) as { email?: string }
-    if (email(record.email) !== email(suggestion.sender)) throw new Error('suggestion_not_usable')
+    if (addressHash(record.email) !== suggestion.addressHash) throw new Error('suggestion_not_usable')
     const area = input.target === 'lead' ? 'leads' : 'careers'
     const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true, req })
     if (relationID(mapping.docs[0]?.mailbox) !== relationID(suggestion.mailbox)) throw new Error('suggestion_not_usable')

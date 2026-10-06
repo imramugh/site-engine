@@ -1039,9 +1039,7 @@ export interface MailConversationSuggestion {
   mailbox: string | MailboxConfiguration;
   provider: 'smtp' | 'microsoft' | 'google';
   providerConversationID: string;
-  sender: string;
-  recipient: string;
-  subject: string;
+  addressHash: string;
   target: 'lead' | 'application';
   adoptedAt?: string | null;
   adoptedBy?: (string | null) | User;
@@ -2326,9 +2324,7 @@ export interface MailConversationSuggestionsSelect<T extends boolean = true> {
   mailbox?: T;
   provider?: T;
   providerConversationID?: T;
-  sender?: T;
-  recipient?: T;
-  subject?: T;
+  addressHash?: T;
   target?: T;
   adoptedAt?: T;
   adoptedBy?: T;

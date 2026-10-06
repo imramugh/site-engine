@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto'
 import type { Payload } from 'payload'
 
 const opaque = /^[^\u0000-\u001f\u007f]{1,500}$/
 const address = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const providers = new Set(['smtp', 'microsoft', 'google'])
 const clean = (value: unknown, limit: number) => String(value ?? '').replace(/<[^>]*>/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit)
+const addressHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const inFlight = new Map<string, Promise<unknown>>()
 
 export type InboundMessage = { mailbox: string; provider: 'smtp' | 'microsoft' | 'google'; conversationID: string; messageID: string; rfcMessageID?: string; rfcReferences?: string; sender: string; recipient: string; subject: string; body: string; receivedAt: string; attachmentMetadata?: Array<{ name?: unknown; contentType?: unknown; size?: unknown }> }
@@ -37,7 +39,7 @@ async function appendMatchedInboundInner(payload: Payload, input: InboundMessage
     const target = lead.docs[0] ? 'lead' : application.docs[0] ? 'application' : undefined
     if (target) {
       const prior = await payload.find({ collection: 'mail-conversation-suggestions', where: { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }, limit: 1, depth: 0, overrideAccess: true })
-      if (!prior.docs[0]) await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, sender, recipient, subject: clean(input.subject, 500), target }, overrideAccess: true })
+      if (!prior.docs[0]) await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, addressHash: addressHash(sender), target }, overrideAccess: true })
     }
     return { matched: false as const, suggested: Boolean(target) }
   }
