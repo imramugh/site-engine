@@ -6,7 +6,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlin
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { parseSiteSnapshot, ThemeManifestSchema } from '@site-engine/contract';
+import { parseSiteSnapshot, ThemeManifestSchema, ThemeSelectionSchema } from '@site-engine/contract';
 import { checkSiteSnapshot } from '@site-engine/checks';
 import { deriveRoutes } from '@site-engine/engine';
 import { manifestDigest } from '@site-engine/engine/theme-registry';
@@ -195,8 +195,8 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, themeManifest?: unknown, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
-export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, themeManifest, versionPins, analytics }) {
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, themeManifest?: unknown, themeSelection?: unknown, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
+export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, themeManifest, themeSelection, versionPins, analytics }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
@@ -216,7 +216,10 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   if (typeof themeVersion !== 'string' || typeof engineVersion !== 'string' || !themeVersion || !engineVersion || !semver.test(themeVersion) || !semver.test(engineVersion) || (pins.contractVersion !== undefined && pins.contractVersion !== snapshot.settings.contractVersion)) throw new Error('Explicit immutable version pins are invalid.');
   const targetTheme = themeManifest === undefined ? undefined : ThemeManifestSchema.parse(themeManifest);
   if (targetTheme) {
-    const selection = snapshot.settings.theme;
+    const externalSelection = themeSelection === undefined ? undefined : ThemeSelectionSchema.parse(themeSelection);
+    const embeddedSelection = snapshot.settings.theme;
+    if (embeddedSelection && externalSelection && (embeddedSelection.id !== externalSelection.id || embeddedSelection.version !== externalSelection.version || embeddedSelection.contract !== externalSelection.contract || embeddedSelection.manifestDigest !== externalSelection.manifestDigest)) throw new Error('External theme selection does not match the frozen snapshot selection.');
+    const selection = embeddedSelection ?? externalSelection;
     if (!selection || selection.id !== targetTheme.name || selection.version !== targetTheme.version || selection.contract !== targetTheme.contract || selection.manifestDigest !== manifestDigest(targetTheme) || themeVersion !== targetTheme.version) throw new Error('Theme manifest does not match the frozen selection and immutable version pins.');
   }
   const root = resolve(outputRoot); const rootInfo = await lstat(root); if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('outputRoot must be a real directory.');
