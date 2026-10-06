@@ -504,6 +504,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
     return
   }
+  if (request.method === 'POST' && request.url === '/__e2e/session/stale') {
+    const sessionCookie = request.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('site_engine_session=') || part.startsWith('__Host-site_engine_session='))
+    const token = sessionCookie?.slice(sessionCookie.indexOf('=') + 1)
+    if (!token) { response.writeHead(401); response.end('Session missing.'); return }
+    void payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? payload.update({ collection: 'auth-sessions', id: docs[0].id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) : Promise.reject(new Error('Session missing')))
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to age session.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
     void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
