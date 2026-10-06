@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Payload } from 'payload'
+import { withPayloadTransaction } from './auth-transaction'
 
 const opaque = /^[^\u0000-\u001f\u007f]{1,500}$/
 const address = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -39,8 +40,11 @@ async function appendMatchedInboundInner(payload: Payload, input: InboundMessage
       ? await payload.find({ collection: 'inquiries', where: { and: [{ email: { equals: sender } }, { spam: { not_equals: true } }] }, limit: 1, depth: 0, overrideAccess: true })
       : target === 'application' ? await payload.find({ collection: 'applications', where: { email: { equals: sender } }, limit: 1, depth: 0, overrideAccess: true }) : undefined
     if (target && candidate?.docs[0]) {
-      const prior = await payload.find({ collection: 'mail-conversation-suggestions', where: { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }, limit: 1, depth: 0, overrideAccess: true })
-      if (!prior.docs[0]) { try { await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, addressHash: addressHash(sender), target }, overrideAccess: true }) } catch { const raced = await payload.find({ collection: 'mail-conversation-suggestions', where: { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }, limit: 1, depth: 0, overrideAccess: true }); if (!raced.docs[0]) throw new Error('suggestion_create_failed') } }
+      await withPayloadTransaction(payload, async (req) => {
+        const where = { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }
+        const prior = await payload.find({ collection: 'mail-conversation-suggestions', where, limit: 1, depth: 0, overrideAccess: true, req })
+        if (!prior.docs[0]) await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, addressHash: addressHash(sender), target }, overrideAccess: true, req })
+      })
     }
     return { matched: false as const, suggested: Boolean(target && candidate?.docs[0]) }
   }
