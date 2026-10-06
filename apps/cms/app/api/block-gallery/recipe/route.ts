@@ -3,7 +3,7 @@ import { getPayload } from 'payload'
 import { createHash } from 'node:crypto'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
-import { recipeBlocks } from '../../../../src/block-gallery'
+import { recipeBlockReferences, recipeBlocks } from '../../../../src/block-gallery'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
@@ -41,6 +41,8 @@ async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403 })
   try {
     const body = await boundedJSON(request) as { pageId?: unknown; changeSetId?: unknown; expectedRevision?: unknown; requestKey?: unknown; blocks?: unknown; blockTypes?: unknown }
+    if (Object.keys(body).some((key) => !['pageId', 'changeSetId', 'expectedRevision', 'requestKey', 'blocks', 'blockTypes'].includes(key))) throw new Error('Recipe requests contain an unsupported field.')
+    if ((body.blocks === undefined) === (body.blockTypes === undefined)) throw new Error('Provide exactly one recipe blocks field.')
     if (!validID(body.pageId) || !validID(body.changeSetId) || !validID(body.requestKey) || !Number.isInteger(body.expectedRevision) || Number(body.expectedRevision) < 0) throw new Error('A page, open change set, request key, and current revision are required.')
     const pageID = body.pageId
     const changeSetID = body.changeSetId
@@ -67,6 +69,14 @@ async function POSTHandler(request: Request): Promise<Response> {
       const page = await payload.findByID({ collection: 'pages', id: pageID, depth: 0, draft: true, user, overrideAccess: false, req }) as { template?: unknown; blocks?: unknown; status?: unknown }
       if (page.status === 'archived') throw new Error('Restore this page before inserting recipe blocks.')
       const blocks = recipeBlocks(String(page.template ?? ''), body.blocks ?? body.blockTypes, page.blocks)
+      const references = recipeBlockReferences(blocks)
+      try {
+        const [referencedPages, referencedAssets] = await Promise.all([
+          Promise.all(references.filter((reference) => reference.collection === 'pages').map((reference) => payload.findByID({ collection: 'pages', id: reference.id, depth: 0, draft: true, user, overrideAccess: false, req }))),
+          Promise.all(references.filter((reference) => reference.collection === 'assets').map(async (reference) => ({ reference, asset: await payload.findByID({ collection: 'assets', id: reference.id, depth: 0, user, overrideAccess: false, req }) as { deletedAt?: unknown; mimeType?: unknown } }))),
+        ])
+        if (referencedPages.some((page) => (page as { status?: unknown; _status?: unknown }).status === 'archived' || (page as { _status?: unknown })._status === 'archived') || referencedAssets.some(({ reference, asset }) => Boolean(asset.deletedAt) || typeof asset.mimeType !== 'string' || !asset.mimeType.startsWith(reference.mimePrefix))) throw new Error('A selected recipe reference is unavailable.')
+      } catch { throw new Error('A selected recipe reference is unavailable.') }
       req.headers.set('x-site-engine-change-set', changeSetID)
       const result = await payload.update({ collection: 'pages', id: pageID, data: { blocks: [...(Array.isArray(page.blocks) ? page.blocks : []), ...blocks] }, draft: true, user, overrideAccess: false, req }) as { id: string; blocks?: unknown }
       await payload.create({ collection: 'audit-events', data: { event: 'block_gallery.recipe_inserted', user: user.id, actor: user.id, detail: { requestKey, requestHash, page: pageID, changeSet: changeSetID, blockTypes: blocks.map((block) => block.type) } }, overrideAccess: true, req })

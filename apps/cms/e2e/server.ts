@@ -6,6 +6,7 @@ import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSyn
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -26,7 +27,7 @@ import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
 import { prepareReply } from '../src/mail-replies.js'
-import { mediaFilePath } from '../src/media.js'
+import { mediaFilePath, snapshotMediaReference } from '../src/media.js'
 import { createRequire } from 'node:module'
 import { createPublishWebhookServer } from '../../site/scripts/run-publish-webhook-receiver.mjs'
 import { dispatchPublishOnce } from '../../site/scripts/run-publish-dispatcher.mjs'
@@ -34,6 +35,7 @@ import { runPublishOnce, validatePublishClaim } from '../../site/scripts/run-pub
 import { createPublicServer } from '../../site/scripts/public-server.mjs'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
+const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const eng016AIRoutingModel = 'gpt-4.1-mini'
@@ -117,6 +119,7 @@ const certificateRequest = join(temporaryDirectory, 'synthetic-issuer.csr')
 const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
+const galleryBrowserThemeManifestPath = join(temporaryDirectory, 'gallery-browser-theme-manifest.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
 const publishArtifacts = join(temporaryDirectory, 'eng010-publish-artifacts')
 const publishReleases = join(temporaryDirectory, 'eng010-publish-releases')
@@ -125,6 +128,7 @@ const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract
 const navigationThemeManifest = { ...browserThemeManifest, name: 'navigation-browser-theme', version: '1.6.0', contract: '1.6.0', settingKeys: [] }
 const searchThemeManifest = { ...browserThemeManifest, name: 'search-browser-theme', version: '1.7.0', contract: '1.7.0', settingKeys: [] }
 const incompatibleBrowserThemeManifest = { name: 'incomplete-browser-theme', version: '1.0.0', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
+const galleryBrowserThemeManifest = { name: 'gallery-browser-theme', version: '1.7.0', contract: '1.7.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: ['subtle', 'ambient', 'signature'], intentFallbacks: { subtle: 'subtle', ambient: 'ambient', signature: 'signature' } } }
 const galleryTheme = process.env.BLOCK_GALLERY_E2E_THEME_ID && process.env.BLOCK_GALLERY_E2E_THEME_VERSION ? { name: process.env.BLOCK_GALLERY_E2E_THEME_ID, version: process.env.BLOCK_GALLERY_E2E_THEME_VERSION, contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'], settingKeys: [], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } } : undefined
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null'
 const themeInstalls = [
@@ -132,8 +136,10 @@ const themeInstalls = [
   { manifest: navigationThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   { manifest: searchThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   { manifest: incompatibleBrowserThemeManifest, installedAt: '2026-10-03T00:00:00.000Z' },
+  { manifest: galleryBrowserThemeManifest, installedAt: '2026-10-06T00:00:00.000Z' },
   ...(galleryTheme ? [{ manifest: galleryTheme, installedAt: '2026-10-05T00:00:00.000Z' }] : []),
 ]
+writeFileSync(galleryBrowserThemeManifestPath, JSON.stringify(galleryBrowserThemeManifest))
 writeFileSync(bootstrapPath, 'synthetic-browser-bootstrap-token')
 writeFileSync(themeRegistry, JSON.stringify({ themes: themeInstalls }))
 const previewThemeRegistry = parseThemeRegistry({ themes: themeInstalls })
@@ -168,6 +174,7 @@ writeFileSync(initialPreviewBaseline, JSON.stringify(initialBaseline))
 Object.assign(process.env, { NODE_ENV: 'test' })
 process.env.DATABASE_URI = `file:${databasePath}`
 process.env.MEDIA_STORAGE_DIR = join(temporaryDirectory, 'media')
+process.env.SITE_MEDIA_DIR = process.env.MEDIA_STORAGE_DIR
 process.env.APPLICATION_STORAGE_DIR = join(temporaryDirectory, 'applications')
 writeFileSync(retentionLedger, ''); chmodSync(retentionLedger, 0o600)
 process.env.RETENTION_TOMBSTONES_FILE = retentionLedger
@@ -244,6 +251,8 @@ let cmsProxy: ReturnType<typeof createServer>
 let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
+let galleryThemeFixture: { releaseID: string; outboxID: string; changeSetID: string } | undefined
+let galleryOwnerID: string | undefined
 let localOwnerID: string | undefined
 let leadOwnerID: string | undefined
 let applicationOwnerID: string | undefined
@@ -366,6 +375,7 @@ async function seed(): Promise<void> {
   const pageEditorApprover = await payload.create({ collection: 'users', data: { email: 'page-editor-approver.synthetic@example.test', name: 'Synthetic Page Editor Approver', roles: ['approver'] }, overrideAccess: true })
   const operationsOwner = await payload.create({ collection: 'users', data: { email: 'operations-owner.synthetic@example.test', name: 'Synthetic Operations Owner', roles: ['owner'] }, overrideAccess: true })
   const galleryOwner = await payload.create({ collection: 'users', data: { email: 'gallery-owner.synthetic@example.test', name: 'Synthetic Gallery Owner', roles: ['owner'] }, overrideAccess: true })
+  galleryOwnerID = String(galleryOwner.id)
   const siteOwner = await payload.create({ collection: 'users', data: { email: 'site-owner.synthetic@example.test', name: 'Synthetic Site Owner', roles: ['owner'] }, overrideAccess: true })
   const usersOwner = await payload.create({ collection: 'users', data: { email: 'users-owner.synthetic@example.test', name: 'Synthetic Users Owner', roles: ['owner'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: 'synthetic-users-owner' }, overrideAccess: true })
   const usersTarget = await payload.create({ collection: 'users', data: { email: 'users-target.synthetic@example.test', name: 'Synthetic Users Target', roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: 'synthetic-users-target' }, overrideAccess: true })
@@ -676,7 +686,10 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         throw new Error('Unsupported preview worker action.')
       }
       const pins = job.versionPins as { engineVersion: string; themeVersion: string; contractVersion: string }
-      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins: pins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined, render: async (input) => {
+        try { return await buildSnapshot(input) }
+        catch (error) { console.error('Direct preview fixture build failed:', error); throw error }
+      } })
       return payload.findByID({ collection: 'preview-render-jobs', id: job.id, depth: 0, overrideAccess: true })
     })().then((job) => json(response, { id: job.id, status: job.status })).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to complete preview.') })
     return
@@ -1060,6 +1073,48 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then(value => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to exercise publish callback history.') })
     return
   }
+  if (request.method === 'POST' && (request.url === '/__e2e/block-gallery-theme/install' || request.url === '/__e2e/block-gallery-theme/restore')) {
+    void (async () => {
+      if (request.url === '/__e2e/block-gallery-theme/restore') {
+        if (galleryThemeFixture) {
+          await payload.delete({ collection: 'published-releases', id: galleryThemeFixture.releaseID, overrideAccess: true })
+          await payload.delete({ collection: 'publish-outbox', id: galleryThemeFixture.outboxID, overrideAccess: true })
+          galleryThemeFixture = undefined
+        }
+        return { restored: true }
+      }
+      if (galleryThemeFixture) return { installed: true }
+      const current = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const release = current.docs[0] as { sequence?: unknown; snapshot?: unknown } | undefined
+      const source = release?.snapshot as { manifest?: unknown; approvedBy?: unknown } | undefined
+      if (!release || !source?.manifest) throw new Error('Gallery fixture requires a published baseline.')
+      const manifest = structuredClone(source.manifest) as { settings: { theme?: unknown; contractVersion: string; sections: Array<{ id: string; pageIds: string[] }> }; pages: Array<{ id: string }>; media: Array<{ id: string }> }
+      manifest.settings.contractVersion = galleryBrowserThemeManifest.contract
+      manifest.settings.theme = { id: galleryBrowserThemeManifest.name, version: galleryBrowserThemeManifest.version, contract: galleryBrowserThemeManifest.contract, manifestDigest: createHash('sha256').update(stable(galleryBrowserThemeManifest)).digest('hex') }
+      // The dedicated recipe target lives only in the CMS test database. Add
+      // it to this scoped release so its fresh change set is based on the
+      // exact queued baseline which will be rendered for review.
+      if (!manifest.pages.some((page) => page.id === galleryPageID)) {
+        manifest.pages.push({ id: galleryPageID, sectionId: directEditSectionID, title: 'Gallery recipe target', summary: 'Synthetic standard page for the active-theme gallery browser workflow.', slug: 'gallery-recipe-target', template: 'standard', status: 'published', blocks: [] } as never)
+        const section = manifest.settings.sections.find((candidate) => candidate.id === directEditSectionID)
+        if (!section) throw new Error('Gallery fixture section is missing from the published baseline.')
+        if (!section.pageIds.includes(galleryPageID)) section.pageIds.push(galleryPageID)
+      }
+      const mediaAssets = await payload.find({ collection: 'assets', where: { filename: { equals: 'media-fixture-00.png' } }, limit: 1, depth: 0, overrideAccess: true })
+      const mediaAsset = mediaAssets.docs[0]
+      if (!mediaAsset) throw new Error('Gallery fixture media asset is missing.')
+      if (!manifest.media.some((asset) => asset.id === mediaAsset.id)) manifest.media.push(snapshotMediaReference(mediaAsset as Parameters<typeof snapshotMediaReference>[0]) as never)
+      const sequence = Number(release.sequence) + 1
+      const changeSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery theme fixture', state: 'published', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+      const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', manifest, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, approvedBy: typeof source.approvedBy === 'string' ? source.approvedBy : localOwnerID!, baselineSequence: Number(release.sequence) }, overrideAccess: true, context: { editorialInternal: true } })
+      const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `scoped-block-gallery-theme:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+      const installed = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'synthetic-gallery-theme', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+      const fixtureSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery recipe', state: 'open', actor: galleryOwnerID!, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+      galleryThemeFixture = { releaseID: String(installed.id), outboxID: String(outbox.id), changeSetID: String(fixtureSet.id) }
+      return { installed: true }
+    })().then(value => json(response, value)).catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to switch the gallery theme fixture.') })
+    return
+  }
   const upstream = requestUpstream({
     hostname: '127.0.0.1', port: e2ePort + 2, method: request.method, path: request.url,
     headers: { ...request.headers, host: `127.0.0.1:${e2ePort}`, 'x-forwarded-host': `127.0.0.1:${e2ePort}`, 'x-forwarded-proto': 'https' },
@@ -1092,6 +1147,25 @@ function runNext(args: string[], keepRunning = false): Promise<ChildProcess> {
   })
 }
 
+function buildNeutralGallery(themeManifestPath: string, merge: boolean): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['scripts/build-neutral-gallery.mjs', '--theme-manifest', themeManifestPath, ...(merge ? ['--merge'] : [])], { cwd: repositoryRoot, env: process.env, stdio: 'inherit' })
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM') }, 120_000)
+    child.once('error', (error) => { clearTimeout(timer); reject(error) })
+    child.once('exit', (status) => {
+      clearTimeout(timer)
+      if (timedOut) reject(new Error(`Neutral gallery build timed out for ${galleryBrowserThemeManifest.name}@${galleryBrowserThemeManifest.version}.`))
+      else if (status === 0) resolve()
+      else reject(new Error(`Neutral gallery build failed for ${galleryBrowserThemeManifest.name}@${galleryBrowserThemeManifest.version} with ${status ?? 'no'} status.`))
+    })
+  })
+}
+
+async function buildNeutralGalleries(): Promise<void> {
+  await buildNeutralGallery(galleryBrowserThemeManifestPath, false)
+}
+
 async function main(): Promise<void> {
   const pair = await generateKeyPair('RS256')
   privateKey = pair.privateKey
@@ -1106,6 +1180,7 @@ async function main(): Promise<void> {
   await seed()
   process.env.OAUTH_INTERNAL_ORIGIN = issuerOrigin
   process.env.OAUTH_INTROSPECTION_SECRET = 'synthetic-e2e-mcp-secret'
+  await buildNeutralGalleries()
   await runAstroBuild()
   // Production deployments use Webpack. Keep the default fast, but let the
   // browser suite exercise the same standalone artifact before release.

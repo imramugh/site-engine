@@ -1,6 +1,14 @@
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
+export type GalleryLibrary = {
+  url: string
+  fixtureHash: string
+  manifestDigest: string
+  source: { themePackage: string; rendererCommit: string; contractVersion: string }
+  capabilities: string[]
+}
+
 export type AdminBranding = {
   name: string
   initials: string
@@ -8,6 +16,7 @@ export type AdminBranding = {
   tokens: Record<string, string>
   stylesheetUrl?: string
   blockGalleryPreviews?: Record<string, Record<string, string>>
+  blockGalleryLibraries?: Record<string, GalleryLibrary>
 }
 
 const defaultBranding: AdminBranding = {
@@ -40,6 +49,28 @@ function sameOriginAsset(value: unknown): string | undefined {
   return value
 }
 
+export function parseGalleryLibraries(value: unknown): Record<string, GalleryLibrary> {
+  const result: Record<string, GalleryLibrary> = {}
+  if (!isRecord(value)) return result
+  for (const [identity, raw] of Object.entries(value)) {
+    if (!/^[a-z0-9-]{1,80}@\d+\.\d+\.\d+$/.test(identity) || !isRecord(raw) || !isRecord(raw.source)) continue
+    const url = sameOriginAsset(raw.url)
+    if (!url || !/^\/admin-branding\/[A-Za-z0-9@._/-]+\.html$/.test(url) || !/^[a-f0-9]{64}$/.test(String(raw.fixtureHash)) || !/^[a-f0-9]{64}$/.test(String(raw.manifestDigest))) continue
+    const { themePackage, rendererCommit, contractVersion } = raw.source
+    if (typeof themePackage !== 'string' || !/^[A-Za-z0-9@/._-]{1,160}$/.test(themePackage) || typeof rendererCommit !== 'string' || !/^[a-f0-9]{7,64}$/.test(rendererCommit) || typeof contractVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(contractVersion)) continue
+    const allowed = ['templates', 'presets', 'variants', 'extensions', 'viewport', 'background', 'motion']
+    const capabilities = Array.isArray(raw.capabilities) ? raw.capabilities.filter((item): item is string => typeof item === 'string' && allowed.includes(item)) : []
+    result[identity] = { url, fixtureHash: raw.fixtureHash as string, manifestDigest: raw.manifestDigest as string, source: { themePackage, rendererCommit, contractVersion }, capabilities }
+  }
+  return result
+}
+
+export function exactGalleryLibrary(libraries: AdminBranding['blockGalleryLibraries'], theme: { name: string; version: string; contract: string; manifestDigest: string } | undefined): GalleryLibrary | undefined {
+  if (!theme) return undefined
+  const library = libraries?.[`${theme.name}@${theme.version}`]
+  return library?.manifestDigest === theme.manifestDigest && library.source.contractVersion === theme.contract ? library : undefined
+}
+
 export function parseAdminBranding(value: unknown): AdminBranding {
   if (!isRecord(value)) return defaultBranding
   const name = text(value.name, 80)
@@ -59,14 +90,20 @@ export function parseAdminBranding(value: unknown): AdminBranding {
     }
     if (Object.keys(safe).length) blockGalleryPreviews[theme] = safe
   }
-  return { name, initials, logoUrl: sameOriginAsset(value.logoUrl), tokens, stylesheetUrl: '/admin-branding/admin-branding.css', ...(Object.keys(blockGalleryPreviews).length ? { blockGalleryPreviews } : {}) }
+  const blockGalleryLibraries = parseGalleryLibraries(value.blockGalleryLibraries)
+  return { name, initials, logoUrl: sameOriginAsset(value.logoUrl), tokens, stylesheetUrl: '/admin-branding/admin-branding.css', ...(Object.keys(blockGalleryPreviews).length ? { blockGalleryPreviews } : {}), ...(Object.keys(blockGalleryLibraries).length ? { blockGalleryLibraries } : {}) }
 }
 
 /** Reads only an optional public build artifact. Invalid or absent files are neutral. */
 export async function loadAdminBranding(directory = brandingDirectory()): Promise<AdminBranding> {
+  let branding = defaultBranding
   try {
-    return parseAdminBranding(JSON.parse(await readFile(join(directory, 'branding.json'), 'utf8')))
-  } catch {
-    return defaultBranding
-  }
+    branding = parseAdminBranding(JSON.parse(await readFile(join(directory, 'branding.json'), 'utf8')))
+  } catch { /* An unbranded engine uses the neutral renderer library. */ }
+  try {
+    const neutral = JSON.parse(await readFile(resolve(process.cwd(), 'public/admin-branding/gallery-libraries.json'), 'utf8'))
+    const libraries = { ...parseGalleryLibraries(neutral.blockGalleryLibraries), ...branding.blockGalleryLibraries }
+    if (Object.keys(libraries).length) branding = { ...branding, blockGalleryLibraries: libraries }
+  } catch { /* Missing build artifacts are represented honestly by the gallery. */ }
+  return branding
 }

@@ -85,6 +85,25 @@ async function clientFor(token: string) {
   return { client, transport }
 }
 
+test('ENG-018 retains a bounded raw SDK input budget for nested recipes', async () => {
+  const user = await payload.create({ collection: 'users', data: { email: 'recipe-budget@example.test', name: 'Recipe budget', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(String(user.id))
+  const token = `recipe-budget-${randomUUID()}`
+  tokens.set(token, { clientId: token, userId: String(user.id), sessionId: String(session.id), scopes: ['mcp:content:read'] })
+  const connected = await clientFor(token)
+  try {
+    let rejection = ''
+    try {
+      const response = await connected.client.callTool({ name: 'get_block_library', arguments: { nested: Array(2048).fill(0) } })
+      expect(response.isError).toBe(true)
+      rejection = JSON.stringify(response.content)
+    } catch (error) { rejection = error instanceof Error ? error.message : String(error) }
+    expect(rejection).toMatch(/maximum of 2048 elements/)
+    const library = await connected.client.callTool({ name: 'get_block_library', arguments: {} })
+    expect(library.isError).not.toBe(true)
+  } finally { await connected.client.close() }
+})
+
 async function publishFrozenSnapshot(ownerID: string, manifest: typeof neutralFixture): Promise<void> {
   const sequence = (await payload.find({ collection: 'published-releases', limit: 0, overrideAccess: true })).totalDocs + 1
   const set = await payload.create({ collection: 'change-sets', data: { name: `Frozen MCP baseline ${randomUUID()}`, actor: ownerID, state: 'published', revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
@@ -467,10 +486,16 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(resultJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } }))).toEqual({ error: 'fixed_block' })
     const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; expect(pageEditorProjection(afterFixedRecord)).toEqual(beforeFixed)
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
-    const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [{ type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' } }, { type: 'faq' }] }
-    const recipePage = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as { id: string; blocks: Array<{ id: string; type: string; appearance: Record<string, string> }> }
-    expect(recipePage.blocks.map((block) => block.type)).toEqual(['callout', 'faq'])
-    expect(recipePage.blocks[0]?.appearance).toMatchObject({ background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' })
+    const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [
+      { type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } } },
+      { type: 'faq', appearance: { background: 'subtle', width: 'content', spacing: 'spacious', motionIntent: 'ambient', logoTone: 'default' } },
+      { type: 'testimonials', appearance: { background: 'highlight', width: 'full', spacing: 'default', motionIntent: 'signature', logoTone: 'inverse' }, fields: { items: [{ quote: 'A consent-confirmed SDK testimonial.', attribution: 'SDK customer', permissionConfirmed: true }] } },
+    ] }
+    const recipePage = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as { id: string; blocks: Array<{ id: string; type: string; appearance: Record<string, string>; items?: Array<{ quote: string; attribution: string; permissionConfirmed: boolean }> }> }
+    expect(recipePage.blocks.map((block) => block.type)).toEqual(['callout', 'faq', 'testimonials'])
+    expect(recipePage.blocks[0]?.appearance).toMatchObject({ background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } })
+    expect(recipePage.blocks[1]?.appearance).toMatchObject({ background: 'subtle', width: 'content', spacing: 'spacious', motionIntent: 'ambient', logoTone: 'default' })
+    expect(recipePage.blocks[2]).toMatchObject({ appearance: { background: 'highlight', width: 'full', spacing: 'default', motionIntent: 'signature', logoTone: 'inverse' }, items: [{ quote: 'A consent-confirmed SDK testimonial.', attribution: 'SDK customer', permissionConfirmed: true }] })
     const recipeReplay = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as typeof recipePage
     expect(recipeReplay.id).toBe(recipePage.id)
     const sectionSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP section' } })) as { id: string; revision: number }
@@ -483,7 +508,14 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(recipeReplay.blocks.map((block) => block.id)).toEqual(recipePage.blocks.map((block) => block.id))
     const text = JSON.stringify([sections, found, selected, redirects]); expect(text).not.toContain('private@example.test'); expect(text).not.toContain('never-expose-this-secret')
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_site_settings', arguments: {} }))).toMatchObject({ id: expect.any(String), settingsHash: expect.stringMatching(/^[a-f0-9]{64}$/), navigationHash: expect.stringMatching(/^[a-f0-9]{64}$/), siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', address: { addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?' } })
-    expect(resultJson(await ownerClient.client.callTool({ name: 'get_block_library', arguments: {} }))).toMatchObject({ blockTypes: expect.arrayContaining(['hero']) })
+    expect(resultJson(await ownerClient.client.callTool({ name: 'get_block_library', arguments: {} }))).toMatchObject({
+      blockTypes: expect.arrayContaining(['hero']),
+      catalog: expect.arrayContaining([expect.objectContaining({ type: 'hero', fields: expect.any(Array), variants: expect.any(Array) })]),
+      templateCatalog: expect.arrayContaining([expect.objectContaining({ id: 'standard', startingBlocks: expect.any(Array) })]),
+      sectionPresetCatalog: expect.arrayContaining([expect.objectContaining({ id: 'root', allowedTemplates: expect.any(Array) })]),
+      recipe: expect.objectContaining({ requiredSelections: expect.objectContaining({ media: ['mediaId'] }) }),
+      gallery: expect.objectContaining({ url: '/block-gallery', extensions: expect.any(Array) }),
+    })
     expect(resultJson(await ownerClient.client.callTool({ name: 'list_installed_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
     expect(resultJson(await ownerClient.client.callTool({ name: 'get_page_quality', arguments: { id: frozen.pages[0]!.id } }))).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, styleGuide: expect.objectContaining({ bannedPhrases: ['frozen phrase'] }) })
     await payload.update({ collection: 'style-guides', id: mutableGuide.id, data: { bannedPhrases: ['draft-only phrase'] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })

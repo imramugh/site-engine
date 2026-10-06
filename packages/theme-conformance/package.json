@@ -9,6 +9,7 @@
   "files": ["src", "scripts", "harness", "baselines.json", "README.md"],
   "scripts": {
     "conformance": "node scripts/theme-conformance.mjs",
+    "test": "node --test test/*.test.mjs",
     "typecheck": "node --check src/index.mjs && node --check harness/build-snapshot.mjs",
     "lint": "node --check src/index.mjs && node --check harness/build-snapshot.mjs"
   },

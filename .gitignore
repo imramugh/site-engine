@@ -24,3 +24,7 @@ __pycache__/
 
 # Local private upload storage; release artifacts are built from explicit snapshots.
 data/
+
+# Generated neutral theme-gallery artifacts are rebuilt from public fixtures.
+/apps/cms/public/admin-branding/assets/gallery-libraries/
+/apps/cms/public/admin-branding/gallery-libraries.json

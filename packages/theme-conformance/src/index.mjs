@@ -798,3 +798,6 @@ if (
       process.exitCode = 1;
     },
   );
+
+// Gallery rendering and conformance intentionally share one synthetic fixture.
+export { fixture as createConformanceFixture };
