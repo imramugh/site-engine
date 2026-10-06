@@ -79,7 +79,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
-  server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
+  server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       // Fetches can take the full remote-image deadline; never hold SQLite's write
@@ -97,7 +97,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
-  server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
+  server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       await editableSet(payload, undefined, current, changeSetId, expectedChangeSetRevision)
