@@ -105,6 +105,25 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   await expect(live.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-changed', 'true')
   await expect(proposed.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-changed', 'true')
 
+  // Reproduce the transient document seen during iframe navigation: the
+  // document exists, but its head is not yet available. A later load must
+  // recover the normal highlights without crashing the review workspace.
+  const frameErrors: string[] = []
+  const recordFrameError = (error: Error) => frameErrors.push(error.message)
+  reviewer.page.on('pageerror', recordFrameError)
+  await reviewer.page.getByTitle('Proposed page').evaluate((element) => {
+    const frame = element as HTMLIFrameElement
+    const doc = frame.contentDocument!
+    const head = doc.head
+    head.remove()
+    frame.dispatchEvent(new Event('load'))
+    doc.documentElement.prepend(head)
+    frame.dispatchEvent(new Event('load'))
+  })
+  await expect(proposed.locator(`[data-block-id="${blockID}"]`)).toHaveAttribute('data-review-changed', 'true')
+  expect(frameErrors).toEqual([])
+  reviewer.page.off('pageerror', recordFrameError)
+
   const change = reviewer.page.getByRole('button', { name: /Proposed review heading/ })
   await live.locator(`[data-block-id="${blockID}"]`).evaluate((node) => node.removeAttribute('data-block-id'))
   await proposed.locator(`[data-block-id="${blockID}"]`).evaluate((node) => node.removeAttribute('data-block-id'))
