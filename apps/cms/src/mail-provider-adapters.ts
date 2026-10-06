@@ -86,7 +86,9 @@ async function graphAttachment(fetcher: Fetcher, token: string, messageID: strin
   }
   const session = await request(fetcher, `${endpoint}/createUploadSession`, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ AttachmentItem: { attachmentType: 'file', name: attachment.filename, size: attachment.size, contentType: attachment.mimeType } }) });
   if (session.status !== 201) fail(session.status);
-  const uploadURL = graphUploadURL((await json(session)).uploadUrl);
+  const sessionBody = await json(session); const initial = sessionBody.nextExpectedRanges;
+  if (initial !== undefined && (!Array.isArray(initial) || initial.length !== 1 || initial[0] !== '0-')) throw new Error('provider_malformed_response');
+  const uploadURL = graphUploadURL(sessionBody.uploadUrl);
   for (let start = 0; start < attachment.size; start += graphUploadChunk) {
     const end = Math.min(start + graphUploadChunk, attachment.size) - 1;
     const part = attachment.bytes.slice(start, end + 1);
