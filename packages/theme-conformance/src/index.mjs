@@ -467,9 +467,10 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
     join(tmpdir(), "site-engine-starter-conformance-"),
   );
   try {
+    const consumerRequire = createRequire(join(process.cwd(), "package.json"));
     const themeManifest = themePackage.includes("/") && !themePackage.startsWith("@")
       ? join(resolve(themePackage), "theme.json")
-      : require.resolve(`${themePackage}/theme.json`);
+      : (() => { try { return consumerRequire.resolve(`${themePackage}/theme.json`); } catch { return require.resolve(`${themePackage}/theme.json`); } })();
     const starter = dirname(themeManifest);
     const engineEntry = fileURLToPath(import.meta.resolve("@site-engine/engine"));
     const validator = join(dirname(engineEntry), "theme-package-cli.js");
@@ -483,6 +484,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
     const manifest = JSON.parse(await readFile(themeManifest, "utf8"));
     const identity = { name: manifest.name, themeVersion: versionPins.themeVersion, engineVersion: versionPins.engineVersion };
     const isBundledStarter = themePackage === "@site-engine/theme-starter";
+    if (recordBaselines && !baselineFile) throw new Error("recordBaselines requires an explicit caller-owned baselineFile.");
     const selectedBaseline = baselineFile ? resolve(baselineFile) : isBundledStarter ? baselinePath : undefined;
     delete manifest.contractSurface.components.blockRenderer;
     const invalid = join(temp, "invalid-theme");
