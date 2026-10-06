@@ -185,6 +185,27 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Fresh reviewer authentication/) })
     await expect(payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).resolves.toMatchObject({ state: 'submitted' })
+    const audits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'editorial.approval_denied' } }, { user: { equals: current.reviewer.id } }, { 'detail.reason': { equals: 'fresh_authentication_required' } }] }, limit: 10, depth: 0, overrideAccess: true })
+    expect(audits.docs).toHaveLength(1)
+    expect(audits.docs[0]).toMatchObject({ actor: current.reviewer.id, detail: { reason: 'fresh_authentication_required' } })
+  })
+
+  it('denies an editor approval before writing approval records and persists only bounded denial evidence', async () => {
+    const current = await fixture('editor-approval-denial')
+    const proof = { private: 'do-not-audit' }
+    const headers = await headersFor(current.editor)
+    const outboxBefore = await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })
+    const snapshotsBefore = await payload.count({ collection: 'publish-snapshots', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })
+    const response = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof }) }), { params: Promise.resolve({ action: 'approve' }) })
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Reviewer role required/) })
+    await expect(payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).resolves.toMatchObject({ state: 'submitted' })
+    expect((await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })).totalDocs).toBe(outboxBefore.totalDocs)
+    expect((await payload.count({ collection: 'publish-snapshots', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })).totalDocs).toBe(snapshotsBefore.totalDocs)
+    const audits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'editorial.approval_denied' } }, { user: { equals: current.editor.id } }, { 'detail.reason': { equals: 'reviewer_role_required' } }] }, limit: 10, depth: 0, overrideAccess: true })
+    expect(audits.docs).toHaveLength(1)
+    expect(audits.docs[0]).toMatchObject({ actor: current.editor.id, detail: { reason: 'reviewer_role_required' } })
+    expect(JSON.stringify(audits.docs[0])).not.toContain('do-not-audit')
   })
 
   it('prepares immutable live/proposed inputs, canonical reviewer state, stale revisions, and exact deduplication', async () => {

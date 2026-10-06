@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { withPayloadTransaction } from '../../../../../src/auth-transaction'
 import { boundedPublishWorkerJSON, claimNextPublishJob, completePublishJob, publishWorkerAuthorized, renewPublishLease, retryPublishJob, type VerifiedArtifact } from '../../../../../src/publishing'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -27,5 +28,5 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const claimed = result as { id: string; leaseToken: string; leaseExpiresAt: string; sequence: number; correlationID: string; snapshot: unknown }
     const snapshot = claimed.snapshot as Record<string, unknown>
     return Response.json({ job: { id: claimed.id, leaseToken: claimed.leaseToken, leaseExpiresAt: claimed.leaseExpiresAt, sequence: claimed.sequence, correlationID: claimed.correlationID }, snapshot: snapshot.manifest, contentHash: snapshot.contentHash, versionPins: { themeVersion: snapshot.themeVersion, engineVersion: snapshot.engineVersion, contractVersion: snapshot.contractVersion } }, { headers: noStore })
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Worker request failed.' }, { status: 400, headers: noStore }) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Worker request failed.' }, { status: 400, headers: noStore }) }
 }

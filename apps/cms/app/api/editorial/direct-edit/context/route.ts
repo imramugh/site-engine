@@ -1,7 +1,9 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { hasRole } from '../../../../../src/access'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { isAuthenticationSQLiteContention } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -17,7 +19,7 @@ function heroes(blocks: unknown): Hero[] {
 
 /** A minimal, role-filtered read model for the direct Hero editor. It never
  * returns arbitrary page blocks, credentials, or another editor's change set. */
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   try {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -33,7 +35,10 @@ export async function GET(request: Request): Promise<Response> {
       truncated: pages.totalDocs > pages.docs.length || sets.totalDocs > sets.docs.length,
       changeSets: sets.docs.map((set) => ({ id: set.id, name: String(set.name), state: String(set.state), revision: Number(set.revision ?? 0) })),
     }, { headers: noStore })
-  } catch {
+  } catch (error) {
+    if (isAuthenticationSQLiteContention(error)) throw error
     return Response.json({ error: 'Unable to load editable draft content.' }, { status: 403, headers: noStore })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

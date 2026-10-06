@@ -1,6 +1,8 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { isAuthenticationSQLiteContention } from '../../../../../src/sqlite'
 import { changeSetHash } from '../../../../../src/publishing'
 
 export const dynamic = 'force-dynamic'
@@ -20,7 +22,7 @@ function comparisonPath(originalURI: string): RegExpExecArray | null {
 }
 
 /** Authenticates a completed, current immutable comparison only. */
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   try {
     const raw = request.headers.get('x-original-uri')
     if (!raw) return response(403)
@@ -46,7 +48,10 @@ export async function GET(request: Request): Promise<Response> {
     const ownsDraft = ['open', 'changes-requested'].includes(String(set.state)) && (owner || ((editor || user.roles?.includes('approver')) && String(typeof set.actor === 'string' ? set.actor : set.actor?.id) === user.id))
     if (!ownsDraft || job.status !== 'completed' || !job.artifactDigest) return response(403)
     return response(204)
-  } catch {
+  } catch (error) {
+    if (isAuthenticationSQLiteContention(error)) throw error
     return response(401)
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

@@ -40,7 +40,7 @@ export function mailboxOAuthSettings(provider: MailboxOAuthProvider): Settings |
   let origin: URL
   try { origin = new URL(base) } catch { return undefined }
   if (origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash || (origin.protocol !== 'https:' && origin.hostname !== 'localhost' && origin.hostname !== '127.0.0.1')) return undefined
-  if (provider === 'microsoft') return { clientID, clientSecret, redirectURI: `${origin.origin}/api/email-workspace/oauth/microsoft/callback`, authorize: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize', token: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/token', scopes: ['offline_access', 'User.Read', 'Mail.Read', 'Mail.Send'] }
+  if (provider === 'microsoft') return { clientID, clientSecret, redirectURI: `${origin.origin}/api/email-workspace/oauth/microsoft/callback`, authorize: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize', token: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/token', scopes: ['offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send'] }
   return { clientID, clientSecret, redirectURI: `${origin.origin}/api/email-workspace/oauth/google/callback`, authorize: 'https://accounts.google.com/o/oauth2/v2/auth', token: 'https://oauth2.googleapis.com/token', scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.settings.basic'] }
 }
 

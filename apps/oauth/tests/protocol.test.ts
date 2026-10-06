@@ -50,7 +50,7 @@ await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', re
 try {
   const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(protectedMetadata.status, 200);
-  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] });
+  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'] });
 
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`);
   assert.equal(discovery.status, 200);

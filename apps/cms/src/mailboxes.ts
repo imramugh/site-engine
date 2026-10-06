@@ -130,6 +130,9 @@ export type AreaMailMessage = {
   providerRFCMessageID?: string
   providerRFCReferences?: string
   providerSubject?: string
+  /** An explicitly confirmed first outbound message for this record. */
+  initialOutbound?: boolean
+  outboundRFCMessageID?: string
 }
 
 async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
@@ -166,14 +169,16 @@ export async function sendAreaMail(
   }
 
   if (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google') throw new Error('mailbox_not_ready')
-  await groundedProviderThread(payload, message, mailbox)
+  if (message.initialOutbound) {
+    if (message.providerThreadID || message.providerMessageID || message.providerMailboxID || message.providerTarget) throw new Error('mailbox_thread_not_grounded')
+  } else await groundedProviderThread(payload, message, mailbox)
 
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
   const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(refreshed.accessToken)
   if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
   const final = await currentAreaMailbox(payload, area)
   if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
-  await groundedProviderThread(payload, message, final.mailbox)
+  if (!message.initialOutbound) await groundedProviderThread(payload, message, final.mailbox)
 
   const envelope = {
     sender: message.sender,
@@ -183,11 +188,13 @@ export async function sendAreaMail(
     ...(mailbox.provider === 'microsoft' && message.providerMessageID ? { replyMessageID: message.providerMessageID } : {}),
     ...(mailbox.provider === 'google' && message.providerRFCMessageID ? { rfcMessageID: message.providerRFCMessageID, ...(message.providerRFCReferences ? { rfcReferences: message.providerRFCReferences } : {}) } : {}),
     ...(mailbox.provider === 'google' && message.providerThreadID ? { threadID: message.providerThreadID } : {}),
+    ...(mailbox.provider === 'google' && message.outboundRFCMessageID ? { outboundRFCMessageID: message.outboundRFCMessageID } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
     ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
     : gmailAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope))
-  return { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
+  const delivered = { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
+  return message.initialOutbound && 'threadID' in result ? { ...delivered, threadID: result.threadID } : delivered
 }
 
 const sendLocks = new Map<string, Promise<void>>()

@@ -4,9 +4,11 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
+import { createClient } from '@libsql/client'
 
 const directory = mkdtempSync(join(tmpdir(), 'mail-thread-route-'))
-process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+const db = join(directory, 'cms.sqlite')
+process.env.DATABASE_URI = `file:${db}`
 process.env.PAYLOAD_SECRET = 'mail-thread-route-test-secret-long-enough'
 const { default: config } = await import('../payload.config.js')
 const { GET } = await import('../app/api/mail-threads/[target]/[id]/route.js')
@@ -45,4 +47,20 @@ describe('ENG-020 mail timeline route', () => {
     expect((await call('lead', crypto.randomUUID(), owner)).status).toBe(404)
     expect((await call('lead', 'not-a-uuid', owner)).status).toBe(404)
   })
+
+  it('returns the shared retryable authentication response when an aged session refresh is blocked', async () => {
+    const owner = await session(['owner'])
+    const ownerSession = (await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(owner) } }, limit: 1, overrideAccess: true })).docs[0]!
+    await payload.update({ collection: 'auth-sessions', id: ownerSession.id, data: { lastSeenAt: new Date(Date.now() - 61_000).toISOString() }, overrideAccess: true })
+    const external = createClient({ url: `file:${db}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute({ sql: 'UPDATE auth_sessions SET updated_at = updated_at WHERE id = ?', args: [String(ownerSession.id)] })
+      const response = await call('lead', crypto.randomUUID(), owner)
+      expect(response.status).toBe(503)
+      expect(response.headers.get('Retry-After')).toBe('1')
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      await expect(response.json()).resolves.toEqual({ error: 'Authentication is temporarily unavailable. Please retry.' })
+    } finally { await lock.rollback(); external.close() }
+  }, 15_000)
 })
