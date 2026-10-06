@@ -23,7 +23,17 @@ export async function prepareReply(payload: Payload, target: 'lead' | 'applicati
   const attachments = await resolveOutgoingAttachments(payload, { target, targetID, actorID: actor, attachments: input.attachments })
   return withPayloadTransaction(payload, async (req) => { const draft = await payload.create({ collection: 'mail-drafts', data: { [target]: targetID, threadID: typeof input.threadID === 'string' && input.threadID.trim() ? input.threadID.trim().slice(0, 500) : randomUUID(), recipient: String(recipientDoc.email).toLowerCase(), sender, subject, body: sanitizeMailBody(input.body), attachments, attachmentHashes: attachments.map((attachment) => attachment.sha256), revision: 1, state: 'prepared', ...(assistantOrigin ? { assistantClientIDHash: assistantOrigin.clientIDHash, assistantActor: assistantOrigin.actorID, assistantOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } as never, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_prepared', user: actor, actor, detail: { draft: draft.id, target, targetID, ...(assistantOrigin ? { clientIdHash: assistantOrigin.clientIDHash, originOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } }, overrideAccess: true, req }); return draft })
 }
-export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
+async function verifyDraftAttachments(payload: Payload, actorID: string, draftID: string) {
+  const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true }) as { lead?: unknown; application?: unknown; attachments?: unknown; attachmentHashes?: unknown }
+  const application = typeof draft.application === 'string' ? draft.application : (draft.application as { id?: string } | undefined)?.id
+  const target = application ? 'application' as const : 'lead' as const
+  const targetID = String(application ?? (typeof draft.lead === 'string' ? draft.lead : (draft.lead as { id?: string } | undefined)?.id ?? ''))
+  const stored = Array.isArray(draft.attachments) ? draft.attachments : []
+  const resolved = await resolveOutgoingAttachments(payload, { target, targetID, actorID, attachments: stored.map((attachment) => ({ source: (attachment as { source?: unknown }).source, id: (attachment as { sourceID?: unknown }).sourceID })) })
+  if (JSON.stringify(resolved) !== JSON.stringify(stored) || JSON.stringify(resolved.map((attachment) => attachment.sha256).sort()) !== JSON.stringify((Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : []).sort())) throw new Error('attachment_not_available')
+  return resolved
+}
+export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { await verifyDraftAttachments(payload, actor.id, draftID); return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
 export async function cancelPreparedReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return cancelPreparedMailDraft(payload, actor, draftID) }
 async function deliverReply(payload: Payload, actorID: string, grantID: string, grant: any) {

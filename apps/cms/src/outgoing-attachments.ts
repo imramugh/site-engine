@@ -19,8 +19,8 @@ const roleAllowed = (roles: unknown, target: 'lead' | 'application') => Array.is
 export async function resolveOutgoingAttachments(payload: Payload, input: { target: 'lead' | 'application'; targetID: string; actorID: string; attachments?: unknown }): Promise<OutgoingAttachment[]> {
   if (input.attachments === undefined) return []
   if (!Array.isArray(input.attachments) || input.attachments.length > maxCount) throw new Error('invalid_reply_attachments')
-  const actor = await payload.findByID({ collection: 'users', id: input.actorID, depth: 0, overrideAccess: true }) as { roles?: unknown }
-  if (!roleAllowed(actor.roles, input.target)) throw new Error('mail_authorization_required')
+  const actor = await payload.findByID({ collection: 'users', id: input.actorID, depth: 0, overrideAccess: true }) as { roles?: unknown; disabled?: unknown }
+  if (actor.disabled || !roleAllowed(actor.roles, input.target)) throw new Error('mail_authorization_required')
   const output: OutgoingAttachment[] = []
   let total = 0
   for (const item of input.attachments) {
@@ -29,13 +29,14 @@ export async function resolveOutgoingAttachments(payload: Payload, input: { targ
     if (source === 'asset') {
       const sourceID = (item as { id?: unknown }).id
       if (typeof sourceID !== 'string' || !id.test(sourceID)) throw new Error('invalid_reply_attachments')
-      const asset = await payload.findByID({ collection: 'assets', id: sourceID, depth: 0, overrideAccess: true }) as { deletedAt?: unknown; currentFile?: unknown }
+      const asset = await payload.findByID({ collection: 'assets', id: sourceID, depth: 0, user: actor as never, overrideAccess: false }) as { deletedAt?: unknown; currentFile?: unknown }
       const file = asset.currentFile as { filename?: unknown; originalFilename?: unknown; mimeType?: unknown; filesize?: unknown } | undefined
       const filename = safeName(file?.originalFilename) ?? safeName(file?.filename)
       const mimeType = typeof file?.mimeType === 'string' ? file.mimeType : ''
       if (asset.deletedAt || !filename || !allowed.has(mimeType) || !safeName(file?.filename)) throw new Error('attachment_not_available')
-      const path = mediaFilePath(String(file!.filename)); const bytes = readFileSync(path); const size = statSync(path).size
-      if (size !== bytes.length || size < 1) throw new Error('attachment_not_available')
+      const path = mediaFilePath(String(file!.filename)); const size = statSync(path).size
+      if (size < 1 || size > maxBytes) throw new Error('attachment_not_available')
+      const bytes = readFileSync(path); if (size !== bytes.length) throw new Error('attachment_not_available')
       output.push({ source: 'asset', sourceID, filename, mimeType, size, sha256: createHash('sha256').update(bytes).digest('hex') })
     } else if (source === 'application-resume') {
       if (input.target !== 'application' || (item as { id?: unknown }).id !== input.targetID) throw new Error('attachment_not_available')
