@@ -505,6 +505,16 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
                       <dd>{item.attempts}</dd>
                     </div>
                     <div>
+                      <dt>Retry reason</dt>
+                      <dd>{item.retryReason ?? "—"}</dd>
+                    </div>
+                    {item.nextAttemptAt && (
+                      <div>
+                        <dt>Next attempt</dt>
+                        <dd><time dateTime={item.nextAttemptAt}>{date(item.nextAttemptAt)}</time></dd>
+                      </div>
+                    )}
+                    <div>
                       <dt>Result</dt>
                       <dd>
                         {item.resultAt ? (
