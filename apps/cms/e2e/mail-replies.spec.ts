@@ -4,13 +4,13 @@ import { createRequire } from 'node:module'
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
-async function composer(browser: Browser, sendFails = false) {
+async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = []) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   const requests: string[] = []
   await page.route('**/api/mail-replies/lead/**', async route => {
-    if (route.request().method() === 'GET') return route.fulfill({ json: { senders: [{ address: 'team@example.test', label: 'Team mailbox' }], canAuthorize: true } })
+    if (route.request().method() === 'GET') return route.fulfill({ json: { senders: [{ address: 'team@example.test', label: 'Team mailbox' }], threads, canAuthorize: true } })
     const body = route.request().postDataJSON()
     requests.push(body.action)
     if (body.action === 'prepare') return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'team@example.test', recipient: 'notes-a.synthetic@example.test', subject: body.subject.trim(), body: body.body.trim() } } })
@@ -84,5 +84,22 @@ test('ENG-033 an ambiguous send does not offer a repeat send or reuse its confir
     await expect(reply.getByRole('status')).toContainText('Delivery could not be confirmed')
     await expect(reply.getByRole('button')).toHaveCount(0)
     expect(requests).toEqual(['prepare', 'authorize', 'send'])
+  } finally { await context.close() }
+})
+
+test('ENG-020 selects only a scoped provider conversation before explicit confirmation', async ({ browser }) => {
+  const threads = [{ id: 'provider-thread-a', subject: 'Thread A' }, { id: 'provider-thread-b', subject: 'Thread B' }]
+  const { context, reply, requests, page } = await composer(browser, false, threads)
+  try {
+    await expect(reply.getByLabel('Existing conversation')).toHaveValue('provider-thread-a')
+    await reply.getByLabel('Existing conversation').selectOption('provider-thread-b')
+    await expect(reply.getByLabel('Reply subject')).toHaveValue('Thread B')
+    await reply.getByLabel('Reply message').fill('Approved body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    expect(requests).toEqual(['prepare'])
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    expect(requests).toEqual(['prepare', 'authorize', 'send'])
+    await expect(page.getByRole('option', { name: /unrelated/i })).toHaveCount(0)
   } finally { await context.close() }
 })

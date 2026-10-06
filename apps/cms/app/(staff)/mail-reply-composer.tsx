@@ -31,8 +31,9 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
       const value = await response.json() as Options
       setOptions(value)
       setSender(value.senders[0]?.address ?? '')
-      setThreadID(value.threads[0]?.id ?? '')
-      if (!subject && value.threads[0]?.subject) setSubject(value.threads[0].subject)
+      const threads = value.threads ?? []
+      setThreadID(threads[0]?.id ?? '')
+      if (!subject && threads[0]?.subject) setSubject(threads[0].subject)
     }).catch((error: unknown) => { if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : 'Reply addresses could not be loaded.') })
     return () => controller.abort()
   }, [endpoint, reload])
@@ -88,7 +89,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         <select id={`${formID}-sender`} aria-label="Reply sender" value={sender} onChange={event => setSender(event.target.value)} disabled={busy} required>
           {options.senders.map(item => <option key={item.address} value={item.address}>{item.label} · {item.address}</option>)}
         </select>
-        {options.threads.length > 0 && <><label htmlFor={`${formID}-thread`}>Existing conversation</label><select id={`${formID}-thread`} aria-label="Existing conversation" value={threadID} onChange={event => { const selected = options.threads.find(item => item.id === event.target.value); setThreadID(event.target.value); if (selected) setSubject(selected.subject) }} disabled={busy}><option value="">Start a new message</option>{options.threads.map(item => <option key={item.id} value={item.id}>{item.subject}</option>)}</select></>}
+        {(options.threads ?? []).length > 0 && <><label htmlFor={`${formID}-thread`}>Existing conversation</label><select id={`${formID}-thread`} aria-label="Existing conversation" value={threadID} onChange={event => { const selected = (options.threads ?? []).find(item => item.id === event.target.value); setThreadID(event.target.value); if (selected) setSubject(selected.subject) }} disabled={busy}><option value="">Start a new message</option>{(options.threads ?? []).map(item => <option key={item.id} value={item.id}>{item.subject}</option>)}</select></>}
         <label htmlFor={`${formID}-subject`}>Subject</label>
         <input id={`${formID}-subject`} aria-label="Reply subject" value={subject} onChange={event => setSubject(event.target.value)} disabled={busy} maxLength={200} required />
         <label htmlFor={`${formID}-body`}>Message</label>
