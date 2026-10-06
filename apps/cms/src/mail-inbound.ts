@@ -34,7 +34,12 @@ async function appendMatchedInboundInner(payload: Payload, input: InboundMessage
       payload.find({ collection: 'inquiries', where: { and: [{ email: { equals: sender } }, { spam: { not_equals: true } }] }, limit: 1, depth: 0, overrideAccess: true }),
       payload.find({ collection: 'applications', where: { email: { equals: sender } }, limit: 1, depth: 0, overrideAccess: true }),
     ])
-    return { matched: false as const, suggested: Boolean(lead.docs[0] || application.docs[0]) }
+    const target = lead.docs[0] ? 'lead' : application.docs[0] ? 'application' : undefined
+    if (target) {
+      const prior = await payload.find({ collection: 'mail-conversation-suggestions', where: { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }, limit: 1, depth: 0, overrideAccess: true })
+      if (!prior.docs[0]) await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, sender, recipient, subject: clean(input.subject, 500), target }, overrideAccess: true })
+    }
+    return { matched: false as const, suggested: Boolean(target) }
   }
   const existing = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ mailbox: { equals: mailbox } }, { providerMessageID: { equals: messageID } }] }, limit: 1, depth: 0, overrideAccess: true })
   if (existing.docs[0]) {
