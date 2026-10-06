@@ -919,6 +919,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     void (async () => {
       const fixtureURL = new URL(request.url ?? '/', cmsOrigin)
       const outcome = fixtureURL.pathname.endsWith('/success') ? 'success' : 'fail'; let clock = Date.now()
+      const cleanupJobID = fixtureURL.searchParams.get('cleanup')
       const changeSetID = fixtureURL.searchParams.get('changeSet')
       if (!changeSetID) throw new Error('ENG-010 fixture requires the approved change set.')
       const target = await payload.find({ collection: 'publish-outbox', where: { changeSet: { equals: changeSetID } }, sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })
@@ -982,6 +983,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       } finally {
         await Promise.all([new Promise<void>((done, reject) => receiver.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))])
         await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: job.status, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt, nextAttemptAt: job.nextAttemptAt }, overrideAccess: true, context: { editorialInternal: true } })))
+        if (outcome === 'fail') { for (const jobID of [claim.job.id, cleanupJobID].filter((id): id is string => Boolean(id))) { const job = await payload.findByID({ collection: 'publish-outbox', id: jobID, depth: 0, overrideAccess: true }).catch(() => null) as any; if (!job) continue; await payload.delete({ collection: 'published-releases', where: { outbox: { equals: jobID } }, overrideAccess: true }); await payload.delete({ collection: 'notification-deliveries', where: { outbox: { equals: jobID } }, overrideAccess: true }).catch(() => undefined); await payload.delete({ collection: 'notification-outbox', where: { sourceID: { equals: jobID } }, overrideAccess: true }).catch(() => undefined); await payload.delete({ collection: 'publish-outbox', id: jobID, overrideAccess: true }); await payload.delete({ collection: 'publish-snapshots', id: String(job.snapshot), overrideAccess: true }).catch(() => undefined); await payload.delete({ collection: 'change-sets', id: String(job.changeSet), overrideAccess: true }).catch(() => undefined) } rmSync(publishArtifacts, { recursive: true, force: true }); rmSync(publishReleases, { recursive: true, force: true }) }
       }
     })().catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG-010 fixture failed.') })
     return
