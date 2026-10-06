@@ -324,6 +324,83 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
   return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: readiness.warnings.map(issue => `${issue.code}: ${issue.message}`), readiness }
 }
 
+type DiscardPlan = { change: CapturedChange; current: Record<string, unknown> | undefined }
+
+/** Discard validates every capture before it changes any record. Captures can
+ * depend on one another: for example, a page may point at a section created
+ * later in the same set. Unwinding such a set one record at a time changes the
+ * later record's hash before its conflict guard has run. */
+function discardDeleteOrder(plans: DiscardPlan[]): DiscardPlan[] {
+  const createdPages = new Map(plans
+    .filter((plan) => plan.change.collection === 'pages')
+    .map((plan) => [plan.change.id, plan]))
+  const pageDepth = (plan: DiscardPlan, seen = new Set<string>()): number => {
+    const parentID = idOf(plan.current?.parentId)
+    if (!parentID || seen.has(parentID)) return 0
+    const parent = createdPages.get(parentID)
+    return parent ? 1 + pageDepth(parent, new Set([...seen, parentID])) : 0
+  }
+  const rank = (plan: DiscardPlan): number => {
+    // Clear singleton references before targets, then page leaves before their
+    // sections and assets.
+    if (plan.change.collection === 'site-settings') return 0
+    if (plan.change.collection === 'pages') return 1
+    if (plan.change.collection === 'sections') return 2
+    if (plan.change.collection === 'assets') return 3
+    return 1
+  }
+  return [...plans].sort((left, right) => {
+    const byRank = rank(left) - rank(right)
+    if (byRank) return byRank
+    if (left.change.collection === 'pages' && right.change.collection === 'pages') return pageDepth(right) - pageDepth(left)
+    return 0
+  })
+}
+
+async function discardChange(payload: Payload, req: PayloadRequest, plan: DiscardPlan): Promise<void> {
+  const { change, current } = plan
+  if (change.before === null) {
+    await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
+    return
+  }
+  const data = change.collection === 'assets' && current
+    ? await assetRestoration(payload, req, current, change.before)
+    : restoration(change.collection, change.before)
+  const archivedPage = change.collection === 'pages' && change.before.status === 'archived'
+  if (archivedPage) data.status = 'archived'
+  await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(archivedPage ? { archiveInternal: true } : {}), ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
+}
+
+async function assertDiscardDeleteIsolation(payload: Payload, req: PayloadRequest, plans: DiscardPlan[]): Promise<void> {
+  const removed = (collection: CapturedCollection) => new Set(plans.filter((plan) => !plan.change.retainedDraftHash && plan.change.before === null && plan.change.collection === collection).map((plan) => plan.change.id))
+  const removedPages = removed('pages')
+  const removedSections = removed('sections')
+  if (!removedPages.size && !removedSections.size) return
+  const [pages, sections] = await Promise.all([
+    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
+    payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
+  ])
+  const planFor = new Map(plans.map((plan) => [`${plan.change.collection}:${plan.change.id}`, plan]))
+  const survives = (collection: CapturedCollection, record: Record<string, unknown>) => {
+    const plan = planFor.get(`${collection}:${record.id}`)
+    if (!plan) return record
+    if (!plan.change.retainedDraftHash && plan.change.before === null) return undefined
+    return plan.change.retainedDraftHash ? record : plan.change.before ?? record
+  }
+  const dependentPage = pages.docs.find((page) => {
+    const effective = survives('pages', page as unknown as Record<string, unknown>)
+    return effective && (removedPages.has(idOf(effective.parentId) ?? '') || removedSections.has(idOf(effective.sectionId) ?? ''))
+  })
+  if (dependentPage) throw new Error('Cannot discard because a surviving page depends on a record that would be removed.')
+  const dependentSection = sections.docs.find((section) => {
+    const effective = survives('sections', section as unknown as Record<string, unknown>)
+    if (!effective) return false
+    if (removedPages.has(idOf(effective.landingPageId) ?? '')) return true
+    return Array.isArray(effective.pageIds) && effective.pageIds.some((id) => removedPages.has(idOf(id) ?? ''))
+  })
+  if (dependentSection) throw new Error('Cannot discard because a surviving section depends on a page that would be removed.')
+}
+
 export async function transitionChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; action: 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' }): Promise<Record<string, unknown>> {
   const { payload, req, id, action } = input; assertActor(input.actor)
   let set = await loadSet(payload, id, req)
@@ -338,22 +415,20 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
   const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
   if (action === 'submit' && changes.length === 0) throw new Error('Add at least one draft change before submitting.')
   if (action === 'discard') {
-    for (const change of [...changes].reverse()) {
-      let current: Record<string, unknown> | undefined
-      current = (await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Record<string, unknown> | undefined
-      if (hash(currentChange(change.collection, current, change.retainedDraftHash ? change.before : change.after)) !== (change.retainedDraftHash ?? change.afterHash)) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
-      if (change.retainedDraftHash) continue // Preparing a removal never mutated this draft.
-      if (change.before === null) {
-        await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
-      } else {
-        const data = change.collection === 'assets' && current
-          ? await assetRestoration(payload, req, current, change.before)
-          : restoration(change.collection, change.before)
-        const archivedPage = change.collection === 'pages' && change.before.status === 'archived'
-        if (archivedPage) data.status = 'archived'
-        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(archivedPage ? { archiveInternal: true } : {}), ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
-      }
+    const current = new Map<string, Record<string, unknown> | undefined>()
+    for (const change of changes) {
+      const record = (await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Record<string, unknown> | undefined
+      current.set(`${change.collection}:${change.id}`, record)
     }
+    const plans: DiscardPlan[] = changes.map((change) => ({ change, current: current.get(`${change.collection}:${change.id}`) }))
+    for (const { change, current: record } of plans) {
+      if (hash(currentChange(change.collection, record, change.retainedDraftHash ? change.before : change.after)) !== (change.retainedDraftHash ?? change.afterHash)) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
+    }
+    const mutable = plans.filter((plan) => !plan.change.retainedDraftHash)
+    await assertDiscardDeleteIsolation(payload, req, plans)
+    // Existing pages leave newly-created sections before the latter are removed.
+    for (const plan of mutable.filter((plan) => plan.change.before !== null)) await discardChange(payload, req, plan)
+    for (const plan of discardDeleteOrder(mutable.filter((plan) => plan.change.before === null))) await discardChange(payload, req, plan)
   }
   if (action === 'refresh') {
     const rebased: CapturedChange[] = []
