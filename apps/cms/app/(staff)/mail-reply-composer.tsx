@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import styles from './mail-reply-composer.module.css'
 
 type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string }
-type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; canAuthorize: boolean }
+type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; assistantPrepared?: boolean; canAuthorize: boolean }
 type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: string } }
 
 export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 'application'; id: string; recipient: string }) {
@@ -84,7 +84,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         if (!current()) return
         if (!value.authorization) throw new Error('Confirmation was not returned.')
         setGrant(value.authorization.id)
-        setStatus('Confirmed for this message only. Send within 10 minutes.')
+        setStatus(options?.assistantPrepared ? 'Confirmed for this exact assistant-prepared message. Return to the connected assistant to send within 10 minutes.' : 'Confirmed for this message only. Send within 10 minutes.')
       } else if (kind === 'edit') {
         if (grant) await call('cancel', grant)
         else if (draft) await call('cancel-prepared', draft.id)
@@ -132,7 +132,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         </section>
         {!terminal && <div className={styles.actions}>
           <button type="button" disabled={busy} onClick={() => void action('edit')}>{grant ? 'Cancel confirmation and edit' : 'Edit reply'}</button>
-          {options.canAuthorize && <button className={styles.primary} type="button" disabled={busy} onClick={() => void action(grant ? 'send' : 'authorize')}>{busy ? 'Working…' : grant ? 'Send confirmed reply' : 'Confirm exact reply'}</button>}
+          {options.canAuthorize && (!grant || !options.assistantPrepared) && <button className={styles.primary} type="button" disabled={busy} onClick={() => void action(grant ? 'send' : 'authorize')}>{busy ? 'Working…' : grant ? 'Send confirmed reply' : options.assistantPrepared ? 'Confirm exact reply for connected assistant' : 'Confirm exact reply'}</button>}
         </div>}
         {!options.canAuthorize && <p className={styles.notice}>An Owner must confirm this reply before it can be sent.</p>}
       </>}
