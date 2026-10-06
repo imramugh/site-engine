@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from 'vitest'
+import { afterAll, beforeAll, expect, test, vi } from 'vitest'
 import { getPayload } from 'payload'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -31,4 +31,21 @@ test('streams only the selected matched record attachment after target-role auth
   const response = await call('lead', message.id, '0', sales)
   expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('private, no-store'); expect(response.headers.get('x-content-type-options')).toBe('nosniff'); expect(response.headers.get('content-type')).toBe('application/pdf'); expect(response.headers.get('content-disposition')).toContain("attachment; filename*=UTF-8''cv%20name.pdf"); expect(Buffer.from(await response.arrayBuffer()).toString()).toBe('exact private bytes')
   expect(providerCalls).toBe(1)
+})
+
+
+test('returns a retryable no-store response when the protected message lookup is SQLite-busy', async () => {
+  const originalLookup = payload.findByID.bind(payload)
+  const lookup = vi.spyOn(payload, 'findByID').mockImplementation(async (args: any) => {
+    if (args.collection === 'mail-thread-messages') throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })
+    return originalLookup(args)
+  })
+  const callsBefore = providerCalls
+  const response = await call('lead', crypto.randomUUID(), '0', await token(['sales']))
+  expect(response.status).toBe(503)
+  expect(response.headers.get('retry-after')).toBe('1')
+  expect(response.headers.get('cache-control')).toBe('private, no-store')
+  await expect(response.json()).resolves.toEqual({ error: 'Saving is temporarily busy. Please retry.' })
+  expect(providerCalls).toBe(callsBefore)
+  lookup.mockRestore()
 })

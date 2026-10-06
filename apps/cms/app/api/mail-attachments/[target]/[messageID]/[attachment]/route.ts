@@ -3,6 +3,7 @@ import config from '../../../../../../payload.config'
 import { hasRole } from '../../../../../../src/access'
 import { serverSessionStrategy } from '../../../../../../src/identity'
 import { downloadMatchedMailAttachment } from '../../../../../../src/mail-attachments'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }
@@ -19,5 +20,5 @@ export async function GET(request: Request, context: { params: Promise<{ target:
     if (!targetID) return Response.json({ error: 'Not found.' }, { status: 404, headers })
     const file = await downloadMatchedMailAttachment(payload, { target, targetID, messageID, attachment: Number(attachment) })
     return new Response(file.data, { headers: { ...headers, 'Content-Type': file.contentType, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}` } })
-  } catch { return Response.json({ error: 'Attachment is unavailable.' }, { status: 404, headers }) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, headers) ?? Response.json({ error: 'Attachment is unavailable.' }, { status: 404, headers }) }
 }
