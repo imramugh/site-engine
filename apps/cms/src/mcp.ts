@@ -13,6 +13,8 @@ import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
 import { canonicalHash } from './publishing'
 import { prepareReply, sendMcpReply } from './mail-replies'
+import { authorizationUsable } from './mail-authorizations'
+import { hasFreshAuthentication, sessionIsUsable } from './identity'
 import { isRetryableSQLiteError } from './sqlite'
 
 const limit = new Map<string, { count: number; reset: number }>()
@@ -415,9 +417,20 @@ export async function handleMcp(request: Request): Promise<Response> {
       if (!scopeOK || draft.assistantClientIDHash !== auditClient(identity.clientId) || actor !== identity.userId || draft.assistantOAuthSessionID !== identity.sessionId) return { isError: true, ...text({ error: 'not_found' }) }
       const grants = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draftID } }, { revokedAt: { exists: false } }, { consumedAt: { exists: false } }, { expiresAt: { greater_than: new Date().toISOString() } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true })
       const grant = grants.docs[0] as unknown as Record<string, unknown> | undefined
-      const usable = String(draft.state) === 'authorized' && grant?.draftRevision === draft.revision
+      const confirmationSessionID = typeof grant?.humanConfirmationSessionID === 'string' ? grant.humanConfirmationSessionID : ''
+      let confirmationUsable = false
+      if (confirmationSessionID) {
+        const session = await payload.findByID({ collection: 'auth-sessions', id: confirmationSessionID, depth: 0, overrideAccess: true })
+        confirmationUsable = relationID(session.user) === identity.userId && sessionIsUsable(session) && hasFreshAuthentication(session)
+      }
+      const grantBound = grant?.assistantClientIDHash === auditClient(identity.clientId) && relationID(grant?.assistantActor) === identity.userId && grant?.assistantOAuthSessionID === identity.sessionId
+      const usable = String(draft.state) === 'authorized' && grantBound && confirmationUsable && Boolean(grant && authorizationUsable(grant as never, draft as never))
       return structured({ draftID, state: String(draft.state), grantID: usable ? grant?.id ?? null : null, expiresAt: usable && typeof grant?.expiresAt === 'string' ? grant.expiresAt : null })
-    } catch { return { isError: true, ...text({ error: 'not_found' }) } }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return { isError: true, ...text({ error: 'not_found' }) }
+      if (isRetryableSQLiteError(error)) return retryable()
+      return unavailable()
+    }
   })
   const writeSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentWriteScope] }], requiredScopes: [contentWriteScope], effectiveUserRequired: true }
   server.registerTool('create_change_set', { title: 'Create change set', description: `Create an explicit draft change set. ${toolLimits}`, inputSchema: { name: z.string().min(1).max(120) }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ name }) => { if (!write) return denied(contentWriteScope); try { const result = await withPayloadTransaction(payload, (req) => { req.user = current as never; return createNamedChangeSet(payload, req, current as never, name) }); return text({ id: result.id, name: result.name, state: result.state, revision: result.revision }) } catch (error) { return mutationFailure(error, 'write_failed') } })
