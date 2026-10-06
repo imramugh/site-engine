@@ -18,7 +18,7 @@ const qualityError = z.union([
   z.object({ code: z.string(), path: z.string(), message: z.string() }).strict(),
 ])
 const qualityCheck = z.object({ name: z.string(), status: z.enum(['passed', 'failed']), errors: z.array(qualityError) }).strict()
-const updateOutput = z.object({ draft: z.object({ assetId: z.string().uuid(), changeSetId: z.string().uuid(), changeSetRevision: z.number().int().nonnegative() }).strict(), checks: z.array(qualityCheck) }).strict()
+const updateOutput = z.object({ draft: z.object({ assetId: z.string().uuid(), changeSetId: z.string().uuid(), changeSetRevision: z.number().int().nonnegative() }).strict(), checks: z.array(qualityCheck), warnings: z.array(z.string()), readiness: z.unknown() }).strict()
 
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(code === 'temporarily_unavailable' ? { error: code, retryAfterSeconds: 1 } : { error: code }) }] })
