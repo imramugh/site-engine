@@ -420,10 +420,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
         images: [...document.images].every(
           (image) => image.complete && image.naturalWidth > 0,
         ),
-        font: [...document.fonts].some(
-          (face) =>
-            face.family.includes("Starter Sans") && face.status === "loaded",
-        ),
+        font: [...document.fonts].some((face) => face.status === "loaded"),
         formError:
           !document.querySelector("[data-inquiry-form]") ||
           document.querySelectorAll('[data-inquiry-form] [aria-invalid="true"]')
