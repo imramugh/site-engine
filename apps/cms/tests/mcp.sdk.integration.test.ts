@@ -971,7 +971,9 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const leadDraft = resultJson(await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'A precise follow-up', body: 'A prepared response only.' } })) as { draft: { id: string; target: string; sender: string; recipient: string; subject: string; body: string; revision: number; state: string } }
     expect(leadDraft.draft).toMatchObject({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared', confirmationURL: expect.stringMatching(/\/leads\?lead=.*&draft=/) })
     expect(JSON.stringify(leadDraft)).not.toContain('A prepared response only.')
-    expect(JSON.stringify(leadDraft)).not.toContain('416')
+    expect(JSON.stringify(leadDraft)).not.toContain('+1 416 555 0199')
+    expect(JSON.stringify(leadDraft)).not.toContain('4165550199')
+    expect(Object.keys(leadDraft.draft).sort()).toEqual(['attachments', 'confirmationURL', 'id', 'revision', 'state', 'target'])
     expect((await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.draft.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
     const applicationDenied = await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'No access', body: 'No access.' } })
     expect(resultJson(applicationDenied)).toEqual({ error: 'insufficient_scope', required: 'mcp:careers:reply' })
