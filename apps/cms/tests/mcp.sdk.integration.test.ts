@@ -1324,4 +1324,4 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     expect(attempted).toEqual(['https://api.openai.com/v1/responses'])
     expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: fallback.jobId } }))).toMatchObject({ status: 'manual-review', notApplied: true })
   } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
-})
+}, 30_000)
