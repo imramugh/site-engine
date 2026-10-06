@@ -1197,7 +1197,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, maxLength: 128, admin: { readOnly: true } },
     { name: 'requestDigest', type: 'text', required: true, maxLength: 64, admin: { readOnly: true } },
     { name: 'input', type: 'textarea', required: true, maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
-    { name: 'imageDataUrl', type: 'textarea', maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
+    { name: 'imageDataUrl', type: 'textarea', maxLength: 500000, access: { read: () => false }, admin: { hidden: true } },
     { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
     { name: 'maxOutputTokens', type: 'number', required: true, min: 1, max: 8192, admin: { readOnly: true } },

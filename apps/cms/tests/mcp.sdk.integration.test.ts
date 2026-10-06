@@ -1286,10 +1286,18 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1_000_000 } as never, overrideAccess: true })
     await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'alt', provider: 'openai', model: 'gpt-test', fallbackProvider: 'anthropic' }, overrideAccess: true })
     await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-fallback', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
-    const image = await sharp({ create: { width: 20, height: 10, channels: 3, background: '#123456' } }).png().toBuffer()
+    // A textured image exercises a real encoded payload above 100 KB. Small
+    // flat-colour fixtures previously hid the durable field's shorter limit.
+    const pixels = Buffer.alloc(512 * 512 * 3)
+    let seed = 0x12345678
+    for (let i = 0; i < pixels.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; pixels[i] = seed & 255 }
+    const image = await sharp(pixels, { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
     const asset = await payload.create({ collection: 'assets', data: { alt: 'Original human alt text', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-alt-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
     const queuedAlt = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })) as { jobId: string; notApplied: boolean }
     expect(queuedAlt.notApplied).toBe(true)
+    const durableAlt = await payload.findByID({ collection: 'configured-ai-jobs', id: queuedAlt.jobId, overrideAccess: true }) as unknown as { imageDataUrl: string }
+    expect(durableAlt.imageDataUrl.length).toBeGreaterThan(100_000)
+    expect(durableAlt.imageDataUrl.length).toBeLessThanOrEqual(500_000)
     let providerRequest: Request | undefined
     await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:02.000Z'), transport: async request => { providerRequest = request; return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A blue rectangular image.' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) } })
     expect(await providerRequest?.json()).toMatchObject({ model: 'gpt-test', input: [{ content: [{ type: 'input_text' }, { type: 'input_image', image_url: expect.stringMatching(/^data:image\/webp;base64,/) }] }] })
