@@ -591,6 +591,15 @@ test('MCP canonical review tools enforce ownership, revisions, and review-only b
     const status = resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: started.id } })) as { id: string; checks: Array<{ name: string }>; comments: unknown[]; privatePreviewURL: string | null }
     expect(status).toMatchObject({ id: started.id, checks: [expect.objectContaining({ name: 'contract-and-tree', status: 'passed', errors: [] })], comments: [], privatePreviewURL: null })
     expect(resultJson(await writer.client.callTool({ name: 'list_change_sets', arguments: {} }))).toMatchObject({ items: [expect.objectContaining({ id: started.id })] })
+    const missingSectionID = randomUUID(); const retainedPageID = randomUUID()
+    const missingSectionChange = [{ collection: 'pages', id: retainedPageID, before: null, after: { sectionId: missingSectionID }, beforeHash: null, afterHash: null }]
+    const retainedDiagnostic = { collection: 'pages', id: retainedPageID, message: 'sectionId: Select an existing content section.' }
+    const discarded = await payload.create({ collection: 'change-sets', data: { name: 'Retained discarded history', actor: editor.id, state: 'discarded', revision: 1, changes: missingSectionChange, quality: { checks: [{ name: 'contract-and-tree', status: 'failed', errors: [retainedDiagnostic] }] } }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: discarded.id } }))).toMatchObject({ id: discarded.id, state: 'discarded', checks: [{ name: 'contract-and-tree', status: 'failed', errors: [retainedDiagnostic] }] })
+    expect((resultJson(await writer.client.callTool({ name: 'list_change_sets', arguments: {} })) as { items: unknown[] }).items).toEqual(expect.arrayContaining([expect.objectContaining({ id: discarded.id, checks: [expect.objectContaining({ errors: [retainedDiagnostic] })] })]))
+    const editable = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'Editable missing section' } })) as { id: string }
+    await payload.update({ collection: 'change-sets', id: editable.id, data: { changes: missingSectionChange }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: editable.id } }))).toMatchObject({ id: editable.id, state: 'open', checks: [expect.objectContaining({ name: 'contract-and-tree', status: 'failed', errors: expect.arrayContaining([retainedDiagnostic]) })] })
     expect(resultJson(await stranger.client.callTool({ name: 'get_review_status', arguments: { id: started.id } }))).toEqual({ error: 'not_found' })
     expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: 1 } }))).toEqual({ error: 'revision_conflict' })
     expect(resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: started.id, expectedRevision: started.revision } }))).toEqual({ error: 'write_failed' })

@@ -284,7 +284,9 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
       const page = { id: change.id, ...change.after } as TreePage
       const [pages, section] = await Promise.all([
         payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
-        typeof change.after.sectionId === 'string' ? payload.findByID({ collection: 'sections', id: change.after.sectionId, depth: 0, draft: true, overrideAccess: true, req }) : Promise.resolve(undefined),
+        typeof change.after.sectionId === 'string'
+          ? payload.find({ collection: 'sections', where: { id: { equals: change.after.sectionId } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req }).then(found => found.docs[0])
+          : Promise.resolve(undefined),
       ])
       const treeErrors = validatePageTree(page, pages.docs.map((doc) => ({
         id: doc.id, sectionId: idOf(doc.sectionId) ?? '', parentId: idOf(doc.parentId), slug: doc.slug, template: doc.template, blocks: doc.blocks ?? [], title: doc.title,
