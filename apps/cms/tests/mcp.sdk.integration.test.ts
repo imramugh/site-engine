@@ -584,7 +584,8 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
   tokens.set('mcp-structure-reader', { clientId: 'mcp-structure-reader-client', userId: reader.id, sessionId: readerSession.id, scopes: ['mcp:content:read'] })
   const [writer, readonly] = await Promise.all([clientFor('mcp-structure-editor'), clientFor('mcp-structure-reader')])
   try {
-    const readPage = async (id: string) => resultJson(await writer.client.callTool({ name: 'get_page', arguments: { id } })) as { id: string; pageHash: string; parentId: string | null; sectionId: string; template: string }
+    const readPage = async (id: string) => resultJson(await writer.client.callTool({ name: 'get_page', arguments: { id } })) as { id: string; pageHash: string; structuralHash: string; parentId: string | null; sectionId: string; template: string }
+    const readSection = async (id: string) => (resultJson(await writer.client.callTool({ name: 'list_sections', arguments: {} })) as Array<{ id: string; sectionHash: string; pageIds: string[] }>).find(section => section.id === id)!
     const publishedHash = async () => {
       const release = (await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })).docs[0]!
       const snapshotID = typeof release.snapshot === 'string' ? release.snapshot : release.snapshot.id
@@ -592,31 +593,33 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     }
     const tools = await writer.client.listTools()
     expect(tools.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page']))
-    await expect(readonly.client.callTool({ name: 'duplicate_page', arguments: { pageId: randomUUID(), changeSetId: randomUUID(), expectedChangeSetRevision: 0, expectedPageHash: 'a'.repeat(64), title: 'Denied copy', slug: 'denied-copy', requestKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    await expect(readonly.client.callTool({ name: 'duplicate_page', arguments: { pageId: randomUUID(), changeSetId: randomUUID(), expectedChangeSetRevision: 0, expectedStructuralHash: 'a'.repeat(64), title: 'Denied copy', slug: 'denied-copy', requestKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
 
     const sourceSection = await payload.create({ collection: 'sections', data: { name: 'Structural source', summary: 'A synthetic section for real SDK structural mutations.', slug: `structural-source-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard', 'article'] }, user: editor, overrideAccess: false })
     const destinationSection = await payload.create({ collection: 'sections', data: { name: 'Structural destination', summary: 'A synthetic destination section for SDK page moves.', slug: `structural-destination-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard', 'article'] }, user: editor, overrideAccess: false })
     const source = await payload.create({ collection: 'pages', data: { title: 'Structural source page', summary: 'A synthetic source page used to prove structural MCP operations keep review captures.', slug: `structural-source-${randomUUID().slice(0, 8)}`, sectionId: sourceSection.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Structural source', body: 'This source has a valid standard hero block.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
     const sourceRead = await readPage(String(source.id))
     expect(sourceRead).toMatchObject({ id: source.id, sectionId: sourceSection.id, parentId: null, template: 'standard', pageHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
-    const sourceHash = sourceRead.pageHash
+    const sourceHash = sourceRead.structuralHash
     const set = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Structural SDK mutation' } })) as { id: string; revision: number }
-    const copied = resultJson(await writer.client.callTool({ name: 'duplicate_page', arguments: { pageId: source.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, expectedPageHash: sourceHash, title: 'Structural copy', slug: `structural-copy-${randomUUID().slice(0, 8)}`, requestKey: randomUUID() } })) as { id: string; sectionId: string; blocks: Array<{ id: string }> }
+    const copied = resultJson(await writer.client.callTool({ name: 'duplicate_page', arguments: { pageId: source.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, expectedStructuralHash: sourceHash, title: 'Structural copy', slug: `structural-copy-${randomUUID().slice(0, 8)}`, requestKey: randomUUID() } })) as { id: string; sectionId: string; blocks: Array<{ id: string }> }
     expect(copied).toMatchObject({ sectionId: sourceSection.id })
     expect(copied.blocks[0]?.id).not.toBe((source.blocks as Array<{ id: string }>)[0]?.id)
+    expect(resultJson(await writer.client.callTool({ name: 'duplicate_page', arguments: { pageId: source.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, expectedStructuralHash: sourceHash, title: 'Structural copy', slug: `replayed-copy-${randomUUID().slice(0, 8)}`, requestKey: randomUUID() } }))).toEqual({ error: 'revision_conflict' })
+    expect((await payload.find({ collection: 'pages', where: { sectionId: { equals: sourceSection.id } }, limit: 0, overrideAccess: true })).docs.filter(page => page.title === 'Structural copy')).toHaveLength(1)
     const afterCopy = await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true }) as unknown as { revision: number; changes: Array<{ collection: string; id: string }> }
-    const copyHash = (await readPage(copied.id)).pageHash
-    expect(resultJson(await writer.client.callTool({ name: 'move_page', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterCopy.revision, expectedPageHash: copyHash, sectionId: destinationSection.id, parentId: null } }))).toMatchObject({ id: copied.id, sectionId: destinationSection.id })
+    const copyHash = (await readPage(copied.id)).structuralHash
+    expect(resultJson(await writer.client.callTool({ name: 'move_page', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterCopy.revision, expectedStructuralHash: copyHash, sectionId: destinationSection.id, parentId: null } }))).toMatchObject({ id: copied.id, sectionId: destinationSection.id })
     const afterMove = await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true }) as unknown as { revision: number }
-    const movedHash = (await readPage(copied.id)).pageHash
-    expect(resultJson(await writer.client.callTool({ name: 'move_page', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterMove.revision, expectedPageHash: copyHash, sectionId: sourceSection.id, parentId: null } }))).toEqual({ error: 'stale_page_edit' })
+    const movedHash = (await readPage(copied.id)).structuralHash
+    expect(resultJson(await writer.client.callTool({ name: 'move_page', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterMove.revision, expectedStructuralHash: copyHash, sectionId: sourceSection.id, parentId: null } }))).toEqual({ error: 'stale_page_edit' })
     expect((await payload.findByID({ collection: 'pages', id: copied.id, depth: 0, draft: true, overrideAccess: true }) as { sectionId: string }).sectionId).toBe(destinationSection.id)
-    expect(resultJson(await writer.client.callTool({ name: 'change_page_template', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterMove.revision, expectedPageHash: movedHash, template: 'article' } }))).toEqual({ error: 'write_failed' })
+    expect(resultJson(await writer.client.callTool({ name: 'change_page_template', arguments: { pageId: copied.id, changeSetId: set.id, expectedChangeSetRevision: afterMove.revision, expectedStructuralHash: movedHash, template: 'article' } }))).toEqual({ error: 'write_failed' })
     expect((await payload.findByID({ collection: 'pages', id: copied.id, depth: 0, draft: true, overrideAccess: true }) as { template: string }).template).toBe('standard')
 
     const templatePage = await payload.create({ collection: 'pages', data: { title: 'Convertible structural page', summary: 'A block-free page that can validly change its template through the SDK.', slug: `convertible-${randomUUID().slice(0, 8)}`, sectionId: destinationSection.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false })
     const revisionBeforeTemplate = (await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })).revision
-    expect(resultJson(await writer.client.callTool({ name: 'change_page_template', arguments: { pageId: templatePage.id, changeSetId: set.id, expectedChangeSetRevision: revisionBeforeTemplate, expectedPageHash: (await readPage(templatePage.id)).pageHash, template: 'article' } }))).toMatchObject({ id: templatePage.id, template: 'article' })
+    expect(resultJson(await writer.client.callTool({ name: 'change_page_template', arguments: { pageId: templatePage.id, changeSetId: set.id, expectedChangeSetRevision: revisionBeforeTemplate, expectedStructuralHash: (await readPage(templatePage.id)).structuralHash, template: 'article' } }))).toMatchObject({ id: templatePage.id, template: 'article' })
     expect((await payload.findByID({ collection: 'pages', id: templatePage.id, depth: 0, draft: true, overrideAccess: true })).template).toBe('article')
 
     const manifest = structuredClone(neutralFixture)
@@ -628,11 +631,26 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     const frozenHash = await publishedHash()
     const archiveSet = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Archive source page' } })) as { id: string; revision: number }
     await payload.create({ collection: 'redirects', data: { from: '/redirect-target', to: '/' }, overrideAccess: true, context: { editorialInternal: true } })
-    expect(resultJson(await writer.client.callTool({ name: 'archive_page', arguments: { pageId: source.id, changeSetId: archiveSet.id, expectedChangeSetRevision: archiveSet.revision, expectedPageHash: sourceHash, redirectTo: '/redirect-target' } }))).toEqual({ error: 'write_failed' })
+    expect(resultJson(await writer.client.callTool({ name: 'archive_page', arguments: { pageId: source.id, changeSetId: archiveSet.id, expectedChangeSetRevision: archiveSet.revision, expectedStructuralHash: sourceHash, redirectTo: '/redirect-target' } }))).toEqual({ error: 'write_failed' })
     expect((await payload.findByID({ collection: 'pages', id: String(source.id), depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('draft')
-    expect(resultJson(await writer.client.callTool({ name: 'archive_page', arguments: { pageId: source.id, changeSetId: archiveSet.id, expectedChangeSetRevision: archiveSet.revision, expectedPageHash: sourceHash, redirectTo: '/' } }))).toMatchObject({ pageId: source.id, archived: true, redirect: { to: '/' } })
+    expect(resultJson(await writer.client.callTool({ name: 'archive_page', arguments: { pageId: source.id, changeSetId: archiveSet.id, expectedChangeSetRevision: archiveSet.revision, expectedStructuralHash: sourceHash, redirectTo: '/' } }))).toMatchObject({ pageId: source.id, archived: true, redirect: { to: '/' } })
     expect((await payload.findByID({ collection: 'pages', id: String(source.id), depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('archived')
     expect(await publishedHash()).toBe(frozenHash)
+
+    const safetySection = await payload.create({ collection: 'sections', data: { name: 'Archive safety section', summary: 'A section used to prove archive hashes reject unlisted pages and navigation order changes.', slug: `archive-safety-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+    const safetyPage = async (title: string) => payload.create({ collection: 'pages', data: { title, summary: 'A synthetic draft page used to verify archive-section optimistic concurrency.', slug: `${title.toLowerCase().replaceAll(' ', '-')}-${randomUUID().slice(0, 8)}`, sectionId: safetySection.id, template: 'standard' }, overrideAccess: true, context: { editorialInternal: true } })
+    const [safetyFirst, safetySecond] = await Promise.all([safetyPage('Archive safety first'), safetyPage('Archive safety second')])
+    await payload.update({ collection: 'sections', id: safetySection.id, data: { pageIds: [String(safetyFirst.id), String(safetySecond.id)] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const safetySet = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Reject concurrent section changes' } })) as { id: string; revision: number }
+    const beforeUnlisted = (await readSection(safetySection.id)).sectionHash
+    const unlisted = await safetyPage('Archive safety unlisted')
+    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: safetySection.id, changeSetId: safetySet.id, expectedChangeSetRevision: safetySet.revision, expectedSectionHash: beforeUnlisted, redirectTo: '/' } }))).toEqual({ error: 'stale_section_edit' })
+    const beforeNavigationOrder = (await readSection(safetySection.id)).sectionHash
+    await payload.update({ collection: 'sections', id: safetySection.id, data: { pageIds: [String(safetySecond.id), String(safetyFirst.id)] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: safetySection.id, changeSetId: safetySet.id, expectedChangeSetRevision: safetySet.revision, expectedSectionHash: beforeNavigationOrder, redirectTo: '/' } }))).toEqual({ error: 'stale_section_edit' })
+    expect((await payload.find({ collection: 'pages', where: { sectionId: { equals: safetySection.id } }, limit: 0, draft: true, overrideAccess: true })).docs.map(page => page.status)).toEqual(['draft', 'draft', 'draft'])
+    expect((await payload.findByID({ collection: 'sections', id: safetySection.id, depth: 0, draft: true, overrideAccess: true }) as { pageIds: string[] }).pageIds).toEqual([safetySecond.id, safetyFirst.id])
+    expect(unlisted.id).toBeDefined()
 
     const retiringSection = await payload.create({ collection: 'sections', data: { name: 'Retiring section', summary: 'A section archived by the real MCP SDK structural test.', slug: `retiring-section-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
     const retiringPage = await payload.create({ collection: 'pages', data: { title: 'Retiring section page', summary: 'A synthetic page that proves a section archive captures redirects and draft state.', slug: `retiring-page-${randomUUID().slice(0, 8)}`, sectionId: retiringSection.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Retiring', body: 'This page is archived through the section operation.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
@@ -644,7 +662,11 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     retiringManifest.pages = [retiringHomePage, { ...retiringHomePage, id: String(retiringPage.id), sectionId: String(retiringSection.id), slug: String(retiringPage.slug), title: String(retiringPage.title), summary: String(retiringPage.summary), template: 'standard', blocks: retiringPage.blocks as never }]
     await publishFrozenSnapshot(editor.id, retiringManifest)
     const sectionSet = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'Archive structural section' } })) as { id: string; revision: number }
-    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: retiringSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionSet.revision, redirectTo: '/' } }))).toMatchObject({ archived: true, pageIds: [retiringPage.id], redirects: [{ to: '/' }] })
+    const staleSectionHash = (await readSection(retiringSection.id)).sectionHash
+    await payload.update({ collection: 'sections', id: retiringSection.id, data: { summary: 'Concurrent section metadata change.' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: retiringSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionSet.revision, expectedSectionHash: staleSectionHash, redirectTo: '/' } }))).toEqual({ error: 'stale_section_edit' })
+    expect((await payload.findByID({ collection: 'pages', id: String(retiringPage.id), depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('draft')
+    expect(resultJson(await writer.client.callTool({ name: 'archive_section', arguments: { sectionId: retiringSection.id, changeSetId: sectionSet.id, expectedChangeSetRevision: sectionSet.revision, expectedSectionHash: (await readSection(retiringSection.id)).sectionHash, redirectTo: '/' } }))).toMatchObject({ archived: true, pageIds: [retiringPage.id], redirects: [{ to: '/' }], section: { pageIds: [], landingPageId: null } })
     expect((await payload.findByID({ collection: 'pages', id: String(retiringPage.id), depth: 0, draft: true, overrideAccess: true }) as { status: string }).status).toBe('archived')
     expect(await payload.findByID({ collection: 'sections', id: retiringSection.id, depth: 0, draft: true, overrideAccess: true })).toMatchObject({ pageIds: [] })
   } finally { await Promise.all([writer.transport.close(), readonly.transport.close()]) }
