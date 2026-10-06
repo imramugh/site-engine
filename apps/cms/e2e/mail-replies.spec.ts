@@ -193,3 +193,18 @@ test('ENG-020 clears delayed reply state when switching records', async ({ brows
     await expect(secondReply.getByLabel('Reply message')).toHaveValue('')
   } finally { await context.close() }
 })
+
+test('ENG-020 adopts a persisted same-address conversation only after an explicit action', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    await page.goto('/leads'); await page.getByRole('button', { name: /First editable lead/ }).click()
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline.getByRole('button', { name: 'Adopt conversation' })).toHaveCount(1)
+    await expect(timeline).not.toContainText('Hidden unmatched subject')
+    await timeline.getByRole('button', { name: 'Adopt conversation' }).click()
+    await expect(timeline.getByRole('button', { name: 'Adopt conversation' })).toHaveCount(0)
+  } finally { await context.close() }
+})

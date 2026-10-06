@@ -486,6 +486,8 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: conversationID }, overrideAccess: true })
         await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: messageID, rfcMessageID, direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject, body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
       }
+      const lead = await payload.findByID({ collection: 'inquiries', id: firstEditableLeadID!, depth: 0, overrideAccess: true })
+      await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: 'fixture-unmatched-conversation', messageID: 'fixture-unmatched-message', sender: String(lead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
       json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b' })
     })().catch(() => { response.writeHead(500); response.end() })
     return
