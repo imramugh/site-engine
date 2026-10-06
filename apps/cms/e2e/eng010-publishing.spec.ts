@@ -32,6 +32,17 @@ test('ENG-010 publishes an approved snapshot, retains it after terminal failure,
     const successfulLog = page.getByRole('region', { name: 'Build log', exact: true })
     for (const stage of ['dispatched', 'building', 'built', 'activating', 'deployed']) await expect(successfulLog).toContainText(stage)
     for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) { await page.setViewportSize(size); await page.goto('/operations'); await page.getByRole('link', { name: 'Open build log', exact: true }).and(page.locator(`a[href="/operations?publish=${body.claim.id}"]`)).click(); await expect(page.getByRole('region', { name: 'Build log' })).toContainText('BUILD_FAILED'); expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await page.addScriptTag({ path: axeSource }); expect(await page.evaluate(async () => (await (window as any).axe.run('main')).violations)).toEqual([]) }
+    await page.goto('/operations')
+    const failedRow = page.locator('[data-release-history-row]').filter({ has: page.locator(`a[href="/operations?publish=${body.claim.id}"]`) })
+    page.once('dialog', dialog => dialog.accept())
+    const retryResponse = page.waitForResponse(response => response.url().endsWith('/api/operations') && response.request().method() === 'POST')
+    await failedRow.getByRole('button', { name: 'Retry approved publish', exact: true }).click()
+    expect((await retryResponse).status()).toBe(200)
+    const recovered = await session.page.request.post(`/__e2e/eng010-publish/success?changeSet=${failedSet}`)
+    expect(recovered.status(), await recovered.text()).toBe(200)
+    expect(await recovered.json()).toMatchObject({ claim: { id: body.claim.id, changeSetID: failedSet }, job: { status: 'completed' }, health: { jobID: body.claim.id } })
+    await page.reload()
+    await expect(page.locator('[data-release-history-row]').filter({ has: page.locator(`a[href="/operations?publish=${body.claim.id}"]`) })).toContainText('Deployed')
     await owner.close()
   } finally { if (jobs.length) { const cleanup = await session.page.request.post('/__e2e/eng010-publish/cleanup?' + jobs.map(job => `job=${encodeURIComponent(job)}`).join('&')); expect(cleanup.ok(), await cleanup.text()).toBe(true) } await session.context.close() }
 })
