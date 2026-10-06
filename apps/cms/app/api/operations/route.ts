@@ -43,6 +43,8 @@ async function GETHandler(request: Request) {
   const target = url.searchParams.get('target')?.trim()
   const type = url.searchParams.get('type')?.trim()
   const source = url.searchParams.get('source')?.trim()
+  const publish = url.searchParams.get('publish')?.trim()
+  if (publish && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(publish)) return Response.json({ error: 'Choose a valid publish job.' }, { status: 400, headers: noStore })
   const period = url.searchParams.get('period')?.trim()
   const since = url.searchParams.get('since') ?? (period && ['7', '30', '90'].includes(period) ? new Date(Date.now() - Number(period) * 86_400_000).toISOString() : null)
   const clauses: Record<string, unknown>[] = []
@@ -83,6 +85,8 @@ async function GETHandler(request: Request) {
   const stageEvents = await payload.find({ collection: 'audit-events', where: { or: [{ event: { equals: 'editorial.publish_stage' } }, { event: { equals: 'publish.completed' } }, { event: { equals: 'publish.failed' } }] }, sort: '-createdAt', limit: 500, depth: 0, overrideAccess: true })
   const stageByOutbox = new Map<string, Record<string, unknown>>()
   for (const event of stageEvents.docs) { const detail = safeDetail(String(event.event), event.detail); const id = relationID(detail?.publishJob); if (id && !stageByOutbox.has(id)) stageByOutbox.set(id, { ...detail, createdAt: event.createdAt }) }
+  const selectedPublish = publish ? await payload.find({ collection: 'publish-outbox', where: { id: { equals: publish } }, limit: 1, depth: 0, overrideAccess: true }) : undefined
+  const buildEvents = publish ? await payload.find({ collection: 'audit-events', where: { 'detail.publishJob': { equals: publish } }, sort: 'createdAt', limit: 200, depth: 0, overrideAccess: true }) : undefined
   const releaseLabel = (status: unknown) => status === 'pending' ? 'Queued' : status === 'processing' ? 'Building' : status === 'completed' ? 'Deployed' : status === 'failed' ? 'Failed' : 'Queued'
   return Response.json({
     summary: {
@@ -123,6 +127,15 @@ async function GETHandler(request: Request) {
         buildLogURL: null,
       }
     }),
+    buildLog: publish ? (() => {
+      const job = selectedPublish?.docs[0]
+      if (!job) return null
+      const events = (buildEvents?.docs ?? []).filter(event => ['editorial.publish_stage', 'editorial.publish_retry', 'publish.failed', 'publish.completed'].includes(String(event.event))).map(event => {
+        const detail = safeDetail(String(event.event), event.detail) ?? {}
+        return { id: String(event.id), event: String(event.event), createdAt: String(event.createdAt), stage: typeof detail.stage === 'string' ? detail.stage : null, result: typeof detail.result === 'string' ? detail.result : null, attempt: typeof detail.attempt === 'number' ? detail.attempt : null, correlationID: typeof detail.correlationID === 'string' ? detail.correlationID : null }
+      })
+      return { id: String(job.id), sequence: Number(job.sequence), status: String(job.status), attempts: Number(job.attempts ?? 0), events }
+    })() : null,
     audit: {
       docs: projected.map((item, index) => ({ ...item, actorId: typeof audit.docs[index]?.actor === 'object' ? audit.docs[index]?.actor?.id : audit.docs[index]?.actor, metadata: safeDetail(audit.docs[index]!.event, audit.docs[index]!.detail) })),
       page: audit.page,
