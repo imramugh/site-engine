@@ -42,7 +42,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ target
   try {
     if (body.action === 'prepare') return Response.json({ draft: await prepareReply(payload, target, id, user.id, body as { sender: unknown; subject: unknown; body: unknown; threadID?: unknown }) }, { status: 201, headers: noStore })
     if (typeof body.grantID !== 'string') throw new Error('invalid_reply')
-    const draftID = body.action === 'authorize' ? body.grantID : (await payload.findByID({ collection: 'mail-authorizations', id: body.grantID, depth: 0, overrideAccess: true }) as { draft: string | { id: string } }).draft
+    const draftID = body.action === 'authorize' || body.action === 'cancel-prepared' ? body.grantID : (await payload.findByID({ collection: 'mail-authorizations', id: body.grantID, depth: 0, overrideAccess: true }) as { draft: string | { id: string } }).draft
     const resolvedDraftID = typeof draftID === 'string' ? draftID : draftID.id
     const draft = await payload.findByID({ collection: 'mail-drafts', id: resolvedDraftID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
     const relation = target === 'lead' ? draft.lead : draft.application; const relationID = typeof relation === 'string' ? relation : (relation as { id?: string } | null)?.id
