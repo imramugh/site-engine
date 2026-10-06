@@ -45,11 +45,14 @@ describe('ENG-012 public structured output', () => {
 
   it('uses the semantic symbol output and falls back to the primary logo', () => {
     const snapshot = structuredClone(neutralFixture)
-    const asset = { id: '10000000-0000-4000-8000-000000000091', filename: 'symbol.svg', sha256: 'a'.repeat(64), alt: 'Symbol', decorative: false, width: 64, height: 64, mimeType: 'image/svg+xml' }
-    snapshot.media.push(asset)
-    snapshot.settings.logos = { primaryLight: asset, symbolLight: asset }
+    const primary = { id: '10000000-0000-4000-8000-000000000091', filename: 'primary.svg', sha256: 'a'.repeat(64), alt: 'Primary', decorative: false, width: 64, height: 64, mimeType: 'image/svg+xml' }
+    const symbol = { ...primary, id: '10000000-0000-4000-8000-000000000092', filename: 'symbol.svg' }
+    snapshot.media.push(primary, symbol)
+    snapshot.settings.logos = { primaryLight: primary, symbolLight: symbol }
     const model = publicModel(snapshot, snapshot.settings.homepageId)
     const schema = schemaForRoute(model.routes[0]!, model, snapshot, 'https://public.example.test')
     expect(schema['@graph'].find(item => item['@type'] === 'Organization')).toMatchObject({ logo: 'https://public.example.test/media/symbol.svg' })
+    delete snapshot.settings.logos.symbolLight
+    expect(schemaForRoute(model.routes[0]!, model, snapshot, 'https://public.example.test')['@graph'].find(item => item['@type'] === 'Organization')).toMatchObject({ logo: 'https://public.example.test/media/primary.svg' })
   })
 });
