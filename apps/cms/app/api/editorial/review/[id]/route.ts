@@ -20,9 +20,21 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return Response.json({ error: 'A valid change set is required.' }, { status: 400, headers: privateHeaders })
     const pageID = new URL(request.url).searchParams.get('pageID') ?? undefined
     if (pageID && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pageID)) return Response.json({ error: 'A valid review page is required.' }, { status: 400, headers: privateHeaders })
-    const review = await loadReviewModeData(payload, id, { pageID })
+    let review
+    let failedPreview
+    try { review = await loadReviewModeData(payload, id, { pageID }) }
+    catch (error) {
+      const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const preview = set.preview as Record<string, unknown> | undefined
+      const jobID = preview?.jobID
+      if (typeof jobID !== 'string' || preview?.status === 'ready') throw error
+      const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const diagnostics = Array.isArray(job.renderDiagnostics) ? job.renderDiagnostics : []
+      if (job.status !== 'failed' || Number(job.reviewRevision) !== Number(set.revision) || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])) throw error
+      failedPreview = { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), diagnostics }
+    }
     const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
-    return Response.json({ review, fresh }, { headers: privateHeaders })
+    return Response.json(failedPreview ? { failedPreview, fresh } : { review, fresh }, { headers: privateHeaders })
   } catch (error) {
     if (isAuthenticationSQLiteContention(error)) throw error
     const text = error instanceof Error ? error.message : 'Unable to load this review.'
