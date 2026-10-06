@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
-import { decryptCredential, type IntegrationProvider } from './integrations'
+import { decryptCredential, type IntegrationProvider, azureResourceEndpoint } from './integrations'
 import { withPayloadTransaction } from './auth-transaction'
 
 /** Money is always an integer count of one-millionths of a US dollar. */
@@ -15,6 +15,7 @@ export const providerCapabilities: Record<IntegrationProvider, ProviderCapabilit
   'google-gemini': { imageInput: false, endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', auth: 'x-api-key' },
   openrouter: { imageInput: false, endpoint: 'https://openrouter.ai/api/v1/chat/completions', auth: 'bearer' },
   mistral: { imageInput: false, endpoint: 'https://api.mistral.ai/v1/chat/completions', auth: 'bearer' },
+  'azure-openai': { imageInput: false, endpoint: 'https://openai.azure.com/openai/v1/responses', auth: 'x-api-key' },
 }
 export type ProviderFetch = (request: Request) => Promise<Response>
 export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd | null; reservedMicroUsd: MicroUsd; usageCostStatus: 'actual' | 'reserved' }
