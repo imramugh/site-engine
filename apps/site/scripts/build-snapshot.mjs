@@ -96,6 +96,14 @@ async function copyThemeComponents(source, destination) {
     }
   }
   await copyDirectory(source, destination);
+  // Starter components refer to package-owned fonts with a path relative to
+  // src/components. Place them at the matching relative destination so an
+  // installed theme never falls back to a machine font at runtime.
+  const packageRoot = resolve(source, '..', '..');
+  const fontRoot = join(packageRoot, 'fonts');
+  const fontInfo = await lstat(fontRoot).catch(() => undefined);
+  if (fontInfo?.isSymbolicLink()) throw new Error('Theme font root must not be a symbolic link.');
+  if (fontInfo?.isDirectory()) await copyDirectory(fontRoot, join(dirname(dirname(destination)), 'fonts'));
 }
 
 async function copyStarterAssets(componentsRoot, stagingRoot) {
