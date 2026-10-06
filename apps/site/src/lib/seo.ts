@@ -78,7 +78,8 @@ function jobSchema(route: PublicRoute, origin: string, snapshot: SiteSnapshot): 
 
 export function schemaForRoute(route: PublicRoute, model: RouteModel, snapshot: SiteSnapshot, origin: string): Schema {
   const description = snapshot.settings.seoDescription;
-  const website = { '@type': 'Organization', '@id': `${origin}/#organization`, name: snapshot.settings.siteName, url: origin, ...(description ? { description } : {}) } as Record<string, Json>;
+  const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
+  const website = { '@type': 'Organization', '@id': `${origin}/#organization`, name: snapshot.settings.siteName, url: origin, ...(symbol ? { logo: `${origin}/media/${symbol.filename}` } : {}), ...(description ? { description } : {}) } as Record<string, Json>;
   const service = { '@type': 'ProfessionalService', '@id': `${origin}/#professional-service`, name: snapshot.settings.siteName, url: origin, ...(description ? { description } : {}), parentOrganization: { '@id': `${origin}/#organization` } } as Record<string, Json>;
   return { '@context': 'https://schema.org', '@graph': [website, snapshot.settings.organizationType === 'professional-service' ? service : undefined, pageSchema(route, origin), breadcrumbs(route, origin), articleSchema(route, origin), faqSchema(route.page), jobSchema(route, origin, snapshot), collectionSchema(route, model, origin)].filter((item): item is Record<string, Json> => Boolean(item)) };
 }

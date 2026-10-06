@@ -6,6 +6,10 @@ export async function up({ db }: MigrateUpArgs): Promise<void> {
   // Preserve children explicitly: SQLite executes ON DELETE actions immediately
   // even when checks are deferred inside Payload's migration transaction.
   await db.run(sql`CREATE TEMP TABLE retention_mail_locks AS SELECT * FROM payload_locked_documents_rels WHERE mail_drafts_id IS NOT NULL OR mail_authorizations_id IS NOT NULL;`)
+  // Historical ALTER-added lock relations use NO ACTION, while schema-pushed
+  // databases use CASCADE. Detach only the saved children before either table
+  // rebuild, then restore them below; both schemas retain the same locks.
+  await db.run(sql`DELETE FROM payload_locked_documents_rels WHERE mail_drafts_id IS NOT NULL OR mail_authorizations_id IS NOT NULL;`)
   await db.run(sql`CREATE TABLE mail_drafts_next (id text(36) PRIMARY KEY NOT NULL, lead_id text(36) REFERENCES inquiries(id), application_id text(36) REFERENCES applications(id), thread_i_d text NOT NULL, recipient text NOT NULL, sender text NOT NULL, subject text NOT NULL, body text NOT NULL, attachment_hashes text DEFAULT '[]', revision numeric NOT NULL DEFAULT 1, state text NOT NULL DEFAULT 'prepared', updated_at text NOT NULL, created_at text NOT NULL, CHECK ((lead_id IS NOT NULL) != (application_id IS NOT NULL)));`)
   await db.run(sql`INSERT INTO mail_drafts_next (id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at) SELECT id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at FROM mail_drafts;`)
   await db.run(sql`CREATE TABLE mail_authorizations_next (id text(36) PRIMARY KEY NOT NULL, draft_id text(36) NOT NULL REFERENCES mail_drafts_next(id), digest text NOT NULL, draft_revision numeric NOT NULL, authorized_by_id text(36) NOT NULL REFERENCES users(id), expires_at text NOT NULL, revoked_at text, consumed_at text, updated_at text NOT NULL, created_at text NOT NULL);`)
@@ -30,6 +34,7 @@ export async function down({ db }: MigrateDownArgs): Promise<void> {
   const count = Number((result.rows[0] as { count?: unknown } | undefined)?.count ?? 0)
   if (count > 0) throw new Error('Cannot roll back mail replies while career reply data exists. Restore the expanded schema instead; no data was changed.')
   await db.run(sql`CREATE TEMP TABLE retention_mail_locks_down AS SELECT * FROM payload_locked_documents_rels WHERE mail_drafts_id IS NOT NULL OR mail_authorizations_id IS NOT NULL;`)
+  await db.run(sql`DELETE FROM payload_locked_documents_rels WHERE mail_drafts_id IS NOT NULL OR mail_authorizations_id IS NOT NULL;`)
   await db.run(sql`CREATE TABLE mail_drafts_previous (id text(36) PRIMARY KEY NOT NULL, lead_id text(36) NOT NULL REFERENCES inquiries(id), thread_i_d text NOT NULL, recipient text NOT NULL, sender text NOT NULL, subject text NOT NULL, body text NOT NULL, attachment_hashes text DEFAULT '[]', revision numeric NOT NULL DEFAULT 1, state text NOT NULL DEFAULT 'prepared', updated_at text NOT NULL, created_at text NOT NULL);`)
   await db.run(sql`INSERT INTO mail_drafts_previous (id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at) SELECT id,lead_id,thread_i_d,recipient,sender,subject,body,attachment_hashes,revision,state,updated_at,created_at FROM mail_drafts;`)
   await db.run(sql`CREATE TABLE mail_authorizations_previous (id text(36) PRIMARY KEY NOT NULL, draft_id text(36) NOT NULL REFERENCES mail_drafts_previous(id), digest text NOT NULL, draft_revision numeric NOT NULL, authorized_by_id text(36) NOT NULL REFERENCES users(id), expires_at text NOT NULL, revoked_at text, consumed_at text, updated_at text NOT NULL, created_at text NOT NULL);`)

@@ -1,15 +1,18 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import styles from './mail-reply-composer.module.css'
 
-type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string }
-type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; canAuthorize: boolean }
+type Attachment = { filename: string; mimeType: string; size: number; sha256: string }
+type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string; attachments?: Attachment[] }
+type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; assistantPrepared?: boolean; canAuthorize: boolean }
 type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: string } }
 
 export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 'application'; id: string; recipient: string }) {
   const formID = useId()
-  const endpoint = `/api/mail-replies/${target}/${id}`
+  const requestedDraft = useSearchParams().get('draft')
+  const endpoint = `/api/mail-replies/${target}/${id}${requestedDraft ? `?draft=${encodeURIComponent(requestedDraft)}` : ''}`
   const [options, setOptions] = useState<Options | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reload, setReload] = useState(0)
@@ -23,6 +26,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
   const [busy, setBusy] = useState(false)
   const [terminal, setTerminal] = useState<'sent' | 'unknown' | null>(null)
   const requestGeneration = useRef(0)
+  const assistantPrepared = Boolean(options?.assistantPrepared && draft?.id === options.preparedDraft?.id)
 
   useEffect(() => {
     const generation = ++requestGeneration.current
@@ -82,9 +86,10 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         if (!current()) return
         if (!value.authorization) throw new Error('Confirmation was not returned.')
         setGrant(value.authorization.id)
-        setStatus('Confirmed for this message only. Send within 10 minutes.')
+        setStatus(assistantPrepared ? 'Confirmed for this exact assistant-prepared message. Return to the connected assistant to send within 10 minutes.' : 'Confirmed for this message only. Send within 10 minutes.')
       } else if (kind === 'edit') {
         if (grant) await call('cancel', grant)
+        else if (draft) await call('cancel-prepared', draft.id)
         if (!current()) return
         setSender(draft?.sender ?? sender)
         setSubject(draft?.subject ?? subject)
@@ -124,12 +129,13 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
       </form> : <>
         <section className={styles.review} aria-label="Exact reply review">
           <h4>Review reply</h4>
+          {assistantPrepared && <p>This exact envelope was prepared by a connected assistant. Confirming it permits that same connected assistant to send it once; it does not send email from this page.</p>}
           <dl><dt>From</dt><dd>{draft.sender}</dd><dt>To</dt><dd>{draft.recipient}</dd><dt>Subject</dt><dd>{draft.subject}</dd></dl>
-          <p className={styles.body}>{draft.body}</p>
+          <p className={styles.body}>{draft.body}</p>{draft.attachments?.length ? <><h5>Attachments included in this exact confirmation</h5><ul>{draft.attachments.map(item => <li key={`${item.sha256}:${item.filename}`}><strong>{item.filename}</strong> · {item.mimeType} · {item.size} bytes · SHA-256 {item.sha256}</li>)}</ul></> : null}
         </section>
         {!terminal && <div className={styles.actions}>
           <button type="button" disabled={busy} onClick={() => void action('edit')}>{grant ? 'Cancel confirmation and edit' : 'Edit reply'}</button>
-          {options.canAuthorize && <button className={styles.primary} type="button" disabled={busy} onClick={() => void action(grant ? 'send' : 'authorize')}>{busy ? 'Working…' : grant ? 'Send confirmed reply' : 'Confirm exact reply'}</button>}
+          {options.canAuthorize && (!grant || !assistantPrepared) && <button className={styles.primary} type="button" disabled={busy} onClick={() => void action(grant ? 'send' : 'authorize')}>{busy ? 'Working…' : grant ? 'Send confirmed reply' : assistantPrepared ? 'Confirm exact reply for connected assistant' : 'Confirm exact reply'}</button>}
         </div>}
         {!options.canAuthorize && <p className={styles.notice}>An Owner must confirm this reply before it can be sent.</p>}
       </>}

@@ -73,6 +73,22 @@ async function PATCHHandler(request: Request, context: { params: Promise<{ id: s
   }
 }
 
+async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+  const payload = await getPayload({ config })
+  const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
+  const user = authenticated.user as { id: string; roles?: ('owner' | 'sales')[] } | null
+  if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
+  try {
+    const { id } = await context.params
+    const lead = await payload.findByID({ collection: 'inquiries', id, depth: 0, overrideAccess: true })
+    return Response.json({ lead }, { headers: noStore })
+  } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
+    return Response.json({ error: 'Lead not found.' }, { status: 404, headers: noStore })
+  }
+}
+
 async function DELETEHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const payload = await getPayload({ config })
@@ -93,3 +109,4 @@ async function DELETEHandler(request: Request, context: { params: Promise<{ id: 
 
 export const PATCH = sqliteAuthenticationBoundary(PATCHHandler)
 export const DELETE = sqliteAuthenticationBoundary(DELETEHandler)
+export const GET = sqliteAuthenticationBoundary(GETHandler)
