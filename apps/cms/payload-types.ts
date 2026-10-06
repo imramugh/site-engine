@@ -749,9 +749,9 @@ export interface IntegrationConfiguration {
 export interface AiJobDefault {
   id: string;
   jobType: 'summary' | 'meta' | 'faq' | 'alt' | 'lead-reply';
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai';
   model: string;
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2179,6 +2179,8 @@ export interface StyleGuidesSelect<T extends boolean = true> {
 export interface IntegrationConfigurationsSelect<T extends boolean = true> {
   provider?: T;
   model?: T;
+  azureResourceEndpoint?: T;
+  azureApiVersion?: T;
   fallbackProvider?: T;
   monthlyCapMicroUsd?: T;
   monthlyUsageMicroUsd?: T;

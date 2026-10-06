@@ -913,9 +913,9 @@ export const AIJobDefaults: CollectionConfig = {
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
-    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] },
   ],
 }
 
@@ -1200,7 +1200,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'requestDigest', type: 'text', required: true, maxLength: 64, admin: { readOnly: true } },
     { name: 'input', type: 'textarea', required: true, maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
     { name: 'imageDataUrl', type: 'textarea', maxLength: 500000, access: { read: () => false }, admin: { hidden: true } },
-    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'], admin: { readOnly: true } },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'], admin: { readOnly: true } },
     { name: 'maxOutputTokens', type: 'number', required: true, min: 1, max: 8192, admin: { readOnly: true } },
     { name: 'configurationSnapshot', type: 'json', required: true, admin: { readOnly: true } },
