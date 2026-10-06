@@ -23,7 +23,7 @@ export const adminNavigationItems: readonly AdminNavigationItem[] = [
   { href: '/leads', label: 'Leads', roles: ['owner', 'sales'] },
   { href: '/applications', label: 'Careers', roles: ['owner', 'hiring'] },
   { href: '/editorial', label: 'Reviews', roles: ['owner', 'editor', 'approver'] },
-  { href: '/operations', label: 'Change log', roles: ['owner'] },
+  { href: '/operations', label: 'Change log', roles: ['owner', 'approver'] },
 ]
 
 export const adminSiteNavigationItems: readonly AdminNavigationItem[] = [

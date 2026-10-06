@@ -33,8 +33,9 @@ function pageOf(value: string | null): number {
 async function GETHandler(request: Request) {
   const payload = await getPayload({ config })
   const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
-  const user = auth.user as { roles?: ('owner')[]; disabled?: boolean } | null
-  if (!user || !hasRole(user, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403 })
+  const user = auth.user as { roles?: ('owner' | 'approver')[]; disabled?: boolean } | null
+  if (!user || !hasRole(user, ['owner', 'approver'])) return Response.json({ error: 'Owner access required.' }, { status: 403 })
+  const owner = hasRole(user, ['owner'])
 
   const url = new URL(request.url)
   const page = pageOf(url.searchParams.get('page'))
@@ -49,26 +50,27 @@ async function GETHandler(request: Request) {
   const since = url.searchParams.get('since') ?? (period && ['7', '30', '90'].includes(period) ? new Date(Date.now() - Number(period) * 86_400_000).toISOString() : null)
   const clauses: Record<string, unknown>[] = []
   if (event) clauses.push({ event: { contains: event.slice(0, 120) } })
-  if (actor) {
+  if (actor && owner) {
     const matches = await payload.find({ collection: 'users', where: { or: [{ id: { equals: actor } }, { email: { equals: actor } }] }, limit: 1, depth: 0, overrideAccess: true })
     clauses.push({ actor: { equals: matches.docs[0]?.id ?? actor } })
   }
   if (since && !Number.isNaN(Date.parse(since))) clauses.push({ createdAt: { greater_than_equal: since } })
+  if (!owner) clauses.push({ or: [{ event: { like: 'editorial.%' } }, { event: { like: 'publish.%' } }] })
   clauses.push(...await changeLogFilters(payload, { type, source, target }))
 
   const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages, retention, retentionFailures, publishHistory, releaseHistory] = await Promise.all([
     payload.count({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: true }),
-    payload.count({ collection: 'inquiries', where: { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }] }, overrideAccess: true }),
+    owner ? payload.count({ collection: 'inquiries', where: { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }] }, overrideAccess: true }) : Promise.resolve({ totalDocs: 0 }),
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, overrideAccess: true }),
     payload.count({ collection: 'publish-outbox', where: { status: { equals: 'pending' } }, overrideAccess: true }),
     payload.count({ collection: 'publish-outbox', where: { status: { equals: 'processing' } }, overrideAccess: true }),
     payload.count({ collection: 'publish-outbox', where: { status: { equals: 'failed' } }, overrideAccess: true }),
     payload.find({ collection: 'publish-outbox', where: { status: { equals: 'failed' } }, sort: '-sequence', limit: 1, overrideAccess: true }),
     payload.find({ collection: 'audit-events', where: clauses.length ? { and: clauses } as never : undefined, sort: '-createdAt', limit: 25, page, depth: 1, overrideAccess: true }),
-    payload.find({ collection: 'users', sort: 'name', limit: 200, depth: 0, overrideAccess: true }),
+    owner ? payload.find({ collection: 'users', sort: 'name', limit: 200, depth: 0, overrideAccess: true }) : Promise.resolve({ docs: [] as Record<string, unknown>[] }),
     payload.find({ collection: 'pages', sort: 'title', limit: 200, depth: 0, draft: true, overrideAccess: true }),
-    retentionPolicy(payload),
-    payload.count({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, overrideAccess: true }),
+    owner ? retentionPolicy(payload) : Promise.resolve(null),
+    owner ? payload.count({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, overrideAccess: true }) : Promise.resolve({ totalDocs: 0 }),
     payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 100, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 100, depth: 0, overrideAccess: true }),
   ])
@@ -100,7 +102,7 @@ async function GETHandler(request: Request) {
         failed: failed.totalDocs,
       },
     },
-    retention: { ...retention, failedJobs: retentionFailures.totalDocs, backupNotice: 'Deletion markers are replayed before a restored backup serves traffic. Immutable backups age out on their configured schedule.' },
+    retention: owner && retention ? { ...retention, failedJobs: retentionFailures.totalDocs, backupNotice: 'Deletion markers are replayed before a restored backup serves traffic. Immutable backups age out on their configured schedule.' } : null,
     releaseHistory: publishHistory.docs.map((job) => {
       const release = releasesByOutbox.get(String(job.id))
       const snapshot = snapshotsByID.get(relationID(job.snapshot) ?? '')
@@ -121,8 +123,8 @@ async function GETHandler(request: Request) {
         nextAttemptAt: typeof job.nextAttemptAt === 'string' ? job.nextAttemptAt : null,
         activatedAt: typeof release?.activatedAt === 'string' ? release.activatedAt : null,
         publishedAt: typeof snapshot?.createdAt === 'string' ? snapshot.createdAt : null,
-        reviewer: stageReviewer ? (stageReviewer.name || stageReviewer.email) : reviewer ? (reviewer.name || reviewer.email) : null,
-        actor: stageActor ? (stageActor.name || stageActor.email) : actor ? (actor.name || actor.email) : null,
+        reviewer: owner ? (stageReviewer ? (stageReviewer.name || stageReviewer.email) : reviewer ? (reviewer.name || reviewer.email) : null) : null,
+        actor: owner ? (stageActor ? (stageActor.name || stageActor.email) : actor ? (actor.name || actor.email) : null) : null,
         resultAt: typeof stage?.publishTime === 'string' ? stage.publishTime : typeof stage?.createdAt === 'string' ? stage.createdAt : typeof job.completedAt === 'string' ? job.completedAt : null,
         buildLogURL: `/operations?publish=${job.id}`,
       }
@@ -137,17 +139,17 @@ async function GETHandler(request: Request) {
       return { id: String(job.id), sequence: Number(job.sequence), status: String(job.status), attempts: Number(job.attempts ?? 0), events }
     })() : null,
     audit: {
-      docs: projected.map((item, index) => ({ ...item, actorId: typeof audit.docs[index]?.actor === 'object' ? audit.docs[index]?.actor?.id : audit.docs[index]?.actor, metadata: safeDetail(audit.docs[index]!.event, audit.docs[index]!.detail) })),
+      docs: projected.map((item, index) => ({ ...item, ...(owner ? { actorId: typeof audit.docs[index]?.actor === 'object' ? audit.docs[index]?.actor?.id : audit.docs[index]?.actor } : { who: typeof audit.docs[index]?.actor === 'object' && typeof audit.docs[index]?.actor?.name === 'string' ? audit.docs[index]?.actor.name : 'Staff member', actorId: null }), metadata: safeDetail(audit.docs[index]!.event, audit.docs[index]!.detail) })),
       page: audit.page,
       totalPages: audit.totalPages,
     },
-    shortcuts: [
+    shortcuts: owner ? [
       { label: 'Editorial review', href: '/editorial' },
       { label: 'Leads', href: '/leads' },
       { label: 'Applications', href: '/applications' },
-    ],
+    ] : [{ label: 'Editorial review', href: '/editorial' }],
     filterOptions: {
-      actors: users.docs.map(user => ({ id: user.id, label: user.name || user.email })),
+      actors: owner ? users.docs.map(user => ({ id: user.id, label: user.name || user.email })) : [],
       pages: pages.docs.map(page => ({ id: page.id, label: page.title })),
     },
   }, { headers: noStore })
@@ -165,8 +167,8 @@ async function POSTHandler(request: Request) {
     if (rollback.mode !== undefined && rollback.mode !== 'release' && rollback.mode !== 'change') return Response.json({ error: 'Choose a supported rollback scope.' }, { status: 400, headers: noStore })
     if (rollback.changeKeys !== undefined && (!Array.isArray(rollback.changeKeys) || rollback.changeKeys.length > 1 || rollback.changeKeys.some(key => typeof key !== 'string' || key.length > 200))) return Response.json({ error: 'Choose one approved change to roll back.' }, { status: 400, headers: noStore })
     const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
-    const actor = auth.user as { id: string; name?: string; email?: string; roles?: ('owner')[]; disabled?: boolean } | null
-    if (!actor || !hasRole(actor, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
+    const actor = auth.user as { id: string; name?: string; email?: string; roles?: ('owner' | 'approver')[]; disabled?: boolean } | null
+    if (!actor || !hasRole(actor, ['owner', 'approver'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
     const set = await prepareReviewedRollback(payload, actor, request.headers, rollback.releaseID, { mode: rollback.mode as 'release' | 'change' | undefined, changeKeys: rollback.changeKeys as string[] | undefined })
     return Response.json({ changeSet: { id: set.id, name: set.name, state: set.state }, reviewURL: '/editorial' }, { status: 201, headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Rollback preparation failed.' }, { status: 400, headers: noStore }) }
