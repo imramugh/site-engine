@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
-async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = []) {
+async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -21,9 +21,11 @@ async function composer(browser: Browser, sendFails = false, threads: Array<{ id
   await page.getByRole('button', { name: /First editable lead/ }).click()
   const reply = page.locator('[data-mail-reply-composer]')
   await expect(reply.getByLabel('Reply sender')).toHaveValue('team@example.test')
-  await reply.getByLabel('Reply subject').fill('  Exact subject  ')
-  await reply.getByLabel('Reply message').fill('  Exact body  ')
-  await reply.getByRole('button', { name: 'Prepare reply' }).click()
+  if (prepare) {
+    await reply.getByLabel('Reply subject').fill('  Exact subject  ')
+    await reply.getByLabel('Reply message').fill('  Exact body  ')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+  }
   return { context, page, reply, requests }
 }
 
@@ -89,7 +91,7 @@ test('ENG-033 an ambiguous send does not offer a repeat send or reuse its confir
 
 test('ENG-020 selects only a scoped provider conversation before explicit confirmation', async ({ browser }) => {
   const threads = [{ id: 'provider-thread-a', subject: 'Thread A' }, { id: 'provider-thread-b', subject: 'Thread B' }]
-  const { context, reply, requests, page } = await composer(browser, false, threads)
+  const { context, reply, requests, page } = await composer(browser, false, threads, false)
   try {
     await expect(reply.getByLabel('Existing conversation')).toHaveValue('provider-thread-a')
     await reply.getByLabel('Existing conversation').selectOption('provider-thread-b')
