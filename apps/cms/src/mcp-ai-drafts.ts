@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Payload } from 'payload'
 import { z } from 'zod'
@@ -6,6 +8,8 @@ import { enqueueConfiguredAIJob } from './configured-ai-jobs'
 import { canonicalHash } from './publishing'
 import { pageEditorHash, pageEditorProjection } from './page-editor'
 import type { IntegrationProvider } from './integrations'
+import { providerCapabilities } from './ai-providers'
+import { mediaStorageDirectory } from './media'
 
 type Current = { id: string; roles?: string[] }
 type Target = { collection: 'pages' | 'assets'; id: string; revision: string }
@@ -57,7 +61,22 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
   server.registerTool('suggest_summary', { title: 'Suggest page summary', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('summary', 'pages', id, idempotencyKey, expectedPageHash))
   server.registerTool('suggest_meta', { title: 'Suggest page metadata', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('meta', 'pages', id, idempotencyKey, expectedPageHash))
   server.registerTool('suggest_faq', { title: 'Suggest page FAQs', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('faq', 'pages', id, idempotencyKey, expectedPageHash))
-  server.registerTool('suggest_alt', { title: 'Suggest image alt text', description: 'Image-pixel alt suggestions are unavailable until a configured image-capable provider and bounded image-input path exist. This tool never infers visual content from filenames or metadata, and never changes assets.', inputSchema: ids, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, () => error('image_input_unavailable'))
+  server.registerTool('suggest_alt', { title: 'Suggest image alt text', description: 'Queue a bounded image-pixel alt-text suggestion for human review. Only configured vision-capable providers are used; this never infers visual content from filenames or metadata and never changes assets.', inputSchema: ids, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, async ({ id, idempotencyKey }) => {
+    if (!enabled) return error('role_access_required')
+    try {
+      const asset = await payload.findByID({ collection: 'assets', id, depth: 0, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
+      const route = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: 'alt' } }, limit: 1, depth: 0, overrideAccess: true })
+      const selected = route.docs[0] as unknown as { provider?: IntegrationProvider; fallbackProvider?: IntegrationProvider | null } | undefined
+      if (!selected?.provider || !providerCapabilities[selected.provider].imageInput) return error('image_input_unavailable')
+      const filename = typeof asset.filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/.test(asset.filename) ? asset.filename : ''
+      const mime = typeof asset.mimeType === 'string' && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.mimeType) ? asset.mimeType : ''
+      if (!filename || !mime) return error('image_input_unavailable')
+      const bytes = await readFile(resolve(mediaStorageDirectory(), filename)); if (!bytes.length || bytes.length > 60_000) return error('image_input_unavailable')
+      const target = { collection: 'assets', id, revision: revision('assets', asset) } as Target
+      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: selected.provider, fallbackProvider: selected.fallbackProvider ?? null, input: envelope('alt', target, { instruction: 'Describe only visible image content for concise accessible alt text.' }), imageDataUrl: `data:${mime};base64,${bytes.toString('base64')}`, maxOutputTokens: 240, idempotencyKey })
+      return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
+    } catch { return error('image_input_unavailable') }
+  })
   server.registerTool('get_ai_suggestion', { title: 'Get AI suggestion status', description: 'Read one of your AI suggestion jobs. Completed text remains a human-review draft and is never applied automatically.', inputSchema: z.object({ jobId: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ jobId }) => {
     if (!read) return error('insufficient_scope')
     try {

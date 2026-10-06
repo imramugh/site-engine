@@ -1319,6 +1319,7 @@ export interface ConfiguredAiJob {
   idempotencyKey: string;
   requestDigest: string;
   input: string;
+  imageDataUrl?: string | null;
   provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
   fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
   maxOutputTokens: number;
@@ -2593,6 +2594,7 @@ export interface ConfiguredAiJobsSelect<T extends boolean = true> {
   idempotencyKey?: T;
   requestDigest?: T;
   input?: T;
+  imageDataUrl?: T;
   provider?: T;
   fallbackProvider?: T;
   maxOutputTokens?: T;
