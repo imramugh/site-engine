@@ -26,7 +26,14 @@ try {
   const consumer = join(temp, "consumer"); await mkdir(consumer);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ name: "packed-theme-conformance-consumer", private: true, dependencies: { "@site-engine/contract": contract, "@site-engine/engine": engine, "@site-engine/theme-starter": starter, "@site-engine/theme-conformance": harness } }));
   await writeFile(join(consumer, "pnpm-workspace.yaml"), `overrides:\n  '@site-engine/contract': '${contract}'\n  '@site-engine/engine': '${engine}'\n  '@site-engine/theme-starter': '${starter}'\n  zod: '${zodTar}'\n`);
-  await run(consumer, ["install", "--offline", "--ignore-scripts"]);
+  // Seed an isolated store first, then prove the packed consumer can be
+  // recreated with networking disabled. GitHub runners start with no package
+  // metadata cache, so an unseeded --offline install tests cache warmth rather
+  // than the published package boundary.
+  const store = join(temp, "store");
+  await run(consumer, ["install", "--ignore-scripts", "--store-dir", store]);
+  await rm(join(consumer, "node_modules"), { recursive: true, force: true });
+  await run(consumer, ["install", "--offline", "--ignore-scripts", "--store-dir", store]);
   const cli = join(consumer, "node_modules/@site-engine/theme-conformance/scripts/theme-conformance.mjs");
   const evidence = join(temp, "evidence");
   const positive = await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", evidence], { cwd: consumer });
