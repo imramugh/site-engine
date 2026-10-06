@@ -68,7 +68,9 @@ test('ENG-020 clears a prior lead timeline before showing the newly selected lea
   try {
     const timeline = page.getByRole('region', { name: 'Mail timeline' })
     await expect(timeline).toContainText('Persisted matched reply')
-    await page.getByRole('button', { name: /Second editable lead/ }).click()
+    const loadedSecondTimeline = page.waitForResponse((response) => response.url().includes('/api/mail-threads/lead/') && response.status() === 200)
+    await page.getByRole('button', { name: /Timeline switch lead/ }).click()
+    await loadedSecondTimeline
     await expect(timeline).toContainText('No matched mail in this conversation yet.')
     await expect(timeline).not.toContainText('Persisted matched reply')
   } finally { await context.close() }
