@@ -175,8 +175,8 @@ function managed(row: { user_id: string; session_id: string; client_id: string; 
 
 export function listManagedGrants(db: DatabaseSync, userId?: string, now = Date.now()): ManagedGrant[] {
   const rows = (userId
-    ? db.prepare('SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500').all(userId, now, now)
-    : db.prepare('SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500').all(now, now)) as Parameters<typeof managed>[0][]
+    ? db.prepare("SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND r.model IN ('Grant','AccessToken','RefreshToken') AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500").all(userId, now, now)
+    : db.prepare("SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND r.model IN ('Grant','AccessToken','RefreshToken') AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500").all(now, now)) as Parameters<typeof managed>[0][]
   return rows.map(managed).filter((item): item is ManagedGrant => Boolean(item))
 }
 
