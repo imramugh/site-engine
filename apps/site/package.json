@@ -3,7 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "astro dev", "build": "astro build", "preview": "astro preview", "typecheck": "astro check", "lint": "astro check", "generate:video": "node scripts/generate-synthetic-video.mjs" },
-  "dependencies": { "@site-engine/contract": "workspace:^", "@site-engine/engine": "workspace:^", "@site-engine/theme-starter": "workspace:^", "astro": "7.3.5" },
-  "devDependencies": { "@astrojs/check": "0.9.10", "typescript": "6.0.2" }
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "lint": "astro check",
+    "generate:video": "node scripts/generate-synthetic-video.mjs"
+  },
+  "dependencies": {
+    "@site-engine/contract": "workspace:^",
+    "@site-engine/engine": "workspace:^",
+    "@site-engine/theme-starter": "workspace:^",
+    "astro": "7.3.5",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "6.0.2"
+  }
 }

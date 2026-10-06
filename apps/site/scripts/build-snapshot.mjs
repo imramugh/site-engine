@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -27,7 +28,8 @@ function referencedMedia(snapshot) {
     }
   };
   deriveRoutes(snapshot, snapshot.settings.homepageId).routes.forEach(({ page }) => collect(page.blocks.filter((block) => !block.hidden)));
-  if (snapshot.settings.logo) ids.add(snapshot.settings.logo.id);
+  const logos = snapshot.settings.logos;
+  for (const logo of [logos?.primaryLight, logos?.primaryDark, logos?.fullLockupLight, logos?.fullLockupDark, logos?.symbolLight, logos?.symbolDark, snapshot.settings.logo]) if (logo) ids.add(logo.id);
   return ids;
 }
 async function copyReferencedMedia(snapshot, output) {
@@ -37,8 +39,7 @@ async function copyReferencedMedia(snapshot, output) {
   const uploadedRoot = resolve(process.env.SITE_MEDIA_DIR || bundledRoot);
   const destination = join(output, 'media'); await rm(destination, { recursive: true, force: true }); await mkdir(destination, { recursive: true });
   const copied = new Map();
-  const referenced = snapshot.media.filter((item) => references.has(item.id));
-  if (snapshot.settings.logo) referenced.push(snapshot.settings.logo);
+  const referenced = [...snapshot.media.filter((item) => references.has(item.id))];
   for (const id of references) if (!referenced.some(media => media.id === id)) throw new Error(`Referenced media is absent from snapshot: ${id}`);
   for (const media of referenced) {
     const selections = [{ filename: media.filename, sha256: media.sha256 }, ...Object.values(media.variants ?? {})];
@@ -193,6 +194,14 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
     await copyReferencedMedia(snapshot, staged);
+    const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
+    if (symbol) {
+      const prefix = normalizedBase === '/' ? '' : normalizedBase.replace(/\/$/, '');
+      const source = join(staged, 'media', symbol.filename);
+      const icon = async (filename, size) => writeFile(join(staged, filename), await sharp(source).resize({ width: size, height: size, fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer());
+      await Promise.all([icon('apple-touch-icon.png', 180), icon('icon-192.png', 192), icon('icon-512.png', 512)]);
+      await writeFile(join(staged, 'site.webmanifest'), JSON.stringify({ name: snapshot.settings.siteName, short_name: snapshot.settings.siteName, icons: [{ src: `${prefix}/icon-192.png`, type: 'image/png', sizes: '192x192' }, { src: `${prefix}/icon-512.png`, type: 'image/png', sizes: '512x512' }] }));
+    }
     await writeIndexNowVerificationFile({ output: staged });
     // This is consumed by the edge deployment adapter only after approval. It
     // contains no draft CMS data and is deterministic for a snapshot hash.
