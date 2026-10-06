@@ -17,7 +17,7 @@ import { authorizationUsable } from './mail-authorizations'
 import { hasFreshAuthentication, sessionIsUsable } from './identity'
 import { isRetryableSQLiteError } from './sqlite'
 import { mcpCatalogMeta } from './mcp-catalog'
-import { promptScope, registerMcpPrompts } from './mcp-prompts'
+import { mcpPromptCatalog, promptScope, registerMcpPrompts } from './mcp-prompts'
 import { registerMediaTools } from './mcp-media'
 import { registerReviewTools } from './mcp-review'
 import { registerChangeLogTools } from './mcp-change-log'
@@ -174,7 +174,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const auditMethod = knownMethods.has(body.method) ? body.method : 'unknown'
   const auditTool = body.method === 'tools/call' && knownTools.has(tool ?? '') ? tool : body.method === 'tools/call' ? 'unknown' : undefined
   try {
-    await payload.create({ collection: 'audit-events', data: { event: 'mcp.request', user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), method: auditMethod, tool: auditTool } }, overrideAccess: true })
+    await payload.create({ collection: 'audit-events', data: { event: 'mcp.request', user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), scopes: identity.scopes, method: auditMethod, tool: auditTool, batch: null, diff: null, result: 'requested' } }, overrideAccess: true })
   } catch (error) {
     if (isRetryableSQLiteError(error)) return new Response(JSON.stringify({ error: 'temporarily_unavailable', retryAfterSeconds: 1 }), { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '1' } })
     return new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
@@ -317,6 +317,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => resource(resourceUri, await frozenStyleGuide()))
   server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => resource(resourceUri, await glossary()))
   registerReadResource('block-library', 'site-engine://contract/block-library', 'Block library', blockLibrary)
+  registerReadResource('prompt-catalog', 'site-engine://catalog/prompts', 'Prompt catalog', { prompts: mcpPromptCatalog })
   server.registerResource('site-settings', 'site-engine://site/settings', { title: 'Site settings', description: `Owner-only read-only site metadata. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta(['owner']) }, async (resourceUri) => resource(resourceUri, await siteSettings().catch(() => ({ error: 'read_failed' }))))
   server.registerResource('installed-themes', 'site-engine://site/installed-themes', { title: 'Installed themes', description: `Owner-only installed theme compatibility metadata. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta(['owner']) }, async (resourceUri) => resource(resourceUri, await installedThemes().catch(() => ({ error: 'read_failed' }))))
   server.registerResource('site-summary', 'site-engine://site/summary', { title: 'Site summary', description: `Read-only scoped content totals. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => {
