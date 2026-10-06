@@ -35,6 +35,22 @@ it('reports an invalid snapshot build with its public page and block location', 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it('stops a static build on the same deterministic readiness code used by review', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-quality-blocker-'));
+  try {
+    const snapshot = fixture('Readiness blocker');
+    const page = snapshot.pages[0]!;
+    const block = page.blocks[0]!;
+    if (block.type !== 'hero') throw new Error('Fixture must start with a hero.');
+    block.body = '# A second authored heading.';
+    const input = await writeSnapshot(root, snapshot, 'quality-blocker.json');
+    const priorTheme = process.env.SITE_THEME_VERSION; const priorEngine = process.env.SITE_ENGINE_VERSION;
+    process.env.SITE_THEME_VERSION = '1.0.0'; process.env.SITE_ENGINE_VERSION = '1.0.0';
+    await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow('HEADING_H1_COUNT (pages.0.blocks)');
+    process.env.SITE_THEME_VERSION = priorTheme; process.env.SITE_ENGINE_VERSION = priorEngine;
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 function fixture(name: string): SiteSnapshot {
   const snapshot = structuredClone(neutralFixture);
   const section = snapshot.settings.sections[0];

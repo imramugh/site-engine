@@ -93,6 +93,22 @@ async function reviewHeaders(role: 'owner' | 'editor') {
 }
 
 describe('ENG-030 immutable review preview jobs', () => {
+  it('keeps advisory readiness warnings distinct from blocking codes', async () => {
+    const current = await fixture('quality-severity')
+    current.live.styleGuide = { bannedPhrases: ['Synthetic forbidden wording'] }
+    const after = structuredClone(current.changes[0]!.after) as Record<string, unknown>
+    const blocks = structuredClone(after.blocks) as Array<Record<string, unknown>>
+    blocks[0] = { ...blocks[0], body: 'Synthetic forbidden wording.' }
+    current.changes[0]!.after = { ...after, blocks }
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: current.changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const job = await prepare(current, { manifest: current.live, sequence: 0, versions })
+    const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest }))
+    const result = await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
+    expect(result.report).toMatchObject({ publishable: true, blockers: [] })
+    expect(result.report.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STYLE_READING_LEVEL', severity: 'warning' })]))
+  })
+
   it('uses canonical engine routes for section landings and rejects cyclic ancestry', () => {
     const snapshot = baseline()
     const section = snapshot.settings.sections[0]!
