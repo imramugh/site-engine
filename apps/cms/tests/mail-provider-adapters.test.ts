@@ -21,7 +21,7 @@ describe('Graph delta provider contracts', () => {
     }, 'staff@example.test')
     await expect(adapter.poll('token', 'inbox')).resolves.toMatchObject({ messages: [{ attachments: [], attachmentsPending: true }] })
     await expect(adapter.attachments('token', 'message-1')).resolves.toMatchObject([{ name: 'cv.pdf', providerAttachmentID: 'file-1' }])
-    expect(urls[1]).toBe('https://graph.microsoft.com/v1.0/me/messages/message-1/attachments?$select=id,name,contentType,size')
+    expect(urls[1]).toBe('https://graph.microsoft.com/v1.0/me/messages/message-1/attachments?$select=id,name,contentType,size&$top=20')
   })
   it('uses only the fixed delta endpoint, preserves a validated cursor, and rejects hostile links', async () => {
     const calls: string[] = []

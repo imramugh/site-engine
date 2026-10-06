@@ -93,7 +93,7 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
       aborted(signal)
       await unchanged(payload, active)
       const appended = await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
-      if (appended.matched && message.attachmentsPending) { const attachmentMetadata = await adapter.attachments(refreshed.accessToken, message.messageId); if (attachmentMetadata.length) await payload.update({ collection: 'mail-thread-messages', id: (appended.message as { id: string }).id, data: { attachmentMetadata }, overrideAccess: true }) }
+      if (appended.matched && message.attachmentsPending) { const attachmentMetadata = await adapter.attachments(refreshed.accessToken, message.messageId); aborted(signal); await unchanged(payload, active); if (attachmentMetadata.length) await payload.update({ collection: 'mail-thread-messages', id: (appended.message as { id: string }).id, data: { attachmentMetadata }, overrideAccess: true }) }
       processed += 1
     }
     nextCursor = page.cursor

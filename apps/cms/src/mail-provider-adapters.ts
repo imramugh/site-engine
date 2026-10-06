@@ -203,7 +203,9 @@ function graphMessage(value: Record<string, unknown>) {
   };
 }
 async function graphAttachments(fetcher: Fetcher, token: string, messageID: string) {
-  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size`, { headers: graphAuth(token) });
+  // Timeline storage deliberately retains metadata for at most 20 attachments;
+  // use Graph's fixed bounded collection rather than following provider links.
+  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size&$top=20`, { headers: graphAuth(token) });
   if (!response.ok) fail(response.status)
   const value = await json(response)
   if (!Array.isArray(value.value) || value.value.length > 20) throw new Error('provider_malformed_response')
