@@ -10,7 +10,7 @@ export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' |
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
-type CapturedChange = {
+export type CapturedChange = {
   collection: CapturedCollection
   id: string
   before: Record<string, unknown> | null
@@ -247,7 +247,13 @@ export async function markStaleIfNeeded(payload: Payload, set: Record<string, un
   return payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'stale', staleAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Promise<Record<string, unknown>>
 }
 
-async function quality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]) {
+export type ChangeSetQualityCheck = {
+  name: string
+  status: 'passed' | 'failed'
+  errors: Array<{ collection: string; id: string; message: string }>
+}
+
+export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[] }> {
   const errors: { collection: string; id: string; message: string }[] = []
   for (const change of changes) {
     if (!change.after) continue
@@ -319,7 +325,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_refresh', user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, rebased: rebased.length } }, overrideAccess: true, req })
     return set
   }
-  const details = action === 'submit' ? await quality(payload, req, changes) : undefined
+  const details = action === 'submit' ? await changeSetQuality(payload, req, changes) : undefined
   if (details?.checks.some((check) => check.status === 'failed')) throw new Error(`Change-set quality checks failed: ${details.checks.flatMap((check) => check.errors ?? []).map((error) => error.message).join('; ')}`)
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, preview: action === 'submit' ? { status: 'pending' } : undefined, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
