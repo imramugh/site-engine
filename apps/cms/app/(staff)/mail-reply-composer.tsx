@@ -4,7 +4,8 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import styles from './mail-reply-composer.module.css'
 
-type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string }
+type Attachment = { filename: string; mimeType: string; size: number; sha256: string }
+type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string; attachments?: Attachment[] }
 type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; assistantPrepared?: boolean; canAuthorize: boolean }
 type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: string } }
 
@@ -130,7 +131,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
           <h4>Review reply</h4>
           {assistantPrepared && <p>This exact envelope was prepared by a connected assistant. Confirming it permits that same connected assistant to send it once; it does not send email from this page.</p>}
           <dl><dt>From</dt><dd>{draft.sender}</dd><dt>To</dt><dd>{draft.recipient}</dd><dt>Subject</dt><dd>{draft.subject}</dd></dl>
-          <p className={styles.body}>{draft.body}</p>
+          <p className={styles.body}>{draft.body}</p>{draft.attachments?.length ? <><h5>Attachments included in this exact confirmation</h5><ul>{draft.attachments.map(item => <li key={`${item.sha256}:${item.filename}`}><strong>{item.filename}</strong> · {item.mimeType} · {item.size} bytes · SHA-256 {item.sha256}</li>)}</ul></> : null}
         </section>
         {!terminal && <div className={styles.actions}>
           <button type="button" disabled={busy} onClick={() => void action('edit')}>{grant ? 'Cancel confirmation and edit' : 'Edit reply'}</button>

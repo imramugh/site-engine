@@ -28,8 +28,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ target:
   }
   const selectedDraft = new URL(request.url).searchParams.get('draft')
   const prepared = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'prepared' } }, ...(selectedDraft ? [{ id: { equals: selectedDraft } }] : [])] }, sort: '-updatedAt', limit: 1, depth: 0, overrideAccess: true })
-  const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string } | undefined
-  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body, threadID: draft.threadID } : null, assistantPrepared: Boolean(draft && (draft as Record<string, unknown>).assistantClientIDHash), canAuthorize: true }, { headers: noStore })
+  const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string; attachments?: Array<{ filename: string; mimeType: string; size: number; sha256: string }> } | undefined
+  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body, threadID: draft.threadID, attachments: Array.isArray(draft.attachments) ? draft.attachments : [] } : null, assistantPrepared: Boolean(draft && (draft as Record<string, unknown>).assistantClientIDHash), canAuthorize: true }, { headers: noStore })
 }
 async function POSTHandler(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
