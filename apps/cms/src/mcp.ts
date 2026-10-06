@@ -695,16 +695,12 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   })
   const structureFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'fixed_block', 'invalid_order', 'invalid_block', 'items_not_supported', 'invalid_item_index'])
   const editableStructure = (block: { type: string }) => blockCatalog.some((item) => item.type === block.type && item.insertable)
-  const capturedQuality = async (changeSetId: string) => withPayloadTransaction(payload, async req => {
-    const set = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as { changes?: unknown[] }
-    return changeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
-  })
   const blockSave = async (tool: string, pageId: string, changeSetId: string, expectedChangeSetRevision: number, expectedPageHash: string, mutate: (draft: ReturnType<typeof pageEditorProjection>, existingRecord: Record<string, unknown>) => { batch: Record<string, unknown>; diff: Record<string, unknown> }) => {
     const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
     const draft = pageEditorProjection(existing)
     const { batch, diff } = mutate(draft, existing)
-    const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool, scopes: identity.scopes, result: 'draft_saved', batch, diff } } })
-    const quality = await capturedQuality(changeSetId)
+    const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool, scopes: identity.scopes, result: 'draft_saved', batch, diff } }, evaluateQuality: (req, set) => evaluateChangeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : []) })
+    const quality = result.quality as Awaited<ReturnType<typeof changeSetQuality>>
     return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness })
   }
   const blockWriteSchema = { pageId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedPageHash: z.string().regex(/^[a-f0-9]{64}$/) }
@@ -813,8 +809,8 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
       if (index < 0) throw new Error('block_not_found')
       const previous = draft.blocks[index]
       draft.blocks[index] = replacement as typeof draft.blocks[number]
-      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId }, diff: { blocks: [{ id: blockId, before: previous, after: replacement }] } } } })
-      const quality = await capturedQuality(changeSetId)
+      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId }, diff: { blocks: [{ id: blockId, before: previous, after: replacement }] } } }, evaluateQuality: (req, set) => evaluateChangeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : []) })
+      const quality = result.quality as Awaited<ReturnType<typeof changeSetQuality>>
       return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness })
     } catch (error) { return structureFailure(error) }
   })

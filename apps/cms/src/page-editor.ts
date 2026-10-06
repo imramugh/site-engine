@@ -50,6 +50,7 @@ export type PageEditorSaveResult = {
   changeSetRevision: number
   replayed: boolean
   noOp: boolean
+  quality?: unknown
 }
 
 const uuid =
@@ -233,6 +234,7 @@ export async function applyPageEditorSave(input: {
   save: PageEditorSave
   initialBaseline?: PreviewBaseline
   audit?: PageEditorAudit
+  evaluateQuality?: (req: PayloadRequest, changeSet: Record<string, unknown>) => Promise<unknown>
 }): Promise<PageEditorSaveResult> {
   const { payload, req, actor, save } = input
   if (!hasRole(actor, ['owner', 'approver', 'editor']))
@@ -275,6 +277,7 @@ export async function applyPageEditorSave(input: {
     req,
   })) as unknown as Record<string, unknown>
   editableSet(set, actor, save.changeSetID)
+  const withQuality = async (result: PageEditorSaveResult, changeSet: Record<string, unknown>) => input.evaluateQuality ? { ...result, quality: await input.evaluateQuality(req, changeSet) } : result
   if (desired.kicker || desired.lede || desired.lastReviewed) {
     const previewContext = await previewThemeContext({
       payload,
@@ -292,23 +295,23 @@ export async function applyPageEditorSave(input: {
   const desiredHash = pageEditorHash(desired)
   if (currentHash === desiredHash) {
     if (currentHash === save.expectedPageHash)
-      return {
+      return withQuality({
         pageID: save.pageID,
         changeSetID: save.changeSetID,
         pageHash: currentHash,
         changeSetRevision: Number(set.revision ?? 0),
         replayed: false,
         noOp: true,
-      }
+      }, set)
     if (replayed(set, save, desiredHash))
-      return {
+      return withQuality({
         pageID: save.pageID,
         changeSetID: save.changeSetID,
         pageHash: currentHash,
         changeSetRevision: Number(set.revision ?? 0),
         replayed: true,
         noOp: false,
-      }
+      }, set)
   }
   if (currentHash !== save.expectedPageHash) throw new Error('STALE_PAGE_EDIT')
   if (Number(set.revision ?? 0) !== save.expectedChangeSetRevision)
@@ -342,14 +345,14 @@ export async function applyPageEditorSave(input: {
     overrideAccess: true,
     req,
   })
-  return {
+  return withQuality({
     pageID: save.pageID,
     changeSetID: save.changeSetID,
     pageHash: desiredHash,
     changeSetRevision: Number(updatedSet.revision ?? 0),
     replayed: false,
     noOp: false,
-  }
+  }, updatedSet as unknown as Record<string, unknown>)
 }
 
 export async function executePageEditorSave(input: {
@@ -358,6 +361,7 @@ export async function executePageEditorSave(input: {
   save: PageEditorSave
   initialBaseline?: PreviewBaseline
   audit?: PageEditorAudit
+  evaluateQuality?: (req: PayloadRequest, changeSet: Record<string, unknown>) => Promise<unknown>
 }): Promise<PageEditorSaveResult> {
   let tails = writeTails.get(input.payload)
   if (!tails) {
