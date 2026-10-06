@@ -5,9 +5,9 @@ import { getPayload } from 'payload'
 import { z } from 'zod'
 import { AppearanceOptions, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
-import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
+import { compatibilityReport, getInstalledTheme, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
-import { createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
+import { changeSetQuality, createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
@@ -21,7 +21,7 @@ import { registerMediaTools } from './mcp-media'
 import { registerReviewTools } from './mcp-review'
 import { registerChangeLogTools } from './mcp-change-log'
 import { registerCrmTools } from './mcp-crm'
-import { archivePage } from './redirect-lifecycle'
+import { archivePage, normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -30,11 +30,12 @@ const knownMethods = new Set([
   'resources/list', 'resources/templates/list', 'resources/read',
   'prompts/list', 'prompts/get',
 ])
-const knownTools = new Set(['list_changes', 'request_rollback', 'start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'find_media', 'get_media_usage', 'update_media', 'list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'get_reply_status', 'send_reply'])
+const knownTools = new Set(['list_changes', 'request_rollback', 'start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'find_media', 'get_media_usage', 'update_media', 'list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'get_reply_status', 'send_reply', 'create_redirect', 'update_site_settings', 'update_nav_overrides', 'list_themes', 'get_theme_compatibility', 'switch_theme', 'update_theme_settings'])
 const protectedReadMethods = new Set(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'])
 const contentReadScope = 'mcp:content:read'
 const contentWriteScope = 'mcp:content:write'
 const redirectsReadScope = 'mcp:redirects:read'
+const redirectsWriteScope = 'mcp:redirects:write'
 const leadsReadScope = 'mcp:leads:read'
 const careersReadScope = 'mcp:careers:read'
 const leadsWriteScope = 'mcp:leads:write'
@@ -151,9 +152,9 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (!identity.active) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
   if (!rateLimit(`client:${identity.clientId}`) || !rateLimit(`user:${identity.userId}`)) return new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '60' } })
   const tool = typeof body.params?.name === 'string' ? body.params.name : undefined
-  const required = body.method === 'tools/call' && ['update_inquiry', 'update_lead', 'record_reply'].includes(tool ?? '') ? leadsWriteScope : body.method === 'tools/call' && tool === 'update_application' ? careersWriteScope : body.method === 'tools/call' && ['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'get_lead_emails', 'list_follow_ups'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['prepare_reply', 'get_reply_status', 'send_reply'].includes(tool ?? '') ? undefined : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && ['request_rollback', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_media'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
+  const required = body.method === 'tools/call' && ['update_inquiry', 'update_lead', 'record_reply'].includes(tool ?? '') ? leadsWriteScope : body.method === 'tools/call' && tool === 'update_application' ? careersWriteScope : body.method === 'tools/call' && ['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'get_lead_emails', 'list_follow_ups'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['prepare_reply', 'get_reply_status', 'send_reply'].includes(tool ?? '') ? undefined : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && tool === 'create_redirect' ? redirectsWriteScope : body.method === 'tools/call' && ['request_rollback', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'www-authenticate': `${challenge(origin.origin)}, error="insufficient_scope", scope="${required}"`, 'cache-control': 'no-store' } })
-  if (body.method === 'tools/list' && !identity.scopes.some((scope) => [contentReadScope, leadsReadScope, careersReadScope].includes(scope))) return new Response(JSON.stringify({ error: 'insufficient_scope', required: 'mcp:content:read mcp:leads:read mcp:careers:read' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
+  if (body.method === 'tools/list' && !identity.scopes.some((scope) => [contentReadScope, redirectsReadScope, redirectsWriteScope, leadsReadScope, careersReadScope].includes(scope))) return new Response(JSON.stringify({ error: 'insufficient_scope', required: 'mcp:content:read mcp:redirects:read mcp:redirects:write mcp:leads:read mcp:careers:read' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
   let current: Awaited<ReturnType<typeof payload.findByID>>
   try { current = await payload.findByID({ collection: 'users', id: identity.userId, overrideAccess: true }) } catch { return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } }) }
@@ -166,7 +167,7 @@ export async function handleMcp(request: Request): Promise<Response> {
     if (isRetryableSQLiteError(error)) return new Response(JSON.stringify({ error: 'temporarily_unavailable', retryAfterSeconds: 1 }), { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '1' } })
     return new Response(null, { status: 503, headers: { 'cache-control': 'no-store' } })
   }
-  const read = identity.scopes.includes(contentReadScope); const redirects = identity.scopes.includes(redirectsReadScope); const leads = identity.scopes.includes(leadsReadScope); const careers = identity.scopes.includes(careersReadScope)
+  const read = identity.scopes.includes(contentReadScope); const redirects = identity.scopes.includes(redirectsReadScope); const redirectWrite = identity.scopes.includes(redirectsWriteScope); const leads = identity.scopes.includes(leadsReadScope); const careers = identity.scopes.includes(careersReadScope)
   const write = identity.scopes.includes(contentWriteScope) && Array.isArray((current as { roles?: string[] }).roles) && (current as { roles: string[] }).roles.some((role) => role === 'editor' || role === 'approver' || role === 'owner')
   const denied = (scope: string) => ({ isError: true, ...text({ error: 'insufficient_scope', required: scope }) })
   const unavailable = () => ({ isError: true, ...text({ error: 'read_failed' }) })
@@ -176,10 +177,11 @@ export async function handleMcp(request: Request): Promise<Response> {
   const notFound = () => ({ isError: true, ...text({ error: 'not_found' }) })
   const siteSettings = async () => {
     if (!owner) return { error: 'owner_access_required' }
-    const result = await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, user: current, overrideAccess: false })
+    const result = await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user: current, overrideAccess: false })
     const setting = result.docs[0] as unknown as Record<string, unknown> | undefined
     if (!setting) return { status: 'not-configured' }
-    return { siteName: setting.siteName, legalName: setting.legalName, homepageId: setting.homepageId, defaultLocale: setting.defaultLocale, organizationType: setting.organizationType, logo: setting.logo, logos: setting.logos, contactEmail: setting.contactEmail, contactPhone: setting.contactPhone, address: setting.address, linkedIn: setting.linkedIn, incident: setting.incident, navigation: setting.navigation, seoDescription: setting.seoDescription, searchEnabled: setting.searchEnabled, crawlerPolicy: setting.crawlerPolicy }
+    const settings = capturedSnapshot('site-settings', setting) ?? {}
+    return { id: setting.id, ...settings, settingsHash: canonicalHash(settings), navigationHash: canonicalHash(settings.navigation ?? null) }
   }
   /** Published releases only retain a relationship ID at depth 0. Resolve the
    * immutable snapshot through the caller-scoped collection read instead of
@@ -194,8 +196,18 @@ export async function handleMcp(request: Request): Promise<Response> {
   const installedThemes = async () => {
     if (!owner) return { error: 'owner_access_required' }
     const manifest = await publishedManifest()
-    if (!manifest) return { status: 'not-configured', themes: [] }
-    return { themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
+    const setting = (await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user: current, overrideAccess: false })).docs[0] as unknown as Record<string, unknown> | undefined
+    const selection = setting?.selection as { id?: unknown } | null ?? null; const settings = setting?.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}
+    const activeSettings = typeof selection?.id === 'string' && settings[selection.id] && typeof settings[selection.id] === 'object' ? settings[selection.id] : {}
+    if (!manifest) return { status: 'not-configured', selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: [] }
+    return { selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
+  }
+  const themeCompatibility = async (id: string, version: string) => {
+    const [registry, manifest] = await Promise.all([loadThemeRegistry(), publishedManifest()])
+    const installed = getInstalledTheme(registry, id, version)
+    if (!installed) return { error: 'theme_not_installed' }
+    if (!manifest) return { status: 'not-configured', id, version }
+    return { id, version, contract: installed.manifest.contract, compatibility: compatibilityReport(manifest, installed.manifest) }
   }
   const frozenPageQuality = async (id: string) => {
     const manifest = await publishedManifest() as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
@@ -361,6 +373,8 @@ export async function handleMcp(request: Request): Promise<Response> {
   server.registerTool('search_content', { title: 'Search content', description: `Search up to 25 scoped pages by title or summary. ${toolLimits}`, inputSchema: z.object({ query: z.string().min(1).max(100) }).strict(), outputSchema: searchOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ query }) => { if (!read) return denied(contentReadScope); try { const result = await payload.find({ collection: 'pages', where: { or: [{ title: { contains: query } }, { summary: { contains: query } }] }, limit: 25, depth: 0, draft: true, user: current, overrideAccess: false }); return structured({ items: result.docs.map((doc) => { const item = page(doc as unknown as Record<string, unknown>); return { id: String(item.id), title: String(item.title), slug: String(item.slug), summary: String(item.summary), template: TemplateSchema.parse(item.template) } }) }) } catch { return unavailable() } })
   server.registerTool('get_site_settings', { title: 'Get site settings', description: `Read Owner-only site metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await siteSettings()) } catch { return unavailable() } })
   server.registerTool('list_installed_themes', { title: 'List installed themes', description: `Read Owner-only installed theme compatibility metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await installedThemes()) } catch { return unavailable() } })
+  server.registerTool('list_themes', { title: 'List themes', description: `Alias for list_installed_themes. Read Owner-only installed theme compatibility metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await installedThemes()) } catch { return unavailable() } })
+  server.registerTool('get_theme_compatibility', { title: 'Get theme compatibility', description: `Check an installed theme against the frozen published site. Owner-only. ${toolLimits}`, inputSchema: z.object({ id: z.string().min(1).max(120), version: z.string().min(1).max(120) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id, version }) => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await themeCompatibility(id, version)) } catch { return unavailable() } })
   server.registerTool('get_page_quality', { title: 'Get frozen page quality', description: `Read deterministic page quality from the frozen published snapshot. ${toolLimits}`, inputSchema: { id: z.string().uuid() }, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { return text(await frozenPageQuality(id)) } catch { return unavailable() } })
   server.registerTool('audit_page', { title: 'Audit draft page', description: `Read deterministic blockers, warnings, freshness, and an identity hash for one current editable draft page. ${toolLimits}`, inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: auditPageOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { const result = await auditPage(id); return 'error' in result ? text(result) : structured(result) } catch { return unavailable() } })
   server.registerTool('list_stale_pages', { title: 'List stale draft pages', description: `List a deterministic page of up to 100 current editable draft pages past the review-freshness threshold. ${toolLimits}`, inputSchema: stalePagesInput, outputSchema: stalePagesOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ limit = 100, cursor }) => { if (!read) return denied(contentReadScope); try { return structured(await stalePages(limit, cursor)) } catch { return unavailable() } })
@@ -506,6 +520,95 @@ export async function handleMcp(request: Request): Promise<Response> {
     req.headers.set('x-site-engine-change-set', changeSetId)
     return set
   }
+  const ownerWriteFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'stale_settings', 'theme_not_installed', 'theme_incompatible'])
+  const changeSetResult = async (id: string, doc: Record<string, unknown>) => {
+    const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true }) as { revision?: number }
+    const quality = await withPayloadTransaction(payload, async (req) => {
+      req.user = current as never
+      const latest = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as { changes?: unknown[] }
+      return changeSetQuality(payload, req, Array.isArray(latest.changes) ? latest.changes as Parameters<typeof changeSetQuality>[2] : [])
+    })
+    return { changeSetId: id, revision: Number(set.revision ?? 0), draft: doc, checks: quality.checks, warnings: quality.warnings }
+  }
+  const siteWrite = async (changeSetId: string, expectedChangeSetRevision: number, expectedSettingsHash: string, data: Record<string, unknown>) => {
+    if (!write) return denied(contentWriteScope)
+    if (!owner) return ownerDenied()
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const found = await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
+        const existing = found.docs[0] as unknown as Record<string, unknown> | undefined
+        const before = capturedSnapshot('site-settings', existing) ?? {}
+        if (canonicalHash(before) !== expectedSettingsHash) throw new Error('stale_settings')
+        const allowed = new Set(['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'searchEnabled', 'crawlerPolicy'])
+        if (!Object.keys(data).length || Object.keys(data).some(key => !allowed.has(key))) throw new Error('invalid_settings')
+        const next = { ...before, ...data, key: 'active' }
+        return existing
+          ? payload.update({ collection: 'site-settings', id: String(existing.id), data: next, draft: true, user: current as never, overrideAccess: false, req })
+          : payload.create({ collection: 'site-settings', data: next, draft: true, user: current as never, overrideAccess: false, req })
+      })
+      return structured(await changeSetResult(changeSetId, capturedSnapshot('site-settings', result as unknown as Record<string, unknown>) ?? {}))
+    } catch (error) { return ownerWriteFailure(error) }
+  }
+  const siteSettingsInput = z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), settings: z.object({}).catchall(z.unknown()) }).strict()
+  server.registerTool('update_site_settings', { title: 'Update site settings', description: `Owner-only update of site settings through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: siteSettingsInput, annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings }) => siteWrite(changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings))
+  server.registerTool('update_nav_overrides', { title: 'Update navigation overrides', description: `Owner-only navigation update through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), navigation: z.unknown() }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, navigation }) => siteWrite(changeSetId, expectedChangeSetRevision, expectedSettingsHash, { navigation }))
+  server.registerTool('switch_theme', { title: 'Switch theme', description: `Owner-only draft theme selection through an explicit revisioned change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSelectionHash: z.string().regex(/^[a-f0-9]{64}$/), id: z.string().min(1).max(120), version: z.string().min(1).max(120) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSelectionHash, id, version }) => {
+    if (!write) return denied(contentWriteScope); if (!owner) return ownerDenied()
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const [found, registry, manifest] = await Promise.all([
+          payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user: current as never, overrideAccess: false, req }),
+          loadThemeRegistry(), publishedManifest(),
+        ])
+        const setting = found.docs[0] as unknown as Record<string, unknown> | undefined
+        const before = setting?.selection ?? null
+        if (canonicalHash(before) !== expectedSelectionHash) throw new Error('stale_settings')
+        const installed = getInstalledTheme(registry, id, version)
+        if (!installed) throw new Error('theme_not_installed')
+        if (manifest && !compatibilityReport(manifest, installed.manifest).compatible) throw new Error('theme_incompatible')
+        const selection = { id: installed.manifest.name, version: installed.manifest.version, contract: installed.manifest.contract, manifestDigest: installed.manifestDigest }
+        const settings = { ...(setting?.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}), [selection.id]: (setting?.settings as Record<string, unknown> | undefined)?.[selection.id] ?? {} }
+        return setting ? payload.update({ collection: 'theme-settings', id: String(setting.id), data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req }) : payload.create({ collection: 'theme-settings', data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req })
+      })
+      return structured(await changeSetResult(changeSetId, capturedSnapshot('theme-settings', result as unknown as Record<string, unknown>) ?? {}))
+    } catch (error) { return ownerWriteFailure(error) }
+  })
+  server.registerTool('update_theme_settings', { title: 'Update theme settings', description: `Owner-only theme settings update through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedSettingsHash: z.string().regex(/^[a-f0-9]{64}$/), settings: z.object({}).catchall(z.unknown()) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: { ...writeSecurity, requiredRoles: ['owner'] } } }, async ({ changeSetId, expectedChangeSetRevision, expectedSettingsHash, settings }) => {
+    if (!write) return denied(contentWriteScope); if (!owner) return ownerDenied()
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const found = await payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
+        const setting = found.docs[0] as unknown as Record<string, unknown> | undefined
+        if (!setting) throw new Error('theme_not_installed')
+        const allSettings = setting.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}
+        const selection = setting.selection as { id?: unknown; version?: unknown }
+        if (typeof selection?.id !== 'string') throw new Error('theme_not_installed')
+        const before = allSettings[selection.id] && typeof allSettings[selection.id] === 'object' ? allSettings[selection.id] : {}
+        if (canonicalHash(before) !== expectedSettingsHash) throw new Error('stale_settings')
+        const installed = getInstalledTheme(await loadThemeRegistry(), selection.id, typeof selection.version === 'string' ? selection.version : '')
+        if (!installed || Object.keys(settings).some(key => !installed.manifest.settingKeys.includes(key))) throw new Error('theme_not_installed')
+        return payload.update({ collection: 'theme-settings', id: String(setting.id), data: { settings: { ...allSettings, [selection.id]: settings } }, draft: true, user: current as never, overrideAccess: false, req })
+      })
+      return structured(await changeSetResult(changeSetId, capturedSnapshot('theme-settings', result as unknown as Record<string, unknown>) ?? {}))
+    } catch (error) { return ownerWriteFailure(error) }
+  })
+  const redirectWriteSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [redirectsWriteScope] }], requiredScopes: [redirectsWriteScope], effectiveUserRequired: true }
+  server.registerTool('create_redirect', { title: 'Create redirect', description: `Create a validated one-hop redirect through an explicit revisioned draft change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), requestKey: z.string().uuid(), from: z.string().min(1).max(512), to: z.string().min(1).max(512) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: redirectWriteSecurity.securitySchemes, authorization: redirectWriteSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, from, to }) => {
+    if (!redirectWrite) return denied(redirectsWriteScope)
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const candidate = normalizedRedirect({ from, to })
+        const existing = await payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
+        validateRedirectSet([...existing.docs.map(item => ({ from: String(item.from), to: String(item.to), status: 301 })), candidate])
+        return payload.create({ collection: 'redirects', data: { id: requestKey, ...candidate }, draft: true, user: current as never, overrideAccess: false, req })
+      })
+      return structured(await changeSetResult(changeSetId, redirect(result as unknown as Record<string, unknown>)))
+    } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable']) }
+  })
   const currentPage = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageId: string, expectedPageHash: string) => {
     const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
     if (structuralPageHash(existing) !== expectedPageHash) throw new Error('STALE_PAGE_EDIT')
