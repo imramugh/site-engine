@@ -753,7 +753,11 @@ function BlockEditor({
       data-page-editor-block-id={block.id}
       data-page-editor-block-active={active ? 'true' : 'false'}
       open={active}
-      onFocus={onSelect}
+      onFocus={(event) => {
+        // Escape returns focus to the summary without reopening the panel.
+        // Enter/Space and pointer activation still use the summary click handler.
+        if (event.target !== event.currentTarget.querySelector('summary')) onSelect()
+      }}
     >
       <summary
         onClick={(event) => {

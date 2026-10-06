@@ -47,7 +47,7 @@ test('Owner sees OAuth mailbox availability and mocked authorization results wit
   await owner.page.locator('[data-email-provider="microsoft"]').getByRole('button', { name: 'Connect' }).click()
   await expect(owner.page).toHaveURL(/\/api\/email-workspace\/oauth\/microsoft$/)
   await owner.page.goto('/integrations?tab=email&mailbox=connected&provider=microsoft')
-  await expect(owner.page.getByRole('status')).toContainText('Microsoft 365 mailbox connected.')
+  await expect(owner.page.locator('[data-email-workspace]').getByRole('status')).toContainText('Microsoft 365 mailbox connected.')
   await expect(owner.page.locator('main')).not.toContainText('synthetic-code')
   await owner.page.goto('/integrations?tab=email&mailbox=authorization_failed&provider=google')
   await expect(owner.page.locator('[data-email-workspace] [role="alert"]')).toContainText('Mailbox authorization could not be completed. No mailbox was connected.')
