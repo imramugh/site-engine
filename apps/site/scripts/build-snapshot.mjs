@@ -20,16 +20,16 @@ function qualityError(report) {
   if (report.publishable) return undefined;
   return `Quality checks failed: ${report.blockers.map((item) => `${item.code} (${item.path}): ${item.message}`).join('; ')}`;
 }
-async function generatedStructuredData(snapshot, artifact) {
+export async function generatedStructuredData(snapshot, artifact, required) {
   const routes = deriveRoutes(snapshot, snapshot.settings.homepageId).routes.filter(({ page }) => page.status === 'published');
   const entries = await Promise.all(routes.map(async ({ page, canonicalPath }) => {
     const relativePath = canonicalPath === '/' ? 'index.html' : join(canonicalPath.replace(/^\//, ''), 'index.html');
     try {
       const source = await readFile(join(artifact, relativePath), 'utf8');
       const match = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i.exec(source);
-      if (!match) return undefined;
+      if (!match) return required ? [page.id, undefined] : undefined;
       try { return [page.id, JSON.parse(match[1])]; } catch { return [page.id, undefined]; }
-    } catch { return undefined; }
+    } catch { return required ? [page.id, undefined] : undefined; }
   }));
   return Object.fromEntries(entries.filter(Boolean));
 }
@@ -215,7 +215,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
-    const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged) });
+    const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, themeComponentsRoot === undefined) });
     const renderedQualityError = qualityError(renderedQuality);
     if (renderedQualityError) throw new Error(renderedQualityError);
     await copyReferencedMedia(snapshot, staged);
