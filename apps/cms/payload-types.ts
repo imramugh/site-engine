@@ -805,6 +805,10 @@ export interface MailboxConfiguration {
   testedAt?: string | null;
   inboundCursor?: string | null;
   inboundCursorRevision?: string | null;
+  inboundNextAttemptAt?: string | null;
+  inboundFailureCount?: number | null;
+  inboundLastError?: string | null;
+  inboundLastSyncedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2142,6 +2146,10 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   testedAt?: T;
   inboundCursor?: T;
   inboundCursorRevision?: T;
+  inboundNextAttemptAt?: T;
+  inboundFailureCount?: T;
+  inboundLastError?: T;
+  inboundLastSyncedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

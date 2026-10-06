@@ -22,6 +22,10 @@ export const MailboxConfigurations: CollectionConfig = {
     { name: 'testedAt', type: 'date' },
     { name: 'inboundCursor', type: 'text', maxLength: 1000, admin: { hidden: true } },
     { name: 'inboundCursorRevision', type: 'text', maxLength: 32, admin: { hidden: true } },
+    { name: 'inboundNextAttemptAt', type: 'date', admin: { hidden: true } },
+    { name: 'inboundFailureCount', type: 'number', defaultValue: 0, min: 0, admin: { hidden: true } },
+    { name: 'inboundLastError', type: 'text', maxLength: 80, admin: { hidden: true } },
+    { name: 'inboundLastSyncedAt', type: 'date', admin: { hidden: true } },
   ],
 }
 
