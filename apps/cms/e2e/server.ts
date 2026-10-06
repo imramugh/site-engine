@@ -174,9 +174,21 @@ const { GET: previewSession } = await import('../app/api/auth/preview/review-ses
 const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
 const replyRoute = await import('../app/api/mail-replies/[target]/[id]/route.js')
 const { setReplyDeliveryForTest } = await import('../src/mail-replies.js')
+const { sendAreaMail } = await import('../src/mailboxes.js')
 const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
-const fixtureReplyDeliveries: unknown[] = []
-if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (_payload, _area, message) => { fixtureReplyDeliveries.push(message); return { provider: 'google', messageID: 'fixture-provider-send' } })
+const fixtureReplyDeliveries: Array<{ threadID: string | null; mime: string; messageID: string }> = []
+if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
+  if (url.includes('/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
+  if (url.endsWith('/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
+  if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] })
+  if (url.endsWith('/messages/send')) {
+    const body = JSON.parse(String(init.body)) as { raw?: string; threadId?: string }
+    const mime = Buffer.from(String(body.raw ?? ''), 'base64url').toString('utf8')
+    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : null, mime, messageID: 'fixture-provider-send' })
+    return Response.json({ id: 'fixture-provider-send', threadId: body.threadId ?? 'fixture-new-thread' })
+  }
+  throw new Error('unexpected_fixture_provider_request')
+}))
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -458,6 +470,7 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') { json(response, { deliveries: fixtureReplyDeliveries.map(item => ({ threadID: item.threadID, mime: item.mime, messageID: item.messageID })) }); return }
   if (request.method === 'POST' && request.url === '/__e2e/mail-reply-fixture') {
     void (async () => {
       const state = new URL(await startMailboxOAuth(payload, 'google', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
