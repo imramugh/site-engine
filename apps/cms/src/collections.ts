@@ -787,6 +787,7 @@ export const PublishOutbox: CollectionConfig = {
     { name: 'completedAt', type: 'date', admin: { readOnly: true } },
     { name: 'completionEvidence', type: 'json', admin: { readOnly: true } },
     { name: 'errorCode', type: 'text', admin: { readOnly: true } },
+    { name: 'renderDiagnostics', type: 'json', admin: { readOnly: true } },
     { name: 'correlationID', type: 'text', required: true, admin: { readOnly: true } },
     { name: 'lastError', type: 'textarea', admin: { readOnly: true } },
   ],

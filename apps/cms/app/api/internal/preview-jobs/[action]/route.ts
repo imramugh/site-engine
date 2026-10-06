@@ -18,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
       if (typeof body.id !== 'string' || typeof body.leaseToken !== 'string') throw new Error('Job ID and lease token are required.')
       if (action === 'renew') return renewPreviewRenderLease(payload, req, body.id, body.leaseToken)
       if (action === 'complete') return completePreviewRenderJob(payload, req, body.id, body.leaseToken, { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) })
-      if (action === 'fail') return failPreviewRenderJob(payload, req, body.id, body.leaseToken, String(body.errorCode))
+      if (action === 'fail') return failPreviewRenderJob(payload, req, body.id, body.leaseToken, String(body.errorCode), undefined, body.diagnostics)
       throw new Error('Unknown worker action.')
     })
     if (action !== 'claim') return Response.json({ job: result }, { headers: noStore })

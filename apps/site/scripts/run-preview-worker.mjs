@@ -167,7 +167,8 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
     await stopHeartbeat();
     if (!leaseLost) {
       const errorCode = error instanceof WorkerError ? error.code : controller.signal.aborted ? 'BUILD_CANCELLED' : 'BUILD_FAILED';
-      try { await api('fail', { ...identity, errorCode }); } catch { /* The expired lease is reclaimable by the next worker. */ }
+      const diagnostics = Array.isArray(error?.diagnostics) ? error.diagnostics.slice(0, 100).map(({ code, path, pageId, blockId, message }) => ({ code, path, ...(pageId ? { pageId } : {}), ...(blockId ? { blockId } : {}), message })) : undefined;
+      try { await api('fail', { ...identity, errorCode, ...(diagnostics ? { diagnostics } : {}) }); } catch { /* The expired lease is reclaimable by the next worker. */ }
     }
     throw new WorkerError(leaseLost ? 'LEASE_LOST' : error instanceof WorkerError ? error.code : 'BUILD_FAILED');
   } finally {
