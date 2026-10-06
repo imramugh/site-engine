@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createNotificationWorkerRunHandler, notificationWorkerAuthorized } from '../src/notification-worker'
+import { runNotificationCycle } from '../app/api/internal/notification-worker/run/route'
 
 describe('notification worker boundary', () => {
   it('fails closed without a configured matching bearer token', async () => {
@@ -18,5 +19,11 @@ describe('notification worker boundary', () => {
     const response = await handler(new Request('http://cms.test/api/internal/notification-worker/run', { method: 'POST', headers: { authorization: `Bearer ${'t'.repeat(32)}` } }))
     expect(response.status).toBe(200); await expect(response.json()).resolves.toEqual({ delivery: { id: 'delivery-id', state: 'delivered' } })
     if (previous === undefined) delete process.env.NOTIFICATION_WORKER_TOKEN; else process.env.NOTIFICATION_WORKER_TOKEN = previous
+  })
+
+  it('continues urgent dispatch when monitor or scheduled follow-up work fails', async () => {
+    const calls: string[] = []
+    await expect(runNotificationCycle({}, { monitor: async () => { calls.push('monitor'); throw new Error('monitor unavailable') }, followUps: async () => { calls.push('follow-ups'); throw new Error('schedule unavailable') }, dispatch: async () => { calls.push('dispatch'); return { id: 'urgent-receipt', state: 'delivered' } } })).resolves.toEqual({ id: 'urgent-receipt', state: 'delivered' })
+    expect(calls).toEqual(['monitor', 'follow-ups', 'dispatch'])
   })
 })
