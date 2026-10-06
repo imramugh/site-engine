@@ -10,6 +10,12 @@ async function owner(browser: Browser) {
   return { context, page: await context.newPage() }
 }
 
+async function approver(browser: Browser) {
+  const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-shell-approver-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  return { context, page: await context.newPage() }
+}
+
 async function currentRelease(page: Page): Promise<Locator> {
   await page.goto('/operations?period=all&type=editorial')
   const row = page.locator('[data-change-log-row]').filter({ hasText: 'Change log current release approved for publishing' })
@@ -63,7 +69,34 @@ test('ENG-010 prepares selected and whole latest-release rollback drafts for nor
   await expect(wholeChanges).toContainText('A current published summary that the reviewed rollback browser flow restores.')
   await expect(wholeChanges.locator('article')).toHaveCount(1)
   await expect(wholeDetail.getByRole('button', { name: 'Submit for review', exact: true })).toBeVisible()
+  const discardWhole = session.page.waitForResponse((value) => value.url().endsWith('/api/editorial/discard') && value.request().method() === 'POST')
+  await wholeDetail.getByRole('button', { name: 'Discard', exact: true }).click()
+  expect((await discardWhole).status()).toBe(200)
   await session.context.close()
+})
+
+test('ENG-010 allows an Approver to inspect Operations and prepare a selected rollback without Owner retention access', async ({ browser }) => {
+  const session = await approver(browser)
+  try {
+    await session.page.goto('/editorial')
+    await session.page.getByRole('link', { name: 'Operations', exact: true }).click()
+    await expect(session.page).toHaveURL(/\/operations/)
+    await expect(session.page.getByRole('heading', { name: /Operations|Change log/i })).toBeVisible()
+    await expect(session.page.getByText(/Retention/i)).toHaveCount(0)
+    const row = await currentRelease(session.page)
+    await row.getByRole('link', { name: 'Open build log', exact: true }).click()
+    await expect(session.page.getByRole('region', { name: 'Build log' })).toBeVisible()
+    await session.page.goBack()
+    const selected = await currentRelease(session.page)
+    await selected.getByLabel('Rollback scope').selectOption({ index: 1 })
+    await prepareRollback(session.page, selected)
+    await expect(session.page.getByRole('status')).toContainText('Rollback change from release #56 is ready for editorial review.')
+    await session.page.getByRole('link', { name: 'Open editorial review' }).click()
+    const detail = session.page.getByRole('region', { name: 'Change set detail', exact: true })
+    const discarded = session.page.waitForResponse((value) => value.url().endsWith('/api/editorial/discard') && value.request().method() === 'POST')
+    await detail.getByRole('button', { name: 'Discard', exact: true }).click()
+    expect((await discarded).status()).toBe(200)
+  } finally { await session.context.close() }
 })
 
 test('ENG-022 Change log remains readable and accessible at desktop and mobile sizes', async ({ browser }) => {
