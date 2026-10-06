@@ -167,7 +167,7 @@ overrides:
 
 patchedDependencies:
   '@libsql/client@0.18.0': 272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1
-  '@payloadcms/drizzle@3.90.2': 83821ee2110d25cb9243f45e86e7f3ff1a435846f0b0a503ee48bee41a253a41
+  '@payloadcms/drizzle@3.90.2': e92cadc3dcd5a8497320c5ecd7bada7f7e2c2969f441bfbad28bca7e92aeb54f
 
 importers:
 
@@ -5700,7 +5700,7 @@ snapshots:
   '@payloadcms/db-sqlite@3.90.2(payload@3.90.2(graphql@16.14.2)(typescript@7.0.2))':
     dependencies:
       '@libsql/client': 0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1)
-      '@payloadcms/drizzle': 3.90.2(patch_hash=83821ee2110d25cb9243f45e86e7f3ff1a435846f0b0a503ee48bee41a253a41)(@libsql/client@0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1))(payload@3.90.2(graphql@16.14.2)(typescript@7.0.2))
+      '@payloadcms/drizzle': 3.90.2(patch_hash=e92cadc3dcd5a8497320c5ecd7bada7f7e2c2969f441bfbad28bca7e92aeb54f)(@libsql/client@0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1))(payload@3.90.2(graphql@16.14.2)(typescript@7.0.2))
       console-table-printer: 2.12.1
       drizzle-kit: 0.31.7
       drizzle-orm: 0.45.2(@libsql/client@0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1))
@@ -5741,7 +5741,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@payloadcms/drizzle@3.90.2(patch_hash=83821ee2110d25cb9243f45e86e7f3ff1a435846f0b0a503ee48bee41a253a41)(@libsql/client@0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1))(payload@3.90.2(graphql@16.14.2)(typescript@7.0.2))':
+  '@payloadcms/drizzle@3.90.2(patch_hash=e92cadc3dcd5a8497320c5ecd7bada7f7e2c2969f441bfbad28bca7e92aeb54f)(@libsql/client@0.18.0(patch_hash=272a1cf613f8228e47051f68894133aaf3dcd5d69f1320c25728d7ec19a8d9a1))(payload@3.90.2(graphql@16.14.2)(typescript@7.0.2))':
     dependencies:
       console-table-printer: 2.12.1
       dequal: 2.0.3
