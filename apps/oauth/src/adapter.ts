@@ -173,7 +173,7 @@ function managed(db: DatabaseSync, row: { user_id: string; session_id: string; c
   try {
     const parsed = JSON.parse(row.scopes) as unknown
     if (!managementID.test(row.management_id) || !Array.isArray(parsed) || !parsed.every((scope) => typeof scope === 'string')) return undefined
-    return { managementId: row.management_id, userId: row.user_id, sessionId: row.session_id, clientId: row.client_id, clientName: row.client_name ?? legacyClientName(db, row.client_id), resource: row.resource, scopes: parsed, expiresAt: row.expires_at, createdAt: row.created_at, ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}) }
+    return { managementId: row.management_id, userId: row.user_id, sessionId: row.session_id, clientId: row.client_id, clientName: row.client_name && row.client_name !== 'Connected assistant' ? row.client_name : legacyClientName(db, row.client_id), resource: row.resource, scopes: parsed, expiresAt: row.expires_at, createdAt: row.created_at, ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}) }
   } catch { return undefined }
 }
 
