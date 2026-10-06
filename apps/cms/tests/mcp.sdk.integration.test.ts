@@ -1282,5 +1282,24 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original human alt text' })
     await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Changed after suggestion' }, overrideAccess: true, context: { editorialInternal: true } })
     expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toMatchObject({ status: 'completed', stale: true, notApplied: true, suggestion: { text: 'A blue rectangular image.', untrusted: true } })
+    await expect(foreign.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    await payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 86_400_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+    expect(resultJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } }))).toEqual({ error: 'image_input_unavailable' })
+
+    const capAsset = await payload.create({ collection: 'assets', data: { alt: 'Cap test image', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-cap-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 0 } as never, overrideAccess: true })
+    const capped = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: capAsset.id, idempotencyKey: randomUUID() } })) as { jobId: string }
+    let capFetches = 0
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:03.000Z'), transport: async () => { capFetches += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(capFetches).toBe(0)
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: capped.jobId } }))).toMatchObject({ status: 'manual-review', notApplied: true })
+
+    const fallbackAsset = await payload.create({ collection: 'assets', data: { alt: 'Fallback image', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-fallback-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1_000_000 } as never, overrideAccess: true })
+    const fallback = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: fallbackAsset.id, idempotencyKey: randomUUID() } })) as { jobId: string }
+    const attempted: string[] = []
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:04.000Z'), transport: async request => { attempted.push(request.url); return new Response('{}', { status: 503 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(attempted).toEqual(['https://api.openai.com/v1/responses'])
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: fallback.jobId } }))).toMatchObject({ status: 'manual-review', notApplied: true })
   } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
 })
