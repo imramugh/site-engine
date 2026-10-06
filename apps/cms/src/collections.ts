@@ -885,9 +885,11 @@ export const IntegrationConfigurations: CollectionConfig = {
   // integration route. Payload's generic REST and Admin CRUD must not bypass it.
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
-    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'azureResourceEndpoint', type: 'text', maxLength: 300 },
+    { name: 'azureApiVersion', type: 'text', maxLength: 40 },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] },
     { name: 'monthlyCapMicroUsd', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
     { name: 'monthlyUsageMicroUsd', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },
     { name: 'usageMonth', type: 'text', maxLength: 7, admin: { readOnly: true } },
@@ -901,6 +903,19 @@ export const IntegrationConfigurations: CollectionConfig = {
     { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
     { name: 'testedAt', type: 'date', admin: { readOnly: true } },
+  ],
+}
+
+/** Owner-selected routing for durable assistant job classes. Credentials remain
+ * in integration-configurations; these records contain no secrets. */
+export const AIJobDefaults: CollectionConfig = {
+  slug: 'ai-job-defaults', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
+    { name: 'model', type: 'text', required: true, maxLength: 160 },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
   ],
 }
 
@@ -1175,7 +1190,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   hooks: { beforeChange: [({ data, originalDoc, operation }) => {
     if (operation === 'update' && originalDoc) {
-      for (const field of ['actor', 'idempotencyKey', 'requestDigest', 'input', 'provider', 'fallbackProvider', 'maxOutputTokens', 'configurationSnapshot']) data[field] = originalDoc[field]
+      for (const field of ['actor', 'idempotencyKey', 'requestDigest', 'input', 'imageDataUrl', 'provider', 'fallbackProvider', 'maxOutputTokens', 'configurationSnapshot']) data[field] = originalDoc[field]
     }
     return data
   }] },
@@ -1184,15 +1199,16 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, maxLength: 128, admin: { readOnly: true } },
     { name: 'requestDigest', type: 'text', required: true, maxLength: 64, admin: { readOnly: true } },
     { name: 'input', type: 'textarea', required: true, maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
-    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
-    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
+    { name: 'imageDataUrl', type: 'textarea', maxLength: 500000, access: { read: () => false }, admin: { hidden: true } },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'], admin: { readOnly: true } },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'], admin: { readOnly: true } },
     { name: 'maxOutputTokens', type: 'number', required: true, min: 1, max: 8192, admin: { readOnly: true } },
     { name: 'configurationSnapshot', type: 'json', required: true, admin: { readOnly: true } },
     { name: 'state', type: 'select', required: true, options: ['queued', 'running', 'completed', 'manual-review', 'failed'], defaultValue: 'queued', admin: { readOnly: true } },
     { name: 'leaseToken', type: 'text', admin: { hidden: true } }, { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
     { name: 'dispatchStartedAt', type: 'date', admin: { readOnly: true } }, { name: 'result', type: 'textarea', access: { read: () => false }, admin: { hidden: true } },
     { name: 'resultDigest', type: 'text', maxLength: 64, admin: { readOnly: true } }, { name: 'costStatus', type: 'select', options: ['actual', 'reserved'], admin: { readOnly: true } },
-    { name: 'usedProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } }, { name: 'fallbackUsed', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
+    { name: 'usedProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'], admin: { readOnly: true } }, { name: 'fallbackUsed', type: 'checkbox', defaultValue: false, admin: { readOnly: true } },
     { name: 'failureCode', type: 'text', maxLength: 64, admin: { readOnly: true } },
   ],
 }

@@ -1,9 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
-export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter'] as const
+export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
 export type ConnectionResult = { ok: boolean; code: 'connected' | 'unavailable' | 'rejected' }
-export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null }) => Promise<ConnectionResult>
+export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null; azureResourceEndpoint?: string | null; azureApiVersion?: string | null }) => Promise<ConnectionResult>
 export type ConnectionFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 const CONNECTION_TIMEOUT_MS = 5_000
@@ -36,21 +36,26 @@ export function decryptCredential(envelope: string, provider: IntegrationProvide
 export const credentialFingerprint = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12)
 
 /** No production provider is contacted by this foundation. Adapters inject this seam when approved. */
-export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
+export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null; azureResourceEndpoint?: string | null; azureApiVersion?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
   const credential = decryptCredential(input.encryptedCredential, input.provider)
   if (!transport) return { ok: false, code: 'unavailable' }
   try {
-    const result = await transport({ provider: input.provider, credential, model: input.model })
+    const result = await transport({ provider: input.provider, credential, model: input.model, azureResourceEndpoint: input.azureResourceEndpoint, azureApiVersion: input.azureApiVersion })
     return result?.ok === true && result.code === 'connected' ? { ok: true, code: 'connected' } : result?.code === 'unavailable' ? { ok: false, code: 'unavailable' } : { ok: false, code: 'rejected' }
   }
   catch { return { ok: false, code: 'rejected' } }
 }
 
-function endpoint(provider: IntegrationProvider, model: string, credential: string): { url: string; headers: Record<string, string> } | undefined {
+function endpoint(provider: IntegrationProvider, model: string, credential: string, azureEndpoint?: string | null): { url: string; headers: Record<string, string> } | undefined {
   const encodedModel = encodeURIComponent(model)
   if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }
   if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}`, headers: { 'x-goog-api-key': credential } }
+  if (provider === 'mistral') return { url: `https://api.mistral.ai/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
+  if (provider === 'azure-openai') {
+    const resource = azureResourceEndpoint(azureEndpoint)
+    return resource ? { url: `${resource}/openai/v1/models`, headers: { 'api-key': credential } } : undefined
+  }
   const [author, slug, ...rest] = model.split('/')
   if (!author || !slug || rest.length) return undefined
   return { url: `https://openrouter.ai/api/v1/model/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }
@@ -73,9 +78,9 @@ async function drainBounded(response: Response) {
 }
 
 /** Explicit, non-billable provider metadata lookup used only by the Owner test action. */
-export async function providerConnectionTransport(input: { provider: IntegrationProvider; credential: string; model?: string | null }, fetcher: ConnectionFetch = fetch): Promise<ConnectionResult> {
+export async function providerConnectionTransport(input: { provider: IntegrationProvider; credential: string; model?: string | null; azureResourceEndpoint?: string | null; azureApiVersion?: string | null }, fetcher: ConnectionFetch = fetch): Promise<ConnectionResult> {
   if (!input.model) return { ok: false, code: 'unavailable' }
-  const target = endpoint(input.provider, input.model, input.credential)
+  const target = endpoint(input.provider, input.model, input.credential, input.azureResourceEndpoint)
   if (!target) return { ok: false, code: 'unavailable' }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
@@ -103,6 +108,8 @@ export function publicIntegration(doc: Record<string, unknown>) {
     id: doc.id,
     provider: doc.provider,
     model: doc.model ?? null,
+    azureResourceEndpoint: doc.azureResourceEndpoint ?? null,
+    azureApiVersion: doc.azureApiVersion ?? null,
     fallbackProvider: doc.fallbackProvider ?? null,
     monthlyCapMicroUsd: doc.monthlyCapMicroUsd ?? null,
     monthlyUsageMicroUsd: doc.monthlyUsageMicroUsd ?? 0,
@@ -116,4 +123,16 @@ export function publicIntegration(doc: Record<string, unknown>) {
     credentialConfigured: typeof doc.encryptedCredential === 'string' && doc.encryptedCredential.length > 0,
     credentialHint: typeof doc.credentialFingerprint === 'string' ? `configured • ${doc.credentialFingerprint}` : null,
   }
+}
+
+export function azureResourceEndpoint(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 300) return undefined
+  try {
+    const url = new URL(value)
+    // The resource endpoint is an Azure-controlled DNS name, not a caller
+    // supplied request URL. Restricting it to one DNS label blocks paths,
+    // userinfo, query tricks, IP literals, and arbitrary internal hosts.
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || url.search || url.hash || url.pathname !== '/' || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.openai\.azure\.com$/i.test(url.hostname)) return undefined
+    return url.origin
+  } catch { return undefined }
 }

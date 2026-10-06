@@ -134,8 +134,9 @@ initialBaseline.pages.push({ id: applicationJobID, sectionId: applicationSection
 initialBaseline.pages.push({ id: draftApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Draft Role', summary: 'A draft synthetic role which must not accept applications.', slug: 'synthetic-draft-role', template: 'job', status: 'draft', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' } } })
 initialBaseline.pages.push({ id: expiredApplicationJobID, sectionId: applicationSectionID, title: 'Synthetic Expired Role', summary: 'An expired synthetic role which must not accept applications.', slug: 'synthetic-expired-role', template: 'job', status: 'published', publishedAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-02T12:00:00.000Z', blocks: [], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Toronto', addressCountry: 'CA' }, validThrough: '2026-10-02T00:00:00.000Z' } })
 const directEditSectionID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
-initialBaseline.settings.sections.push({ id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing', 'standard'], pageIds: [directEditPageID, pageEditorPageID, approverEditorPageID] })
+initialBaseline.settings.sections.push({ id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing', 'standard'], pageIds: [directEditPageID, pageEditorPageID, approverEditorPageID, galleryPageID] })
 initialBaseline.pages.push({ id: directEditPageID, sectionId: directEditSectionID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', template: 'landing', status: 'published', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
+initialBaseline.pages.push({ id: galleryPageID, sectionId: directEditSectionID, title: 'Gallery recipe target', summary: 'Synthetic standard page for the active-theme gallery browser workflow.', slug: 'gallery-recipe-target', template: 'standard', status: 'published', blocks: [] })
 const onPageReviewSectionID = '12345678-1234-4234-8234-1234567890aa'
 initialBaseline.settings.sections.push({ id: onPageReviewSectionID, name: 'On-page review browser section', slug: 'on-page-review', allowedTemplates: ['landing'], pageIds: [onPageReviewPageID] })
 initialBaseline.pages.push({ id: onPageReviewPageID, sectionId: onPageReviewSectionID, title: 'On-page review target', summary: 'Synthetic published page for the protected on-page review flow.', slug: 'review-target', template: 'landing', status: 'published', blocks: [{ id: onPageReviewBlockID, type: 'hero', heading: 'Original review heading', body: 'This is the live rendered review body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] })
@@ -239,7 +240,7 @@ let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
 let firstEditableApplicationID: string | undefined
 const mcpBearer = 'synthetic-e2e-mcp-bearer'
-let mcpIdentity: { userId: string; sessionId: string } | undefined
+let mcpIdentity: { userId: string; sessionId: string; scopes: string[] } | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -282,7 +283,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: mcpIdentity.scopes, userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
@@ -563,8 +564,8 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
-  if (request.method === 'POST' && request.url === '/__e2e/mcp-identity') {
-    void (async () => { const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: leadOwnerID!, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: leadOwnerID!, sessionId: String(session.id) }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
+  if (request.method === 'POST' && /^\/__e2e\/mcp-identity(?:\?[^/]*)?$/.test(request.url ?? '')) {
+    void (async () => { const content = new URL(request.url ?? '/', cmsOrigin).searchParams.get('content') === '1'; const user = content ? localOwnerID! : leadOwnerID!; const scopes = content ? ['mcp:content:read'] : ['mcp:leads:read', 'mcp:leads:reply']; const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: user, sessionId: String(session.id), scopes }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
   }
   const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
   if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {

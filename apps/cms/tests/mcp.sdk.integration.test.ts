@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -167,15 +167,16 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
   tokens.set('owner-token', { clientId: 'owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
   tokens.set('owner-personal-token', { clientId: 'owner-personal-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:careers:read'] })
+  tokens.set('sales-content-token', { clientId: 'sales-content-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:content:read'] })
   tokens.set('sales-token', { clientId: 'sales-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:leads:read'] }); tokens.set('sales-reply-token', { clientId: 'sales-reply-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] }); tokens.set('sales-write-token', { clientId: 'sales-write-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:leads:read', 'mcp:leads:write'] }); tokens.set('hiring-token', { clientId: 'hiring-client', userId: hiring.id, sessionId: hiringSession.id, scopes: ['mcp:careers:read'] }); tokens.set('hiring-write-token', { clientId: 'hiring-write-client', userId: hiring.id, sessionId: hiringSession.id, scopes: ['mcp:careers:read', 'mcp:careers:write'] })
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }, navigation: { header: [{ kind: 'page', id: page.id, label: 'SDK page', style: 'link' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable navigation reference.', style: 'link' }], footer: { columns: [{ kind: 'links', heading: 'Resources', links: [{ kind: 'page', id: page.id, label: 'SDK page' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable footer reference.' }] }], copyright: '© {year} MCP' } } }, draft: true, user: owner, overrideAccess: false })
-  const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const salesReplyClient = await clientFor('sales-reply-token'); const salesWriteClient = await clientFor('sales-write-token'); const hiringClient = await clientFor('hiring-token'); const hiringWriteClient = await clientFor('hiring-write-token')
+  const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesContentClient = await clientFor('sales-content-token'); const salesClient = await clientFor('sales-token'); const salesReplyClient = await clientFor('sales-reply-token'); const salesWriteClient = await clientFor('sales-write-token'); const hiringClient = await clientFor('hiring-token'); const hiringWriteClient = await clientFor('hiring-write-token')
   try {
     const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'suggest_summary', 'suggest_meta', 'suggest_faq', 'suggest_alt', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -185,9 +186,14 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect((await salesClient.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_leads' })]))
     await expect(salesClient.client.listResources()).rejects.toMatchObject({ code: 403 })
     await expect(salesClient.client.callTool({ name: 'get_tree', arguments: {} })).rejects.toMatchObject({ code: 403 })
+    // A valid bearer scope cannot turn into global CMS access: reads keep the
+    // effective user and overrideAccess remains false in the MCP projection.
+    const salesContentTree = await salesContentClient.client.callTool({ name: 'get_tree', arguments: {} })
+    expect(salesContentTree).toMatchObject({ isError: true })
+    expect(resultJson(salesContentTree)).toEqual({ error: 'read_failed' })
     const [resources, templates, prompts] = await Promise.all([editorClient.client.listResources(), editorClient.client.listResourceTemplates(), editorClient.client.listPrompts()])
     expect(resources.resources.map((entry) => entry.uri).sort()).toEqual(expect.arrayContaining([
-      'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
+      'site-engine://catalog/prompts', 'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
     ]))
     expect(templates.resourceTemplates).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'page', uriTemplate: 'site-engine://page/{id}' })]))
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['add-faq', 'build-page-from-recipe', 'create-section', 'monthly-content-review', 'plan-page', 'refresh-page-facts', 'review-content', 'write-service-page'])
@@ -199,6 +205,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       })
     }
     for (const prompt of prompts.prompts) expect(prompt.description).toContain('cannot publish, approve, manage users, permanently delete content')
+    for (const prompt of prompts.prompts) expect(prompt.description).toMatch(/Required OAuth scope: mcp:(content|leads|careers):read; effective CMS user required/)
     for (const uri of ['site-engine://site/settings', 'site-engine://site/installed-themes']) expect(resources.resources.find((entry) => entry.uri === uri)?._meta).toMatchObject({ authorization: { requiredRoles: ['owner'] } })
     const [library, configuredStyle, scopedPage, planned] = await Promise.all([
       editorClient.client.readResource({ uri: 'site-engine://contract/block-library' }),
@@ -491,13 +498,14 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await expect(approverClient.client.callTool({ name: 'list_redirects', arguments: {} })).rejects.toMatchObject({ code: 403 })
     const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, limit: 100 })
     expect(audit.docs.some((event) => event.detail && JSON.stringify(event.detail).includes('clientIdHash'))).toBe(true)
+    expect(audit.docs.find((event) => (event.detail as Record<string, unknown> | undefined)?.tool === 'get_tree')).toMatchObject({ detail: { scopes: expect.arrayContaining(['mcp:content:read']), batch: null, diff: null, result: 'requested' } })
     expect(JSON.stringify(audit.docs)).not.toContain('editor-client')
     expect(JSON.stringify(audit.docs)).not.toContain('editor-token')
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['sales'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
     await payload.update({ collection: 'users', id: editor.id, data: { roles: ['editor'] }, overrideAccess: true })
     await expect(editorClient.client.callTool({ name: 'list_sections', arguments: {} })).rejects.toMatchObject({ code: 401 })
-  } finally { await Promise.all([editorClient.transport.close(), qualityWriterClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), ownerPersonalClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
+  } finally { await Promise.all([editorClient.transport.close(), qualityWriterClient.transport.close(), approverClient.transport.close(), ownerClient.transport.close(), ownerPersonalClient.transport.close(), salesContentClient.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
 }, 15_000)
 
 test('MCP site and theme tools keep Owner draft mutations revisioned and scoped', async () => {
@@ -1251,3 +1259,77 @@ test('MCP sends a human-confirmed careers reply with only careers read and reply
     expect(deliveries).toBe(1)
   } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
 })
+
+test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
+  process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+  const [{ encryptCredential }, executor] = await Promise.all([import('../src/integrations.js'), import('../src/configured-ai-job-execution.js')])
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-ai-editor-${randomUUID()}@example.test`, name: 'AI editor', roles: ['editor'] }, overrideAccess: true })
+  const stranger = await payload.create({ collection: 'users', data: { email: `mcp-ai-stranger-${randomUUID()}@example.test`, name: 'AI stranger', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `AI ${randomUUID()}`, slug: `ai-${randomUUID()}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const record = await payload.create({ collection: 'pages', data: { title: 'Neutral AI test', slug: `neutral-ai-${randomUUID()}`, summary: 'A neutral synthetic page.', sectionId: section.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+  const editorSession = await sessionFor(String(editor.id)); const strangerSession = await sessionFor(String(stranger.id))
+  const token = `mcp-ai-${randomUUID()}`; const strangerToken = `mcp-ai-stranger-${randomUUID()}`; const readOnlyToken = `mcp-ai-read-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-ai-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set(strangerToken, { clientId: `mcp-ai-stranger-client-${randomUUID()}`, userId: String(stranger.id), sessionId: String(strangerSession.id), scopes: ['mcp:content:read'] })
+  tokens.set(readOnlyToken, { clientId: `mcp-ai-read-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read'] })
+  const sdk = await clientFor(token); const foreign = await clientFor(strangerToken); const readonly = await clientFor(readOnlyToken)
+  try {
+    const hash = pageEditorHash(pageEditorProjection(record))
+    await expect(readonly.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    const unavailable = resultJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { error: string }
+    expect(unavailable).toEqual({ error: 'ai_job_default_unavailable' })
+    const configuration = await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'test', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'summary', provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
+    await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'meta', provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
+    const queued = structuredJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { jobId: string; status: string; notApplied: boolean }
+    expect(queued).toMatchObject({ status: 'queued', notApplied: true })
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:00.000Z'), transport: async () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A neutral suggested summary.' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toMatchObject({ status: 'completed', notApplied: true, suggestion: { text: 'A neutral suggested summary.', untrusted: true } })
+    expect(resultJson(await foreign.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toEqual({ error: 'not_found' })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1 }, overrideAccess: true })
+    const overBudget = structuredJson(await sdk.client.callTool({ name: 'suggest_meta', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { jobId: string }
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:01.000Z'), transport: async () => { throw new Error('budget should prevent transport') } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: overBudget.jobId } }))).toMatchObject({ status: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN', suggestion: null })
+
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1_000_000 } as never, overrideAccess: true })
+    await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'alt', provider: 'openai', model: 'gpt-test', fallbackProvider: 'anthropic' }, overrideAccess: true })
+    await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-fallback', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    // A textured image exercises a real encoded payload above 100 KB. Small
+    // flat-colour fixtures previously hid the durable field's shorter limit.
+    const pixels = Buffer.alloc(512 * 512 * 3)
+    let seed = 0x12345678
+    for (let i = 0; i < pixels.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; pixels[i] = seed & 255 }
+    const image = await sharp(pixels, { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Original human alt text', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-alt-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    const queuedAlt = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })) as { jobId: string; notApplied: boolean }
+    expect(queuedAlt.notApplied).toBe(true)
+    const durableAlt = await payload.findByID({ collection: 'configured-ai-jobs', id: queuedAlt.jobId, overrideAccess: true }) as unknown as { imageDataUrl: string }
+    expect(durableAlt.imageDataUrl.length).toBeGreaterThan(100_000)
+    expect(durableAlt.imageDataUrl.length).toBeLessThanOrEqual(500_000)
+    let providerRequest: Request | undefined
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:02.000Z'), transport: async request => { providerRequest = request; return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A blue rectangular image.' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) } })
+    expect(await providerRequest?.json()).toMatchObject({ model: 'gpt-test', input: [{ content: [{ type: 'input_text' }, { type: 'input_image', image_url: expect.stringMatching(/^data:image\/webp;base64,/) }] }] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original human alt text' })
+    await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Changed after suggestion' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toMatchObject({ status: 'completed', stale: true, notApplied: true, suggestion: { text: 'A blue rectangular image.', untrusted: true } })
+    await expect(foreign.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    await payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 86_400_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+    expect(resultJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } }))).toEqual({ error: 'image_input_unavailable' })
+
+    const capAsset = await payload.create({ collection: 'assets', data: { alt: 'Cap test image', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-cap-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 0 } as never, overrideAccess: true })
+    const capped = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: capAsset.id, idempotencyKey: randomUUID() } })) as { jobId: string }
+    let capFetches = 0
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:03.000Z'), transport: async () => { capFetches += 1; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(capFetches).toBe(0)
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: capped.jobId } }))).toMatchObject({ status: 'manual-review', notApplied: true })
+
+    const fallbackAsset = await payload.create({ collection: 'assets', data: { alt: 'Fallback image', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-fallback-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1_000_000 } as never, overrideAccess: true })
+    const fallback = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: fallbackAsset.id, idempotencyKey: randomUUID() } })) as { jobId: string }
+    const attempted: string[] = []
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:04.000Z'), transport: async request => { attempted.push(request.url); return new Response('{}', { status: 503 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(attempted).toEqual(['https://api.openai.com/v1/responses'])
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: fallback.jobId } }))).toMatchObject({ status: 'manual-review', notApplied: true })
+  } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
+}, 30_000)

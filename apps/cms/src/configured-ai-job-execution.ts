@@ -4,11 +4,11 @@ import { executeConfiguredAIJob, type AIConfigurationSnapshot, type ProviderFetc
 import { beginConfiguredAIJob, claimConfiguredAIJob, completeConfiguredAIJob, failUnbegunConfiguredAIJob, manualReviewConfiguredAIJob, renewConfiguredAIJob } from './configured-ai-job-lifecycle'
 import type { IntegrationProvider } from './integrations'
 
-type StoredJob = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; maxOutputTokens: number; configurationSnapshot: unknown }
+type StoredJob = { id: string; state: string; leaseToken?: string | null; leaseExpiresAt?: string | null; dispatchStartedAt?: string | null; provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; imageDataUrl?: string | null; maxOutputTokens: number; configurationSnapshot: unknown }
 export type ClaimedConfiguredAIJob = { job: StoredJob; leaseToken: string }
 export type ConfiguredAIExecutionOptions = { transport: ProviderFetch; now?: Date; clock?: () => Date; timeoutMs?: number }
 
-const providers = new Set<IntegrationProvider>(['openai', 'anthropic', 'google-gemini', 'openrouter'])
+const providers = new Set<IntegrationProvider>(['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'])
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 export const configuredAIReservationKey = (jobID: string, provider: IntegrationProvider) => createHash('sha256').update(`${jobID}:${provider}`).digest('hex').slice(0, 36)
 function snapshots(value: unknown): AIConfigurationSnapshot[] | undefined {
@@ -16,7 +16,7 @@ function snapshots(value: unknown): AIConfigurationSnapshot[] | undefined {
   const parsed = value.map((raw): AIConfigurationSnapshot | undefined => {
     if (!raw || typeof raw !== 'object') return undefined
     const candidate = raw as Record<string, unknown>
-    if (typeof candidate.id !== 'string' || !providers.has(candidate.provider as IntegrationProvider) || typeof candidate.model !== 'string' || !candidate.model || typeof candidate.credentialFingerprint !== 'string' || !candidate.credentialFingerprint || (candidate.monthlyCapMicroUsd !== null && !integer(candidate.monthlyCapMicroUsd)) || !integer(candidate.inputMicroUsdPerMillionTokens) || !integer(candidate.outputMicroUsdPerMillionTokens) || typeof candidate.pricingSource !== 'string' || !candidate.pricingSource || typeof candidate.pricingAsOf !== 'string' || !Number.isFinite(Date.parse(candidate.pricingAsOf))) return undefined
+    if (typeof candidate.id !== 'string' || !providers.has(candidate.provider as IntegrationProvider) || typeof candidate.model !== 'string' || !candidate.model || typeof candidate.credentialFingerprint !== 'string' || !candidate.credentialFingerprint || (candidate.monthlyCapMicroUsd !== null && !integer(candidate.monthlyCapMicroUsd)) || !integer(candidate.inputMicroUsdPerMillionTokens) || !integer(candidate.outputMicroUsdPerMillionTokens) || typeof candidate.pricingSource !== 'string' || !candidate.pricingSource || typeof candidate.pricingAsOf !== 'string' || !Number.isFinite(Date.parse(candidate.pricingAsOf)) || (candidate.provider === 'azure-openai' && (typeof candidate.azureResourceEndpoint !== 'string' || !candidate.azureResourceEndpoint || candidate.azureApiVersion !== null))) return undefined
     return candidate as unknown as AIConfigurationSnapshot
   })
   return parsed.every(Boolean) && new Set(parsed.map(item => item!.provider)).size === parsed.length ? parsed as AIConfigurationSnapshot[] : undefined
@@ -25,7 +25,7 @@ async function snapshotsStillCurrent(payload: Payload, snapshot: AIConfiguration
   for (const expected of snapshot) {
     try {
       const current = await payload.findByID({ collection: 'integration-configurations', id: expected.id, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
-      if (current.provider !== expected.provider || current.model !== expected.model || current.credentialFingerprint !== expected.credentialFingerprint || !current.encryptedCredential || current.health === 'revoked' || (current.monthlyCapMicroUsd ?? null) !== expected.monthlyCapMicroUsd || current.inputMicroUsdPerMillionTokens !== expected.inputMicroUsdPerMillionTokens || current.outputMicroUsdPerMillionTokens !== expected.outputMicroUsdPerMillionTokens || current.pricingSource !== expected.pricingSource || current.pricingAsOf !== expected.pricingAsOf) return false
+      if (current.provider !== expected.provider || current.model !== expected.model || current.credentialFingerprint !== expected.credentialFingerprint || !current.encryptedCredential || current.health === 'revoked' || (current.monthlyCapMicroUsd ?? null) !== expected.monthlyCapMicroUsd || current.inputMicroUsdPerMillionTokens !== expected.inputMicroUsdPerMillionTokens || current.outputMicroUsdPerMillionTokens !== expected.outputMicroUsdPerMillionTokens || current.pricingSource !== expected.pricingSource || current.pricingAsOf !== expected.pricingAsOf || (expected.provider === 'azure-openai' && (current.azureResourceEndpoint !== expected.azureResourceEndpoint || (current.azureApiVersion ?? null) !== expected.azureApiVersion))) return false
     } catch { return false }
   }
   return true
@@ -66,7 +66,7 @@ export async function executeClaimedConfiguredAIJob(payload: Payload, claim: Cla
   await renewConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
   await beginConfiguredAIJob(payload, job.id, expectedToken, clock().getTime())
   try {
-    const result = await executeConfiguredAIJob(payload, { provider: job.provider, fallbackProvider: job.fallbackProvider, input: job.input, maxOutputTokens: job.maxOutputTokens }, {
+    const result = await executeConfiguredAIJob(payload, { provider: job.provider, fallbackProvider: job.fallbackProvider, input: job.input, imageDataUrl: job.imageDataUrl ?? undefined, requiresImage: Boolean(job.imageDataUrl), maxOutputTokens: job.maxOutputTokens }, {
       transport: options.transport,
       now: clock(),
       timeoutMs: Math.min(options.timeoutMs ?? 15_000, 15_000),

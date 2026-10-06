@@ -81,6 +81,7 @@ export interface Config {
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
+    'ai-job-defaults': AiJobDefault;
     'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
@@ -131,6 +132,7 @@ export interface Config {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
+    'ai-job-defaults': AiJobDefaultsSelect<false> | AiJobDefaultsSelect<true>;
     'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
@@ -721,9 +723,11 @@ export interface StyleGuide {
  */
 export interface IntegrationConfiguration {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai';
   model: string;
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  azureResourceEndpoint?: string | null;
+  azureApiVersion?: string | null;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   monthlyCapMicroUsd?: number | null;
   monthlyUsageMicroUsd?: number | null;
   usageMonth?: string | null;
@@ -735,6 +739,19 @@ export interface IntegrationConfiguration {
   credentialFingerprint?: string | null;
   health: 'unknown' | 'connected' | 'unavailable' | 'rejected' | 'revoked';
   testedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "ai-job-defaults".
+ */
+export interface AiJobDefault {
+  id: string;
+  jobType: 'summary' | 'meta' | 'faq' | 'alt' | 'lead-reply';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
+  model: string;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1305,8 +1322,9 @@ export interface ConfiguredAiJob {
   idempotencyKey: string;
   requestDigest: string;
   input: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  imageDataUrl?: string | null;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai';
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   maxOutputTokens: number;
   configurationSnapshot:
     | {
@@ -1324,7 +1342,7 @@ export interface ConfiguredAiJob {
   result?: string | null;
   resultDigest?: string | null;
   costStatus?: ('actual' | 'reserved') | null;
-  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai') | null;
   fallbackUsed?: boolean | null;
   failureCode?: string | null;
   updatedAt: string;
@@ -1608,6 +1626,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'integration-configurations';
         value: string | IntegrationConfiguration;
+      } | null)
+    | ({
+        relationTo: 'ai-job-defaults';
+        value: string | AiJobDefault;
       } | null)
     | ({
         relationTo: 'mcp-privacy-settings';
@@ -2174,6 +2196,18 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "ai-job-defaults_select".
+ */
+export interface AiJobDefaultsSelect<T extends boolean = true> {
+  jobType?: T;
+  provider?: T;
+  model?: T;
+  fallbackProvider?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mcp-privacy-settings_select".
  */
 export interface McpPrivacySettingsSelect<T extends boolean = true> {
@@ -2564,6 +2598,7 @@ export interface ConfiguredAiJobsSelect<T extends boolean = true> {
   idempotencyKey?: T;
   requestDigest?: T;
   input?: T;
+  imageDataUrl?: T;
   provider?: T;
   fallbackProvider?: T;
   maxOutputTokens?: T;
