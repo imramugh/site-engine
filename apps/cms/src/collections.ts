@@ -636,7 +636,7 @@ export const MailDrafts: CollectionConfig = {
     { name: 'lead', type: 'relationship', relationTo: 'inquiries' },
     { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
-    { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
+    { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachments', type: 'json', defaultValue: [] }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
     // Set only by the trusted MCP preparation path. These immutable values bind
     // a browser confirmation to the assistant identity that prepared it.
     { name: 'assistantClientIDHash', type: 'text', maxLength: 64 }, { name: 'assistantActor', type: 'relationship', relationTo: 'users' }, { name: 'assistantOAuthSessionID', type: 'text', maxLength: 128 },
@@ -649,7 +649,7 @@ export const MailDrafts: CollectionConfig = {
       if (Boolean(requestedLead) === Boolean(application)) throw new Error('A mail draft must belong to one lead or application.')
       if (requestedLead && req.context.leadSpamLifecycle !== true) await assertLeadAcceptsOutbound(req.payload, requestedLead, req)
       if (operation !== 'update' || !originalDoc) return data
-      const fields = ['recipient', 'sender', 'subject', 'body', 'attachmentHashes', 'lead', 'application', 'threadID']
+      const fields = ['recipient', 'sender', 'subject', 'body', 'attachments', 'attachmentHashes', 'lead', 'application', 'threadID']
       // Payload update input is a patch. An omitted draft-bound field must not
       // be treated as an edit when the authorization service only changes state.
       return fields.some((field) => data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(originalDoc[field])) ? { ...data, revision: Number(originalDoc.revision) + 1, state: 'prepared' } : data

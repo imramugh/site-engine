@@ -45,6 +45,7 @@ import * as migration_20261006_004000_gmail_rfc_threading from './20261006_00400
 import * as migration_20261006_005000_mailbox_sync_schedule from './20261006_005000_mailbox_sync_schedule';
 import * as migration_20261006_006000_mail_conversation_suggestions from './20261006_006000_mail_conversation_suggestions';
 import * as migration_20261006_007000_mcp_mail_confirmation from './20261006_007000_mcp_mail_confirmation';
+import * as migration_20261006_008000_mail_draft_attachments from './20261006_008000_mail_draft_attachments';
 import * as migration_20261005_164500_crawler_policy_1_7 from './20261005_164500_crawler_policy_1_7';
 import * as migration_20261005_170000_redirect_creator_attribution from './20261005_170000_redirect_creator_attribution';
 import * as migration_20261005_180000_inquiry_spam_lifecycle from './20261005_180000_inquiry_spam_lifecycle';
@@ -288,4 +289,5 @@ export const migrations = [
   { up: migration_20261006_005000_mailbox_sync_schedule.up, down: migration_20261006_005000_mailbox_sync_schedule.down, name: '20261006_005000_mailbox_sync_schedule' },
   { up: migration_20261006_006000_mail_conversation_suggestions.up, down: migration_20261006_006000_mail_conversation_suggestions.down, name: '20261006_006000_mail_conversation_suggestions' },
   { up: migration_20261006_007000_mcp_mail_confirmation.up, down: migration_20261006_007000_mcp_mail_confirmation.down, name: '20261006_007000_mcp_mail_confirmation' },
+  { up: migration_20261006_008000_mail_draft_attachments.up, down: migration_20261006_008000_mail_draft_attachments.down, name: '20261006_008000_mail_draft_attachments' },
 ];

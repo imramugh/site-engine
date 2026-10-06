@@ -4,6 +4,7 @@ import { authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, 
 import { sendAreaMail } from './mailboxes'
 import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
+import { resolveOutgoingAttachments } from './outgoing-attachments'
 
 let replyDelivery = sendAreaMail
 export function setReplyDeliveryForTest(sender?: typeof sendAreaMail) { if (process.env.NODE_ENV !== 'test') throw new Error('Test delivery override is disabled.'); replyDelivery = sender ?? sendAreaMail }
@@ -14,12 +15,13 @@ export type AssistantReplyOrigin = { clientIDHash: string; actorID: string; oaut
 
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export function sanitizeMailBody(value: unknown) { if (typeof value !== 'string') throw new Error('invalid_reply'); const body = value.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim(); if (!body || body.length > 10_000) throw new Error('invalid_reply'); return body }
-export async function prepareReply(payload: Payload, target: 'lead' | 'application', targetID: string, actor: string, input: { sender: unknown; subject: unknown; body: unknown; threadID?: unknown }, assistantOrigin?: AssistantReplyOrigin) {
+export async function prepareReply(payload: Payload, target: 'lead' | 'application', targetID: string, actor: string, input: { sender: unknown; subject: unknown; body: unknown; threadID?: unknown; attachments?: unknown }, assistantOrigin?: AssistantReplyOrigin) {
   const recipientDoc = await payload.findByID({ collection: target === 'lead' ? 'inquiries' : 'applications', id: targetID, depth: 0, overrideAccess: true }) as { email?: string }
   if (target === 'lead') await assertLeadAcceptsOutbound(payload, targetID)
   const sender = typeof input.sender === 'string' ? input.sender.trim().toLowerCase() : ''; const subject = typeof input.subject === 'string' ? input.subject.trim() : ''
   if (!email.test(sender) || !email.test(String(recipientDoc.email ?? '')) || !subject || subject.length > 200 || /[\u0000-\u001f\u007f]/.test(sender + String(recipientDoc.email ?? '') + subject)) throw new Error('invalid_reply')
-  return withPayloadTransaction(payload, async (req) => { const draft = await payload.create({ collection: 'mail-drafts', data: { [target]: targetID, threadID: typeof input.threadID === 'string' && input.threadID.trim() ? input.threadID.trim().slice(0, 500) : randomUUID(), recipient: String(recipientDoc.email).toLowerCase(), sender, subject, body: sanitizeMailBody(input.body), attachmentHashes: [], revision: 1, state: 'prepared', ...(assistantOrigin ? { assistantClientIDHash: assistantOrigin.clientIDHash, assistantActor: assistantOrigin.actorID, assistantOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } as never, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_prepared', user: actor, actor, detail: { draft: draft.id, target, targetID, ...(assistantOrigin ? { clientIdHash: assistantOrigin.clientIDHash, originOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } }, overrideAccess: true, req }); return draft })
+  const attachments = await resolveOutgoingAttachments(payload, { target, targetID, actorID: actor, attachments: input.attachments })
+  return withPayloadTransaction(payload, async (req) => { const draft = await payload.create({ collection: 'mail-drafts', data: { [target]: targetID, threadID: typeof input.threadID === 'string' && input.threadID.trim() ? input.threadID.trim().slice(0, 500) : randomUUID(), recipient: String(recipientDoc.email).toLowerCase(), sender, subject, body: sanitizeMailBody(input.body), attachments, attachmentHashes: attachments.map((attachment) => attachment.sha256), revision: 1, state: 'prepared', ...(assistantOrigin ? { assistantClientIDHash: assistantOrigin.clientIDHash, assistantActor: assistantOrigin.actorID, assistantOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } as never, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_prepared', user: actor, actor, detail: { draft: draft.id, target, targetID, ...(assistantOrigin ? { clientIdHash: assistantOrigin.clientIDHash, originOAuthSessionID: assistantOrigin.oauthSessionID } : {}) } }, overrideAccess: true, req }); return draft })
 }
 export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
