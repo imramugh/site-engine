@@ -1,0 +1,92 @@
+---
+import type { InquiryTopicValue } from '@site-engine/contract';
+type Topic = { value: InquiryTopicValue; label: string };
+interface Props { enabled: boolean; formId: string; heading?: string; headingId?: string; topicLabel?: string; topics?: Topic[]; consentLabel?: string }
+const { enabled, formId, heading, headingId, topicLabel = 'Topic', topics = [{ value: 'general', label: 'General inquiry' }, { value: 'active-incident', label: 'Active incident' }], consentLabel = 'I consent to the handling of this inquiry.' } = Astro.props;
+---
+<form id={formId} data-inquiry-form data-preview={!enabled} method="post" action="/api/inquiries" aria-labelledby={heading && headingId ? headingId : undefined}>
+  {heading && headingId && <h2 id={headingId} data-inquiry-heading>{heading}</h2>}
+  <p><label>Name <input name="name" autocomplete="name" maxlength="160" required aria-describedby={`${formId}-name-error`} /></label><span id={`${formId}-name-error`} data-inquiry-field-error="name"></span></p>
+  <p><label>Work email <input name="email" type="email" autocomplete="email" required aria-describedby={`${formId}-email-error`} /></label><span id={`${formId}-email-error`} data-inquiry-field-error="email"></span></p>
+  <p><label>Phone (optional) <input name="telephone" type="tel" autocomplete="tel" maxlength="48" aria-describedby={`${formId}-telephone-error`} /></label><span id={`${formId}-telephone-error`} data-inquiry-field-error="telephone"></span></p>
+  <p><label>Company (optional) <input name="company" autocomplete="organization" maxlength="160" aria-describedby={`${formId}-company-error`} /></label><span id={`${formId}-company-error`} data-inquiry-field-error="company"></span></p>
+  <p><label>{topicLabel} <select name="topic" aria-describedby={`${formId}-topic-error`}>{topics.map((topic) => <option value={topic.value}>{topic.label}</option>)}</select></label><span id={`${formId}-topic-error`} data-inquiry-field-error="topic"></span></p>
+  <p><label>Message <textarea name="message" rows="5" maxlength="5000" required aria-describedby={`${formId}-message-error`} /></label><span id={`${formId}-message-error`} data-inquiry-field-error="message"></span></p>
+  <p><label><input name="consent" type="checkbox" required aria-describedby={`${formId}-consent-error`} /> {consentLabel}</label><span id={`${formId}-consent-error`} data-inquiry-field-error="consent"></span></p>
+  <button disabled data-inquiry-submit>Send inquiry</button>
+  <p role="alert" data-inquiry-error></p>
+  <p role="status" data-inquiry-status></p>
+  <noscript><p>Enable JavaScript to send an inquiry.</p></noscript>
+</form>
+<script>
+  const controlCharacters = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
+  const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  document.querySelectorAll<HTMLFormElement>('[data-inquiry-form]').forEach((form) => {
+    if (form.dataset.inquiryBound === 'true') return;
+    form.dataset.inquiryBound = 'true';
+    const button = form.querySelector<HTMLButtonElement>('[data-inquiry-submit]')!;
+    if (form.dataset.preview === 'true') { form.addEventListener('submit', (event) => event.preventDefault()); return; }
+    form.noValidate = true;
+    button.disabled = false;
+    let pending = false;
+    let accepted = false;
+    // Preserve the key across network retries; the server rejects changed data.
+    let key = crypto.randomUUID().replaceAll('-', '');
+    let previous = '';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (form.dataset.preview === 'true' || pending || accepted) return;
+      const data = new FormData(form);
+      const fields = { ...Object.fromEntries(data), consent: data.get('consent') === 'on', sourcePage: location.pathname };
+      const fingerprint = JSON.stringify(fields);
+      const error = form.querySelector<HTMLElement>('[data-inquiry-error]')!;
+      const status = form.querySelector<HTMLElement>('[data-inquiry-status]')!;
+      error.textContent = ''; status.textContent = 'Sending inquiry…';
+      for (const field of form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[name]')) {
+        field.removeAttribute('aria-invalid');
+        const fieldError = form.querySelector<HTMLElement>(`[data-inquiry-field-error="${field.name}"]`);
+        if (fieldError) fieldError.textContent = '';
+      }
+      const text = (name: string) => String(data.get(name) ?? '').trim();
+      const errors: Record<string, string> = {};
+      const name = text('name'); const emailAddress = text('email'); const telephone = text('telephone'); const company = text('company'); const message = text('message');
+      if (!name || name.length > 160 || controlCharacters.test(name)) errors.name = 'Enter a name of up to 160 characters without control characters.';
+      if (!email.test(emailAddress) || emailAddress.length > 254) errors.email = 'Enter a valid email address.';
+      if (telephone.length > 48 || controlCharacters.test(telephone)) errors.telephone = 'Enter at most 48 characters without control characters.';
+      if (company.length > 160 || controlCharacters.test(company)) errors.company = 'Enter at most 160 characters without control characters.';
+      if (!message || message.length > 5_000 || controlCharacters.test(message)) errors.message = 'Enter a message of up to 5,000 characters.';
+      if (data.get('consent') !== 'on') errors.consent = 'Consent is required before sending an inquiry.';
+      const setErrors = (errors: Record<string, string>) => {
+        let first: HTMLElement | undefined;
+        for (const [name, message] of Object.entries(errors)) {
+          const field = form.elements.namedItem(name);
+          const fieldError = form.querySelector<HTMLElement>(`[data-inquiry-field-error="${name}"]`);
+          if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement) { field.setAttribute('aria-invalid', 'true'); first ??= field; }
+          if (fieldError) fieldError.textContent = String(message);
+        }
+        error.textContent = Object.values(errors).join(' ');
+        first?.focus();
+      };
+      if (Object.keys(errors).length) { status.textContent = ''; setErrors(errors); return; }
+      if (previous && previous !== fingerprint) key = crypto.randomUUID().replaceAll('-', '');
+      previous = fingerprint;
+      pending = true; button.disabled = true; form.setAttribute('aria-busy', 'true');
+      try {
+        const response = await fetch('/api/inquiries', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...fields, idempotencyKey: key }) });
+        const result = await response.json();
+        accepted = response.ok && result.accepted === true;
+        window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted } }));
+        const responseErrors = result.errors ?? { form: 'Unable to send inquiry. Please try again.' };
+        if (!accepted) setErrors(responseErrors);
+        error.textContent = accepted ? '' : Object.values(responseErrors).join(' ');
+        status.textContent = accepted ? 'Your inquiry has been received.' : '';
+      } catch {
+        window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } }));
+        error.textContent = 'Unable to send inquiry. Please check your connection and try again.';
+        status.textContent = '';
+      } finally {
+        pending = false; button.disabled = accepted; form.removeAttribute('aria-busy');
+      }
+    });
+  });
+</script>
