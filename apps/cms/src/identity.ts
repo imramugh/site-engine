@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AuthStrategy, AuthStrategyFunctionArgs } from 'payload'
 import type { AuthSession, User } from '../payload-types'
+import { markAuthenticationSQLiteContention } from './sqlite'
 
 export const SESSION_COOKIE = '__Host-site_engine_session'
 export const OIDC_TRANSACTION_COOKIE = '__Host-site_engine_oidc'
@@ -39,10 +40,11 @@ export function hasFreshAuthentication(session: { authenticatedAt: string }, now
 export const serverSessionStrategy: AuthStrategy = {
   name: 'server-session',
   authenticate: async ({ headers, payload }: AuthStrategyFunctionArgs) => {
-    const token = readCookie(headers, cookieName(SESSION_COOKIE))
-    if (!token) return { user: null }
-    const tokenHash = hashOpaqueToken(token)
-    const sessions = await payload.find({
+    try {
+      const token = readCookie(headers, cookieName(SESSION_COOKIE))
+      if (!token) return { user: null }
+      const tokenHash = hashOpaqueToken(token)
+      const sessions = await payload.find({
       collection: 'auth-sessions',
       where: { tokenHash: { equals: tokenHash } },
       limit: 1,
@@ -61,7 +63,11 @@ export const serverSessionStrategy: AuthStrategy = {
     }
     // Authenticated user objects can reach admin client props. Never include
     // credential material fetched with the trusted Local API.
-    return { user: { id: user.id, email: user.email, name: user.name, roles: user.roles, provider: user.provider, disabled: user.disabled, createdAt: user.createdAt, updatedAt: user.updatedAt, collection: 'users', _strategy: 'server-session' } }
+      return { user: { id: user.id, email: user.email, name: user.name, roles: user.roles, provider: user.provider, disabled: user.disabled, createdAt: user.createdAt, updatedAt: user.updatedAt, collection: 'users', _strategy: 'server-session' } }
+    } catch (error) {
+      markAuthenticationSQLiteContention(error)
+      throw error
+    }
   },
 }
 

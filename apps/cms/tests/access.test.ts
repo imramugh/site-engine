@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { hasRole } from '../src/access.js'
-import { isRetryableSQLiteError } from '../src/sqlite.js'
+import { isRetryableSQLiteError, markAuthenticationSQLiteContention, sqliteAuthenticationBoundary, sqliteBackpressureResponse } from '../src/sqlite.js'
 import { hasFreshAuthentication, SESSION_IDLE_SECONDS, sessionIsUsable } from '../src/identity'
 import { decryptSecret, encryptSecret, recoveryHash, recoveryMatches } from '../src/totp'
+
+const { default: configPromise } = await import('../payload.config.js')
+const config = await configPromise
 
 describe('role matrix (ENG-007)', () => {
   it('allows only matching active roles', () => {
@@ -15,6 +18,31 @@ describe('role matrix (ENG-007)', () => {
     expect(isRetryableSQLiteError(new Error('SQLITE_BUSY: database is locked'))).toBe(true)
     expect(isRetryableSQLiteError({ code: 'SQLITE_BUSY' })).toBe(true)
     expect(isRetryableSQLiteError(new Error('validation failed'))).toBe(false)
+  })
+
+  it('returns a stable retry response for custom and native Payload routes (ENG-036)', async () => {
+    const driverError = new Error('SQLITE_BUSY: database is locked: internal path')
+    const custom = sqliteBackpressureResponse(driverError, { error: 'safe' })!
+    expect(custom.status).toBe(503)
+    expect(custom.headers.get('Retry-After')).toBe('1')
+    expect(await custom.json()).toEqual({ error: 'safe' })
+
+    const responseHeaders = new Headers()
+    const nativePayloadErrorHook = config.hooks?.afterError?.[0]
+    expect(nativePayloadErrorHook).toBeDefined()
+    expect(await nativePayloadErrorHook!({ error: driverError, req: { responseHeaders } } as never)).toEqual({ status: 503, response: { errors: [{ message: 'Saving is temporarily busy. Please retry.' }] } })
+    expect(responseHeaders.get('Retry-After')).toBe('1')
+    expect(await nativePayloadErrorHook!({ error: new Error('validation failed'), req: { responseHeaders } } as never)).toBeUndefined()
+  })
+
+  it('converts only session-resolution contention at the custom-route boundary (ENG-036)', async () => {
+    const contention = new Error('SQLITE_BUSY: database is locked')
+    markAuthenticationSQLiteContention(contention)
+    const response = await sqliteAuthenticationBoundary(async () => { throw contention })()
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Retry-After')).toBe('1')
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    await expect(sqliteAuthenticationBoundary(async () => { throw new Error('SQLITE_BUSY: database is locked') })()).rejects.toThrow('SQLITE_BUSY')
   })
 
   it('enforces eight-hour idle and fifteen-minute sensitive-session policy (ENG-007)', () => {

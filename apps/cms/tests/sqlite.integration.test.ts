@@ -59,7 +59,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
 
     const resolved = await resolve(firstToken)
     expect(resolved.status).toBe(200)
-    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] } })
+    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'] } })
     const validated = await handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'validate', sessionId: first.id, userId: user.id }),
     }), payload, secret)
@@ -90,19 +90,19 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     expect(approverResolution.status).toBe(200)
     await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] } })
 
-    for (const [role, scope] of [['sales', 'mcp:leads:read'], ['hiring', 'mcp:careers:read']] as const) {
+    for (const [role, scope] of [['sales', ['mcp:leads:read', 'mcp:leads:reply']], ['hiring', ['mcp:careers:read', 'mcp:careers:reply']]] as const) {
       const staff = await payload.create({ collection: 'users', data: { email: `bridge-${role}@example.test`, name: `Bridge ${role}`, roles: [role] }, overrideAccess: true })
       const token = newOpaqueToken()
       await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: staff.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
       const resolution = await resolve(token)
       expect(resolution.status).toBe(200)
-      await expect(resolution.json()).resolves.toEqual({ user: { id: staff.id, sessionId: expect.any(String), scopes: [scope] } })
+      await expect(resolution.json()).resolves.toEqual({ user: { id: staff.id, sessionId: expect.any(String), scopes: scope } })
     }
 
     const mixed = await payload.create({ collection: 'users', data: { email: 'bridge-mixed@example.test', name: 'Bridge mixed', roles: ['editor', 'sales', 'hiring'] }, overrideAccess: true })
     const mixedToken = newOpaqueToken()
     const mixedSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(mixedToken), user: mixed.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    await expect((await resolve(mixedToken)).json()).resolves.toEqual({ user: { id: mixed.id, sessionId: mixedSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] } })
+    await expect((await resolve(mixedToken)).json()).resolves.toEqual({ user: { id: mixed.id, sessionId: mixedSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'] } })
     await payload.update({ collection: 'users', id: mixed.id, data: { roles: ['sales', 'hiring'] }, overrideAccess: true })
     expect((await resolve(mixedToken)).status).toBe(401)
   })

@@ -3,8 +3,8 @@ import { buildConfig } from 'payload'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
-import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, DeletionTombstones, Inquiries, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailAuthorizations, MailDrafts, MailThreads, MailThreadMessages, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, RetentionPurgeJobs, RetentionSettings, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
-import { databaseURI } from './src/sqlite'
+import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, DeletionTombstones, Inquiries, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailAuthorizations, MailConversationSuggestions, MailDrafts, MailThreads, MailThreadMessages, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, RetentionPurgeJobs, RetentionSettings, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
+import { databaseURI, sqliteBackpressurePayloadError } from './src/sqlite'
 import { MailboxAreaMappings, MailboxConfigurations, MailboxOAuthTransactions, MailboxTestSends } from './src/mailbox-collections'
 
 const secret = process.env.PAYLOAD_SECRET
@@ -25,7 +25,7 @@ export default buildConfig({
     },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
-  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailboxConfigurations, MailboxOAuthTransactions, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailDrafts, MailThreads, MailThreadMessages, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
+  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailboxConfigurations, MailboxOAuthTransactions, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailConversationSuggestions, MailDrafts, MailThreads, MailThreadMessages, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
     // libSQL opens additional pooled connections lazily; its timeout applies to each
     // connection, unlike the one-time PRAGMA below.
@@ -42,6 +42,11 @@ export default buildConfig({
   }),
   editor: undefined,
   graphQL: { disable: false },
+  hooks: {
+    // Payload catches native REST errors itself. Translate writer timeouts before
+    // its error formatter can surface a driver message.
+    afterError: [({ error, req }) => sqliteBackpressurePayloadError(error, req)],
+  },
   sharp,
   onInit: async (payload) => {
     // foreign_keys is connection-local. This is Payload's own adapter client.

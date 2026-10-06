@@ -9,8 +9,10 @@ export type Envelope = {
   replyMessageID?: string;
   rfcMessageID?: string;
   rfcReferences?: string;
+  outboundRFCMessageID?: string;
 };
 const maximum = 262_144;
+const attachmentMaximum = 10 * 1024 * 1024;
 const timeout = 10_000;
 const graph = "https://graph.microsoft.com";
 const gmail = "https://gmail.googleapis.com";
@@ -20,6 +22,7 @@ const auth = (token: string) => ({
   authorization: `Bearer ${token}`,
   "content-type": "application/json",
 });
+const graphAuth = (token: string) => ({ ...auth(token), Prefer: 'IdType="ImmutableId"' });
 const clean = (value: unknown, limit = 20_000) =>
   String(value ?? "")
     .replace(/<[^>]*>/g, " ")
@@ -58,6 +61,7 @@ function checkedEnvelope(input: Envelope) {
       input.subject,
       input.threadID ?? "",
       input.replyMessageID ?? "",
+      input.outboundRFCMessageID ?? "",
     ].some((value) => controls.test(value))
   )
     throw new Error("invalid_envelope");
@@ -128,11 +132,37 @@ async function json(response: Response): Promise<Record<string, unknown>> {
     throw new Error("provider_malformed_response");
   }
 }
+async function bytes(response: Response, limit: number) {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (!Number.isSafeInteger(declared) || declared > limit) throw new Error("provider_response_too_large");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("provider_malformed_response");
+  const chunks: Uint8Array[] = []; let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read(); if (next.done) break;
+      total += next.value.byteLength;
+      if (total > limit) { await reader.cancel(); throw new Error("provider_response_too_large"); }
+      chunks.push(next.value);
+    }
+  } finally { reader.releaseLock(); }
+  const output = new Uint8Array(total); let offset = 0;
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+  return output;
+}
+async function attachmentJSON(response: Response) {
+  const raw = await bytes(response, Math.ceil(attachmentMaximum * 4 / 3) + 1024);
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(raw));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    return value as Record<string, unknown>;
+  } catch { throw new Error("provider_malformed_response"); }
+}
 function graphDelta(folderID: string, cursor?: string) {
   if (!opaque(folderID)) throw new Error("invalid_cursor");
   const path = `/v1.0/me/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
   if (!cursor)
-    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime`;
+    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,hasAttachments`;
   let url: URL;
   try {
     url = new URL(cursor);
@@ -172,6 +202,19 @@ function graphMessage(value: Record<string, unknown>) {
     }>,
   };
 }
+async function graphAttachments(fetcher: Fetcher, token: string, messageID: string) {
+  // Timeline storage deliberately retains metadata for at most 20 attachments;
+  // use Graph's fixed bounded collection rather than following provider links.
+  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size&$top=20`, { headers: graphAuth(token) });
+  if (!response.ok) fail(response.status)
+  const value = await json(response)
+  if (!Array.isArray(value.value) || value.value.length > 20) throw new Error('provider_malformed_response')
+  return value.value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object').flatMap((entry) => {
+    const type = entry['@odata.type']
+    if (type !== '#microsoft.graph.fileAttachment' && type !== '#microsoft.graph.itemAttachment' || !opaque(entry.id)) return []
+    return [{ name: clean(entry.name, 255), contentType: clean(entry.contentType, 120), size: Number(entry.size) || 0, providerAttachmentID: String(entry.id) }]
+  })
+}
 export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
   return {
     async send(token: string, input: Envelope) {
@@ -186,7 +229,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
           `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/reply`,
           {
             method: "POST",
-            headers: auth(token),
+            headers: graphAuth(token),
             body: JSON.stringify({
               message: {
                 subject: input.subject,
@@ -200,27 +243,35 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         if (response.status !== 202) fail(response.status);
         return { accepted: true as const };
       }
-      const response = await request(fetcher, `${graph}/v1.0/me/sendMail`, {
+      const draft = await request(fetcher, `${graph}/v1.0/me/messages`, {
         method: "POST",
-        headers: auth(token),
+        headers: graphAuth(token),
         body: JSON.stringify({
-          message: {
-            subject: input.subject,
-            body: { contentType: "Text", content: input.body },
-            toRecipients: [{ emailAddress: { address: input.recipient } }],
-            from: { emailAddress: { address: verifiedSender } },
-          },
+          subject: input.subject,
+          body: { contentType: "Text", content: input.body },
+          toRecipients: [{ emailAddress: { address: input.recipient } }],
+          from: { emailAddress: { address: verifiedSender } },
         }),
       });
-      if (response.status !== 202) fail(response.status);
-      return { accepted: true as const };
+      if (!draft.ok) fail(draft.status);
+      const created = await json(draft);
+      const id = typeof created.id === "string" ? created.id : "";
+      const threadID = typeof created.conversationId === "string" ? created.conversationId : "";
+      if (!opaque(id) || !opaque(threadID)) throw new Error("provider_malformed_response");
+      const sent = await request(
+        fetcher,
+        `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`,
+        { method: "POST", headers: graphAuth(token) },
+      );
+      if (sent.status !== 202) fail(sent.status);
+      return { accepted: true as const, id, threadID };
     },
     async thread(token: string, id: string) {
       if (!opaque(id)) throw new Error("invalid_thread");
       const response = await request(
         fetcher,
         `${graph}/v1.0/me/messages/${encodeURIComponent(id)}?$select=id,conversationId,body,subject`,
-        { headers: auth(token) },
+        { headers: graphAuth(token) },
       );
       if (!response.ok) fail(response.status);
       const output = graphMessage(await json(response));
@@ -235,7 +286,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
     },
     async poll(token: string, folderID: string, cursor?: string) {
       const response = await request(fetcher, graphDelta(folderID, cursor), {
-        headers: { ...auth(token), Prefer: "odata.maxpagesize=100" },
+        headers: { ...graphAuth(token), Prefer: 'odata.maxpagesize=100, IdType="ImmutableId"' },
       });
       if (!response.ok) fail(response.status);
       const value = await json(response);
@@ -251,13 +302,14 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         const message = graphMessage(raw);
         if (!message.messageId || !message.threadId)
           throw new Error("provider_malformed_response");
-        return message;
+        return { ...message, attachmentsPending: raw.hasAttachments === true };
       });
       return {
         cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
         messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
       };
     },
+    attachments(token: string, messageID: string) { return graphAttachments(fetcher, token, messageID) },
   };
 }
 export function microsoftIdentity(fetcher: Fetcher) {
@@ -265,7 +317,7 @@ export function microsoftIdentity(fetcher: Fetcher) {
     const response = await request(
       fetcher,
       `${graph}/v1.0/me?$select=mail,userPrincipalName`,
-      { headers: auth(token) },
+      { headers: graphAuth(token) },
     );
     if (!response.ok) fail(response.status);
     const value = await json(response);
@@ -328,6 +380,7 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
       name: clean(part.filename, 255),
       contentType: clean(part.mimeType, 120),
       size: Number((part.body as { size?: unknown })?.size) || 0,
+      providerAttachmentID: opaque((part.body as { attachmentId?: unknown })?.attachmentId) ? String((part.body as { attachmentId: string }).attachmentId) : undefined,
     }));
   const date = Number(message.internalDate);
   return {
@@ -343,6 +396,26 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
     attachments,
   };
 }
+export function gmailAttachment(fetcher: Fetcher) {
+  return async (token: string, messageID: string, attachmentID: string) => {
+    if (!opaque(messageID) || !opaque(attachmentID)) throw new Error("invalid_attachment");
+    const response = await request(fetcher, `${gmail}/gmail/v1/users/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}`, { headers: auth(token) });
+    if (!response.ok) fail(response.status);
+    const value = await attachmentJSON(response);
+    if (typeof value.data !== "string" || !/^[A-Za-z0-9_-]*={0,2}$/.test(value.data)) throw new Error("provider_malformed_response");
+    const output = Buffer.from(value.data, "base64url");
+    if (output.length > attachmentMaximum) throw new Error("provider_response_too_large");
+    return new Uint8Array(output);
+  };
+}
+export function microsoftAttachment(fetcher: Fetcher) {
+  return async (token: string, messageID: string, attachmentID: string) => {
+    if (!opaque(messageID) || !opaque(attachmentID)) throw new Error("invalid_attachment");
+    const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}/$value`, { headers: graphAuth(token) });
+    if (!response.ok) fail(response.status);
+    return bytes(response, attachmentMaximum);
+  };
+}
 export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
   return {
     async send(token: string, input: Envelope) {
@@ -355,6 +428,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         (input.threadID && !input.rfcMessageID) ||
         (input.threadID && !opaque(input.threadID)) ||
         (input.rfcMessageID && !rfcMessageID(input.rfcMessageID)) ||
+        (input.outboundRFCMessageID && !rfcMessageID(input.outboundRFCMessageID)) ||
         (input.rfcReferences && normalizedReferences !== input.rfcReferences)
       )
         throw new Error("invalid_envelope");
@@ -362,7 +436,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[normalizedReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
         : "";
       const raw = Buffer.from(
-        `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,
+        `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ""}${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,
         "utf8",
       ).toString("base64url");
       const response = await request(
@@ -379,7 +453,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
       );
       if (!response.ok) fail(response.status);
       const value = await json(response);
-      if (typeof value.id !== "string" || typeof value.threadId !== "string")
+      if (!opaque(value.id) || !opaque(value.threadId))
         throw new Error("provider_malformed_response");
       return {
         accepted: true as const,

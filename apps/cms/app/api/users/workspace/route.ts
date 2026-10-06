@@ -1,9 +1,11 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { freshStaff, hasRole, roles, type Role } from '../../../../src/access'
 import { serverSessionStrategy, type IdentityProvider } from '../../../../src/identity'
 import { configuredProvider } from '../../../../src/oidc'
 import { createUserInvitation, loadUsersWorkspace, updateManagedUser, UserManagementError } from '../../../../src/user-management'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
@@ -12,13 +14,13 @@ async function body(request: Request) { const text = await request.text(); if (B
 const validRoles = (value: unknown): value is Role[] => Array.isArray(value) && value.length > 0 && value.every((role) => roles.includes(role as Role)) && new Set(value).size === value.length
 async function context(request: Request) { const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); return { payload, user: auth.user as { id: string; roles?: string[] } | null } }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, user } = await context(request)
   if (!hasRole(user as never, ['owner'])) return json({ error: 'Owner access required.' }, 403)
   return json({ ...(await loadUsersWorkspace(payload)), providers: { google: Boolean(configuredProvider('google')), microsoft: Boolean(configuredProvider('microsoft')) } })
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return json({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await context(request)
@@ -31,7 +33,12 @@ export async function POST(request: Request) {
     }
     return json({ error: 'Check the submitted user details.' }, 400)
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     if (error instanceof UserManagementError) return json({ error: error.message }, error.code === 'not-found' ? 404 : error.code === 'conflict' ? 409 : 400)
     return json({ error: 'The user request could not be completed.' }, 400)
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

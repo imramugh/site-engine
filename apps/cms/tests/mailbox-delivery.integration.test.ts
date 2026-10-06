@@ -214,17 +214,24 @@ test('OAuth delivery refreshes before a verified Graph send and refuses local dr
   await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'provider@example.test' }, owner.id)
 
   let calls = 0
-  let sent: Record<string, unknown> | undefined
+  let drafted: Record<string, unknown> | undefined
+  let refreshBody = ''
+  const urls: string[] = []
   const fetcher = async (url: string, init: RequestInit) => {
     calls += 1
+    urls.push(url)
     if (url.includes('/token')) {
-      expect(String(init.body)).toContain('grant_type=refresh_token')
-      expect(String(init.body)).toContain('refresh_token=initial-refresh')
+      refreshBody = String(init.body)
       return Response.json({ access_token: 'refreshed-access', refresh_token: 'rotated-refresh' })
     }
     if (url.includes('/v1.0/me?')) return Response.json({ mail: 'provider@example.test' })
-    if (url.endsWith('/v1.0/me/sendMail')) {
-      sent = JSON.parse(String(init.body))
+    if (url.endsWith('/v1.0/me/messages')) {
+      drafted = JSON.parse(String(init.body))
+      expect(new Headers(init.headers).get('prefer')).toBe('IdType="ImmutableId"')
+      return Response.json({ id: 'graph-draft-id', conversationId: 'graph-conversation-id' })
+    }
+    if (url.endsWith('/v1.0/me/messages/graph-draft-id/send')) {
+      expect(new Headers(init.headers).get('prefer')).toBe('IdType="ImmutableId"')
       return new Response(null, { status: 202 })
     }
     throw new Error(`unexpected provider request ${url}`)
@@ -233,9 +240,12 @@ test('OAuth delivery refreshes before a verified Graph send and refuses local dr
   await expect(service.sendAreaMail(payload, 'leads', { sender: 'provider@example.test', recipient: 'recipient@example.test', subject: 'Approved subject', body: 'Approved plain-text body', threadID: 'local-draft-thread' }, fetcher)).rejects.toThrow('mailbox_thread_not_grounded')
   expect(calls).toBe(0)
 
-  await expect(service.sendAreaMail(payload, 'leads', { sender: 'provider@example.test', recipient: 'recipient@example.test', subject: 'Approved subject', body: 'Approved plain-text body' }, fetcher)).resolves.toEqual({ provider: 'microsoft', messageID: null })
-  expect(calls).toBe(3)
-  expect(sent).toEqual({ message: { subject: 'Approved subject', body: { contentType: 'Text', content: 'Approved plain-text body' }, toRecipients: [{ emailAddress: { address: 'recipient@example.test' } }], from: { emailAddress: { address: 'provider@example.test' } } } })
+  const delivered = await service.sendAreaMail(payload, 'leads', { sender: 'provider@example.test', recipient: 'recipient@example.test', subject: 'Approved subject', body: 'Approved plain-text body', initialOutbound: true }, fetcher)
+  expect(delivered).toEqual({ provider: 'microsoft', messageID: 'graph-draft-id', threadID: 'graph-conversation-id' })
+  expect(calls).toBe(4)
+  expect(refreshBody).toContain('grant_type=refresh_token')
+  expect(refreshBody).toContain('refresh_token=initial-refresh')
+  expect(drafted).toEqual({ subject: 'Approved subject', body: { contentType: 'Text', content: 'Approved plain-text body' }, toRecipients: [{ emailAddress: { address: 'recipient@example.test' } }], from: { emailAddress: { address: 'provider@example.test' } } })
   const rotated = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
   expect(JSON.parse(oauth.decryptMailboxOAuthCredential(String(rotated.encryptedCredential), 'microsoft'))).toEqual({ refreshToken: 'rotated-refresh' })
 

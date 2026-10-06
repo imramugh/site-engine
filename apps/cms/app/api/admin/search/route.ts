@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { serverSessionStrategy } from '../../../../src/identity'
@@ -11,7 +12,7 @@ function sameOrigin(request: Request) {
   return Boolean(configured && (origin === new URL(configured).origin || (!origin && request.headers.get('sec-fetch-site') === 'same-origin')))
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: 'Same-origin request required.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -25,3 +26,5 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Search is unavailable.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

@@ -16,8 +16,9 @@ configuration, or credentials.
 - Scoped reads: redirects, site settings, installed themes, frozen page
   quality, deterministic current-draft page audits, stale current-draft pages, current style
   policy, leads, and applications, subject to their declared scopes and roles.
+- Reply preparation: `prepare_reply` creates a reviewable, record-scoped draft only when an assistant has both the corresponding read and explicit reply-preparation scope (`mcp:leads:reply` or `mcp:careers:reply`). It returns only draft identity/status; a fresh human Owner session in the CMS must review, authorize, and send the immutable envelope.
 
-All draft writes require an explicit change set, write scope, a current
+All content draft writes require an explicit change set, write scope, a current
 revision or page hash where applicable, contract validation, and audit data.
 The server exposes no approval or publication tool.
 

@@ -1,9 +1,11 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { moveAssetToBin, restoreAssetFromBin } from '../../../../src/media-lifecycle'
 import { retentionPolicy } from '../../../../src/retention'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,7 +15,7 @@ function sameOrigin(request: Request): boolean {
   return Boolean(configured && origin && origin === new URL(configured).origin)
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403 })
   try {
     const payload = await getPayload({ config })
@@ -31,6 +33,10 @@ export async function POST(request: Request): Promise<Response> {
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to update media lifecycle.' }, { status: 400 })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

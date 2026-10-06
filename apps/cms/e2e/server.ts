@@ -22,6 +22,7 @@ import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
+import { prepareReply } from '../src/mail-replies.js'
 import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -163,6 +164,8 @@ process.env.OIDC_GOOGLE_CLIENT_ID = clientID
 process.env.OIDC_GOOGLE_CLIENT_SECRET = clientSecret
 process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+process.env.MAILBOX_GOOGLE_CLIENT_ID = 'synthetic-mailbox-google-client'
+process.env.MAILBOX_GOOGLE_CLIENT_SECRET = 'synthetic-mailbox-google-secret'
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
 process.env.PREVIEW_THEME_VERSION = galleryTheme?.version ?? '1.0.0'
 process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
@@ -170,6 +173,24 @@ process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
 const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
+const replyRoute = await import('../app/api/mail-replies/[target]/[id]/route.js')
+const suggestionRoute = await import('../app/api/mail-suggestions/[target]/[id]/route.js')
+const { setReplyDeliveryForTest } = await import('../src/mail-replies.js')
+const { sendAreaMail } = await import('../src/mailboxes.js')
+const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
+const fixtureReplyDeliveries: Array<{ threadID: string | null; mime: string; messageID: string }> = []
+if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
+  if (url.includes('/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
+  if (url.endsWith('/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
+  if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] })
+  if (url.endsWith('/messages/send')) {
+    const body = JSON.parse(String(init.body)) as { raw?: string; threadId?: string }
+    const mime = Buffer.from(String(body.raw ?? ''), 'base64url').toString('utf8')
+    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' })
+    return Response.json({ id: 'fixture-provider-send', threadId: body.threadId ?? 'fixture-new-thread' })
+  }
+  throw new Error('unexpected_fixture_provider_request')
+}))
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -193,6 +214,7 @@ let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
 let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
 let sqliteLockClient: Client | undefined
+let firstEditableLeadID: string | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -310,7 +332,7 @@ async function seed(): Promise<void> {
   }
   const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode), recoveryHash(reviewOwnerReauthenticationCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
-  await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06'), recoveryHash('synthetic-identity-owner-code-07')] }, overrideAccess: true })
   const leadOwner = await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
   const leadEditor = await payload.create({ collection: 'users', data: { email: 'lead-editor.synthetic@example.test', name: 'Synthetic Lead Editor', roles: ['editor'] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
@@ -419,15 +441,22 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'inquiries', data: { email: 'new-lead.synthetic@example.test', message: 'A synthetic new lead.', topic: 'general', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-new', stage: 'new', urgent: false }, overrideAccess: true })
   await payload.create({ collection: 'inquiries', data: { email: 'urgent-lead.synthetic@example.test', message: 'A synthetic urgent lead.', topic: 'active-incident', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-urgent', stage: 'qualified', urgent: true }, overrideAccess: true })
   const firstEditableLead = await payload.create({ collection: 'inquiries', data: { email: 'notes-a.synthetic@example.test', name: 'First editable lead', message: '<img src=x onerror=alert(1)> remains visible text.', topic: 'project', sourcePage: '/services/a', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-notes-a', stage: 'contacted', urgent: false, notes: 'First lead notes', nextAction: 'Call first lead' }, overrideAccess: true })
+  firstEditableLeadID = firstEditableLead.id
   await payload.create({ collection: 'inquiries', data: { email: 'notes-b.synthetic@example.test', name: 'Second editable lead', message: 'A separate lead for controlled form state.', topic: 'partnership', sourcePage: '/services/b', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-notes-b', stage: 'contacted', urgent: false, notes: 'Second lead notes', nextAction: 'Email second lead' }, overrideAccess: true })
   await payload.create({ collection: 'inquiries', data: { email: 'timeline-switch.synthetic@example.test', name: 'Timeline switch lead', message: 'A dedicated unmatched lead for mail timeline isolation.', topic: 'project', sourcePage: '/services/timeline', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-timeline-switch', stage: 'contacted', urgent: false }, overrideAccess: true })
   const mailFixtureMailbox = await payload.create({ collection: 'mailbox-configurations', data: { name: 'Timeline fixture inbox', provider: 'smtp', primaryAddress: 'team@example.test', aliases: [], verifiedAliases: [], host: 'smtp.example.test', port: 587, security: 'starttls', username: 'timeline', encryptedCredential: 'opaque', credentialRevision: 'fixture', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
   await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLead.id, mailbox: mailFixtureMailbox.id, provider: 'microsoft', providerConversationID: 'fixture-matched-conversation' }, overrideAccess: true })
-  const matchedInbound = { mailbox: String(mailFixtureMailbox.id), provider: 'microsoft' as const, conversationID: 'fixture-matched-conversation', messageID: 'fixture-matched-message', sender: 'notes-a.synthetic@example.test', recipient: 'team@example.test', subject: 'Persisted matched reply', body: '<script>window.bad = true</script>Persisted inbound timeline body', receivedAt: '2026-10-05T12:00:00.000Z', attachmentMetadata: [{ name: 'cv.pdf', contentType: 'application/pdf', size: 12 }] }
+  const matchedInbound = { mailbox: String(mailFixtureMailbox.id), provider: 'microsoft' as const, conversationID: 'fixture-matched-conversation', messageID: 'fixture-matched-message', sender: 'notes-a.synthetic@example.test', recipient: 'team@example.test', subject: 'Persisted matched reply', body: '<script>window.bad = true</script>Persisted inbound timeline body', receivedAt: '2026-10-05T12:00:00.000Z', attachmentMetadata: [{ name: 'cv.pdf', contentType: 'application/pdf', size: 12, providerAttachmentID: 'fixture-attachment' }] }
   const inboundResult = await appendMatchedInbound(payload, matchedInbound)
   if (!inboundResult.matched || inboundResult.duplicate) throw new Error('Failed to seed the matched inbound timeline fixture.')
   const unrelatedResult = await appendMatchedInbound(payload, { ...matchedInbound, conversationID: 'fixture-unrelated-conversation', messageID: 'fixture-unrelated-message' })
   if (unrelatedResult.matched) throw new Error('An unrelated same-address conversation was incorrectly associated.')
+  const replyFixtureMailbox = await payload.create({ collection: 'mailbox-configurations', data: { name: 'Reply fixture OAuth mailbox', provider: 'google', primaryAddress: 'reply@example.test', aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: 'reply@example.test', encryptedCredential: 'opaque', credentialRevision: 'fixture-reply', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: replyFixtureMailbox.id, senderAddress: 'reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+  for (const [conversation, subject] of [['fixture-reply-a', 'Fixture reply A'], ['fixture-reply-b', 'Fixture reply B']] as const) {
+    const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLead.id, mailbox: replyFixtureMailbox.id, provider: 'google', providerConversationID: conversation }, overrideAccess: true })
+    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: replyFixtureMailbox.id, lead: firstEditableLead.id, providerMessageID: `${conversation}-message`, rfcMessageID: `<${conversation}@example.test>`, direction: 'inbound', sender: firstEditableLead.email, recipient: 'reply@example.test', subject, body: 'Fixture provider correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+  }
   const archivedLead = await payload.create({ collection: 'inquiries', data: { email: 'archived-lead.synthetic@example.test', name: 'Archived lead', message: 'A lead outside the default received range.', topic: 'general', sourcePage: '/archive', consentedAt: '2025-01-01T00:00:00.000Z', consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-archived', stage: 'new', urgent: false }, overrideAccess: true })
   await payload.update({ collection: 'inquiries', id: archivedLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
   await payload.create({ collection: 'inquiries', data: { email: 'restore-spam.synthetic@example.test', name: 'Restore spam fixture', message: 'A persisted spam submission that can be restored.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-spam-restore', stage: 'qualified', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'qualified', urgent: false }, overrideAccess: true })
@@ -443,6 +472,42 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') { json(response, { deliveries: fixtureReplyDeliveries.map(item => ({ threadID: item.threadID, mime: item.mime, messageID: item.messageID })) }); return }
+  if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-fixture') {
+    void (async () => {
+      const state = new URL(await startMailboxOAuth(payload, 'google', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
+      const mailbox = await completeMailboxOAuth(payload, 'google', state, 'fixture-code', localOwnerID!, leadSessionTokens.owner, async (url) => url.includes('/token') ? Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'fixture-reply@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] }))
+      const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'leads' } }, limit: 1, depth: 0, overrideAccess: true })
+      if (mapping.docs[0]) await payload.update({ collection: 'mailbox-area-mappings', id: mapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+      else await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+      for (const [conversationID, messageID, rfcMessageID, subject] of [
+        ['fixture-oauth-thread-a', 'fixture-oauth-message-a', '<fixture-oauth-a@example.test>', 'Fixture OAuth reply A'],
+        ['fixture-oauth-thread-b', 'fixture-oauth-message-b', '<fixture-oauth-b@example.test>', 'Fixture OAuth reply B'],
+      ]) {
+        const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: conversationID }, overrideAccess: true })
+        await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: messageID, rfcMessageID, direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject, body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+      }
+      const adoptionLead = await payload.create({ collection: 'inquiries', data: { name: `Suggestion adoption ${mailbox.id}`, email: `suggestion-${mailbox.id}@example.test`, message: 'Dedicated suggestion fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `suggestion-${mailbox.id}`, stage: 'new' }, overrideAccess: true })
+      await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: `fixture-unmatched-${mailbox.id}`, messageID: `fixture-unmatched-message-${mailbox.id}`, sender: String(adoptionLead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
+      const prepared = new URL(`https://fixture.test${request.url}`).searchParams.get('prepared') === '1'
+      const preparedDraft = prepared ? await prepareReply(payload, 'lead', firstEditableLeadID!, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }) : undefined
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
+    })().catch(() => { response.writeHead(500); response.end() })
+    return
+  }
+  const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
+  if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {
+    void (async () => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const method = request.method!
+      const route = replyMatch[1] === 'mail-suggestions' ? suggestionRoute : replyRoute
+      const handler = method === 'GET' ? route.GET : route.POST
+      const result = await handler(new Request(`${cmsOrigin}${request.url}`, { method, headers: request.headers as HeadersInit, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }), { params: Promise.resolve({ target: replyMatch[2]!, id: replyMatch[3]! }) })
+      response.writeHead(result.status, Object.fromEntries(result.headers.entries()))
+      response.end(Buffer.from(await result.arrayBuffer()))
+    })().catch(() => { response.writeHead(500); response.end() })
+    return
+  }
   if (request.method === 'GET' && request.url === '/__e2e/axe.js') {
     response.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
     response.end(readFileSync(axeSourcePath))

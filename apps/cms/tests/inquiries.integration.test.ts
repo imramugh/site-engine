@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
+import { createClient } from '@libsql/client'
 import { createAcceptedInquiry, InquiryIdempotencyCollisionError, InquiryRateLimitedError, inquiryTopics, type InquiryTopic, validateInquiry, validateLeadAssignee } from '../src/inquiries'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-inquiries-'))
-process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+const dbPath = join(directory, 'cms.sqlite')
+process.env.DATABASE_URI = `file:${dbPath}`
 process.env.PAYLOAD_SECRET = 'inquiry-integration-secret-that-is-long-enough'
+process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 const { default: config } = await import('../payload.config.js')
+const inquiryRoute = await import('../app/api/inquiries/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 
 beforeAll(async () => { payload = await getPayload({ config }) })
@@ -64,6 +68,25 @@ describe('ENG-019 real SQLite intake and outbox', () => {
     const leads = await payload.find({ collection: 'inquiries', where: { idempotencyKey: { equals: input.idempotencyKey } }, overrideAccess: true })
     expect(leads.docs).toHaveLength(1)
   })
+
+  it('returns a safe retry response when the inquiry writer is externally locked', async () => {
+    const external = createClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    let blocked: Response | undefined
+    try {
+      await lock.execute('UPDATE inquiries SET updated_at = updated_at')
+      blocked = await inquiryRoute.POST(new Request('http://cms.test/api/inquiries', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json' }, body: JSON.stringify(fixture('backpressure-inquiry-key-1234')) }))
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    expect(blocked?.status).toBe(503)
+    expect(blocked?.headers.get('Retry-After')).toBe('1')
+    const body = await blocked?.json()
+    expect(body).toEqual({ errors: { form: 'The inquiry service is temporarily busy. Please retry.' } })
+    expect(JSON.stringify(body)).not.toContain('SQLITE_BUSY')
+    expect(JSON.stringify(body)).not.toContain('locked')
+  }, 20_000)
 
   it('allows only active owners or sales users to be assigned leads', async () => {
     const sales = await payload.create({ collection: 'users', data: { email: 'sales-assignee@example.test', name: 'Sales Assignee', roles: ['sales'] }, overrideAccess: true })

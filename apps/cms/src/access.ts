@@ -2,6 +2,7 @@ import type { Access, AccessResult } from 'payload'
 import { timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, SESSION_COOKIE, sessionIsUsable } from './identity'
+import { isRetryableSQLiteError } from './sqlite'
 
 export const roles = ['owner', 'approver', 'editor', 'sales', 'hiring'] as const
 export type Role = (typeof roles)[number]
@@ -38,7 +39,8 @@ export const freshStaff = (allowed: readonly Role[]): Access => async ({ req }) 
   try {
     const canonicalUser = await req.payload.findByID({ collection: 'users', id: sessionUserID, overrideAccess: true, req })
     return canonicalUser.id === requestUser.id && hasRole(canonicalUser as Actor, allowed)
-  } catch {
+  } catch (error) {
+    if (isRetryableSQLiteError(error)) throw error
     return false
   }
 }
