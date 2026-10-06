@@ -967,14 +967,24 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
           const server = createSMTPServer(socket => { let buffer = ''; let data = false; socket.write('220 eng010 ESMTP\r\n'); socket.on('data', chunk => { buffer += chunk.toString('utf8'); while (true) { if (data) { const end = buffer.indexOf('\r\n.\r\n'); if (end < 0) return; messages.push(buffer.slice(0, end)); buffer = buffer.slice(end + 5); data = false; socket.write('250 queued\r\n'); continue } const end = buffer.indexOf('\r\n'); if (end < 0) return; const line = buffer.slice(0, end); buffer = buffer.slice(end + 2); if (/^EHLO /i.test(line)) socket.write('250-eng010\r\n250 AUTH PLAIN\r\n'); else if (/^AUTH PLAIN /i.test(line)) socket.write('235 authenticated\r\n'); else if (/^(MAIL FROM|RCPT TO):/i.test(line)) socket.write('250 accepted\r\n'); else if (/^DATA$/i.test(line)) { data = true; socket.write('354 continue\r\n') } else if (/^QUIT$/i.test(line)) { socket.write('221 bye\r\n'); socket.end() } else socket.write('250 ok\r\n') } }) })
           await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
           try {
-            const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
+            const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea, clearMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
             const actor = claim.immutableContext.approvedBy; const mailbox = await configureSMTPMailbox(payload, { name: 'ENG-010 SMTP', primaryAddress: 'notices@example.test', aliases: [], host: '127.0.0.1', port: (server.address() as { port: number }).port, security: 'starttls', username: 'eng010', password: 'eng010-password' }, actor)
+            const priorMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true }) as any
+            const owned = await payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: 'publish-job' } }, { sourceID: { equals: claim.job.id } }] }, limit: 1, depth: 0, overrideAccess: true }) as any
+            if (!owned.docs[0]) throw new Error('ENG-010 failure notification is missing.')
+            await payload.update({ collection: 'notification-outbox', id: owned.docs[0].id, data: { availableAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true })
             await testSMTPMailbox(payload, mailbox.id, actor); await setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notices@example.test' }, actor)
             // nodemailer encodes the URL's equals sign as quoted-printable. Decode
             // the captured wire body before matching the exact publish job.
             const decoded = () => messages.map(message => message.replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))))
-            for (let index = 0; index < 40 && !decoded().some(message => message.includes(`publish=${claim.job.id}`)); index += 1) await dispatchOneNotification(payload, new Date(Date.now() + 10_000 + index))
-            smtp = decoded().find(message => message.includes(`publish=${claim.job.id}`))
+            const expected = (owned.docs[0].recipients as unknown[]).length * (owned.docs[0].channels as unknown[]).length
+            for (let index = 0; index < expected + 1; index += 1) { const state = await payload.findByID({ collection: 'notification-outbox', id: owned.docs[0].id, depth: 0, overrideAccess: true }) as any; if (state.state === 'delivered') break; await dispatchOneNotification(payload, new Date(Date.now() + 10_000 + index)) }
+            const delivered = await payload.findByID({ collection: 'notification-outbox', id: owned.docs[0].id, depth: 0, overrideAccess: true }) as any
+            if (delivered.state !== 'delivered') throw new Error('ENG-010 Owner notification did not reach a terminal delivered state.')
+            const targetMessages = decoded().filter(message => message.includes(`publish=${claim.job.id}`)); if (targetMessages.length !== expected) throw new Error('ENG-010 did not capture every intended Owner SMTP message.')
+            smtp = targetMessages.join('\n')
+            if (priorMapping.docs[0]) await setMailboxArea(payload, { area: 'notifications', mailbox: String(priorMapping.docs[0].mailbox?.id ?? priorMapping.docs[0].mailbox), senderAddress: String(priorMapping.docs[0].senderAddress) }, actor); else await clearMailboxArea(payload, 'notifications', actor)
+            await payload.delete({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
           } finally { await new Promise<void>(done => server.close(() => done())) }
         }
         const notification = await payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: 'publish-job' } }, { sourceID: { equals: claim.job.id } }] }, limit: 1, depth: 0, overrideAccess: true })
