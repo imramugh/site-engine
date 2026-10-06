@@ -153,7 +153,8 @@ describe('editorial quality captures all portable change collections', () => {
     const saved = await payload.create({ collection: 'pages', data: { title: 'A', summary: 'A sufficiently long summary for a retained editorial draft.', slug: `brief-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'A useful heading', body: 'A useful body.', hidden: false, appearance }] }, draft: true, user: owner, overrideAccess: false }) as unknown as Record<string, unknown>
     const returned = saved.readiness as { blockers?: Array<{ code: string }>; warnings?: Array<{ code: string }> }
     expect(await payload.findByID({ collection: 'pages', id: String(saved.id), draft: true, overrideAccess: true })).toMatchObject({ title: 'A' })
-    const report = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, { asOf: '2026-10-06T00:00:00.000Z' }))
+    const set = await setFor(owner.id)
+    const report = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, set.changes as never, { asOf: '2026-10-06T00:00:00.000Z' }))
     expect({ blockers: returned.blockers?.map(issue => issue.code), warnings: returned.warnings?.map(issue => issue.code) }).toEqual({ blockers: report.blockers.map(issue => issue.code), warnings: report.warnings.map(issue => issue.code) })
   })
 })

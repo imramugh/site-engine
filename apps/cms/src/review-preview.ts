@@ -57,6 +57,12 @@ async function queueHead(payload: Payload, req?: PayloadRequest): Promise<Previe
   return { manifest: SiteSnapshotSchema.parse(snapshot.manifest), snapshotID: idOf(snapshot), sequence: Number(job.sequence), versions: { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion) } }
 }
 
+/** The exact baseline selected by preview and publication candidate assembly. */
+export async function currentPreviewBaseline(payload: Payload, req?: PayloadRequest): Promise<PreviewBaseline | undefined> {
+  const live = await latestPublished(payload, req) ?? await loadInitialPreviewBaseline()
+  return await queueHead(payload, req) ?? live
+}
+
 /** The candidate's selection is authoritative for approval and publication.
  * Legacy jobs omit the live pins; new jobs preserve both rendered variants. */
 function previewVersions(live: PreviewBaseline, proposed: SiteSnapshot, base: PreviewBaseline): PreviewVersions {
