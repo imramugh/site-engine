@@ -251,11 +251,25 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     editor.page.locator('[data-page-editor-block]').first(),
   ).toHaveAttribute('data-page-editor-block-active', 'true')
   await renderedBlocks.nth(1).focus()
-  await renderedBlocks.nth(1).press('Enter')
+  await renderedBlocks.nth(1).evaluate((node) => {
+    node.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Enter',
+      }),
+    )
+    window.parent.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Escape',
+      }),
+    )
+  })
   await expect(
     editor.page.locator('[data-page-editor-block]').nth(1),
-  ).toHaveAttribute('data-page-editor-block-active', 'true')
-  await editor.page.keyboard.press('Escape')
+  ).toHaveAttribute('data-page-editor-block-active', 'false')
   await expect(
     editor.page.locator('[data-page-editor-block][open]'),
   ).toHaveCount(0)

@@ -904,6 +904,18 @@ export const IntegrationConfigurations: CollectionConfig = {
   ],
 }
 
+/** Owner-selected routing for durable assistant job classes. Credentials remain
+ * in integration-configurations; these records contain no secrets. */
+export const AIJobDefaults: CollectionConfig = {
+  slug: 'ai-job-defaults', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+  ],
+}
+
 /** Private operational control for the information MCP tools may disclose. */
 export const McpPrivacySettings: CollectionConfig = {
   slug: 'mcp-privacy-settings',
@@ -1175,7 +1187,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   hooks: { beforeChange: [({ data, originalDoc, operation }) => {
     if (operation === 'update' && originalDoc) {
-      for (const field of ['actor', 'idempotencyKey', 'requestDigest', 'input', 'provider', 'fallbackProvider', 'maxOutputTokens', 'configurationSnapshot']) data[field] = originalDoc[field]
+      for (const field of ['actor', 'idempotencyKey', 'requestDigest', 'input', 'imageDataUrl', 'provider', 'fallbackProvider', 'maxOutputTokens', 'configurationSnapshot']) data[field] = originalDoc[field]
     }
     return data
   }] },
@@ -1184,6 +1196,7 @@ export const ConfiguredAIJobs: CollectionConfig = {
     { name: 'idempotencyKey', type: 'text', required: true, unique: true, maxLength: 128, admin: { readOnly: true } },
     { name: 'requestDigest', type: 'text', required: true, maxLength: 64, admin: { readOnly: true } },
     { name: 'input', type: 'textarea', required: true, maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
+    { name: 'imageDataUrl', type: 'textarea', maxLength: 100000, access: { read: () => false }, admin: { hidden: true } },
     { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'], admin: { readOnly: true } },
     { name: 'maxOutputTokens', type: 'number', required: true, min: 1, max: 8192, admin: { readOnly: true } },

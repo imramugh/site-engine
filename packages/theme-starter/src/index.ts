@@ -15,7 +15,10 @@ export const starterTheme: ThemeDescriptor = {
   supportedBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'],
   backgrounds: BackgroundSchema.options, motionIntents: MotionIntentSchema.options,
   appearance: { widths: WidthSchema.options, spacings: SpacingSchema.options, logoTones: LogoToneSchema.options },
-  motion: { supportedPresets: ['subtle', 'ambient', 'signature'], intentFallbacks: {} },
+  motion: {
+    supportedPresets: ['subtle', 'ambient', 'signature'],
+    intentFallbacks: { subtle: 'subtle', ambient: 'ambient', signature: 'signature' },
+  },
   tokens: { color: { text: '#14212b', surface: '#ffffff', brand: '#064f85', focus: '#e47d22' }, space: { compact: '1rem', default: '2rem', spacious: '5rem' }, radius: '0.25rem', fontFamily: 'system-ui, sans-serif' },
   classes: { page: 'starter-page', block: 'starter-block', header: 'starter-header', footer: 'starter-footer' },
   components: { headerClass: () => 'starter-header', footerClass: () => 'starter-footer', blockClass: (block) => `starter-block starter-block--${block.type}` },

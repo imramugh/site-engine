@@ -36,6 +36,37 @@ it('reports an invalid snapshot build with its public page and block location', 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it('builds a target-theme motion projection without mutating the frozen source snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-theme-motion-switch-'));
+  try {
+    const snapshot = fixture('Theme motion switch');
+    const block = snapshot.pages[0]!.blocks[0]!;
+    block.appearance = { ...block.appearance, motionIntent: 'signature', motionPreset: 'source-grid' };
+    const targetManifest = {
+      name: 'target-theme', version: '1.0.0', contract: snapshot.settings.contractVersion, entry: './dist/renderer.js',
+      standardBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'],
+      settingKeys: [], extensionBlocks: [], motion: { presets: ['target-chapter', 'target-fade'], intentFallbacks: { signature: 'target-chapter', subtle: 'target-fade' } },
+    };
+    snapshot.settings.theme = { id: targetManifest.name, version: targetManifest.version, contract: targetManifest.contract, manifestDigest: hash(targetManifest) };
+    const sourceHash = hash(snapshot);
+    const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'source.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: targetManifest, versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: snapshot.settings.contractVersion } });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    expect(html).toContain('data-motion-effect="target-chapter"');
+    expect(html).not.toContain('source-grid');
+    expect(snapshot.pages[0]!.blocks[0]!.appearance.motionPreset).toBe('source-grid');
+    expect(hash(snapshot)).toBe(sourceHash);
+    expect(built.manifest.snapshotContentHash).toBe(sourceHash);
+    const legacySnapshot = structuredClone(snapshot); delete legacySnapshot.settings.theme;
+    const legacyHash = hash(legacySnapshot);
+    const legacy = await renderer.buildSnapshot({ input: await writeSnapshot(root, legacySnapshot, 'legacy-source.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: targetManifest, themeSelection: snapshot.settings.theme, versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: legacySnapshot.settings.contractVersion } });
+    expect((await readFile(join(legacy.output, 'index.html'), 'utf8'))).toContain('data-motion-effect="target-chapter"');
+    expect(legacy.manifest.snapshotContentHash).toBe(legacyHash);
+    expect(hash(legacySnapshot)).toBe(legacyHash);
+    await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'mismatched-manifest.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: { ...targetManifest, version: '1.0.1' }, versionPins: { themeVersion: '1.0.1', engineVersion: '1.0.0', contractVersion: snapshot.settings.contractVersion } })).rejects.toThrow('Theme manifest does not match the frozen selection');
+    await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'mismatched-selection.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: targetManifest, themeSelection: { ...snapshot.settings.theme, version: '1.0.1' }, versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: snapshot.settings.contractVersion } })).rejects.toThrow('External theme selection does not match');
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 120_000);
+
 it('stops a static build on the same deterministic readiness code used by review', async () => {
   const root = await mkdtemp(join(tmpdir(), 'snapshot-quality-blocker-'));
   try {

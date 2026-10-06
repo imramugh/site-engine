@@ -6,9 +6,10 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlin
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { parseSiteSnapshot } from '@site-engine/contract';
+import { parseSiteSnapshot, ThemeManifestSchema, ThemeSelectionSchema } from '@site-engine/contract';
 import { checkSiteSnapshot } from '@site-engine/checks';
 import { deriveRoutes } from '@site-engine/engine';
+import { manifestDigest } from '@site-engine/engine/theme-registry';
 import { normalizeBasePath, normalizePublicOrigin } from '../site-config.mjs';
 import { writeIndexNowVerificationFile } from './indexnow.mjs';
 import { nginxRedirectInclude } from './redirect-artifact.mjs';
@@ -158,7 +159,7 @@ async function copyStarterAssets(componentsRoot, stagingRoot) {
   await copyDirectory(fonts, join(stagingRoot, 'fonts'));
 }
 
-async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot, analytics }) {
+async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot, themeMotionPath, analytics }) {
   // Astro writes prerender intermediates to <root>/.astro independently of its
   // cacheDir. Separate source roots prevent simultaneous jobs deleting each
   // other's intermediates. Copy only reviewed renderer inputs, never .env/data.
@@ -183,7 +184,7 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
       if (analytics.consentRequired === undefined) delete environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
       else environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED = String(analytics.consentRequired);
     }
-    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...environment, SITE_THEME_COMPONENT_ROOT: themeComponents, SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
+    const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...environment, SITE_THEME_COMPONENT_ROOT: themeComponents, ...(themeMotionPath ? { SITE_THEME_MOTION_PATH: themeMotionPath } : {}), SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
     const stop = () => { terminate(child, 'SIGTERM'); forceTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 5_000); };
     const abort = () => { aborted = true; stop(); };
     const cleanup = () => { clearTimeout(timeout); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort); };
@@ -194,8 +195,8 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
-export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, versionPins, analytics }) {
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, themeManifest?: unknown, themeSelection?: unknown, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
+export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, themeManifest, themeSelection, versionPins, analytics }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive number.');
@@ -213,12 +214,20 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const { themeVersion, engineVersion } = pins;
   const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
   if (typeof themeVersion !== 'string' || typeof engineVersion !== 'string' || !themeVersion || !engineVersion || !semver.test(themeVersion) || !semver.test(engineVersion) || (pins.contractVersion !== undefined && pins.contractVersion !== snapshot.settings.contractVersion)) throw new Error('Explicit immutable version pins are invalid.');
+  const targetTheme = themeManifest === undefined ? undefined : ThemeManifestSchema.parse(themeManifest);
+  if (targetTheme) {
+    const externalSelection = themeSelection === undefined ? undefined : ThemeSelectionSchema.parse(themeSelection);
+    const embeddedSelection = snapshot.settings.theme;
+    if (embeddedSelection && externalSelection && (embeddedSelection.id !== externalSelection.id || embeddedSelection.version !== externalSelection.version || embeddedSelection.contract !== externalSelection.contract || embeddedSelection.manifestDigest !== externalSelection.manifestDigest)) throw new Error('External theme selection does not match the frozen snapshot selection.');
+    const selection = embeddedSelection ?? externalSelection;
+    if (!selection || selection.id !== targetTheme.name || selection.version !== targetTheme.version || selection.contract !== targetTheme.contract || selection.manifestDigest !== manifestDigest(targetTheme) || themeVersion !== targetTheme.version) throw new Error('Theme manifest does not match the frozen selection and immutable version pins.');
+  }
   const root = resolve(outputRoot); const rootInfo = await lstat(root); if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('outputRoot must be a real directory.');
   // Build input and output stay in a private staging directory. Only a completed,
   // validated artifact is renamed into outputRoot under its public snapshot name.
-  const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 });
+  const job = await mkdtemp(join(root, '.snapshot-staging-')); await chmod(job, 0o700); const frozen = join(job, 'input.json'); const themeMotionPath = targetTheme ? join(job, 'theme-motion.json') : undefined; const staged = join(job, 'artifact'); const output = join(root, `snapshot-${randomUUID()}`); await writeFile(frozen, stable(snapshot), { mode: 0o600 }); if (themeMotionPath) await writeFile(themeMotionPath, stable(targetTheme), { mode: 0o600 });
   try {
-    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
+    await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, themeMotionPath, analytics });
     const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, true) });
     const renderedQualityError = qualityError(renderedQuality);
     if (renderedQualityError) throw renderedQualityError;

@@ -37,6 +37,24 @@ export function resolveMotionPreset(
   return supportedPresets.has(fallback) ? fallback : undefined;
 }
 
+/**
+ * Resolve a preset while switching themes.  Unlike the legacy convenience
+ * resolver, portability only uses a fallback explicitly declared by the
+ * target theme: matching intent and preset names are not evidence that a
+ * foreign preset is safe to hand to a renderer.
+ */
+export function resolveDeclaredMotionPreset(
+  intent: string,
+  preset: string | undefined,
+  supportedPresets: ReadonlySet<string>,
+  intentFallbacks?: ReadonlyMap<string, string>,
+): ResolvedMotionPreset {
+  if (intent === 'none') return undefined;
+  if (preset && supportedPresets.has(preset)) return preset;
+  const fallback = intentFallbacks?.get(intent);
+  return fallback && supportedPresets.has(fallback) ? fallback : undefined;
+}
+
 type MotionMediaQuery = MediaQueryList & {
   addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
   removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
