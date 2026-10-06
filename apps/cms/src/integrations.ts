@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
-export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter'] as const
+export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
 export type ConnectionResult = { ok: boolean; code: 'connected' | 'unavailable' | 'rejected' }
 export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null }) => Promise<ConnectionResult>
@@ -51,6 +51,7 @@ function endpoint(provider: IntegrationProvider, model: string, credential: stri
   if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }
   if (provider === 'google-gemini') return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}`, headers: { 'x-goog-api-key': credential } }
+  if (provider === 'mistral') return { url: `https://api.mistral.ai/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   const [author, slug, ...rest] = model.split('/')
   if (!author || !slug || rest.length) return undefined
   return { url: `https://openrouter.ai/api/v1/model/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`, headers: { authorization: `Bearer ${credential}` } }

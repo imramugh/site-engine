@@ -721,9 +721,9 @@ export interface StyleGuide {
  */
 export interface IntegrationConfiguration {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
   model: string;
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
   monthlyCapMicroUsd?: number | null;
   monthlyUsageMicroUsd?: number | null;
   usageMonth?: string | null;
@@ -1305,8 +1305,8 @@ export interface ConfiguredAiJob {
   idempotencyKey: string;
   requestDigest: string;
   input: string;
-  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
-  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral';
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
   maxOutputTokens: number;
   configurationSnapshot:
     | {
@@ -1324,7 +1324,7 @@ export interface ConfiguredAiJob {
   result?: string | null;
   resultDigest?: string | null;
   costStatus?: ('actual' | 'reserved') | null;
-  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
+  usedProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral') | null;
   fallbackUsed?: boolean | null;
   failureCode?: string | null;
   updatedAt: string;

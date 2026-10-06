@@ -5,7 +5,7 @@ import styles from './integration-configuration.module.css'
 import { EmailWorkspace } from './email-workspace'
 import { NotificationPreferences } from './notification-preferences'
 
-type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter'
+type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral'
 type Tab = 'ai' | 'email' | 'signin' | 'assistants' | 'notifications'
 type Integration = { id: string; provider: Provider; model: string | null; fallbackProvider: Provider | null; monthlyCapMicroUsd: number | null; monthlyUsageMicroUsd: number; usageMonth: string | null; inputMicroUsdPerMillionTokens: number | null; outputMicroUsdPerMillionTokens: number | null; pricingSource: string | null; pricingAsOf: string | null; health: string; testedAt: string | null; credentialConfigured: boolean; credentialHint: string | null }
 type FederatedIdentity = { configured: boolean; users: number; enrollment: 'invited-only'; roleAssignment: 'manual'; issuer?: string | null; allowedTenant?: string | null }
@@ -15,7 +15,7 @@ type AssistantGrant = { managementId: string; clientName: string; resource: stri
 type AssistantResponse = { scope: 'all' | 'own'; endpoint: string | null; grants: AssistantGrant[] }
 type McpPrivacy = { hidePhone: boolean }
 
-const providers: { id: Provider; name: string; mark: string }[] = [{ id: 'openai', name: 'OpenAI', mark: 'OA' }, { id: 'anthropic', name: 'Anthropic', mark: 'AN' }, { id: 'google-gemini', name: 'Google Gemini', mark: 'GG' }, { id: 'openrouter', name: 'OpenRouter', mark: 'OR' }]
+const providers: { id: Provider; name: string; mark: string }[] = [{ id: 'openai', name: 'OpenAI', mark: 'OA' }, { id: 'anthropic', name: 'Anthropic', mark: 'AN' }, { id: 'google-gemini', name: 'Google Gemini', mark: 'GG' }, { id: 'openrouter', name: 'OpenRouter', mark: 'OR' }, { id: 'mistral', name: 'Mistral', mark: 'MI' }]
 const tabs: { id: Tab; label: string }[] = [{ id: 'ai', label: 'AI providers' }, { id: 'email', label: 'Email' }, { id: 'signin', label: 'Sign-in' }, { id: 'assistants', label: 'Connected assistants' }, { id: 'notifications', label: 'Notifications' }]
 const emptyFederated: FederatedIdentity = { configured: false, users: 0, enrollment: 'invited-only', roleAssignment: 'manual' }
 const emptyCapabilities: Capabilities = { identity: { google: emptyFederated, microsoft: emptyFederated, emergencyOwner: { configured: false, users: 0, lastUsedAt: null, sensitiveReauthMinutes: 15 } }, assistants: { oauthConfigured: false, endpoint: null }, email: { workerConfigured: false }, notifications: { queued: 0, delivered: 0, failed: 0 } }

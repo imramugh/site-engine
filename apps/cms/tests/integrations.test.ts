@@ -34,13 +34,14 @@ describe('ENG-023 credential envelopes', () => {
     await expect(providerConnectionTransport({ provider: 'openai', model: 'gpt-test', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' })
     await expect(providerConnectionTransport({ provider: 'anthropic', model: 'claude-test', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' })
     await expect(providerConnectionTransport({ provider: 'google-gemini', model: 'gemini-test', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' })
-    await expect(providerConnectionTransport({ provider: 'openrouter', model: 'openai/gpt-test', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' })
+    await expect(providerConnectionTransport({ provider: 'openrouter', model: 'openai/gpt-test', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' }); await expect(providerConnectionTransport({ provider: 'mistral', model: 'mistral-small-latest', credential: 'secret' }, fakeFetch)).resolves.toEqual({ ok: true, code: 'connected' })
     expect(requests.map(item => item.url)).toEqual([
       'https://api.openai.com/v1/models/gpt-test',
       'https://api.anthropic.com/v1/models/claude-test',
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-test',
       'https://openrouter.ai/api/v1/key',
       'https://openrouter.ai/api/v1/model/openai/gpt-test',
+      'https://api.mistral.ai/v1/models/mistral-small-latest',
     ])
     expect(requests[0]!.headers.get('authorization')).toBe('Bearer secret')
     expect(requests[1]!.headers.get('x-api-key')).toBe('secret')
