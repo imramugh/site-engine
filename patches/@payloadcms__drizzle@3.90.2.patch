@@ -1,17 +1,27 @@
 diff --git a/dist/transactions/beginTransaction.js b/dist/transactions/beginTransaction.js
-index b997960d6443005979890c1fdeef9271810a407c..d1253dffa5daeddc762696581c1751b747779007 100644
+index b997960d6443005979890c1fdeef9271810a407c..330768382824e5cfcd01aa748e13c7d04279f021 100644
 --- a/dist/transactions/beginTransaction.js
 +++ b/dist/transactions/beginTransaction.js
-@@ -1,6 +1,16 @@
+@@ -1,6 +1,26 @@
  import { v4 as uuid } from 'uuid';
-+const writeTails = new WeakMap();
++const writeQueues = new WeakMap();
++const maxQueuedWriters = 100;
++const writerWaitMs = 5_000;
++function busyError() { const error = new Error('SQLITE_BUSY: local SQLite writer queue is busy'); error.code = 'SQLITE_BUSY'; return error; }
 +async function acquireWrite(adapter) {
-+    const prior = writeTails.get(adapter);
-+    let release;
-+    const tail = new Promise((resolve) => { release = resolve; });
-+    writeTails.set(adapter, tail);
-+    if (prior) await prior;
-+    return () => { release(); if (writeTails.get(adapter) === tail) writeTails.delete(adapter); };
++    let queue = writeQueues.get(adapter);
++    if (!queue) { queue = { active: false, waiting: [] }; writeQueues.set(adapter, queue); }
++    if (queue.active) {
++        if (queue.waiting.length >= maxQueuedWriters) throw busyError();
++        await new Promise((resolve, reject) => {
++            const waiter = { resolve, reject, timer: undefined };
++            waiter.timer = setTimeout(() => { const index = queue.waiting.indexOf(waiter); if (index >= 0) queue.waiting.splice(index, 1); reject(busyError()); }, writerWaitMs);
++            queue.waiting.push(waiter);
++        });
++    }
++    queue.active = true;
++    let released = false;
++    return () => { if (released) return; released = true; const waiter = queue.waiting.shift(); if (waiter) { clearTimeout(waiter.timer); waiter.resolve(); } else { queue.active = false; if (!queue.waiting.length) writeQueues.delete(adapter); } };
 +}
  export const beginTransaction = async function beginTransaction(options) {
      let id;
@@ -19,15 +29,15 @@ index b997960d6443005979890c1fdeef9271810a407c..d1253dffa5daeddc762696581c1751b7
      try {
          id = uuid();
          let reject;
-@@ -8,6 +18,7 @@ export const beginTransaction = async function beginTransaction(options) {
+@@ -8,6 +28,7 @@ export const beginTransaction = async function beginTransaction(options) {
          let transaction;
          let transactionReady;
          let transactionFailed;
-+        releaseWrite = await acquireWrite(this);
++        releaseWrite = this.name === 'sqlite' ? await acquireWrite(this) : undefined;
          // Await initialization here
          // Prevent race conditions where the adapter may be
          // re-initializing, and `this.drizzle` is potentially undefined
-@@ -17,6 +28,12 @@ export const beginTransaction = async function beginTransaction(options) {
+@@ -17,6 +38,12 @@ export const beginTransaction = async function beginTransaction(options) {
          // over many files and we don't want to pass the `tx` around like that,
          // so instead, we "lift" up the `resolve` and `reject` methods
          // and will call them in our respective transaction methods
@@ -40,7 +50,7 @@ index b997960d6443005979890c1fdeef9271810a407c..d1253dffa5daeddc762696581c1751b7
          const done = this.drizzle.transaction(async (tx)=>{
              transaction = tx;
              await new Promise((res, rej)=>{
-@@ -31,22 +48,23 @@ export const beginTransaction = async function beginTransaction(options) {
+@@ -31,22 +58,23 @@ export const beginTransaction = async function beginTransaction(options) {
                  };
                  transactionReady();
              });
