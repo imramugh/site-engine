@@ -109,9 +109,11 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   const session = await mediaPage(browser)
   const page = session.page
   const uploadName = `media-ui-${Date.now()}.png`
+  const allFilter = page.getByRole('button', { name: /^All \d+$/ })
 
   await expect(page.locator('[data-media-upload]')).toContainText('Drop an image here')
-  await expect(page.getByRole('button', { name: /^All 26$/ })).toBeVisible()
+  const initialAll = Number((await allFilter.innerText()).match(/\d+$/)?.[0])
+  expect(initialAll).toBeGreaterThanOrEqual(24)
   const fileChooser = page.waitForEvent('filechooser')
   await page.getByRole('button', { name: 'Upload', exact: true }).click()
   await (await fileChooser).setFiles({ name: uploadName, mimeType: 'image/png', buffer: png })
@@ -119,6 +121,7 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   await page.getByLabel('Alt text', { exact: false }).first().fill('Blue browser test square')
   await page.getByRole('button', { name: 'Upload image' }).click()
   await expect(page.getByRole('status')).toContainText('Image uploaded')
+  await expect(page.getByRole('button', { name: `All ${initialAll + 1}`, exact: true })).toBeVisible()
   await expect(page.locator('[data-media-detail] h2')).toHaveText(uploadName)
   const enabledBin = page.getByRole('button', { name: 'Move to bin' })
   await expect(enabledBin).toBeEnabled()
@@ -171,11 +174,13 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   await expect(page.locator('[data-media-detail] header')).toContainText('48 × 64')
 
   await search(page, '')
-  await expect(page.getByText(/Page 1 of 2/)).toBeVisible()
+  const pagesAfterUpload = Math.ceil((initialAll + 1) / 24)
+  expect(pagesAfterUpload).toBeGreaterThan(1)
+  await expect(page.getByText(`Page 1 of ${pagesAfterUpload}`, { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Next' }).click()
-  await expect(page.getByText('Page 2 of 2')).toBeVisible()
+  await expect(page.getByText(`Page 2 of ${pagesAfterUpload}`, { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Previous' }).click()
-  await expect(page.getByText('Page 1 of 2')).toBeVisible()
+  await expect(page.getByText(`Page 1 of ${pagesAfterUpload}`, { exact: true })).toBeVisible()
 
   await search(page, 'media-fixture-00.png')
   const usageLink = page.getByRole('link', { name: 'Media usage fixture page' })
