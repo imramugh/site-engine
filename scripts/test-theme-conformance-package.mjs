@@ -34,10 +34,16 @@ try {
   const bad = join(temp, "bad-theme"); await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), bad, { recursive: true });
   const manifest = JSON.parse(await readFile(join(bad, "theme.json"), "utf8")); delete manifest.contractSurface.components.blockRenderer; await writeFile(join(bad, "theme.json"), JSON.stringify(manifest));
   await execFile(process.execPath, [cli, bad, "--artifacts-dir", join(temp, "bad-evidence")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a missing blockRenderer."); }, error => { if (!String(error.stderr).includes("blockRenderer")) throw error; });
+  const custom = join(temp, "custom-theme"); await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), custom, { recursive: true });
+  const customManifest = JSON.parse(await readFile(join(custom, "theme.json"), "utf8")); customManifest.name = "neutral-custom"; await writeFile(join(custom, "theme.json"), JSON.stringify(customManifest));
+  await execFile(process.execPath, [cli, custom, "--artifacts-dir", join(temp, "custom-missing-baseline")], { cwd: consumer }).then(() => { throw new Error("Packed CLI allowed an unowned custom baseline."); }, error => { if (!String(error.stderr).includes("No visual baseline")) throw error; });
+  const customBaseline = join(temp, "custom-baseline.json");
+  const customResult = await execFile(process.execPath, [cli, custom, "--artifacts-dir", join(temp, "custom"), "--baseline-file", customBaseline, "--record-baselines"], { cwd: consumer });
+  if (JSON.parse(customResult.stdout.trim().split("\n").at(-1)).cases !== 14) throw new Error("Custom package path did not resolve through the installed CLI.");
   const baselineA = join(temp, "baseline-a.json"), baselineB = join(temp, "baseline-b.json");
   await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", join(temp, "a"), "--baseline-file", baselineA, "--record-baselines"], { cwd: consumer });
   await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", join(temp, "b"), "--baseline-file", baselineB, "--record-baselines"], { cwd: consumer });
   if ((await readFile(baselineA, "utf8")) !== (await readFile(baselineB, "utf8"))) throw new Error("Independent baseline recordings diverged.");
-  await writeFile(join(temp, "result.json"), `${JSON.stringify({ blocks: result.blocks, cases: result.cases, negative: "blockRenderer", baselineFiles: 2 }, null, 2)}\n`);
-  process.stdout.write(`${JSON.stringify({ blocks: result.blocks, cases: result.cases, negative: "blockRenderer", baselineFiles: 2 })}\n`);
+  await writeFile(join(temp, "result.json"), `${JSON.stringify({ blocks: result.blocks, cases: result.cases, negative: "blockRenderer", baselineFiles: 3, customPackage: true }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ blocks: result.blocks, cases: result.cases, negative: "blockRenderer", baselineFiles: 3, customPackage: true })}\n`);
 } finally { await rm(temp, { recursive: true, force: true }); }
