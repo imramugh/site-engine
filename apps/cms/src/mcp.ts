@@ -10,7 +10,7 @@ import config from '../payload.config'
 import { createNamedChangeSet, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
-import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
+import { executePageEditorSave, pageEditorProjection } from './page-editor'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -316,8 +316,9 @@ export async function handleMcp(request: Request): Promise<Response> {
       const draft = pageEditorProjection(existing)
       const index = draft.blocks.findIndex((candidate) => candidate.id === blockId)
       if (index < 0) throw new Error('block_not_found')
+      const previous = draft.blocks[index]
       draft.blocks[index] = replacement as typeof draft.blocks[number]
-      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId } } } })
+      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId }, diff: { blocks: [{ id: blockId, before: previous, after: replacement }] } } } })
       const checks = [{ name: 'contract-and-tree', status: 'passed' as const, errors: [] }]
       return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks })
     } catch (error) { return { isError: true, ...text({ error: error instanceof Error && ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'invalid_block'].includes(error.message) ? error.message.toLowerCase() : 'write_failed' }) } }
