@@ -103,9 +103,11 @@ test('ENG-020 selects only a scoped provider conversation before explicit confir
     await expect(reply.getByLabel('Reply subject')).toHaveValue('Thread B')
     await reply.getByLabel('Reply message').fill('Approved body')
     await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await expect(reply.getByRole('region', { name: 'Exact reply review' })).toContainText('Approved body')
     expect(requests).toEqual(['prepare'])
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
     await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
     expect(requests).toEqual(['prepare', 'authorize', 'send'])
     await expect(page.getByRole('option', { name: /unrelated/i })).toHaveCount(0)
   } finally { await context.close() }
