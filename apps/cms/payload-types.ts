@@ -97,6 +97,7 @@ export interface Config {
     'mail-drafts': MailDraft;
     'mail-threads': MailThread;
     'mail-thread-messages': MailThreadMessage;
+    'external-replies': ExternalReply;
     'mail-authorizations': MailAuthorization;
     applications: Application;
     'retention-settings': RetentionSetting;
@@ -146,6 +147,7 @@ export interface Config {
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
     'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
     'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
+    'external-replies': ExternalRepliesSelect<false> | ExternalRepliesSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'retention-settings': RetentionSettingsSelect<false> | RetentionSettingsSelect<true>;
@@ -1161,6 +1163,21 @@ export interface MailThreadMessage {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "external-replies".
+ */
+export interface ExternalReply {
+  id: string;
+  lead: string | Inquiry;
+  sentAt: string;
+  subject: string;
+  summary: string;
+  recordedBy: string | User;
+  idempotencyKey: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "mail-authorizations".
  */
 export interface MailAuthorization {
@@ -1646,6 +1663,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'mail-thread-messages';
         value: string | MailThreadMessage;
+      } | null)
+    | ({
+        relationTo: 'external-replies';
+        value: string | ExternalReply;
       } | null)
     | ({
         relationTo: 'mail-authorizations';
@@ -2411,6 +2432,20 @@ export interface MailThreadMessagesSelect<T extends boolean = true> {
   body?: T;
   receivedAt?: T;
   attachmentMetadata?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "external-replies_select".
+ */
+export interface ExternalRepliesSelect<T extends boolean = true> {
+  lead?: T;
+  sentAt?: T;
+  subject?: T;
+  summary?: T;
+  recordedBy?: T;
+  idempotencyKey?: T;
   updatedAt?: T;
   createdAt?: T;
 }
