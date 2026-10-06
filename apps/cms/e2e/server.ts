@@ -970,6 +970,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea, clearMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
             const actor = claim.immutableContext.approvedBy; const mailbox = await configureSMTPMailbox(payload, { name: 'ENG-010 SMTP', primaryAddress: 'notices@example.test', aliases: [], host: '127.0.0.1', port: (server.address() as { port: number }).port, security: 'starttls', username: 'eng010', password: 'eng010-password' }, actor)
             const priorMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true }) as any
+            try {
             const owned = await payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: 'publish-job' } }, { sourceID: { equals: claim.job.id } }] }, limit: 1, depth: 0, overrideAccess: true }) as any
             if (!owned.docs[0]) throw new Error('ENG-010 failure notification is missing.')
             await payload.update({ collection: 'notification-outbox', id: owned.docs[0].id, data: { availableAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true })
@@ -983,8 +984,10 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             if (delivered.state !== 'delivered') throw new Error('ENG-010 Owner notification did not reach a terminal delivered state.')
             const targetMessages = decoded().filter(message => message.includes(`publish=${claim.job.id}`)); if (targetMessages.length !== expected) throw new Error('ENG-010 did not capture every intended Owner SMTP message.')
             smtp = targetMessages.join('\n')
+            } finally {
             if (priorMapping.docs[0]) await setMailboxArea(payload, { area: 'notifications', mailbox: String(priorMapping.docs[0].mailbox?.id ?? priorMapping.docs[0].mailbox), senderAddress: String(priorMapping.docs[0].senderAddress) }, actor); else await clearMailboxArea(payload, 'notifications', actor)
             await payload.delete({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
+            }
           } finally { await new Promise<void>(done => server.close(() => done())) }
         }
         const notification = await payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: 'publish-job' } }, { sourceID: { equals: claim.job.id } }] }, limit: 1, depth: 0, overrideAccess: true })

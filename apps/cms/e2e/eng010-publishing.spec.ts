@@ -20,10 +20,10 @@ test('ENG-010 publishes an approved snapshot, retains it after terminal failure,
     const failed = await session.page.request.post(`/__e2e/eng010-publish/fail?changeSet=${failedSet}`)
     expect(failed.status(), await failed.text()).toBe(200)
     const body = await failed.json() as { claim: { changeSetID: string; id: string }; health: { jobID: string; contentHash: string }; notification: { sourceID: string }; smtp: string | null }
-    expect(body).toMatchObject({ claim: { changeSetID: failedSet }, job: { status: 'failed' }, releases: before.releaseCount, served: expect.stringContaining('Original review heading'), notification: { sourceID: body.claim.id, state: 'queued' }, smtp: expect.stringContaining('Publish build failed') })
+    jobs.push(body.claim.id)
+    expect(body).toMatchObject({ claim: { changeSetID: failedSet }, job: { status: 'failed' }, releases: before.releaseCount, served: expect.stringContaining('Original review heading'), notification: { sourceID: body.claim.id, state: 'delivered' }, smtp: expect.stringContaining('Publish build failed') })
     expect(body.smtp).toContain(`publish=${body.claim.id}`)
     expect(body.health).toMatchObject({ jobID: completed.claim.id, contentHash: completed.claim.contentHash })
-    jobs.push(body.claim.id)
     const owner = await browser.newContext({ baseURL: 'https://127.0.0.1:' + Number(process.env.CMS_E2E_PORT ?? 4300), ignoreHTTPSErrors: true }); await owner.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-operations-owner-session-token', url: 'https://127.0.0.1:' + Number(process.env.CMS_E2E_PORT ?? 4300), secure: true, httpOnly: true, sameSite: 'Lax' as const }))); const page = await owner.newPage()
     await page.goto('/operations')
     const successfulLink = page.getByRole('link', { name: 'Open build log', exact: true }).and(page.locator(`a[href="/operations?publish=${completed.claim.id}"]`))
