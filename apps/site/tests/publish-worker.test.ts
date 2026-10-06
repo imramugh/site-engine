@@ -200,4 +200,15 @@ describe('publish worker', () => {
     await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, render: neverRender, healthProbe: async () => true })).resolves.toBe(true);
     expect(neverRender).not.toHaveBeenCalled(); expect(completed).toHaveLength(2); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
   }, 60_000);
+  it('notifies IndexNow only after the activated public release and replays completion without a duplicate request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const complete: any[] = [];
+    vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('SITE_INDEXNOW_ENABLED', 'true'); vi.stubEnv('SITE_INDEXNOW_KEY', 'abcdefghi'); vi.stubEnv('SITE_INDEXNOW_ENDPOINT', 'https://indexnow.example/indexnow'); vi.stubEnv('SITE_INDEXNOW_ALLOWED_HOSTS', 'indexnow.example');
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 })); vi.stubGlobal('fetch', fetch);
+    let lease = job.leaseToken;
+    const api = async (action: string, body: Record<string, unknown> = {}) => action === 'claim' ? { job: { ...job, leaseToken: lease }, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job: { ...job, leaseToken: body.leaseToken } } : action === 'complete' ? (complete.push(body), lease = 'c'.repeat(36), { job: { status: 'completed' } }) : { job: {} };
+    const worker = { api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://public.example.test', versionPins: pins, healthProbe: async () => true };
+    await expect(runPublishOnce(worker)).resolves.toBe(true); await expect(runPublishOnce(worker)).resolves.toBe(true);
+    expect(fetch).toHaveBeenCalledOnce(); expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toMatchObject({ host: 'public.example.test', urlList: expect.arrayContaining(['https://public.example.test/']) });
+    expect(complete).toHaveLength(2); expect(complete[0].artifact.indexNow).toMatchObject({ sent: true, batches: 1 }); expect(complete[1].artifact.indexNow).toEqual(complete[0].artifact.indexNow);
+  }, 60_000);
 });
