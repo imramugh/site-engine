@@ -585,7 +585,7 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const denied = await contentOnly.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'Private subject', body: 'Private body' } })
     expect(resultJson(denied)).toEqual({ error: 'insufficient_scope', required: 'mcp:leads:reply' })
     const leadDraft = resultJson(await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'A precise follow-up', body: 'A prepared response only.' } })) as { draft: { id: string; target: string; sender: string; recipient: string; subject: string; body: string; revision: number; state: string } }
-    expect(leadDraft.draft).toEqual({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared' })
+    expect(leadDraft.draft).toMatchObject({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared', confirmationURL: expect.stringMatching(/\/leads\?draft=/) })
     expect(JSON.stringify(leadDraft)).not.toContain('A prepared response only.')
     expect(JSON.stringify(leadDraft)).not.toContain('416')
     expect((await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.draft.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
