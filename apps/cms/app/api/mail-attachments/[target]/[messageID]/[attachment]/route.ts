@@ -9,8 +9,8 @@ const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options'
 
 export async function GET(request: Request, context: { params: Promise<{ target: string; messageID: string; attachment: string }> }) {
   const { target, messageID, attachment } = await context.params
-  if ((target !== 'lead' && target !== 'application') || !/^[0-9a-f-]{36}$/i.test(messageID) || !/^(?:0|[1-9][0-9]?)$/.test(attachment)) return Response.json({ error: 'Not found.' }, { status: 404, headers })
-  const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); const user = auth.user as { roles?: string[] } | null
+  if ((target !== 'lead' && target !== 'application') || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(messageID) || !/^(?:0|[1-9]|1[0-9])$/.test(attachment)) return Response.json({ error: 'Not found.' }, { status: 404, headers })
+  let payload; let auth; try { payload = await getPayload({ config }); auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }) } catch { return Response.json({ error: 'Attachment is temporarily unavailable.' }, { status: 503, headers: { ...headers, 'Retry-After': '1' } }) }; const user = auth.user as { roles?: string[] } | null
   if (!user || !hasRole(user as never, target === 'lead' ? ['owner', 'sales'] : ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403, headers })
   try {
     const message = await payload.findByID({ collection: 'mail-thread-messages', id: messageID, depth: 0, overrideAccess: false, user: user as never }) as unknown as Record<string, unknown>

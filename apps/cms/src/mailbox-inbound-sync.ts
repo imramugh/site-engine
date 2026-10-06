@@ -88,11 +88,12 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   let processed = 0
 
   if (active.provider === 'microsoft') {
-    const page = await microsoftAdapter(providerFetch, 'sync@example.invalid').poll(refreshed.accessToken, 'inbox', cursor ?? undefined)
+    const adapter = microsoftAdapter(providerFetch, 'sync@example.invalid'); const page = await adapter.poll(refreshed.accessToken, 'inbox', cursor ?? undefined)
     for (const message of page.messages) {
       aborted(signal)
       await unchanged(payload, active)
-      await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
+      const appended = await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
+      if (appended.matched && message.attachmentsPending) { const attachmentMetadata = await adapter.attachments(refreshed.accessToken, message.messageId); if (attachmentMetadata.length) await payload.update({ collection: 'mail-thread-messages', id: (appended.message as { id: string }).id, data: { attachmentMetadata }, overrideAccess: true }) }
       processed += 1
     }
     nextCursor = page.cursor

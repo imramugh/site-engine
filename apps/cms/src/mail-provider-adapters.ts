@@ -162,7 +162,7 @@ function graphDelta(folderID: string, cursor?: string) {
   if (!opaque(folderID)) throw new Error("invalid_cursor");
   const path = `/v1.0/me/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
   if (!cursor)
-    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime`;
+    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,hasAttachments`;
   let url: URL;
   try {
     url = new URL(cursor);
@@ -203,7 +203,7 @@ function graphMessage(value: Record<string, unknown>) {
   };
 }
 async function graphAttachments(fetcher: Fetcher, token: string, messageID: string) {
-  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size,@odata.type`, { headers: graphAuth(token) });
+  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size`, { headers: graphAuth(token) });
   if (!response.ok) fail(response.status)
   const value = await json(response)
   if (!Array.isArray(value.value) || value.value.length > 20) throw new Error('provider_malformed_response')
@@ -292,7 +292,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         throw new Error("provider_malformed_response");
       if (value.value.length > 500) throw new Error("provider_page_too_large");
       const next = value["@odata.nextLink"] ?? value["@odata.deltaLink"];
-      const messages = await Promise.all(value.value.map(async (entry) => {
+      const messages = value.value.map((entry) => {
         if (!entry || typeof entry !== "object")
           throw new Error("provider_malformed_response");
         const raw = entry as Record<string, unknown>;
@@ -300,14 +300,14 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         const message = graphMessage(raw);
         if (!message.messageId || !message.threadId)
           throw new Error("provider_malformed_response");
-        if (raw.hasAttachments === true) message.attachments = await graphAttachments(fetcher, token, message.messageId)
-        return message;
-      }));
+        return { ...message, attachmentsPending: raw.hasAttachments === true };
+      });
       return {
         cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
         messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
       };
     },
+    attachments(token: string, messageID: string) { return graphAttachments(fetcher, token, messageID) },
   };
 }
 export function microsoftIdentity(fetcher: Fetcher) {
@@ -400,7 +400,7 @@ export function gmailAttachment(fetcher: Fetcher) {
     const response = await request(fetcher, `${gmail}/gmail/v1/users/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}`, { headers: auth(token) });
     if (!response.ok) fail(response.status);
     const value = await attachmentJSON(response);
-    if (typeof value.data !== "string" || !/^[A-Za-z0-9_-]*$/.test(value.data)) throw new Error("provider_malformed_response");
+    if (typeof value.data !== "string" || !/^[A-Za-z0-9_-]*={0,2}$/.test(value.data)) throw new Error("provider_malformed_response");
     const output = Buffer.from(value.data, "base64url");
     if (output.length > attachmentMaximum) throw new Error("provider_response_too_large");
     return new Uint8Array(output);
