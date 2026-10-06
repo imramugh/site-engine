@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { artifactName, checkSiteSnapshot, inspectBoundaries, withIsolatedSqlitePath } from '../src/index.js'
+import { artifactName, checkSiteSnapshot, inspectBoundaries, scrubFailureLog, withIsolatedSqlite, withIsolatedSqlitePath } from '../src/index.js'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { inspectPublicProvenance } from '../src/provenance.js'
 
@@ -39,6 +39,16 @@ afterEach(async () => {
 describe('ENG-028 regression helpers', () => {
   it('names artifacts without fixture text', () => expect(artifactName('ENG-028', 'chromium', 'home page is accessible')).toBe('ENG-028-chromium-home-page-is-accessible'))
   it('creates and removes an isolated SQLite location', async () => { let database = ''; await withIsolatedSqlitePath(async (path) => { database = path; await expect(access(path)).rejects.toThrow() }); await expect(access(database)).rejects.toThrow() })
+  it('cleans the database lifecycle root including SQLite journal files', async () => {
+    let directory = ''; let database = '';
+    await withIsolatedSqlite(async (fixture) => { ({ directory, path: database } = fixture); expect(fixture.uri).toBe(`file:${fixture.path}`); await writeFile(fixture.path, 'neutral'); await writeFile(`${fixture.path}-wal`, 'journal') });
+    await expect(access(directory)).rejects.toThrow(); await expect(access(database)).rejects.toThrow(); await expect(access(`${database}-wal`)).rejects.toThrow();
+  })
+  it('scrubs authentication values before retaining a failure log', () => {
+    const log = scrubFailureLog("Authorization: Bearer synthetic-token\ntoken=abc123 secret='shh' https://user:password@example.test/path")
+    expect(log).toContain('Authorization: Bearer [REDACTED]')
+    expect(log).not.toContain('synthetic-token'); expect(log).not.toContain('abc123'); expect(log).not.toContain('shh'); expect(log).not.toContain('password@')
+  })
 })
 
 describe('ENG-011 deterministic readiness report', () => {
