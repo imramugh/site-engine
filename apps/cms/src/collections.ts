@@ -600,7 +600,7 @@ const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read'
 /** Routing metadata only: unmatched messages are never attached automatically. */
 export const MailConversationSuggestions: CollectionConfig = {
   slug: 'mail-conversation-suggestions', admin: { hidden: true, group: 'Private' },
-  access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ target: { equals: 'lead' } } as never) : hasRole(req.user as never, ['hiring']) ? ({ target: { equals: 'application' } } as never) : false, update: () => false, delete: () => false },
+  access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) && hasRole(req.user as never, ['hiring']) ? ({ or: [{ target: { equals: 'lead' } }, { target: { equals: 'application' } }] } as never) : hasRole(req.user as never, ['sales']) ? ({ target: { equals: 'lead' } } as never) : hasRole(req.user as never, ['hiring']) ? ({ target: { equals: 'application' } } as never) : false, update: () => false, delete: () => false },
   fields: [
     { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true }, { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] }, { name: 'providerConversationID', type: 'text', required: true, maxLength: 500 },
     { name: 'addressHash', type: 'text', required: true, maxLength: 64 }, { name: 'target', type: 'select', required: true, options: ['lead', 'application'] },
@@ -609,7 +609,7 @@ export const MailConversationSuggestions: CollectionConfig = {
 }
 
 export const MailThreads: CollectionConfig = {
-  slug: 'mail-threads', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
+  slug: 'mail-threads', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) && hasRole(req.user as never, ['hiring']) ? ({ or: [{ lead: { exists: true } }, { application: { exists: true } }] } as never) : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
   fields: [
     { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true }, { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] },
@@ -619,7 +619,7 @@ export const MailThreads: CollectionConfig = {
 }
 
 export const MailThreadMessages: CollectionConfig = {
-  slug: 'mail-thread-messages', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
+  slug: 'mail-thread-messages', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) && hasRole(req.user as never, ['hiring']) ? ({ or: [{ lead: { exists: true } }, { application: { exists: true } }] } as never) : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
   fields: [
     { name: 'thread', type: 'relationship', relationTo: 'mail-threads', required: true }, { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true },
     { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
