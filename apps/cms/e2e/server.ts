@@ -23,6 +23,7 @@ import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
 import { prepareReply } from '../src/mail-replies.js'
+import { mediaFilePath } from '../src/media.js'
 import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -505,6 +506,23 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') {
     const deliveries = readFileSync(standaloneReplyDeliveryLedger, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { threadID: string | null; mime: string; messageID: string })
     json(response, { deliveries }); return
+  }
+  if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-attachment-state') {
+    void (async () => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { action?: unknown; assetID?: unknown; grantID?: unknown }
+      if (body.action === 'mutate-asset' || body.action === 'delete-asset') {
+        if (typeof body.assetID !== 'string') throw new Error('missing_asset')
+        const asset = await payload.findByID({ collection: 'assets', id: body.assetID, depth: 0, overrideAccess: true }) as { currentFile?: { filename?: unknown }; filename?: unknown }
+        if (body.action === 'mutate-asset') writeFileSync(mediaFilePath(String(asset.currentFile?.filename ?? asset.filename)), Buffer.from('mutated after human confirmation'))
+        else await payload.update({ collection: 'assets', id: body.assetID, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+      } else if (body.action === 'revoke-role') await payload.update({ collection: 'users', id: leadOwnerID!, data: { roles: ['editor'] }, overrideAccess: true })
+      else if (body.action === 'restore-role') await payload.update({ collection: 'users', id: leadOwnerID!, data: { roles: ['owner'] }, overrideAccess: true })
+      else if (body.action !== 'grant-state') throw new Error('invalid_attachment_fixture_action')
+      const grant = typeof body.grantID === 'string' ? await payload.findByID({ collection: 'mail-authorizations', id: body.grantID, depth: 0, overrideAccess: true }) : undefined
+      json(response, { ...(grant ? { grant: { consumedAt: grant.consumedAt, revokedAt: grant.revokedAt } } : {}) })
+    })().catch(() => { response.writeHead(500); response.end() })
+    return
   }
   if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-fixture') {
     void (async () => {
