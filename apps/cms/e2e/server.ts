@@ -914,9 +914,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(() => { response.writeHead(500); response.end('Unable to read publish state.') })
     return
   }
-  if (request.method === 'POST' && /^\/__e2e\/eng010-publish\/(success|fail)$/.test(request.url ?? '')) {
+  if (request.method === 'POST' && /^\/__e2e\/eng010-publish\/(success|fail)$/.test(new URL(request.url ?? '/', cmsOrigin).pathname)) {
     void (async () => {
-      const outcome = (request.url ?? '').endsWith('/success') ? 'success' : 'fail'; let clock = Date.now()
+      const fixtureURL = new URL(request.url ?? '/', cmsOrigin)
+      const outcome = fixtureURL.pathname.endsWith('/success') ? 'success' : 'fail'; let clock = Date.now()
+      const changeSetID = fixtureURL.searchParams.get('changeSet')
+      if (!changeSetID) throw new Error('ENG-010 fixture requires the approved change set.')
+      const target = await payload.find({ collection: 'publish-outbox', where: { changeSet: { equals: changeSetID } }, sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })
+      if (!target.docs[0]) throw new Error('ENG-010 fixture could not find the approved outbox job.')
+      const suspended = await payload.find({ collection: 'publish-outbox', where: { and: [{ status: { in: ['pending', 'processing'] } }, { id: { not_equals: target.docs[0].id } }] }, pagination: false, limit: 100, depth: 0, overrideAccess: true })
+      await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: 'completed', leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, context: { editorialInternal: true } })))
       const api = async (action: string, body: Record<string, unknown> = {}) => withPayloadTransaction(payload, async req => {
         if (action === 'claim') {
           const job = await claimNextPublishJob(payload, req, new Date(clock))
@@ -932,9 +939,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         throw new Error('Unknown ENG-010 fixture action.')
       })
       const claimProbe = await api('claim')
-      if (!claimProbe.job) throw new Error('ENG-010 fixture did not receive an approved publish job.')
+      if (!claimProbe.job || claimProbe.job.id !== target.docs[0].id) throw new Error('ENG-010 fixture did not claim the approved outbox job.')
       if (!claimProbe.versionPins || !claimProbe.immutableContext) throw new Error('ENG-010 fixture claim is incomplete.')
-      const claim = claimProbe as { job: { id: string }; versionPins: { engineVersion: string; contractVersion: string }; immutableContext: { approvedBy: string } }
+      const claim = claimProbe as { job: { id: string }; contentHash: string; versionPins: { engineVersion: string; contractVersion: string }; immutableContext: { approvedBy: string } }
       const pins = { engineVersion: claim.versionPins.engineVersion, contractVersion: claim.versionPins.contractVersion }
       try { validatePublishClaim(claimProbe, pins) } catch (error) { throw new Error(`ENG010_CLAIM_DIAGNOSTIC ${JSON.stringify({ error: error instanceof Error ? error.message : 'unknown', job: claimProbe.job, contentHash: claimProbe.contentHash, versionPins: claimProbe.versionPins, immutableContext: claimProbe.immutableContext })}`) }
       // Return the probe to the dispatcher once; the real dispatch still signs
@@ -950,6 +957,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         else for (let attempt = 0; attempt < 3; attempt += 1) try { await dispatchPublishOnce({ api: attempt ? api : dispatchAPI, webhookURL: `http://127.0.0.1:${address.port}`, secret: publishSecret, versionPins: pins, timeoutMs: 10_000, signal: undefined }) } catch { /* terminal retry is asserted below */ }
         const jobs = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true }); const releases = await payload.count({ collection: 'published-releases', overrideAccess: true })
         const stages = await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.publish_stage' } }, pagination: false, limit: 20, depth: 0, overrideAccess: true })
+        const publishStages = stages.docs.filter(item => (item.detail as { publishJob?: string }).publishJob === claim.job.id).map(item => (item.detail as { stage: string }).stage)
+        const health = await fetch(`${publicOrigin}/healthz`).then(item => item.json()) as { contentHash?: string; jobID?: string }
+        const served = await fetch(`${publicOrigin}/on-page-review/review-target`).then(item => item.text())
         let smtp: string | undefined
         if (outcome === 'fail') {
           const messages: string[] = []
@@ -959,12 +969,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
             const actor = claim.immutableContext.approvedBy; const mailbox = await configureSMTPMailbox(payload, { name: 'ENG-010 SMTP', primaryAddress: 'notices@example.test', aliases: [], host: '127.0.0.1', port: (server.address() as { port: number }).port, security: 'starttls', username: 'eng010', password: 'eng010-password' }, actor)
             await testSMTPMailbox(payload, mailbox.id, actor); await setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notices@example.test' }, actor)
-            for (let index = 0; index < 40 && !messages.length; index += 1) await dispatchOneNotification(payload, new Date(Date.now() + 10_000 + index))
-            smtp = messages[0]
+            for (let index = 0; index < 40 && !messages.some(message => message.includes(`publish=${claim.job.id}`)); index += 1) await dispatchOneNotification(payload, new Date(Date.now() + 10_000 + index))
+            smtp = messages.find(message => message.includes(`publish=${claim.job.id}`))
           } finally { await new Promise<void>(done => server.close(() => done())) }
         }
-        json(response, { job: jobs.docs[0] ? { id: jobs.docs[0].id, status: jobs.docs[0].status } : null, releases: releases.totalDocs, stages: stages.docs.map(item => (item.detail as any).stage), served: await fetch(publicOrigin).then(item => item.text()), smtp: smtp ?? null })
-      } finally { await Promise.all([new Promise<void>((done, reject) => receiver.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))]) }
+        const notification = await payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: 'publish-job' } }, { sourceID: { equals: claim.job.id } }] }, limit: 1, depth: 0, overrideAccess: true })
+        json(response, { claim: { id: claim.job.id, changeSetID, contentHash: claim.contentHash }, job: jobs.docs[0] ? { id: jobs.docs[0].id, status: jobs.docs[0].status } : null, releases: releases.totalDocs, stages: publishStages, health, served, notification: notification.docs[0] ? { sourceID: notification.docs[0].sourceID, state: notification.docs[0].state } : null, smtp: smtp ?? null })
+      } finally {
+        await Promise.all([new Promise<void>((done, reject) => receiver.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))])
+        await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: job.status, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt, nextAttemptAt: job.nextAttemptAt }, overrideAccess: true, context: { editorialInternal: true } })))
+      }
     })().catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG-010 fixture failed.') })
     return
   }
