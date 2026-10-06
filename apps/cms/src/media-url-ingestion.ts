@@ -21,13 +21,18 @@ export type RemoteImageDependencies = {
 const reject = (message: string): never => { throw new Error(message) }
 const hostnameAddress = (hostname: string) => hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
 
-/** Accept only addresses ipaddr.js classifies as globally routable unicast. */
+/**
+ * Accept only current globally routable unicast addresses. IANA assigns IPv6
+ * global unicast from 2000::/3: https://www.iana.org/assignments/ipv6-address-space
+ */
 export function isPublicAddress(address: string): boolean {
   try {
     const parsed = ipaddr.parse(hostnameAddress(address))
     return parsed.kind() === 'ipv4'
       ? parsed.range() === 'unicast'
-      : !(parsed as ipaddr.IPv6).isIPv4MappedAddress() && parsed.range() === 'unicast'
+      : !(parsed as ipaddr.IPv6).isIPv4MappedAddress()
+        && parsed.match(ipaddr.parseCIDR('2000::/3'))
+        && parsed.range() === 'unicast'
   } catch { return false }
 }
 
@@ -81,9 +86,10 @@ export async function importPublicImage(sourceURL: string, dependencies: RemoteI
   const resolve = dependencies.resolve ?? (async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map(({ address, family }) => ({ address, family })))
   const send = dependencies.request ?? nodeRequest
   let abortActive: (() => void) | undefined
+  let expired = false
   let timeout: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_resolve, rejectDeadline) => {
-    timeout = setTimeout(() => { abortActive?.(); rejectDeadline(new Error('remote_image_timeout')) }, timeoutMs)
+    timeout = setTimeout(() => { expired = true; abortActive?.(); rejectDeadline(new Error('remote_image_timeout')) }, timeoutMs)
     timeout.unref?.()
   })
   const withinDeadline = <T>(promise: Promise<T>) => Promise.race([promise, deadline])
@@ -93,9 +99,14 @@ export async function importPublicImage(sourceURL: string, dependencies: RemoteI
   try {
     let url = assertURL(sourceURL)
     for (let redirects = 0; redirects <= 3; redirects++) {
-      const addresses = await withinDeadline(resolve(url.hostname))
+      const addresses = await withinDeadline(resolve(hostnameAddress(url.hostname)))
       if (!addresses.length || addresses.some((address) => !isPublicResolvedAddress(address))) reject('unsafe_remote_url')
-      const response = await withinDeadline(send(url, addresses[0]!, remaining(startedAt)))
+      // A request can produce headers just after the deadline race has rejected.
+      // Destroy that late response rather than leaving its socket/body open.
+      const response = await withinDeadline(send(url, addresses[0]!, remaining(startedAt)).then((received) => {
+        if (expired) { received.abort?.(); reject('remote_image_timeout') }
+        return received
+      }))
       abortActive = response.abort
       const location = typeof response.headers.location === 'string' ? response.headers.location : undefined
       if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0)) {
@@ -121,7 +132,7 @@ export async function importPublicImage(sourceURL: string, dependencies: RemoteI
       }
       abortActive = undefined
       const file = { data: Buffer.concat(chunks), mimetype: mime, name: nameFor(url, mime), size }
-      await validateRasterUpload(file)
+      await withinDeadline(validateRasterUpload(file))
       return file
     }
     return reject('remote_redirect_rejected')
