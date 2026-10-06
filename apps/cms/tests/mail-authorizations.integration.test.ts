@@ -73,7 +73,7 @@ describe('local mail authorization transactions', () => {
     try {
       await sendReply(payload, owner, grant.id)
       expect(delivered).toMatchObject({ body: prepared.body, recipient: prepared.recipient, subject: prepared.subject })
-      await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('draft_already_dispatched')
+      await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('draft_not_prepared')
     } finally { payload.create = create; setReplyDeliveryForTest() }
   })
 
@@ -160,6 +160,16 @@ describe('local mail authorization transactions', () => {
     expect(await payload.findByID({ collection: 'mail-drafts', id: revokedDraft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'canceled' })
   })
 
+  it('rolls back an expiry transition when its mandatory audit cannot persist', async () => {
+    const owner = await actor('owner'); const prepared = await draft(); const grant = await authorizeMailDraft(payload, owner, prepared.id, future())
+    const create = payload.create.bind(payload)
+    payload.create = async (args) => { if (args.collection === 'audit-events' && (args.data as { event?: string }).event === 'mail.authorization_expired') throw new Error('audit unavailable'); return create(args as never) }
+    try {
+      await expect(consumeMailAuthorization(payload, owner, grant.id, new Date('2099-01-01T00:00:00.000Z'))).rejects.toThrow('audit unavailable')
+      expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'authorized' })
+    } finally { payload.create = create }
+  })
+
   it('allows only a fresh canonical role for the selected draft domain', async () => {
     const owner = await actor('owner'); const sales = await actor('sales'); const hiring = await actor('hiring'); const leadDraft = await draft()
     await expect(authorizeMailDraft(payload, sales, leadDraft.id, future())).resolves.toMatchObject({ authorizedBy: expect.objectContaining({ id: sales.id }) })
@@ -182,16 +192,16 @@ describe('local mail authorization transactions', () => {
     await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('mail_authorization_required')
   })
 
-  it('supersedes an earlier grant so a draft has one active authorization', async () => {
-    const owner = await actor('owner')
-    const prepared = await draft()
+  it('never lets an old cancelled grant cancel or expire a re-authorized draft', async () => {
+    const owner = await actor('owner'); const prepared = await draft()
     const first = await authorizeMailDraft(payload, owner, prepared.id, future())
+    await revokeMailAuthorization(payload, owner, first.id)
+    await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { body: 'Edited exact envelope.' }, overrideAccess: true })
     const second = await authorizeMailDraft(payload, owner, prepared.id, future())
-    const grants = await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: prepared.id } }, depth: 0, limit: 0, pagination: false, overrideAccess: true })
-    expect(grants.docs.filter((grant) => !grant.revokedAt && !grant.consumedAt)).toHaveLength(1)
-    expect((await payload.findByID({ collection: 'mail-authorizations', id: first.id, depth: 0, overrideAccess: true })).revokedAt).toBeTruthy()
-    await expect(consumeMailAuthorization(payload, owner, first.id)).rejects.toThrow('authorization_not_usable')
-    await expect(consumeMailAuthorization(payload, owner, second.id)).resolves.toMatchObject({ id: second.id })
+    await expect(revokeMailAuthorization(payload, owner, first.id)).rejects.toThrow('authorization_not_usable')
+    await expect(consumeMailAuthorization(payload, owner, first.id, new Date('2099-01-01T00:00:00.000Z'))).rejects.toThrow('authorization_not_usable')
+    expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'authorized' })
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: second.id, depth: 0, overrideAccess: true })).toMatchObject({ revokedAt: null, consumedAt: null })
   })
 
   it('revokes prior grants on spam classification and never revives them on restore', async () => {
