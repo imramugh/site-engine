@@ -56,7 +56,14 @@ it('builds a target-theme motion projection without mutating the frozen source s
     expect(snapshot.pages[0]!.blocks[0]!.appearance.motionPreset).toBe('source-grid');
     expect(hash(snapshot)).toBe(sourceHash);
     expect(built.manifest.snapshotContentHash).toBe(sourceHash);
+    const legacySnapshot = structuredClone(snapshot); delete legacySnapshot.settings.theme;
+    const legacyHash = hash(legacySnapshot);
+    const legacy = await renderer.buildSnapshot({ input: await writeSnapshot(root, legacySnapshot, 'legacy-source.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: targetManifest, themeSelection: snapshot.settings.theme, versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: legacySnapshot.settings.contractVersion } });
+    expect((await readFile(join(legacy.output, 'index.html'), 'utf8'))).toContain('data-motion-effect="target-chapter"');
+    expect(legacy.manifest.snapshotContentHash).toBe(legacyHash);
+    expect(hash(legacySnapshot)).toBe(legacyHash);
     await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'mismatched-manifest.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: { ...targetManifest, version: '1.0.1' }, versionPins: { themeVersion: '1.0.1', engineVersion: '1.0.0', contractVersion: snapshot.settings.contractVersion } })).rejects.toThrow('Theme manifest does not match the frozen selection');
+    await expect(renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'mismatched-selection.json'), publicOrigin: PUBLIC_ORIGIN, outputRoot: root, themeManifest: targetManifest, themeSelection: { ...snapshot.settings.theme, version: '1.0.1' }, versionPins: { themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: snapshot.settings.contractVersion } })).rejects.toThrow('External theme selection does not match');
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 120_000);
 
