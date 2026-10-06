@@ -157,6 +157,30 @@ describe('ENG-026 draft-only direct hero edits', () => {
     }
   })
 
+  it('keeps timeout and foreign-key enforcement on replacement connections after repeated busy BEGINs', async () => {
+    const path = join(directory, `replacement-${randomUUID()}.sqlite`)
+    const client = createClient({ url: `file:${path}`, timeout: 5_000, concurrency: 2 })
+    const external = createClient({ url: `file:${path}` })
+    try {
+      await client.execute('PRAGMA foreign_keys = ON')
+      await client.execute('CREATE TABLE parent (id INTEGER PRIMARY KEY)')
+      await client.execute('CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))')
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        const lock = await external.transaction('write')
+        await lock.execute('INSERT INTO parent (id) VALUES (?)', [100 + cycle])
+        const started = Date.now()
+        await expect(client.transaction('write')).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+        expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
+        await lock.rollback()
+        expect((await client.execute('PRAGMA foreign_keys')).rows).toEqual([{ foreign_keys: 1 }])
+        await expect(client.execute('INSERT INTO child (id, parent_id) VALUES (?, ?)', [cycle + 1, 9_999])).rejects.toThrow(/FOREIGN KEY/)
+        const valid = await client.transaction('write')
+        await valid.execute('INSERT INTO parent (id) VALUES (?)', [cycle + 1])
+        await valid.commit()
+      }
+    } finally { client.close(); external.close() }
+  }, 20_000)
+
   it('recovers the CJS libSQL transaction client after a busy BEGIN', async () => {
     const editor = await actor(); const current = await fixture(editor)
     const external = createClient({ url: `file:${dbPath}` })
