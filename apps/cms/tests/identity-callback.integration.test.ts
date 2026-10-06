@@ -94,13 +94,34 @@ async function createSignIn(email: string, subject: string) {
     data: { stateHash: hashOpaqueToken(state), nonce: issuerState.nonce, verifier: issuerState.verifier, provider: 'google', invitation: invitation.id, expiresAt: new Date(Date.now() + 60_000).toISOString() },
     overrideAccess: true,
   })
-  const request = () => new Request(`http://localhost/api/auth/callback/google?code=accepted-code&state=${state}`, {
+  const request = (code = 'accepted-code') => new Request(`http://localhost/api/auth/callback/google?code=${code}&state=${state}`, {
     headers: { cookie: `${cookieName(OIDC_TRANSACTION_COOKIE)}=${hashOpaqueToken(state)}` },
   })
   return { invitation, request, state }
 }
 
 const invoke = (request: Request) => callback(request, { params: Promise.resolve({ provider: 'google' }) })
+
+async function callbackDenials(transactionID: string, reason: string) {
+  const audit = await payload.find({
+    collection: 'audit-events',
+    where: { and: [
+      { event: { equals: 'identity.sign_in_denied' } },
+      { 'detail.transactionID': { equals: transactionID } },
+      { 'detail.reason': { equals: reason } },
+    ] },
+    limit: 20,
+    depth: 0,
+    overrideAccess: true,
+  })
+  return audit.docs
+}
+
+function expectPrivacySafeCallbackDenial(event: any, input: { transactionID: string; provider: 'google' | 'microsoft'; reason: string; secrets: string[] }) {
+  expect(event.detail).toEqual({ provider: input.provider, reason: input.reason, transactionID: input.transactionID })
+  const serialized = JSON.stringify(event)
+  for (const secret of input.secrets) expect(serialized).not.toContain(secret)
+}
 
 describe('identity callback SQLite transaction (ENG-007)', () => {
   it('enables real Payload SQLite transactions', async () => {
@@ -110,7 +131,7 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
   })
 
   it('atomically consumes a replayed state, creating only one session and audit event', async () => {
-    const { request } = await createSignIn('parallel@example.test', 'parallel-subject')
+    const { request, state } = await createSignIn('parallel@example.test', 'parallel-subject')
     const [first, second] = await Promise.all([invoke(request()), invoke(request())])
     expect([first.status, second.status].sort()).toEqual([307, 400])
 
@@ -123,6 +144,16 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
     expect(audit.docs[0]).toMatchObject({ user: users.docs[0]!.id, detail: { provider: 'google' } })
     expect(JSON.stringify(audit.docs[0])).not.toContain('parallel@example.test')
     expect(JSON.stringify(audit.docs[0])).not.toContain('accepted-code')
+
+    const transaction = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(state) } }, limit: 1, depth: 0, overrideAccess: true })
+    const denials = await callbackDenials(String(transaction.docs[0]!.id), 'transaction_not_current')
+    expect(denials).toHaveLength(1)
+    expectPrivacySafeCallbackDenial(denials[0], {
+      transactionID: String(transaction.docs[0]!.id),
+      provider: 'google',
+      reason: 'transaction_not_current',
+      secrets: [state, 'accepted-code', 'parallel@example.test', 'parallel-subject', issuerState.nonce, issuerState.verifier],
+    })
   })
 
   it('rolls back state, invitation, user, and session when the audit insert fails', async () => {
@@ -227,6 +258,42 @@ describe('ENG-007 identity decision audit evidence', () => {
     const wrongMatching = wrongAudit.docs.filter((event: any) => event.detail?.transactionID === String(wrongTransaction.docs[0]!.id))
     expect(wrongMatching).toHaveLength(1)
     expect(wrongMatching[0]).toMatchObject({ detail: { provider: 'microsoft', reason: 'transaction_provider_mismatch' } })
+  })
+
+  it('atomically records one privacy-safe provider mismatch denial for concurrent callbacks', async () => {
+    const mismatch = await createSignIn('concurrent-mismatch@example.test', 'concurrent-mismatch-subject')
+    const invokeMismatch = () => callback(mismatch.request(), { params: Promise.resolve({ provider: 'microsoft' }) })
+    const responses = await Promise.all([invokeMismatch(), invokeMismatch()])
+    expect(responses.map(response => response.status)).toEqual([400, 400])
+
+    const transaction = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(mismatch.state) } }, limit: 1, depth: 0, overrideAccess: true })
+    const transactionID = String(transaction.docs[0]!.id)
+    const denials = await callbackDenials(transactionID, 'transaction_provider_mismatch')
+    expect(denials).toHaveLength(1)
+    expectPrivacySafeCallbackDenial(denials[0], {
+      transactionID,
+      provider: 'microsoft',
+      reason: 'transaction_provider_mismatch',
+      secrets: [mismatch.state, 'accepted-code', 'concurrent-mismatch@example.test', 'concurrent-mismatch-subject', issuerState.nonce, issuerState.verifier],
+    })
+  })
+
+  it('atomically records one privacy-safe identity validation failure for concurrent callbacks', async () => {
+    const failed = await createSignIn('concurrent-validation@example.test', 'concurrent-validation-subject')
+    const rejectedCode = 'rejected-authorization-code'
+    const responses = await Promise.all([invoke(failed.request(rejectedCode)), invoke(failed.request(rejectedCode))])
+    expect(responses.map(response => response.status)).toEqual([401, 401])
+
+    const transaction = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(failed.state) } }, limit: 1, depth: 0, overrideAccess: true })
+    const transactionID = String(transaction.docs[0]!.id)
+    const denials = await callbackDenials(transactionID, 'identity_verification_failed')
+    expect(denials).toHaveLength(1)
+    expectPrivacySafeCallbackDenial(denials[0], {
+      transactionID,
+      provider: 'google',
+      reason: 'identity_verification_failed',
+      secrets: [failed.state, rejectedCode, 'concurrent-validation@example.test', 'concurrent-validation-subject', issuerState.nonce, issuerState.verifier],
+    })
   })
 
   it('records disabled enrolled identities without consuming enrollment or leaking claims', async () => {
