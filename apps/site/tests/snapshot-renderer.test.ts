@@ -9,6 +9,7 @@ import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import type { SiteSnapshot } from '@site-engine/contract';
+import { checkSiteSnapshot } from '@site-engine/checks';
 
 const renderer = await import('../scripts/build-snapshot.mjs');
 const BASE_PATH = '/preview/changes/test/proposed/';
@@ -48,6 +49,19 @@ it('stops a static build on the same deterministic readiness code used by review
     process.env.SITE_THEME_VERSION = '1.0.0'; process.env.SITE_ENGINE_VERSION = '1.0.0';
     await expect(renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root })).rejects.toThrow('HEADING_H1_COUNT (pages.0.blocks)');
     process.env.SITE_THEME_VERSION = priorTheme; process.env.SITE_ENGINE_VERSION = priorEngine;
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('treats missing and malformed required JSON-LD as structured-data blockers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'snapshot-jsonld-blocker-'));
+  try {
+    const snapshot = fixture('JSON-LD blocker');
+    const artifact = join(root, 'artifact'); await mkdir(artifact);
+    const missing = await renderer.generatedStructuredData(snapshot, artifact, true);
+    expect(checkSiteSnapshot(snapshot, { structuredData: missing }).blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STRUCTURED_DATA_INVALID', path: `structuredData.${snapshot.pages[0]!.id}` })]));
+    await writeFile(join(artifact, 'index.html'), '<script type="application/ld+json">{bad</script>');
+    const malformed = await renderer.generatedStructuredData(snapshot, artifact, true);
+    expect(checkSiteSnapshot(snapshot, { structuredData: malformed }).blockers).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'STRUCTURED_DATA_INVALID', path: `structuredData.${snapshot.pages[0]!.id}` })]));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
