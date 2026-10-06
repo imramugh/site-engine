@@ -120,3 +120,16 @@ test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ br
   const csrf = await owner.page.request.post('/api/integrations', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'x', credential: 'must-not-persist' } })
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()
 })
+
+test('Owner saves and reloads durable AI job routing', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
+  await owner.page.goto('/integrations')
+  const row = owner.page.locator('[data-ai-job-route="summary"]')
+  await expect(row).toContainText('Page summaries')
+  const saved = owner.page.waitForResponse(response => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
+  await row.getByLabel('Page summaries provider').selectOption('openai'); expect((await saved).status()).toBe(200)
+  await owner.page.reload(); await expect(owner.page.locator('[data-ai-job-route="summary"]').getByLabel('Page summaries provider')).toHaveValue('openai')
+  const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
+  expect((await editor.page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'configure-ai-default', jobType: 'summary', provider: 'openai', model: 'synthetic', fallbackProvider: null } })).status()).toBe(403)
+  await Promise.all([owner.context.close(), editor.context.close()])
+})
