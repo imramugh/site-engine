@@ -1,8 +1,11 @@
 import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 import { createRequire } from 'node:module'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
+function mcpResult<T>(value: unknown): T { const result = value as { structuredContent?: T; content?: Array<{ text?: string }> }; return result.structuredContent ?? JSON.parse(result.content?.find((item) => item.text)?.text ?? '{}') as T }
 
 async function signedIn(browser: Browser) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -139,6 +142,68 @@ test('ENG-018 renders the complete active-theme library and captures an ordered 
   } finally {
     const restoredTheme = await page.request.post('/__e2e/block-gallery-theme/restore')
     expect(restoredTheme.ok(), await restoredTheme.text()).toBeTruthy()
+    await context.close()
+  }
+})
+
+test('ENG-018 sends an MCP recipe through the real reviewed renderer in its authored order', async ({ browser }) => {
+  test.setTimeout(120_000)
+  const { context, page } = await signedIn(browser)
+  const identity = await page.request.post('/__e2e/mcp-identity?role=editor&content=write').then(async response => { expect(response.ok(), await response.text()).toBeTruthy(); return response.json() as Promise<{ bearer: string }> })
+  const client = new Client({ name: 'eng018-mcp-browser-proof', version: '1.0.0' })
+  const priorTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  let transport: StreamableHTTPClientTransport | undefined
+  let setID: string | undefined
+  try {
+    expect((await page.request.post('/__e2e/block-gallery-theme/install')).ok()).toBeTruthy()
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
+    await client.connect(transport)
+    const set = mcpResult<{ id: string; revision: number }>(await client.callTool({ name: 'create_change_set', arguments: { name: 'ENG-018 MCP rendered recipe' } }))
+    setID = set.id
+    const media = mcpResult<{ assets: Array<{ id: string; filename: string }> }>(await client.callTool({ name: 'find_media', arguments: { q: 'media-fixture-00', pageSize: 1 } }))
+    const asset = media.assets.find((item) => item.filename === 'media-fixture-00.png')
+    expect(asset).toBeTruthy()
+    const pageID = crypto.randomUUID()
+    const createdResponse = await client.callTool({ name: 'create_page_from_recipe', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, requestKey: pageID, title: 'MCP gallery recipe', summary: 'A synthetic MCP recipe used to prove the real review renderer preserves authored block order.', slug: `mcp-gallery-${Date.now()}`, sectionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', template: 'standard', blocks: [{ type: 'faq', appearance: { background: 'subtle', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'default' } }, { type: 'callout', appearance: { background: 'accent', width: 'content', spacing: 'spacious', motionIntent: 'ambient', logoTone: 'inverse' } }, { type: 'media', appearance: { background: 'default', width: 'full', spacing: 'default', motionIntent: 'none', logoTone: 'default' }, fields: { mediaId: asset!.id } }] } })
+    expect((createdResponse as { isError?: boolean }).isError).not.toBe(true)
+    const revised = mcpResult<{ revision: number }>(await client.callTool({ name: 'get_change_set', arguments: { id: set.id } }))
+    const submitted = mcpResult<{ state: string }>(await client.callTool({ name: 'submit_change_set', arguments: { id: set.id, expectedRevision: revised.revision } }))
+    expect(submitted.state).toBe('submitted')
+    const reviewer = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+    try {
+      await reviewer.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-theme-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+      expect((await reviewer.request.post('/api/editorial/prepare-preview', { headers: { origin, 'content-type': 'application/json' }, data: { id: set.id, includedChangeKeys: [`pages:${pageID}`] } })).ok()).toBeTruthy()
+      expect((await reviewer.request.post('/__e2e/direct-preview-worker')).ok()).toBeTruthy()
+      const review = await reviewer.newPage(); await review.goto(`/review/${set.id}?pageID=${pageID}`)
+      const rendered = review.frameLocator('iframe[title="Proposed page"]').locator('[data-block], [data-block-type]')
+      await expect(rendered).toHaveCount(3)
+      await expect(rendered.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-block') ?? node.getAttribute('data-block-type')))).resolves.toEqual(['faq', 'callout', 'media'])
+      expect((await reviewer.request.post('/api/editorial/request-changes', { headers: { origin, 'content-type': 'application/json' }, data: { id: set.id } })).ok()).toBeTruthy()
+    } finally { await reviewer.close() }
+    const current = mcpResult<{ revision: number }>(await client.callTool({ name: 'get_change_set', arguments: { id: set.id } }))
+    expect(mcpResult<{ state: string }>(await client.callTool({ name: 'discard_change_set', arguments: { id: set.id, expectedRevision: current.revision } })).state).toBe('discarded')
+  } finally {
+    // Preserve the original assertion failure while returning this actor's
+    // draft to a discarded state, so a failed browser run cannot poison the
+    // next scenario's review queue.
+    if (setID && transport) {
+      try {
+        let current = mcpResult<{ state: string; revision: number }>(await client.callTool({ name: 'get_change_set', arguments: { id: setID } }))
+        if (current.state === 'submitted') {
+          const owner = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+          try {
+            await owner.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-theme-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+            const returned = await owner.request.post('/api/editorial/request-changes', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID } })
+            if (returned.ok()) current = await returned.json() as typeof current
+          } finally { await owner.close() }
+        }
+        if (current.state === 'open' || current.state === 'changes-requested') await client.callTool({ name: 'discard_change_set', arguments: { id: setID, expectedRevision: current.revision } })
+      } catch { /* do not hide the test's primary failure */ }
+    }
+    await transport?.close().catch(() => undefined)
+    if (priorTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = priorTls
+    await page.request.post('/__e2e/block-gallery-theme/restore')
     await context.close()
   }
 })
