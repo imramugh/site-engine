@@ -270,3 +270,33 @@ test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through th
     await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
   } finally { await context.close() }
 })
+
+test('ENG-033 lets a fresh Hiring user cancel then send one confirmed application reply through the real handler', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-hiring-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+    await page.goto('/applications')
+    await page.getByRole('button', { name: /^Applications/ }).click()
+    await page.getByRole('button', { name: /Synthetic candidate/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await expect(reply.getByLabel('Existing conversation')).toHaveValue('fixture-oauth-application-thread')
+    await reply.getByLabel('Reply message').fill('Canceled hiring body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Cancel confirmation and edit' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
+    await reply.getByLabel('Reply message').fill('Confirmed hiring body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
+    const after = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    expect(after.deliveries).toHaveLength(before.deliveries.length + 1)
+    expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-application-thread' })
+    expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture hiring reply\r\n')
+    expect(after.deliveries.at(-1)?.mime).toContain('Confirmed hiring body')
+  } finally { await context.close() }
+})
