@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload } from 'payload'
-import { authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, revokeMailAuthorization } from './mail-authorizations'
+import { authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, consumeMcpMailAuthorization, revokeMailAuthorization, type McpMailIdentity } from './mail-authorizations'
 import { sendAreaMail } from './mailboxes'
 import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
@@ -24,7 +24,7 @@ export async function prepareReply(payload: Payload, target: 'lead' | 'applicati
 export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
 export async function cancelPreparedReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return cancelPreparedMailDraft(payload, actor, draftID) }
-export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) {
+async function deliverReply(payload: Payload, actorID: string, grantID: string, grant: any) {
   const pending = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const pendingDraft = await payload.findByID({ collection: 'mail-drafts', id: typeof pending.draft === 'string' ? pending.draft : pending.draft.id, depth: 0, overrideAccess: true })
   if (Array.isArray(pendingDraft.attachmentHashes) && pendingDraft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
@@ -47,7 +47,6 @@ export async function sendReply(payload: Payload, actor: { id: string; sessionTo
       providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: target, ...(mailbox.provider === 'google' ? { providerRFCMessageID: String(messages.docs[0].rfcMessageID), ...(messages.docs[0].rfcReferences ? { providerRFCReferences: String(messages.docs[0].rfcReferences) } : {}) } : {}), providerSubject: String(messages.docs[0].subject) }
     }
   }
-  const grant = await consumeMailAuthorization(payload, actor, grantID)
   const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
   const draft = grant.envelope
   try {
@@ -62,11 +61,13 @@ export async function sendReply(payload: Payload, actor: { id: string; sessionTo
       await payload.create({ collection: 'mail-thread-messages', data: { thread: persistedThread.id, mailbox: initialProvider.mailboxID, [pendingApplication ? 'application' : 'lead']: target.id, providerMessageID: delivered.messageID, ...(initialProvider.rfcMessageID ? { rfcMessageID: initialProvider.rfcMessageID } : {}), direction: 'outbound', sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), receivedAt: new Date().toISOString(), attachmentMetadata: [] } as never, overrideAccess: true })
     }
     await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true })
     return delivered
   } catch (error) {
     await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID } }, overrideAccess: true })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID } }, overrideAccess: true })
     throw error
   }
 }
+export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID)) }
+export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) { return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID)) }
