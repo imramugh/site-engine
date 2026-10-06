@@ -1,5 +1,5 @@
 import { withPayloadTransaction } from './auth-transaction'
-import { credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider } from './integrations'
+import { credentialFingerprint, encryptCredential, providerConnectionTransport, testConnection, type ConnectionTransport, type IntegrationProvider, integrationProviders } from './integrations'
 import { enqueueNotification } from './notification-settings'
 
 type PayloadLike = Parameters<typeof withPayloadTransaction>[0]
@@ -14,7 +14,7 @@ function snapshot(record: Record<string, unknown>): StoredConfiguration | undefi
   if (typeof record.id !== 'string' || !integrationProvider(record.provider) || typeof record.model !== 'string' || !record.encryptedCredential || typeof record.encryptedCredential !== 'string' || !record.credentialFingerprint || typeof record.credentialFingerprint !== 'string' || record.health === 'revoked') return undefined
   return { id: record.id, provider: record.provider, model: record.model, encryptedCredential: record.encryptedCredential, credentialFingerprint: record.credentialFingerprint, health: typeof record.health === 'string' ? record.health : null, testedAt: typeof record.testedAt === 'string' ? record.testedAt : null, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null }
 }
-const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && ['openai', 'anthropic', 'google-gemini', 'openrouter'].includes(value)
+const integrationProvider = (value: unknown): value is IntegrationProvider => typeof value === 'string' && integrationProviders.includes(value as IntegrationProvider)
 const unchanged = (left: StoredConfiguration, right: StoredConfiguration) => left.id === right.id && left.provider === right.provider && left.model === right.model && left.encryptedCredential === right.encryptedCredential && left.credentialFingerprint === right.credentialFingerprint && left.updatedAt === right.updatedAt && right.health !== 'revoked'
 
 export class IntegrationConfigurationStaleError extends Error { constructor() { super('INTEGRATION_CONFIGURATION_STALE') } }
