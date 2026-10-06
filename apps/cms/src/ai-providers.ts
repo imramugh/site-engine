@@ -21,7 +21,7 @@ export type ProviderFetch = (request: Request) => Promise<Response>
 export type AIJobResult = { provider: IntegrationProvider; fallbackUsed: boolean; output: string; usageCostMicroUsd: MicroUsd | null; reservedMicroUsd: MicroUsd; usageCostStatus: 'actual' | 'reserved' }
 type TokenUsage = { inputTokens: number; outputTokens: number }
 type Attempt = { outcome: 'success'; output: string; usage?: TokenUsage } | { outcome: 'unavailable' | 'rejected' | 'snapshot-stale' }
-type StoredConfiguration = Record<string, unknown> & { id: string; provider: IntegrationProvider; model: string; encryptedCredential?: string | null; credentialFingerprint?: string | null; monthlyCapMicroUsd?: number | null; monthlyUsageMicroUsd?: number | null; usageMonth?: string | null; health?: string | null; inputMicroUsdPerMillionTokens?: number | null; outputMicroUsdPerMillionTokens?: number | null; pricingSource?: string | null; pricingAsOf?: string | null }
+type StoredConfiguration = Record<string, unknown> & { id: string; provider: IntegrationProvider; model: string; azureResourceEndpoint?: string | null; azureApiVersion?: string | null; encryptedCredential?: string | null; credentialFingerprint?: string | null; monthlyCapMicroUsd?: number | null; monthlyUsageMicroUsd?: number | null; usageMonth?: string | null; health?: string | null; inputMicroUsdPerMillionTokens?: number | null; outputMicroUsdPerMillionTokens?: number | null; pricingSource?: string | null; pricingAsOf?: string | null }
 type Pricing = { inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; source: string; asOf: string }
 type UsageReservation = Record<string, unknown> & { id: string; configuration: string | { id: string }; executionKey: string; usageMonth: string; reservedMicroUsd: number; settledMicroUsd?: number | null; state: 'reserved' | 'settled' | 'released' }
 type Reservation = { id: string; config: StoredConfiguration; pricing: Pricing; reservedMicroUsd: MicroUsd; usageMonth: string }
@@ -61,8 +61,9 @@ function requestBody(provider: IntegrationProvider, model: string, input: string
 // The reservation includes serialized JSON framing and the requested completion budget.
 // Providers can bill internal reasoning beyond visible text; unreported usage retains the full reservation.
 function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): number { return Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8') }
-function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, signal?: AbortSignal): Request {
+function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, signal?: AbortSignal, azureEndpoint?: string | null, azureApiVersion?: string | null): Request {
   const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens))
+  if (provider === 'azure-openai') { const resource = azureResourceEndpoint(azureEndpoint); if (!resource) throw new Error('azure endpoint'); const url = new URL(`${resource}/openai/v1/responses`); if (azureApiVersion) url.searchParams.set('api-version', azureApiVersion); return new Request(url, { method: 'POST', signal, headers: { 'api-key': credential, 'content-type': 'application/json' }, body }) }
   if (provider === 'openai') return new Request(providerCapabilities.openai.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
   if (provider === 'anthropic') return new Request(providerCapabilities.anthropic.endpoint, { method: 'POST', signal, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body })
   if (provider === 'google-gemini') return new Request(`${providerCapabilities['google-gemini'].endpoint}/${encodeURIComponent(model)}:generateContent`, { method: 'POST', signal, headers: { 'x-goog-api-key': credential, 'content-type': 'application/json' }, body })
@@ -86,11 +87,11 @@ function parsed(provider: IntegrationProvider, body: Record<string, unknown>): {
   return output ? { output, usage: usage(details?.prompt_tokens, details?.completion_tokens) } : undefined
 }
 /** Builds bounded provider requests and normalizes provider token counts; provider-reported money is deliberately ignored. */
-export async function invokeProvider(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, transport: ProviderFetch = fetch, timeoutMs = 15_000): Promise<Attempt> {
+export async function invokeProvider(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, transport: ProviderFetch = fetch, timeoutMs = 15_000, azureEndpoint?: string | null, azureApiVersion?: string | null): Promise<Attempt> {
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')) }, timeoutMs) })
   try {
-    const response = await Promise.race([transport(requestFor(provider, credential, model, input, maxOutputTokens, controller.signal)), deadline])
+    const response = await Promise.race([transport(requestFor(provider, credential, model, input, maxOutputTokens, controller.signal, azureEndpoint, azureApiVersion)), deadline])
     if (!response.ok) return { outcome: response.status === 401 || response.status === 403 ? 'rejected' : 'unavailable' }
     const body = await Promise.race([response.json(), deadline]).catch(() => undefined) as Record<string, unknown> | undefined
     const result = body && parsed(provider, body)
@@ -364,7 +365,7 @@ export async function executeConfiguredAIJob(payload: Payload, job: AIJob, optio
     if (!reservation) return { outcome: 'unavailable' }
     let credential: string
     try { credential = decryptCredential(reservation.config.encryptedCredential!, provider) } catch { await settle(payload, reservation, undefined, 'rejected', now); return { outcome: 'rejected' } }
-    const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs)
+    const result = await invokeProvider(provider, credential, reservation.config.model, job.input, job.maxOutputTokens, options.transport, options.timeoutMs, reservation.config.azureResourceEndpoint, reservation.config.azureApiVersion)
     const actualMicroUsd = result.outcome === 'success' && result.usage ? costMicroUsd(result.usage.inputTokens, result.usage.outputTokens, reservation.pricing) : undefined
     await settle(payload, reservation, actualMicroUsd, result.outcome === 'success' ? 'connected' : result.outcome === 'rejected' ? 'rejected' : 'unavailable', now)
     return result.outcome === 'success' ? { ...result, usageCostMicroUsd: actualMicroUsd ?? null, reservedMicroUsd: reservation.reservedMicroUsd, usageCostStatus: actualMicroUsd === undefined ? 'reserved' : 'actual' } : { ...result, reservedMicroUsd: result.outcome === 'unavailable' ? reservation.reservedMicroUsd : 0, usageCostMicroUsd: null, usageCostStatus: result.outcome === 'unavailable' ? 'reserved' : 'actual' }
