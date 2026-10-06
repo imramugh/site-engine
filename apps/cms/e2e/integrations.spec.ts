@@ -121,7 +121,7 @@ test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ br
   expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('must-not-persist'); await owner.context.close()
 })
 
-test('Owner saves and reloads durable AI job routing', async ({ browser }) => {
+test('Owner saves and reloads durable AI job routing', async ({ browser }, testInfo) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/integrations')
   const configured = await owner.page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'browser-routing-model', credential: 'synthetic-routing-credential', fallbackProvider: null, monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/routing', pricingAsOf: '2026-10-06T00:00:00.000Z' } })
@@ -136,6 +136,9 @@ test('Owner saves and reloads durable AI job routing', async ({ browser }) => {
   const fallbackSaved = owner.page.waitForResponse(response => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
   await row.getByLabel('Page summaries fallback').selectOption('anthropic'); expect((await fallbackSaved).status()).toBe(200)
   await owner.page.reload(); const reloaded = owner.page.locator('[data-ai-job-route="summary"]'); await expect(reloaded.getByLabel('Page summaries provider')).toHaveValue('openai'); await expect(reloaded.getByLabel('Page summaries model')).toHaveValue('browser-routing-model'); await expect(reloaded.getByLabel('Page summaries fallback')).toHaveValue('anthropic')
+  const rejected = await owner.page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'configure-ai-default', jobType: 'faq', provider: 'openai', model: 'unreviewed-model', fallbackProvider: null } }); expect(rejected.status()).toBe(400)
+  for (const width of [1440, 390]) { await owner.page.setViewportSize({ width, height: 900 }); const rows = owner.page.locator('[data-ai-job-route]'); await expect(rows).toHaveCount(5); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.screenshot({ path: testInfo.outputPath(`routing-${width}.png`), fullPage: true }) }
+  await reloaded.getByLabel('Page summaries provider').focus(); await owner.page.keyboard.press('Tab'); await expect(reloaded.getByLabel('Page summaries model')).toBeFocused(); await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('[data-integrations-routing]', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   const editor = await signedIn(browser, 'synthetic-application-editor-session-token')
   expect((await editor.page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'configure-ai-default', jobType: 'summary', provider: 'openai', model: 'synthetic', fallbackProvider: null } })).status()).toBe(403)
   await Promise.all([owner.context.close(), editor.context.close()])
