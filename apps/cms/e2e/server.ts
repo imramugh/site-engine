@@ -184,7 +184,7 @@ if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, are
   if (url.endsWith('/messages/send')) {
     const body = JSON.parse(String(init.body)) as { raw?: string; threadId?: string }
     const mime = Buffer.from(String(body.raw ?? ''), 'base64url').toString('utf8')
-    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : null, mime, messageID: 'fixture-provider-send' })
+    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' })
     return Response.json({ id: 'fixture-provider-send', threadId: body.threadId ?? 'fixture-new-thread' })
   }
   throw new Error('unexpected_fixture_provider_request')

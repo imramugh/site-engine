@@ -9,6 +9,7 @@ export type Envelope = {
   replyMessageID?: string;
   rfcMessageID?: string;
   rfcReferences?: string;
+  outboundRFCMessageID?: string;
 };
 const maximum = 262_144;
 const timeout = 10_000;
@@ -58,6 +59,7 @@ function checkedEnvelope(input: Envelope) {
       input.subject,
       input.threadID ?? "",
       input.replyMessageID ?? "",
+      input.outboundRFCMessageID ?? "",
     ].some((value) => controls.test(value))
   )
     throw new Error("invalid_envelope");
@@ -200,20 +202,28 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         if (response.status !== 202) fail(response.status);
         return { accepted: true as const };
       }
-      const response = await request(fetcher, `${graph}/v1.0/me/sendMail`, {
+      const draft = await request(fetcher, `${graph}/v1.0/me/messages`, {
         method: "POST",
         headers: auth(token),
         body: JSON.stringify({
-          message: {
-            subject: input.subject,
-            body: { contentType: "Text", content: input.body },
-            toRecipients: [{ emailAddress: { address: input.recipient } }],
-            from: { emailAddress: { address: verifiedSender } },
-          },
+          subject: input.subject,
+          body: { contentType: "Text", content: input.body },
+          toRecipients: [{ emailAddress: { address: input.recipient } }],
+          from: { emailAddress: { address: verifiedSender } },
         }),
       });
-      if (response.status !== 202) fail(response.status);
-      return { accepted: true as const };
+      if (!draft.ok) fail(draft.status);
+      const created = await json(draft);
+      const id = typeof created.id === "string" ? created.id : "";
+      const threadID = typeof created.conversationId === "string" ? created.conversationId : "";
+      if (!opaque(id) || !opaque(threadID)) throw new Error("provider_malformed_response");
+      const sent = await request(
+        fetcher,
+        `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`,
+        { method: "POST", headers: auth(token) },
+      );
+      if (sent.status !== 202) fail(sent.status);
+      return { accepted: true as const, id, threadID };
     },
     async thread(token: string, id: string) {
       if (!opaque(id)) throw new Error("invalid_thread");
@@ -355,6 +365,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         (input.threadID && !input.rfcMessageID) ||
         (input.threadID && !opaque(input.threadID)) ||
         (input.rfcMessageID && !rfcMessageID(input.rfcMessageID)) ||
+        (input.outboundRFCMessageID && !rfcMessageID(input.outboundRFCMessageID)) ||
         (input.rfcReferences && normalizedReferences !== input.rfcReferences)
       )
         throw new Error("invalid_envelope");
@@ -362,7 +373,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[normalizedReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
         : "";
       const raw = Buffer.from(
-        `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,
+        `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ""}${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,
         "utf8",
       ).toString("base64url");
       const response = await request(
@@ -379,7 +390,7 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
       );
       if (!response.ok) fail(response.status);
       const value = await json(response);
-      if (typeof value.id !== "string" || typeof value.threadId !== "string")
+      if (!opaque(value.id) || !opaque(value.threadId))
         throw new Error("provider_malformed_response");
       return {
         accepted: true as const,

@@ -130,3 +130,31 @@ test('ENG-020 real handler grounds the selected OAuth conversation before sendin
     expect(evidence.deliveries[0].mime).toContain('Approved fixture body')
   } finally { await context.close() }
 })
+
+test('ENG-020 sends a confirmed initial OAuth message through the real handler', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await reply.getByLabel('Existing conversation').selectOption('')
+    await expect(reply.getByLabel('Existing conversation')).toHaveValue('')
+    await reply.getByLabel('Reply subject').fill('Initial approved subject')
+    await reply.getByLabel('Reply message').fill('Initial approved body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    const evidence = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    expect(evidence.deliveries).toHaveLength(before.deliveries.length + 1)
+    const delivered = evidence.deliveries.at(-1)!
+    expect(delivered.threadID).toBe('fixture-new-thread')
+    expect(delivered.mime).toContain('Subject: Initial approved subject\r\n')
+    expect(delivered.mime).toContain('Initial approved body')
+    expect(delivered.mime).toContain('Message-ID: <')
+    expect(delivered.mime).not.toContain('In-Reply-To:')
+  } finally { await context.close() }
+})
