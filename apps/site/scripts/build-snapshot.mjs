@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -13,7 +14,6 @@ import { nginxRedirectInclude } from './redirect-artifact.mjs';
 
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
-const sharp = createRequire(new URL('../../cms/package.json', import.meta.url))('sharp');
 async function files(directory, root = directory) { const entries = await readdir(directory, { withFileTypes: true }); return (await Promise.all(entries.map(async entry => { if (entry.isSymbolicLink()) throw new Error('Artifact contains a symbolic link.'); return entry.isDirectory() ? files(join(directory, entry.name), root) : [[relative(root, join(directory, entry.name)), sha(await readFile(join(directory, entry.name)))]]; }))).flat(); }
 const safeFilename = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(value);
 function referencedMedia(snapshot) {
@@ -39,7 +39,7 @@ async function copyReferencedMedia(snapshot, output) {
   const uploadedRoot = resolve(process.env.SITE_MEDIA_DIR || bundledRoot);
   const destination = join(output, 'media'); await rm(destination, { recursive: true, force: true }); await mkdir(destination, { recursive: true });
   const copied = new Map();
-  const referenced = snapshot.media.filter((item) => references.has(item.id));
+  const referenced = [...snapshot.media.filter((item) => references.has(item.id))];
   for (const id of references) if (!referenced.some(media => media.id === id)) throw new Error(`Referenced media is absent from snapshot: ${id}`);
   for (const media of referenced) {
     const selections = [{ filename: media.filename, sha256: media.sha256 }, ...Object.values(media.variants ?? {})];
