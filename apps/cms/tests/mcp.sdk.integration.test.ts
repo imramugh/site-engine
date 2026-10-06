@@ -35,6 +35,7 @@ let oauthOrigin = ''
 let introspections = 0
 let mcpServer: ReturnType<typeof createServer>
 let oauthServer: ReturnType<typeof createServer>
+let remoteImageImporter: ((url: string) => Promise<{ data: Buffer; mimetype: string; name: string; size: number }>) | undefined
 
 function requestFrom(incoming: IncomingMessage, origin: string, body: Buffer): Request {
   return new Request(`${origin}${incoming.url}`, { method: incoming.method, headers: incoming.headers as HeadersInit, body: body.length ? new Uint8Array(body) : undefined })
@@ -113,7 +114,7 @@ beforeAll(async () => {
   process.env.OAUTH_INTROSPECTION_SECRET = 'mcp-sdk-secret'
   const mcp = await startServer(async (incoming, outgoing) => {
     const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
-    await respond(outgoing, await handleMcp(requestFrom(incoming, mcpOrigin, Buffer.concat(chunks))))
+    await respond(outgoing, await handleMcp(requestFrom(incoming, mcpOrigin, Buffer.concat(chunks)), { remoteImageImporter }))
   })
   mcpServer = mcp.server; mcpOrigin = mcp.origin
   process.env.PAYLOAD_PUBLIC_SERVER_URL = mcpOrigin
@@ -969,6 +970,48 @@ test('MCP update_media reports a retryable SQLite writer lock without a partial 
     await lock?.rollback(); external.close()
     await sdk.transport.close()
   }
+}, 15_000)
+
+test('MCP SDK URL media sources use the shared create and immutable replacement pipelines', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-url-editor-${randomUUID()}@example.test`, name: 'MCP URL Editor', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(editor.id)
+  const token = `mcp-url-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-url-client-${randomUUID()}`, userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const first = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#112233' } }).png().toBuffer()
+  const second = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#445566' } }).png().toBuffer()
+  let imports = 0
+  remoteImageImporter = async (url) => {
+    imports += 1
+    if (url.includes('private')) throw new Error('unsafe_remote_url')
+    const data = url.includes('replacement') ? second : first
+    return { data, mimetype: 'image/png', name: url.includes('replacement') ? 'replacement.png' : 'uploaded.png', size: data.length }
+  }
+  const sdk = await clientFor(token)
+  try {
+    const set = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP URL media' } })) as { id: string; revision: number }
+    const denied = await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Rejected URL', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://private.example.test/a.png' } } })
+    expect(denied).toMatchObject({ isError: true })
+    expect((await payload.find({ collection: 'assets', limit: 0, overrideAccess: true })).totalDocs).toBeGreaterThanOrEqual(0)
+    const uploaded = resultJson(await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'URL sourced media', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })) as { draft: { assetId: string; changeSetRevision: number } }
+    const before = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
+    const section = await payload.create({ collection: 'sections', data: { name: `URL media ${randomUUID()}`, summary: 'Synthetic section for an MCP URL media reference.', slug: `url-media-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+    await payload.create({ collection: 'pages', data: { title: `URL media use ${randomUUID()}`, summary: 'Synthetic page proving the URL-created asset can be referenced.', slug: `url-media-use-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'media', mediaId: uploaded.draft.assetId, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
+    const currentRevision = (await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true }) as unknown as { revision: number }).revision
+    const stale = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: set.revision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
+    expect(resultJson(stale)).toEqual({ error: 'revision_conflict' })
+    const replacementCall = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: currentRevision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
+    expect(resultJson(replacementCall)).not.toEqual(expect.objectContaining({ error: expect.any(String) }))
+    const replaced = resultJson(replacementCall) as { draft: { changeSetRevision: number } }
+    expect(replaced.draft.changeSetRevision).toBeGreaterThan(uploaded.draft.changeSetRevision)
+    const after = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
+    expect(after.currentFileVersion).not.toBe(before.currentFileVersion)
+    expect((await payload.find({ collection: 'asset-file-versions', where: { parentAsset: { equals: uploaded.draft.assetId } }, limit: 10, overrideAccess: true })).totalDocs).toBe(1)
+    tokens.set(`${token}-read`, { clientId: `mcp-url-read-${randomUUID()}`, userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read'] })
+    const readOnly = await clientFor(`${token}-read`)
+    await expect(readOnly.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: replaced.draft.changeSetRevision, alt: 'No scope', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })).rejects.toThrow()
+    await readOnly.transport.close()
+    expect(imports).toBe(3)
+  } finally { remoteImageImporter = undefined; await sdk.transport.close() }
 }, 15_000)
 
 test('MCP media tools use scoped effective users and revisioned metadata writes', async () => {
