@@ -16,6 +16,8 @@ process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-payload'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://localhost'
 process.env.OIDC_GOOGLE_CLIENT_ID = 'test-client'
 process.env.OIDC_GOOGLE_CLIENT_SECRET = 'test-secret'
+process.env.OIDC_MICROSOFT_CLIENT_ID = 'test-client'
+process.env.OIDC_MICROSOFT_CLIENT_SECRET = 'test-secret'
 writeFileSync(tokenFile, 'test-only-bootstrap-token')
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = tokenFile
 
@@ -64,6 +66,7 @@ beforeAll(async () => {
   const address = server.address()
   issuerState.issuer = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   process.env.OIDC_GOOGLE_ISSUER_URL = issuerState.issuer
+  process.env.OIDC_MICROSOFT_ISSUER_URL = issuerState.issuer
 
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
@@ -113,10 +116,13 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
 
     const users = await payload.find({ collection: 'users', where: { providerSubject: { equals: 'parallel-subject' } }, limit: 10, overrideAccess: true })
     const sessions = await payload.find({ collection: 'auth-sessions', limit: 10, overrideAccess: true })
-    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.signed_in' } }, limit: 10, overrideAccess: true })
+    const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.signed_in' } }, limit: 10, depth: 0, overrideAccess: true })
     expect(users.totalDocs).toBe(1)
     expect(sessions.totalDocs).toBe(1)
     expect(audit.totalDocs).toBe(1)
+    expect(audit.docs[0]).toMatchObject({ user: users.docs[0]!.id, detail: { provider: 'google' } })
+    expect(JSON.stringify(audit.docs[0])).not.toContain('parallel@example.test')
+    expect(JSON.stringify(audit.docs[0])).not.toContain('accepted-code')
   })
 
   it('rolls back state, invitation, user, and session when the audit insert fails', async () => {
@@ -161,7 +167,7 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
     expect(transaction.docs[0]?.consumedAt).toBeNull()
     expect(untouchedInvitation.acceptedAt).toBeNull()
     expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(sessionsBefore.totalDocs)
-    expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(auditBefore.totalDocs)
+    expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(auditBefore.totalDocs + 1)
   })
 
   it('enrolls a first owner from an unbound bootstrap invitation once', async () => {
@@ -189,5 +195,51 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
       entry.mutate()
       expect((await invoke(request())).status).toBe(403)
     }
+  })
+})
+
+describe('ENG-007 identity decision audit evidence', () => {
+  async function auditByReason(reason: string) {
+    return payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.sign_in_denied' } }, { 'detail.reason': { equals: reason } }] }, limit: 20, depth: 0, overrideAccess: true })
+  }
+
+  it('records a bounded privacy-safe decision for uninvited and wrong-provider callbacks', async () => {
+    issuerState.email = 'uninvited@example.test'
+    issuerState.subject = 'uninvited-subject'
+    const state = 'uninvited-state'
+    const transaction = await payload.create({ collection: 'auth-transactions', data: { stateHash: hashOpaqueToken(state), nonce: issuerState.nonce, verifier: issuerState.verifier, provider: 'google', expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const request = () => new Request(`http://localhost/api/auth/callback/google?code=accepted-code&state=${state}`, { headers: { cookie: `${cookieName(OIDC_TRANSACTION_COOKIE)}=${hashOpaqueToken(state)}` } })
+    expect((await invoke(request())).status).toBe(403)
+    expect((await invoke(request())).status).toBe(403)
+
+    const uninvited = await auditByReason('invitation_not_authorized')
+    const matching = uninvited.docs.filter((event: any) => event.detail?.transactionID === String(transaction.id))
+    expect(matching).toHaveLength(1)
+    expect(matching[0]).toMatchObject({ detail: { provider: 'google', reason: 'invitation_not_authorized', transactionID: String(transaction.id) } })
+    expect(JSON.stringify(matching[0])).not.toContain(issuerState.email)
+    expect(JSON.stringify(matching[0])).not.toContain('accepted-code')
+
+    const wrong = await createSignIn('wrong-provider@example.test', 'wrong-provider-subject')
+    const wrongResponse = await callback(wrong.request(), { params: Promise.resolve({ provider: 'microsoft' }) })
+    expect(wrongResponse.status).toBe(400)
+    const wrongTransaction = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(wrong.state) } }, limit: 1, depth: 0, overrideAccess: true })
+    const wrongAudit = await auditByReason('transaction_provider_mismatch')
+    const wrongMatching = wrongAudit.docs.filter((event: any) => event.detail?.transactionID === String(wrongTransaction.docs[0]!.id))
+    expect(wrongMatching).toHaveLength(1)
+    expect(wrongMatching[0]).toMatchObject({ detail: { provider: 'microsoft', reason: 'transaction_provider_mismatch' } })
+  })
+
+  it('records disabled enrolled identities without consuming enrollment or leaking claims', async () => {
+    const disabled = await payload.create({ collection: 'users', data: { email: 'disabled@example.test', name: 'Disabled', roles: ['editor'], disabled: true, provider: 'google', providerIssuer: issuerState.issuer, providerSubject: 'disabled-subject' }, overrideAccess: true })
+    const { invitation, request, state } = await createSignIn('disabled@example.test', 'disabled-subject')
+    expect((await invoke(request())).status).toBe(403)
+
+    const audit = await auditByReason('identity_disabled')
+    expect(audit.docs).toHaveLength(1)
+    expect(audit.docs[0]).toMatchObject({ user: disabled.id, detail: { provider: 'google', reason: 'identity_disabled' } })
+    expect(JSON.stringify(audit.docs[0])).not.toContain('disabled@example.test')
+    const transaction = await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(state) } }, limit: 1, overrideAccess: true })
+    expect(transaction.docs[0]?.consumedAt).toBeNull()
+    expect((await payload.findByID({ collection: 'invitations', id: invitation.id, overrideAccess: true })).acceptedAt).toBeNull()
   })
 })
