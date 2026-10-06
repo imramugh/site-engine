@@ -22,7 +22,8 @@
     "check:provenance": "tsx packages/checks/src/assert-provenance.ts",
     "conformance:starter": "node scripts/theme-conformance.mjs",
     "test:theme-conformance-package": "node scripts/test-theme-conformance-package.mjs",
-    "check": "corepack pnpm@12.8.1 build:packages && corepack pnpm@12.8.1 lint && corepack pnpm@12.8.1 typecheck && corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 check:boundaries && corepack pnpm@12.8.1 check:provenance",
+    "test:regression-harness": "tsx scripts/test-regression-harness.ts",
+    "check": "corepack pnpm@12.8.1 build:packages && corepack pnpm@12.8.1 lint && corepack pnpm@12.8.1 typecheck && corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 test:regression-harness && corepack pnpm@12.8.1 check:boundaries && corepack pnpm@12.8.1 check:provenance",
     "build:packages": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/oauth build"
   },
   "devDependencies": {
