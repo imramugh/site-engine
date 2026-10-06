@@ -42,6 +42,7 @@ export type PageEditorSave = {
   expectedChangeSetRevision: number
   draft: PageEditorDraft
 }
+export type PageEditorAudit = { user: string; actor: string; detail: Record<string, unknown> }
 export type PageEditorSaveResult = {
   pageID: string
   changeSetID: string
@@ -231,6 +232,7 @@ export async function applyPageEditorSave(input: {
   actor: PageEditorActor
   save: PageEditorSave
   initialBaseline?: PreviewBaseline
+  audit?: PageEditorAudit
 }): Promise<PageEditorSaveResult> {
   const { payload, req, actor, save } = input
   if (!hasRole(actor, ['owner', 'approver', 'editor']))
@@ -332,6 +334,7 @@ export async function applyPageEditorSave(input: {
     overrideAccess: false,
     req,
   })
+  if (input.audit) await payload.create({ collection: 'audit-events', data: { event: 'mcp.tool_result', ...input.audit }, overrideAccess: true, req })
   const updatedSet = await payload.findByID({
     collection: 'change-sets',
     id: save.changeSetID,
@@ -354,6 +357,7 @@ export async function executePageEditorSave(input: {
   actor: PageEditorActor
   save: PageEditorSave
   initialBaseline?: PreviewBaseline
+  audit?: PageEditorAudit
 }): Promise<PageEditorSaveResult> {
   let tails = writeTails.get(input.payload)
   if (!tails) {

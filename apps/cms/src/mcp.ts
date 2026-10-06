@@ -317,9 +317,8 @@ export async function handleMcp(request: Request): Promise<Response> {
       const index = draft.blocks.findIndex((candidate) => candidate.id === blockId)
       if (index < 0) throw new Error('block_not_found')
       draft.blocks[index] = replacement as typeof draft.blocks[number]
-      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft } })
+      const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId } } } })
       const checks = [{ name: 'contract-and-tree', status: 'passed' as const, errors: [] }]
-      await payload.create({ collection: 'audit-events', data: { event: 'mcp.tool_result', user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool: 'update_block', scopes: identity.scopes, result: 'draft_saved', batch: { pageId, blockId, changeSetId, revision: result.changeSetRevision } } }, overrideAccess: true })
       return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks })
     } catch (error) { return { isError: true, ...text({ error: error instanceof Error && ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'invalid_block'].includes(error.message) ? error.message.toLowerCase() : 'write_failed' }) } }
   })
