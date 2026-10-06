@@ -1,5 +1,6 @@
 import { createServer as createHTTPServer, request as requestUpstream, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer } from 'node:https'
+import { createServer as createSMTPServer } from 'node:net'
 import { once } from 'node:events'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -15,7 +16,7 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob } from '../src/review-preview.js'
-import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
+import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, recordPublishStage, renewPublishLease, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
 import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
@@ -27,6 +28,10 @@ import { appendMatchedInbound } from '../src/mail-inbound.js'
 import { prepareReply } from '../src/mail-replies.js'
 import { mediaFilePath } from '../src/media.js'
 import { createRequire } from 'node:module'
+import { createPublishWebhookServer } from '../../site/scripts/run-publish-webhook-receiver.mjs'
+import { dispatchPublishOnce } from '../../site/scripts/run-publish-dispatcher.mjs'
+import { runPublishOnce, validatePublishClaim } from '../../site/scripts/run-publish-worker.mjs'
+import { createPublicServer } from '../../site/scripts/public-server.mjs'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
@@ -110,6 +115,9 @@ const certificateExtensions = join(temporaryDirectory, 'synthetic-issuer.ext')
 const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baseline.json')
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
+const publishArtifacts = join(temporaryDirectory, 'eng010-publish-artifacts')
+const publishReleases = join(temporaryDirectory, 'eng010-publish-releases')
+const publishSecret = 'synthetic-eng010-webhook-secret-at-least-32-bytes'
 const browserThemeManifest = { name: 'browser-theme', version: '2.4.6', contract: '1.4.0', entry: './dist/renderer.js', standardBlocks: ['hero', 'faq', 'contact', 'richText'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } }
 const navigationThemeManifest = { ...browserThemeManifest, name: 'navigation-browser-theme', version: '1.6.0', contract: '1.6.0', settingKeys: [] }
 const searchThemeManifest = { ...browserThemeManifest, name: 'search-browser-theme', version: '1.7.0', contract: '1.7.0', settingKeys: [] }
@@ -172,8 +180,9 @@ process.env.MAILBOX_GOOGLE_CLIENT_SECRET = 'synthetic-mailbox-google-secret'
 process.env.INITIAL_PUBLISH_BASELINE_FILE = initialPreviewBaseline
 process.env.PREVIEW_THEME_VERSION = galleryTheme?.version ?? '1.0.0'
 process.env.PREVIEW_ENGINE_VERSION = '1.0.0'
-process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
+process.env.PREVIEW_CONTRACT_VERSION = initialBaseline.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
+process.env.MAIL_TEST_SMTP_LOOPBACK = '1'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
 const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
 const replyRoute = await import('../app/api/mail-replies/[target]/[id]/route.js')
@@ -462,6 +471,12 @@ async function seed(): Promise<void> {
 
   const currentOperationsManifest = structuredClone(publishedBaseline)
   const operationsPageBefore = structuredClone(currentOperationsManifest.pages[0]!)
+  const operationsSection = currentOperationsManifest.settings.sections.find(section => section.id === operationsPageBefore.sectionId)
+  if (!operationsSection) throw new Error('Change-log browser fixture page has no section.')
+  const storedOperationsSection = await payload.findByID({ collection: 'sections', id: operationsSection.id, depth: 0, overrideAccess: true }).catch(() => null)
+  if (!storedOperationsSection) await payload.create({ collection: 'sections', data: { id: operationsSection.id, name: operationsSection.name, summary: operationsSection.summary, slug: operationsSection.slug, allowedTemplates: operationsSection.allowedTemplates, ...(operationsSection.landingPageId ? { landingPageId: operationsSection.landingPageId } : {}) }, overrideAccess: true, context: { editorialInternal: true } })
+  const storedOperationsPage = await payload.findByID({ collection: 'pages', id: operationsPageBefore.id, depth: 0, overrideAccess: true }).catch(() => null)
+  if (!storedOperationsPage) await payload.create({ collection: 'pages', data: { ...operationsPageBefore, status: 'draft' }, overrideAccess: true, context: { editorialInternal: true } })
   currentOperationsManifest.pages[0]!.summary = 'A current published summary that the reviewed rollback browser flow restores.'
   const operationsPublishedSet = await payload.create({ collection: 'change-sets', data: { name: 'Change log current release', actor: operationsOwner.id, state: 'published', revision: 1, changes: [{ collection: 'pages', id: currentOperationsManifest.pages[0]!.id, before: operationsPageBefore, after: currentOperationsManifest.pages[0]!, beforeHash: canonicalHash(operationsPageBefore), afterHash: canonicalHash(currentOperationsManifest.pages[0]!) }] }, overrideAccess: true, context: { editorialInternal: true } })
   const operationsSnapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(currentOperationsManifest), changeSet: operationsPublishedSet.id, reviewRevision: 1, changeHash: canonicalHash(operationsPublishedSet.changes), manifest: currentOperationsManifest, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: operationsOwner.id, baselineSequence: 1 }, overrideAccess: true, context: { editorialInternal: true } })
@@ -897,6 +912,60 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       payload.count({ collection: 'published-releases', overrideAccess: true }),
     ]).then(([outbox, releases]) => json(response, { outbox: outbox.docs[0] ? { id: outbox.docs[0].id, status: outbox.docs[0].status } : null, releaseCount: releases.totalDocs }))
       .catch(() => { response.writeHead(500); response.end('Unable to read publish state.') })
+    return
+  }
+  if (request.method === 'POST' && /^\/__e2e\/eng010-publish\/(success|fail)$/.test(request.url ?? '')) {
+    void (async () => {
+      const outcome = (request.url ?? '').endsWith('/success') ? 'success' : 'fail'; let clock = Date.now()
+      const api = async (action: string, body: Record<string, unknown> = {}) => withPayloadTransaction(payload, async req => {
+        if (action === 'claim') {
+          const job = await claimNextPublishJob(payload, req, new Date(clock))
+          if (!job) return { job: null }
+          const full = await payload.findByID({ collection: 'publish-outbox', id: job.id, depth: 1, overrideAccess: true, req }) as any
+          const snapshot = full.snapshot
+          return { job: { id: full.id, leaseToken: full.leaseToken, leaseExpiresAt: full.leaseExpiresAt, sequence: full.sequence }, snapshot: snapshot.manifest, contentHash: snapshot.contentHash, versionPins: { themeVersion: snapshot.themeVersion, engineVersion: snapshot.engineVersion, contractVersion: snapshot.contractVersion }, immutableContext: { changeSetID: String(full.changeSet?.id ?? full.changeSet), approvedRevision: full.reviewRevision, includedChangeKeys: full.includedChangeKeys, snapshotID: String(snapshot.id), approvedBy: String(snapshot.approvedBy?.id ?? snapshot.approvedBy), approvedAt: String(snapshot.createdAt) } }
+        }
+        if (action === 'renew') return { job: await renewPublishLease(payload, req, String(body.id), String(body.leaseToken)) }
+        if (action === 'complete') return { job: await completePublishJob(payload, req, String(body.id), String(body.leaseToken), body.artifact as VerifiedArtifact) }
+        if (action === 'fail') { clock += 10_000; return { job: await retryPublishJob(payload, req, String(body.id), String(body.leaseToken), String(body.errorCode), new Date(clock)) } }
+        if (action === 'log') return { job: await recordPublishStage(payload, req, String(body.id), String(body.leaseToken), String(body.stage)) }
+        throw new Error('Unknown ENG-010 fixture action.')
+      })
+      const claimProbe = await api('claim')
+      if (!claimProbe.job) throw new Error('ENG-010 fixture did not receive an approved publish job.')
+      if (!claimProbe.versionPins || !claimProbe.immutableContext) throw new Error('ENG-010 fixture claim is incomplete.')
+      const claim = claimProbe as { job: { id: string }; versionPins: { engineVersion: string; contractVersion: string }; immutableContext: { approvedBy: string } }
+      const pins = { engineVersion: claim.versionPins.engineVersion, contractVersion: claim.versionPins.contractVersion }
+      try { validatePublishClaim(claimProbe, pins) } catch (error) { throw new Error(`ENG010_CLAIM_DIAGNOSTIC ${JSON.stringify({ error: error instanceof Error ? error.message : 'unknown', job: claimProbe.job, contentHash: claimProbe.contentHash, versionPins: claimProbe.versionPins, immutableContext: claimProbe.immutableContext })}`) }
+      // Return the probe to the dispatcher once; the real dispatch still signs
+      // its HTTP request and the receiver validates the same immutable claim.
+      let probed = false; const dispatchAPI = async (action: string, body: Record<string, unknown> = {}) => action === 'claim' && !probed ? (probed = true, claimProbe) : api(action, body)
+      const publicServer = createPublicServer({ releasesRoot: publishReleases })
+      await new Promise<void>(done => publicServer.listen(0, '127.0.0.1', done)); const publicAddress = publicServer.address() as { port: number }; const publicOrigin = `http://127.0.0.1:${publicAddress.port}`
+      const render = outcome === 'fail' ? async () => { throw Object.assign(new Error('synthetic build failure'), { code: 'BUILD_FAILED' }) } : buildSnapshot
+      const receiver = createPublishWebhookServer({ secret: publishSecret, run: (claimed: any, signal: AbortSignal) => runPublishOnce({ api, claimed, buildRoot: publishArtifacts, releasesRoot: publishReleases, publicOrigin, versionPins: pins, registry: previewThemeRegistry, render: render as any, indexNowPublisher: async () => ({ sent: false, reason: 'test' }), signal } as any) })
+      await new Promise<void>(done => receiver.listen(0, '127.0.0.1', done)); const address = receiver.address() as { port: number }
+      try {
+        if (outcome === 'success') await dispatchPublishOnce({ api: dispatchAPI, webhookURL: `http://127.0.0.1:${address.port}`, secret: publishSecret, versionPins: pins, timeoutMs: 10_000, signal: undefined })
+        else for (let attempt = 0; attempt < 3; attempt += 1) try { await dispatchPublishOnce({ api: attempt ? api : dispatchAPI, webhookURL: `http://127.0.0.1:${address.port}`, secret: publishSecret, versionPins: pins, timeoutMs: 10_000, signal: undefined }) } catch { /* terminal retry is asserted below */ }
+        const jobs = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true }); const releases = await payload.count({ collection: 'published-releases', overrideAccess: true })
+        const stages = await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.publish_stage' } }, pagination: false, limit: 20, depth: 0, overrideAccess: true })
+        let smtp: string | undefined
+        if (outcome === 'fail') {
+          const messages: string[] = []
+          const server = createSMTPServer(socket => { let buffer = ''; let data = false; socket.write('220 eng010 ESMTP\r\n'); socket.on('data', chunk => { buffer += chunk.toString('utf8'); while (true) { if (data) { const end = buffer.indexOf('\r\n.\r\n'); if (end < 0) return; messages.push(buffer.slice(0, end)); buffer = buffer.slice(end + 5); data = false; socket.write('250 queued\r\n'); continue } const end = buffer.indexOf('\r\n'); if (end < 0) return; const line = buffer.slice(0, end); buffer = buffer.slice(end + 2); if (/^EHLO /i.test(line)) socket.write('250-eng010\r\n250 AUTH PLAIN\r\n'); else if (/^AUTH PLAIN /i.test(line)) socket.write('235 authenticated\r\n'); else if (/^(MAIL FROM|RCPT TO):/i.test(line)) socket.write('250 accepted\r\n'); else if (/^DATA$/i.test(line)) { data = true; socket.write('354 continue\r\n') } else if (/^QUIT$/i.test(line)) { socket.write('221 bye\r\n'); socket.end() } else socket.write('250 ok\r\n') } }) })
+          await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
+          try {
+            const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
+            const actor = claim.immutableContext.approvedBy; const mailbox = await configureSMTPMailbox(payload, { name: 'ENG-010 SMTP', primaryAddress: 'notices@example.test', aliases: [], host: '127.0.0.1', port: (server.address() as { port: number }).port, security: 'starttls', username: 'eng010', password: 'eng010-password' }, actor)
+            await testSMTPMailbox(payload, mailbox.id, actor); await setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notices@example.test' }, actor)
+            for (let index = 0; index < 40 && !messages.length; index += 1) await dispatchOneNotification(payload, new Date(Date.now() + 10_000 + index))
+            smtp = messages[0]
+          } finally { await new Promise<void>(done => server.close(() => done())) }
+        }
+        json(response, { job: jobs.docs[0] ? { id: jobs.docs[0].id, status: jobs.docs[0].status } : null, releases: releases.totalDocs, stages: stages.docs.map(item => (item.detail as any).stage), served: await fetch(publicOrigin).then(item => item.text()), smtp: smtp ?? null })
+      } finally { await Promise.all([new Promise<void>((done, reject) => receiver.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))]) }
+    })().catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG-010 fixture failed.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/publish-callback-history') {
