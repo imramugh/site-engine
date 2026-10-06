@@ -87,9 +87,10 @@ async function writeSnapshot(root: string, snapshot: SiteSnapshot, filename = 's
 
 async function customThemeComponents(root: string): Promise<string> {
   const components = await mkdtemp(join(root, 'custom-theme-components-'));
-  await writeFile(join(components, 'theme.css'), 'body { outline: 1px solid #123456; }\n');
+  await mkdir(join(components, 'nested'));
+  await writeFile(join(components, 'nested/theme.css'), 'body { outline: 1px solid #123456; }\n');
   await writeFile(join(components, 'Layout.astro'), `---
-import './theme.css';
+import './nested/theme.css';
 const { title, description } = Astro.props;
 ---
 <!doctype html><html lang="en"><head><title>{title}</title><meta name="description" content={description} /></head><body data-custom-theme-layout="true"><main><slot /></main><script>document.documentElement.dataset.customThemeEnhancement = 'active';</script></body></html>\n`);
@@ -144,6 +145,29 @@ describe('static snapshot renderer', () => {
     if (priorAnalyticsConsentRequired === undefined) delete process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED; else process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED = priorAnalyticsConsentRequired;
     server?.closeAllConnections(); server?.close(); await rm(root, { recursive: true, force: true });
   });
+
+  it('ENG-005 ENG-038 builds installed starter components with live related cards and an explicit empty callout list', async () => {
+    const snapshot = fixture('Related rebuild');
+    const appearance = { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const };
+    snapshot.settings.contractVersion = '1.2.0';
+    const source = snapshot.pages[0]!;
+    const related = snapshot.pages.find((page) => page.slug === 'install')!;
+    source.blocks.push(
+      { id: '99999999-0000-4000-8000-000000000001', type: 'relatedServices', heading: 'Live related', pageIds: [related.id], hidden: false, appearance } as never,
+      { id: '99999999-0000-4000-8000-000000000003', type: 'callout', heading: 'Empty callout', body: 'No items should create no list.', items: [], hidden: false, appearance } as never,
+      { id: '99999999-0000-4000-8000-000000000004', type: 'callout', heading: 'Hidden list marker', body: 'Must not render.', hidden: true, appearance } as never,
+    );
+    related.title = 'Renamed related service';
+    const input = await writeSnapshot(root, snapshot, 'related-rebuild.json');
+    const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const html = await readFile(join(built.output, 'index.html'), 'utf8');
+    expect(Object.keys(built.manifest.files).filter(path => path.includes('font') || path.includes('Deja') || path.endsWith('.ttf')), Object.keys(built.manifest.files).join('\n')).not.toEqual([]);
+    expect(html).toContain('Renamed related service');
+    expect(html).not.toContain('Hidden list marker');
+    for (const id of ['99999999-0000-4000-8000-000000000003']) {
+      expect(html.match(new RegExp(`<section[^>]+data-block-id="${id}"[\\s\\S]*?</section>`))?.[0]).not.toMatch(/<ul(?:\s|>)/);
+    }
+  }, 120_000);
 
   it('builds two concurrent, content-distinct snapshots without sharing Astro intermediates', async () => {
     const alpha = fixture('Alpha'); const beta = fixture('Beta');

@@ -8,13 +8,18 @@ const contentRead = 'mcp:content:read'
 const contentWrite = 'mcp:content:write'
 const redirectsRead = 'mcp:redirects:read'
 const redirectsWrite = 'mcp:redirects:write'
+const leadsRead = 'mcp:leads:read'
+const careersRead = 'mcp:careers:read'
 
 export type OAuthBridgeUser = { id: string; sessionId: string; scopes: readonly string[] }
 type BridgeRequest = { operation: 'resolve' } | { operation: 'validate'; sessionId: string; userId: string }
 
 function scopesForRoles(roles: readonly string[] | null | undefined): string[] {
-  if (roles?.includes('owner') || roles?.includes('editor')) return [contentRead, contentWrite, redirectsRead, redirectsWrite]
+  if (roles?.includes('owner')) return [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, careersRead]
+  if (roles?.includes('editor')) return [contentRead, contentWrite, redirectsRead, redirectsWrite]
   if (roles?.includes('approver')) return [contentRead, contentWrite, redirectsRead]
+  if (roles?.includes('sales')) return [leadsRead]
+  if (roles?.includes('hiring')) return [careersRead]
   return []
 }
 

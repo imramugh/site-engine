@@ -59,7 +59,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
 
     const resolved = await resolve(firstToken)
     expect(resolved.status).toBe(200)
-    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] } })
+    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] } })
     const validated = await handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'validate', sessionId: first.id, userId: user.id }),
     }), payload, secret)
@@ -89,6 +89,15 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     const approverResolution = await resolve(approverToken)
     expect(approverResolution.status).toBe(200)
     await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] } })
+
+    for (const [role, scope] of [['sales', 'mcp:leads:read'], ['hiring', 'mcp:careers:read']] as const) {
+      const staff = await payload.create({ collection: 'users', data: { email: `bridge-${role}@example.test`, name: `Bridge ${role}`, roles: [role] }, overrideAccess: true })
+      const token = newOpaqueToken()
+      await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: staff.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+      const resolution = await resolve(token)
+      expect(resolution.status).toBe(200)
+      await expect(resolution.json()).resolves.toEqual({ user: { id: staff.id, sessionId: expect.any(String), scopes: [scope] } })
+    }
   })
 
   it('rejects unauthenticated, malformed, oversized, and non-POST OAuth bridge requests', async () => {

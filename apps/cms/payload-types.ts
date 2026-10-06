@@ -81,15 +81,20 @@ export interface Config {
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
+    'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
     'mailbox-area-mappings': MailboxAreaMapping;
     'mailbox-test-sends': MailboxTestSend;
     inquiries: Inquiry;
     'notification-outbox': NotificationOutbox;
+    'notification-deliveries': NotificationDelivery;
     'notification-preferences': NotificationPreference;
+    'notification-user-preferences': NotificationUserPreference;
     'urgent-contacts': UrgentContact;
     'mail-drafts': MailDraft;
+    'mail-threads': MailThread;
+    'mail-thread-messages': MailThreadMessage;
     'mail-authorizations': MailAuthorization;
     applications: Application;
     'retention-settings': RetentionSetting;
@@ -123,15 +128,20 @@ export interface Config {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
+    'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
     'mailbox-area-mappings': MailboxAreaMappingsSelect<false> | MailboxAreaMappingsSelect<true>;
     'mailbox-test-sends': MailboxTestSendsSelect<false> | MailboxTestSendsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'notification-outbox': NotificationOutboxSelect<false> | NotificationOutboxSelect<true>;
+    'notification-deliveries': NotificationDeliveriesSelect<false> | NotificationDeliveriesSelect<true>;
     'notification-preferences': NotificationPreferencesSelect<false> | NotificationPreferencesSelect<true>;
+    'notification-user-preferences': NotificationUserPreferencesSelect<false> | NotificationUserPreferencesSelect<true>;
     'urgent-contacts': UrgentContactsSelect<false> | UrgentContactsSelect<true>;
     'mail-drafts': MailDraftsSelect<false> | MailDraftsSelect<true>;
+    'mail-threads': MailThreadsSelect<false> | MailThreadsSelect<true>;
+    'mail-thread-messages': MailThreadMessagesSelect<false> | MailThreadMessagesSelect<true>;
     'mail-authorizations': MailAuthorizationsSelect<false> | MailAuthorizationsSelect<true>;
     applications: ApplicationsSelect<false> | ApplicationsSelect<true>;
     'retention-settings': RetentionSettingsSelect<false> | RetentionSettingsSelect<true>;
@@ -724,6 +734,17 @@ export interface IntegrationConfiguration {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-privacy-settings".
+ */
+export interface McpPrivacySetting {
+  id: string;
+  key: string;
+  hidePhone: boolean;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "provider-usage-reservations".
  */
 export interface ProviderUsageReservation {
@@ -901,6 +922,34 @@ export interface NotificationOutbox {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-deliveries".
+ */
+export interface NotificationDelivery {
+  id: string;
+  outbox: string | NotificationOutbox;
+  idempotencyKey: string;
+  recipient:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  state: 'queued' | 'processing' | 'delivered' | 'retryable' | 'failed' | 'unknown' | 'unsupported';
+  attempts: number;
+  nextAttemptAt: string;
+  leaseToken?: string | null;
+  leaseExpiresAt?: string | null;
+  providerMessageID?: string | null;
+  failureCode?: string | null;
+  completedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "notification-preferences".
  */
 export interface NotificationPreference {
@@ -916,6 +965,25 @@ export interface NotificationPreference {
     | boolean
     | null;
   updatedBy: string | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-user-preferences".
+ */
+export interface NotificationUserPreference {
+  id: string;
+  user: string | User;
+  mutedKinds:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -975,6 +1043,49 @@ export interface Application {
   resumeKey: string;
   idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-threads".
+ */
+export interface MailThread {
+  id: string;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
+  mailbox: string | MailboxConfiguration;
+  provider: 'smtp' | 'microsoft' | 'google';
+  providerConversationID: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-thread-messages".
+ */
+export interface MailThreadMessage {
+  id: string;
+  thread: string | MailThread;
+  mailbox: string | MailboxConfiguration;
+  lead?: (string | null) | Inquiry;
+  application?: (string | null) | Application;
+  providerMessageID: string;
+  direction: 'inbound' | 'outbound';
+  sender: string;
+  recipient: string;
+  subject: string;
+  body: string;
+  receivedAt: string;
+  attachmentMetadata?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1399,6 +1510,10 @@ export interface PayloadLockedDocument {
         value: string | IntegrationConfiguration;
       } | null)
     | ({
+        relationTo: 'mcp-privacy-settings';
+        value: string | McpPrivacySetting;
+      } | null)
+    | ({
         relationTo: 'provider-usage-reservations';
         value: string | ProviderUsageReservation;
       } | null)
@@ -1423,8 +1538,16 @@ export interface PayloadLockedDocument {
         value: string | NotificationOutbox;
       } | null)
     | ({
+        relationTo: 'notification-deliveries';
+        value: string | NotificationDelivery;
+      } | null)
+    | ({
         relationTo: 'notification-preferences';
         value: string | NotificationPreference;
+      } | null)
+    | ({
+        relationTo: 'notification-user-preferences';
+        value: string | NotificationUserPreference;
       } | null)
     | ({
         relationTo: 'urgent-contacts';
@@ -1433,6 +1556,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'mail-drafts';
         value: string | MailDraft;
+      } | null)
+    | ({
+        relationTo: 'mail-threads';
+        value: string | MailThread;
+      } | null)
+    | ({
+        relationTo: 'mail-thread-messages';
+        value: string | MailThreadMessage;
       } | null)
     | ({
         relationTo: 'mail-authorizations';
@@ -1931,6 +2062,16 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mcp-privacy-settings_select".
+ */
+export interface McpPrivacySettingsSelect<T extends boolean = true> {
+  key?: T;
+  hidePhone?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "provider-usage-reservations_select".
  */
 export interface ProviderUsageReservationsSelect<T extends boolean = true> {
@@ -2047,12 +2188,41 @@ export interface NotificationOutboxSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-deliveries_select".
+ */
+export interface NotificationDeliveriesSelect<T extends boolean = true> {
+  outbox?: T;
+  idempotencyKey?: T;
+  recipient?: T;
+  state?: T;
+  attempts?: T;
+  nextAttemptAt?: T;
+  leaseToken?: T;
+  leaseExpiresAt?: T;
+  providerMessageID?: T;
+  failureCode?: T;
+  completedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "notification-preferences_select".
  */
 export interface NotificationPreferencesSelect<T extends boolean = true> {
   key?: T;
   events?: T;
   updatedBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "notification-user-preferences_select".
+ */
+export interface NotificationUserPreferencesSelect<T extends boolean = true> {
+  user?: T;
+  mutedKinds?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -2083,6 +2253,39 @@ export interface MailDraftsSelect<T extends boolean = true> {
   attachmentHashes?: T;
   revision?: T;
   state?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-threads_select".
+ */
+export interface MailThreadsSelect<T extends boolean = true> {
+  lead?: T;
+  application?: T;
+  mailbox?: T;
+  provider?: T;
+  providerConversationID?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mail-thread-messages_select".
+ */
+export interface MailThreadMessagesSelect<T extends boolean = true> {
+  thread?: T;
+  mailbox?: T;
+  lead?: T;
+  application?: T;
+  providerMessageID?: T;
+  direction?: T;
+  sender?: T;
+  recipient?: T;
+  subject?: T;
+  body?: T;
+  receivedAt?: T;
+  attachmentMetadata?: T;
   updatedAt?: T;
   createdAt?: T;
 }

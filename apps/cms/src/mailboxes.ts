@@ -108,13 +108,13 @@ export async function clearMailboxArea(payload: Payload, area: MailboxArea, acto
  * here with the same mailbox-scoped contract; SMTP remains the deterministic
  * fallback and is deliberately the only provider persisted until tenant OAuth
  * credentials are configured. */
-export async function sendAreaMail(payload: Payload, area: Extract<MailboxArea, 'leads' | 'careers'>, message: { sender: string; recipient: string; subject: string; body: string; threadID: string }) {
+export async function sendAreaMail(payload: Payload, area: MailboxArea, message: { sender: string; recipient: string; subject: string; body: string; threadID?: string }) {
   const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
   if (!mapping.docs[0]) throw new Error('mailbox_not_configured')
   const mailboxID = relationID(mapping.docs[0].mailbox)
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
   if (mailbox.provider !== 'smtp' || mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(mapping.docs[0].senderAddress))) throw new Error('mailbox_not_ready')
-  const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, headers: { 'In-Reply-To': message.threadID } })
+  const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, ...(message.threadID ? { headers: { 'In-Reply-To': message.threadID } } : {}) })
   return { provider: 'smtp', messageID: result.messageId?.slice(0, 500) ?? null }
 }
 

@@ -19,12 +19,24 @@ import { assertLeadAcceptsOutbound } from './lead-outbound'
 const editorialRoles = ['owner', 'approver', 'editor'] as const
 
 async function purgePrivateCorrespondence(req: PayloadRequest, target: 'lead' | 'application', id: string) {
+  const store = req.payload as any
+  const threads = await store.find({ collection: 'mail-threads', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const thread of threads.docs) {
+    await store.delete({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, overrideAccess: true, req })
+    await store.delete({ collection: 'mail-threads', id: thread.id, overrideAccess: true, req })
+  }
   const drafts = await req.payload.find({ collection: 'mail-drafts', where: { [target]: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
   for (const draft of drafts.docs) {
     await req.payload.delete({ collection: 'mail-authorizations', where: { draft: { equals: draft.id } }, overrideAccess: true, req })
     await req.payload.delete({ collection: 'mail-drafts', id: draft.id, overrideAccess: true, req })
   }
-  await req.payload.delete({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, overrideAccess: true, req })
+  const notificationOutboxes = await req.payload.find({ collection: 'notification-outbox', where: { and: [{ sourceType: { equals: target === 'lead' ? 'inquiry' : 'application' } }, { sourceID: { equals: id } }] }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+  for (const outbox of notificationOutboxes.docs) {
+    const receipts = await req.payload.find({ collection: 'notification-deliveries', where: { outbox: { equals: outbox.id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    if (receipts.docs.some((receipt) => receipt.state === 'processing' && new Date(String(receipt.leaseExpiresAt ?? 0)).getTime() > Date.now())) throw new Error('Notification delivery is actively sending.')
+    for (const receipt of receipts.docs) await req.payload.delete({ collection: 'notification-deliveries', id: receipt.id, overrideAccess: true, req })
+    await req.payload.delete({ collection: 'notification-outbox', id: outbox.id, overrideAccess: true, req })
+  }
   if (target === 'application') {
     const notes = await req.payload.find({ collection: 'audit-events', where: { event: { equals: 'application.note_added' } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
     for (const note of notes.docs) {
@@ -502,6 +514,15 @@ export const Inquiries: CollectionConfig = {
 export const NotificationOutbox: CollectionConfig = {
   slug: 'notification-outbox', admin: { hidden: true },
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  hooks: { beforeDelete: [async ({ id, req }) => {
+    const receipts = await req.payload.find({ collection: 'notification-deliveries', where: { outbox: { equals: id } }, pagination: false, limit: 0, depth: 0, overrideAccess: true, req })
+    const now = Date.now()
+    // Once a provider attempt is in progress, deleting the parent must wait for
+    // its bounded lease to settle. This prevents a retention purge from making
+    // an already-claimed event appear deleted while a worker can still send it.
+    if (receipts.docs.some((receipt) => receipt.state === 'processing' && new Date(String(receipt.leaseExpiresAt ?? 0)).getTime() > now)) throw new Error('Notification delivery is actively sending.')
+    for (const receipt of receipts.docs) await req.payload.delete({ collection: 'notification-deliveries', id: receipt.id, overrideAccess: true, req })
+  }] },
   fields: [
     { name: 'inquiry', type: 'relationship', relationTo: 'inquiries' },
     { name: 'kind', type: 'select', required: true, options: ['new-lead', 'active-incident-lead', 'new-job-application', 'change-set-submitted', 'follow-ups-due', 'publish-or-integration-failed'] },
@@ -517,6 +538,22 @@ export const NotificationOutbox: CollectionConfig = {
   ],
 }
 
+/** Per-recipient delivery receipts keep a provider result separate from durable intent. */
+export const NotificationDeliveries: CollectionConfig = {
+  slug: 'notification-deliveries', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'outbox', type: 'relationship', relationTo: 'notification-outbox', required: true },
+    { name: 'idempotencyKey', type: 'text', required: true, unique: true },
+    { name: 'recipient', type: 'json', required: true },
+    { name: 'state', type: 'select', required: true, defaultValue: 'queued', options: ['queued', 'processing', 'delivered', 'retryable', 'failed', 'unknown', 'unsupported'] },
+    { name: 'attempts', type: 'number', required: true, defaultValue: 0, min: 0 },
+    { name: 'nextAttemptAt', type: 'date', required: true },
+    { name: 'leaseToken', type: 'text' }, { name: 'leaseExpiresAt', type: 'date' },
+    { name: 'providerMessageID', type: 'text' }, { name: 'failureCode', type: 'text' }, { name: 'completedAt', type: 'date' },
+  ],
+}
+
 /** Private operator settings. These collections never participate in editorial capture or publishing. */
 export const NotificationPreferences: CollectionConfig = {
   slug: 'notification-preferences', admin: { hidden: true },
@@ -525,6 +562,16 @@ export const NotificationPreferences: CollectionConfig = {
     { name: 'key', type: 'text', required: true, unique: true },
     { name: 'events', type: 'json', required: true },
     { name: 'updatedBy', type: 'relationship', relationTo: 'users', required: true },
+  ],
+}
+
+/** A person's opt-out choices; incident alerts intentionally cannot be muted. */
+export const NotificationUserPreferences: CollectionConfig = {
+  slug: 'notification-user-preferences', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'user', type: 'relationship', relationTo: 'users', required: true, unique: true },
+    { name: 'mutedKinds', type: 'json', required: true, defaultValue: [] },
   ],
 }
 
@@ -548,6 +595,27 @@ const readMailDrafts: NonNullable<NonNullable<CollectionConfig['access']>['read'
   if (hiring) return { application: { exists: true } }
   return false
 }
+export const MailThreads: CollectionConfig = {
+  slug: 'mail-threads', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
+    { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true }, { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] },
+    { name: 'providerConversationID', type: 'text', required: true, maxLength: 500 },
+  ],
+  hooks: { beforeChange: [({ data, originalDoc }) => { const lead = relationId(data.lead) ?? relationId(originalDoc?.lead); const application = relationId(data.application) ?? relationId(originalDoc?.application); if (Boolean(lead) === Boolean(application)) throw new Error('A mail thread must belong to one lead or application.'); return data }] },
+}
+
+export const MailThreadMessages: CollectionConfig = {
+  slug: 'mail-thread-messages', admin: { hidden: true, group: 'Private' }, access: { create: () => false, read: ({ req }) => hasRole(req.user as never, ['owner']) ? true : hasRole(req.user as never, ['sales']) ? ({ lead: { exists: true } } as never) : hasRole(req.user as never, ['hiring']) ? ({ application: { exists: true } } as never) : false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'thread', type: 'relationship', relationTo: 'mail-threads', required: true }, { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true },
+    { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
+    { name: 'providerMessageID', type: 'text', required: true, maxLength: 500 }, { name: 'direction', type: 'select', required: true, options: ['inbound', 'outbound'] },
+    { name: 'sender', type: 'text', required: true, maxLength: 320 }, { name: 'recipient', type: 'text', required: true, maxLength: 320 }, { name: 'subject', type: 'text', required: true, maxLength: 500 },
+    { name: 'body', type: 'textarea', required: true, maxLength: 20_000 }, { name: 'receivedAt', type: 'date', required: true }, { name: 'attachmentMetadata', type: 'json', defaultValue: [] },
+  ],
+}
+
 export const MailDrafts: CollectionConfig = {
   slug: 'mail-drafts', admin: { hidden: true, useAsTitle: 'subject', group: 'Private' },
   access: { create: () => false, read: readMailDrafts, update: () => false, delete: () => false },
@@ -805,6 +873,19 @@ export const IntegrationConfigurations: CollectionConfig = {
     { name: 'credentialFingerprint', type: 'text', admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'unavailable', 'rejected', 'revoked'], admin: { readOnly: true } },
     { name: 'testedAt', type: 'date', admin: { readOnly: true } },
+  ],
+}
+
+/** Private operational control for the information MCP tools may disclose. */
+export const McpPrivacySettings: CollectionConfig = {
+  slug: 'mcp-privacy-settings',
+  admin: { hidden: true },
+  // This singleton is deliberately separate from editorial SiteSettings. Only
+  // the audited route may change it; generic Payload CRUD must not bypass it.
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'key', type: 'text', required: true, unique: true, defaultValue: 'active' },
+    { name: 'hidePhone', type: 'checkbox', required: true, defaultValue: true },
   ],
 }
 

@@ -18,3 +18,37 @@ test('Owner reviews and revokes connected assistants with accessible desktop and
 test('non-Owner account navigation opens only that person’s connected assistants', async ({ browser }) => {
   const editor = await signedIn(browser, 'synthetic-shell-editor-session-token'); await editor.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(true) })); await editor.page.goto('/admin'); await editor.page.locator('[data-admin-account-button]').click(); const link = editor.page.getByRole('menuitem', { name: 'My connected assistants' }); await expect(link).toHaveAttribute('href', '/integrations?tab=assistants'); await link.click(); await expect(editor.page).toHaveURL(/\/integrations\?tab=assistants/); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants' })).toBeVisible(); await expect(editor.page.getByRole('heading', { name: 'My connected assistants' })).toBeVisible(); await expect(editor.page.locator('[data-assistant-grant]').getByText('Synthetic Shell Editor')).toBeVisible(); await editor.context.close()
 })
+
+test('ENG-017 Owner persists MCP phone privacy from Connected assistants and non-Owners cannot read it', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-shell-owner-session-token')
+  await owner.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(false) }))
+  await owner.page.goto('/integrations?tab=assistants')
+  const toggle = owner.page.getByLabel('Hide lead phone numbers')
+  await expect(toggle).toBeChecked()
+  const save = owner.page.waitForResponse((entry) => entry.url().endsWith('/api/mcp-privacy') && entry.request().method() === 'PUT')
+  await toggle.uncheck(); expect((await save).status()).toBe(200)
+  await expect(owner.page.getByRole('status')).toContainText('available to authorized lead readers')
+  await owner.page.reload(); await expect(owner.page.getByLabel('Hide lead phone numbers')).not.toBeChecked()
+  const ownerPolicy = await owner.page.request.get('/api/mcp-privacy'); expect(ownerPolicy.status()).toBe(200); expect(await ownerPolicy.json()).toEqual({ hidePhone: false })
+  const restore = owner.page.waitForResponse((entry) => entry.url().endsWith('/api/mcp-privacy') && entry.request().method() === 'PUT')
+  await owner.page.getByLabel('Hide lead phone numbers').check(); expect((await restore).status()).toBe(200)
+  const csrf = await owner.page.request.put('/api/mcp-privacy', { headers: { origin: 'https://attacker.example', 'content-type': 'application/json' }, data: { hidePhone: false } })
+  expect(csrf.status()).toBe(403); expect(await csrf.text()).not.toContain('phone')
+  const editor = await signedIn(browser, 'synthetic-shell-editor-session-token')
+  expect((await editor.page.request.get('/api/mcp-privacy')).status()).toBe(403)
+  expect((await editor.page.request.put('/api/mcp-privacy', { headers: { origin, 'content-type': 'application/json' }, data: { hidePhone: false } })).status()).toBe(403)
+  await Promise.all([owner.context.close(), editor.context.close()])
+})
+
+test('ENG-017 retries a failed MCP privacy read and restores the saved value after a failed write', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-shell-owner-session-token'); let reads = 0
+  await owner.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(false) }))
+  await owner.page.route('**/api/mcp-privacy', (route) => {
+    if (route.request().method() === 'GET') { reads += 1; return reads === 1 ? route.fulfill({ status: 503, json: { error: 'unavailable' } }) : route.fulfill({ json: { hidePhone: true } }) }
+    return route.fulfill({ status: 503, json: { error: 'unavailable' } })
+  })
+  await owner.page.goto('/integrations?tab=assistants'); await expect(owner.page.locator('[data-assistant-status]')).toContainText('unavailable')
+  await owner.page.getByRole('button', { name: 'Retry' }).click(); await expect(owner.page.getByLabel('Hide lead phone numbers')).toBeChecked()
+  await owner.page.getByLabel('Hide lead phone numbers').uncheck(); await expect(owner.page.locator('[data-assistant-status]')).toContainText('unavailable'); await expect(owner.page.getByLabel('Hide lead phone numbers')).toBeChecked()
+  await owner.context.close()
+})

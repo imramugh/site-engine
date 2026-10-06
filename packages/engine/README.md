@@ -22,3 +22,18 @@ it is unavailable after a theme change, the optional `intentFallbacks` map may
 translate the declared intent to a supported preset (for example, `subtle` to
 `fade`). Without a map, compatible intent and preset names work directly. A
 missing or unsupported fallback leaves a still frame.
+
+## Theme package validation
+
+Before registering an already-extracted theme package, validate its directory without
+loading its code:
+
+```sh
+site-engine-validate-theme /path/to/extracted-theme
+```
+
+The command emits JSON containing the validated install record and SHA-256 receipts
+only when the package has a complete version-1 `contractSurface`. It rejects missing
+or inconsistent contract declarations, unsafe paths, symlinks, oversized artifacts,
+and missing entry or declared component files. The validator does not execute package
+scripts or modules; the operator remains responsible for trusting the extracted source.

@@ -1,0 +1,6 @@
+.timeline { border: 1px solid #d9dce4; border-radius: 12px; padding: 1rem; margin: 1rem 0; background: #fff; }
+.timeline h3 { margin-top: 0; }
+.timeline ol { display: grid; gap: .75rem; padding-left: 1.25rem; }
+.timeline li { border-left: 3px solid #465f91; padding-left: .75rem; }
+.timeline p { margin: .3rem 0; }
+.body { white-space: pre-wrap; overflow-wrap: anywhere; }

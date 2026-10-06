@@ -15,7 +15,11 @@ test('ENG-028 neutral fixture renders accessible semantic content', async ({ pag
 test('ENG-004 and ENG-005 derive routes and render the complete neutral block gallery', async ({ page }) => {
   await page.goto('/general/gallery');
   await expect(page.locator('[data-block]')).toHaveCount(17);
+  expect(await page.locator('[data-block]').evaluateAll((blocks) => blocks.map((block) => block.getAttribute('data-block')))).toEqual(expect.arrayContaining([
+    'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video',
+  ]));
   await expect(page.getByText('Hidden fixture')).toHaveCount(0);
+  await expect(page.getByText('HIDDEN_TESTIMONIAL_MUST_NOT_RENDER')).toHaveCount(0);
   await expect(page.getByText('This unconfirmed quote must not render.')).toHaveCount(0);
   const video = page.locator('video');
   await expect(video).toHaveCount(1);
@@ -25,6 +29,53 @@ test('ENG-004 and ENG-005 derive routes and render the complete neutral block ga
   await page.goto('/services/operations/detail');
   await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText('Operations');
   await page.goto('/unknown-route');
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+});
+
+test('ENG-005 starter blocks retain their semantic HTML and omit hidden content', async ({ page }) => {
+  await page.goto('/general/gallery');
+  await expect(page.locator('[data-block="incidentBar"] [role="status"]')).toHaveCount(1);
+  await expect(page.locator('[data-block="pillarGrid"] ul.cards > li.card')).toHaveCount(2);
+  await expect(page.locator('[data-block="featureGrid"] ul.cards > li.card')).toHaveCount(2);
+  await expect(page.locator('[data-block="splitList"] ol.split > li')).toHaveCount(2);
+  await expect(page.locator('[data-block="chipList"] ul.chips > li')).toHaveCount(3);
+  await expect(page.locator('[data-block="testimonials"] figure.quote blockquote')).toHaveCount(1);
+  await expect(page.locator('[data-block="faq"] details > summary')).toHaveCount(2);
+  await expect(page.locator('[data-block="callout"] ul')).toHaveCount(0);
+  await expect(page.locator('[data-block="relatedServices"] ul > li')).toHaveCount(1);
+  await expect(page.locator('[data-block="cta"] h2')).toHaveCount(1);
+  await expect(page.locator('[data-block="richText"] p')).toHaveCount(1);
+  await expect(page.locator('[data-block="contact"]')).toContainText('This synthetic contact block accepts a secure inquiry.');
+  await expect(page.locator('[data-block="media"] figure img')).toHaveCount(1);
+  await expect(page.locator('[data-block="imageText"] picture + div h2')).toHaveCount(1);
+  await expect(page.locator('[data-block="gallery"] ul.cards > li img')).toHaveCount(2);
+  await expect(page.locator('[data-block="logoStrip"] ul.cards > li img')).toHaveCount(1);
+  await expect(page.locator('[data-block="video"] video track[kind="captions"]')).toHaveCount(1);
+  await expect(page.locator('[data-block-id="40000000-0000-4000-8000-000000000022"]')).toHaveCount(0);
+});
+
+test('ENG-038 starter fixture matrix renders every declared surface at desktop and mobile', async ({ page }, testInfo) => {
+  const standardBlocks = ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'];
+  await page.goto('/');
+  await expect(page.locator('[data-block="hero"]')).toHaveCount(1);
+  await page.goto('/general/gallery');
+  expect(await page.locator('[data-block]').evaluateAll(blocks => blocks.map(block => block.getAttribute('data-block')))).toEqual(expect.arrayContaining(standardBlocks.filter(type => type !== 'hero')));
+  await expect(page.getByText('Short copy.')).toBeVisible();
+  await expect(page.getByText('Longer synthetic copy demonstrates a resilient card layout without depending on a real client message.')).toBeVisible();
+  await expect(page.locator('[data-block="media"] img, [data-block="imageText"] img, [data-block="gallery"] img, [data-block="logoStrip"] img')).toHaveCount(5);
+  await expect(page.locator('video')).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('starter-gallery-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('starter-gallery-mobile.png'), fullPage: true });
+  await page.addScriptTag({ path: axeSource });
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })).violations)).toEqual([]);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduce');
+  await expect(page.locator('[data-motion-effect]').first()).toHaveAttribute('data-motion-paused', 'true');
+  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "Starter Sans"'))).toBe(true);
+  for (const [path, heading] of [['/general/guide', 'Guide'], ['/general/article', 'Article'], ['/insights/all', 'Insights'], ['/services/operations', 'Operations'], ['/services/operations/detail', 'Service detail'], ['/careers/example-role', 'Example role']] as const) { await page.goto(path); await expect(page.getByRole('heading', { level: 1 })).toContainText(heading); }
+  await page.goto('/unknown-fixture');
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
 });
 test('ENG-015 neutral runtime persists reduced motion across routes', async ({ page }) => {

@@ -27,7 +27,7 @@ const databasePath = join(tmpdir(), `site-engine-oauth-${process.pid}.sqlite`);
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' });
 let currentUser = 'synthetic-user';
 let userEnabled = true;
-let currentScopes = ['mcp:content:read'];
+let currentScopes = ['mcp:content:read', 'mcp:leads:read'];
 const registrationFailures: string[] = [];
 const previousIntrospectionSecret = process.env.OAUTH_INTROSPECTION_SECRET;
 process.env.OAUTH_INTROSPECTION_SECRET = 'test-introspection-secret';
@@ -49,7 +49,7 @@ await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', re
 try {
   const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(protectedMetadata.status, 200);
-  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] });
+  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] });
 
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`);
   assert.equal(discovery.status, 200);
@@ -87,12 +87,15 @@ try {
   const defaultScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/default-scope'], token_endpoint_auth_method: 'none', response_types: ['code'] }) });
   assert.equal(defaultScopeRegistration.status, 201);
   assert.equal((await defaultScopeRegistration.json() as { scope: string }).scope, 'mcp:content:read');
+  const personalScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/personal-scope'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:leads:read mcp:careers:read' }) });
+  assert.equal(personalScopeRegistration.status, 201);
+  assert.equal((await personalScopeRegistration.json() as { scope: string }).scope, 'mcp:leads:read mcp:careers:read');
 
   const nonStringScopeRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/non-string-scope'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: ['mcp:content:read'] }) });
   assert.equal(nonStringScopeRegistration.status, 400);
   assert.equal(registrationFailures.at(-1), 'unsupported_scope');
 
-  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read offline_access' }) });
+  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read mcp:leads:read offline_access' }) });
   assert.equal(registered.status, 201);
   const client = await registered.json() as { client_id: string; application_type: string };
   assert.equal(client.application_type, 'native');
@@ -101,7 +104,7 @@ try {
   const secondClient = await registeredSecond.json() as { client_id: string };
 
   const authorization = new URL(`${issuer}/auth`);
-  authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+  authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read mcp:leads:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
   const authWithoutResource = new URL(authorization);
   authWithoutResource.searchParams.delete('resource');
   assert.equal((await fetch(authWithoutResource, { redirect: 'manual' })).status, 400);
@@ -129,10 +132,12 @@ try {
   }));
   let next = new URL(interaction!, issuer);
   let callback: URL | undefined;
+  let personalScopeWasShown = false;
   for (let redirects = 0; redirects < 8; redirects++) {
     const response = await fetch(next, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
     if (response.status === 200) {
       const page = await response.text();
+      if (page.includes('mcp:leads:read')) personalScopeWasShown = true;
       const csrf = /name="csrf" value="([^"]+)"/.exec(page)?.[1];
       assert.ok(csrf, 'interaction page must include a CSRF confirmation');
       const confirmed = await fetch(next, {
@@ -157,6 +162,7 @@ try {
     if (redirect.origin === 'http://127.0.0.1' && redirect.pathname === '/callback') { callback = redirect; break; }
     next = redirect;
   }
+  assert.equal(personalScopeWasShown, true);
   assert.ok(callback, 'authorization did not reach the registered redirect URI');
   assert.equal(callback.origin + callback.pathname, 'http://127.0.0.1/callback');
   assert.equal(callback.searchParams.get('state'), 'state-value');
@@ -192,7 +198,7 @@ try {
   assert.equal(activeBody.active, true);
   assert.equal(activeBody.clientId, client.client_id);
   assert.equal(activeBody.resource, resource);
-  assert.deepEqual(activeBody.scopes, ['mcp:content:read']);
+  assert.deepEqual(activeBody.scopes, ['mcp:content:read', 'mcp:leads:read']);
   assert.equal(activeBody.userId, 'synthetic-user');
   assert.equal(activeBody.sessionId, 'synthetic-user-session');
   assert.equal(typeof activeBody.expiresAt, 'number');
@@ -221,7 +227,7 @@ try {
   currentScopes = [];
   const narrowedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: descendantTokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(narrowedRefresh.status, 400);
-  currentScopes = ['mcp:content:read'];
+  currentScopes = ['mcp:content:read', 'mcp:leads:read'];
   userEnabled = false;
   const disabledRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: descendantTokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(disabledRefresh.status, 400);

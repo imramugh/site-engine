@@ -82,20 +82,46 @@ async function copyThemeComponents(source, destination) {
     const componentInfo = await lstat(join(source, component)).catch(() => undefined);
     if (!componentInfo?.isFile() || componentInfo.isSymbolicLink()) throw new Error(`Theme component root is missing required ${component}.`);
   }
-  await mkdir(destination, { recursive: false });
   async function copyDirectory(from, to) {
+    await mkdir(to, { recursive: false });
     const entries = await readdir(from, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === '.' || entry.name === '..' || entry.name.includes(sep)) throw new Error('Theme component path is unsafe.');
       const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name);
       const entryInfo = await lstat(sourcePath);
       if (entryInfo.isSymbolicLink()) throw new Error('Theme component root must not contain symbolic links.');
-      if (entryInfo.isDirectory()) { await mkdir(destinationPath); await copyDirectory(sourcePath, destinationPath); }
+      if (entryInfo.isDirectory()) await copyDirectory(sourcePath, destinationPath);
       else if (entryInfo.isFile()) await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
       else throw new Error('Theme component root contains an unsupported entry.');
     }
   }
   await copyDirectory(source, destination);
+}
+
+async function copyStarterAssets(componentsRoot, stagingRoot) {
+  // Starter component CSS may reference package-local, public assets. Copy the
+  // conventional fonts directory beside the renderer so relative @font-face
+  // URLs survive the isolated snapshot build without executing theme code.
+  const starterRoot = dirname(createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro'));
+  if (componentsRoot !== starterRoot) return;
+  const fonts = resolve(componentsRoot, '../..', 'fonts');
+  const info = await lstat(fonts).catch(() => undefined);
+  if (!info) return;
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Theme fonts directory must be a real directory.');
+  async function copyDirectory(from, to) {
+    await mkdir(to, { recursive: false });
+    const entries = await readdir(from, { withFileTypes: true });
+    for (const entry of entries) {
+      const sourcePath = join(from, entry.name); const destinationPath = join(to, entry.name); const entryInfo = await lstat(sourcePath);
+      if (entryInfo.isSymbolicLink()) throw new Error('Theme fonts directory must not contain symbolic links.');
+      if (!entryInfo.isFile()) throw new Error('Theme fonts directory contains an unsupported entry.');
+      if (/\.(?:woff2?|ttf|otf)$/i.test(entry.name)) {
+        if (entryInfo.size > 5_000_000) throw new Error('Theme font file exceeds the maximum allowed size.');
+        await writeFile(destinationPath, await readFile(sourcePath, { flag: constants.O_RDONLY | constants.O_NOFOLLOW }), { flag: 'wx', mode: 0o644 });
+      }
+    }
+  }
+  await copyDirectory(fonts, join(stagingRoot, 'fonts'));
 }
 
 async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, signal, themeComponentsRoot, analytics }) {
@@ -109,7 +135,9 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     await cp(new URL(name, sourceRoot), join(renderRoot, name), { recursive: true });
   }
   const themeComponents = join(renderRoot, 'theme-components');
-  await copyThemeComponents(await trustedThemeComponentsRoot(themeComponentsRoot), themeComponents);
+  const componentsRoot = await trustedThemeComponentsRoot(themeComponentsRoot);
+  await copyThemeComponents(componentsRoot, themeComponents);
+  await copyStarterAssets(componentsRoot, dirname(renderRoot));
   await symlink(fileURLToPath(new URL('node_modules', sourceRoot)), join(renderRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   return new Promise((resolve, reject) => {

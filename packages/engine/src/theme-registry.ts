@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { ThemeInstallSchema, ThemeSelectionSchema, SiteSnapshotSchema, ThemeManifestSchema } from '@site-engine/contract';
 
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value) ?? "null";
-const digest = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
+export const manifestDigest = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex');
 
 export type InstalledTheme = { manifest: ReturnType<typeof ThemeManifestSchema.parse>; manifestDigest: string };
 /** Themes are retained by immutable name/version identity. */
@@ -24,10 +24,10 @@ export function parseThemeRegistry(value: unknown): ThemeRegistry {
   const registry: ThemeRegistry = new Map();
   for (const entry of entries) {
     const installed = ThemeInstallSchema.parse(entry);
-    const manifestDigest = digest(installed.manifest);
+    const digest = manifestDigest(installed.manifest);
     const versions = registry.get(installed.manifest.name) ?? new Map<string, InstalledTheme>();
     if (versions.has(installed.manifest.version)) throw new Error('Theme registry contains duplicate install name/version pairs.');
-    versions.set(installed.manifest.version, { manifest: installed.manifest, manifestDigest });
+    versions.set(installed.manifest.version, { manifest: installed.manifest, manifestDigest: digest });
     registry.set(installed.manifest.name, versions);
   }
   return registry;

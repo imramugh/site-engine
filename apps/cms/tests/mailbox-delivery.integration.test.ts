@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
-import { getPayload } from 'payload'
+import { createLocalReq, getPayload } from 'payload'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { prepareReply, authorizeReply, sendReply } from '../src/mail-replies'
+import { dispatchOneNotification } from '../src/notification-dispatch'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-delivery-'))
 Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-delivery-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'http://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAIL_TEST_SMTP_LOOPBACK: '1' })
@@ -87,4 +88,105 @@ test('a reviewed lead reply reaches SMTP once with the exact confirmed content',
   await expect(sendReply(payload, actor, grant.id)).rejects.toThrow('authorization_not_usable')
   expect(messages).toHaveLength(before + 1)
   expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, overrideAccess: true })).toMatchObject({ state: 'sent' })
+})
+
+test('notification delivery uses the notifications mapping once per recipient and never places private intake content on SMTP', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-owner@example.test', name: 'Notify owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification fixture mailbox', primaryAddress: 'notify@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-user', password: 'notify-password' }, owner.id)
+  await service.testSMTPMailbox(payload, mailbox.id, owner.id)
+  await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify@example.test' }, owner.id)
+  const outbox = await payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: { message: 'private inquiry body', resume: 'private-resume-key' }, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email', 'sms'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  const before = messages.length
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'delivered' })
+  expect(messages).toHaveLength(before + 1)
+  expect(messages.at(-1)).toContain(`Reference: ${outbox.id}`)
+  expect(messages.at(-1)).not.toContain('private inquiry body')
+  expect(messages.at(-1)).not.toContain('private-resume-key')
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  const deliveries = await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: outbox.id } }, limit: 0, pagination: false, overrideAccess: true })
+  expect(deliveries.docs).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'delivered' }), expect.objectContaining({ state: 'unsupported', failureCode: 'channel-unsupported' })]))
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  expect(messages).toHaveLength(before + 1)
+})
+
+test('notification claims are idempotent, stale leases never resend, and definite pre-send failures back off', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-race-owner@example.test', name: 'Notify race owner', roles: ['owner'] }, overrideAccess: true })
+  await service.clearMailboxArea(payload, 'notifications', owner.id)
+  const createOutbox = () => payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: {}, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  const unconfigured = await createOutbox()
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'queued' })
+  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: unconfigured.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ state: 'queued', attempts: 0, failureCode: 'mailbox-not-configured' })] })
+  await payload.update({ collection: 'notification-outbox', id: unconfigured.id, data: { state: 'failed' }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification race mailbox', primaryAddress: 'notify-race@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-race-user', password: 'notify-race-password' }, owner.id)
+  await service.testSMTPMailbox(payload, mailbox.id, owner.id)
+  await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify-race@example.test' }, owner.id)
+
+  const raced = await createOutbox(); const before = messages.length
+  const results = await Promise.all([dispatchOneNotification(payload), dispatchOneNotification(payload)])
+  expect(results.filter(Boolean)).toHaveLength(1)
+  expect(messages).toHaveLength(before + 1)
+  expect((await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: raced.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(1)
+
+  const stale = await createOutbox()
+  await (payload as any).create({ collection: 'notification-deliveries', data: { outbox: stale.id, idempotencyKey: `${stale.id}:staff:${owner.id}:email`, recipient: { type: 'staff', id: owner.id, email: owner.email }, state: 'processing', attempts: 1, nextAttemptAt: new Date().toISOString(), leaseToken: 'crashed-before-result', leaseExpiresAt: new Date(Date.now() - 60_000).toISOString() }, overrideAccess: true })
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  expect(messages).toHaveLength(before + 1)
+  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: stale.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ state: 'unknown', failureCode: 'lease-expired-outcome-unknown' })] })
+
+  const unavailable = await createOutbox()
+  // Reconfiguration deliberately resets audited transport health to unknown;
+  // this is a definite pre-send condition, not an ambiguous SMTP result.
+  await service.configureSMTPMailbox(payload, { id: mailbox.id, name: 'Notification race mailbox', primaryAddress: 'notify-race@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-race-user' }, owner.id)
+  let at = new Date()
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    await expect(dispatchOneNotification(payload, at)).resolves.toMatchObject({ state: attempt === 5 ? 'failed' : 'retryable' })
+    at = new Date(at.getTime() + 6 * 60_000)
+  }
+  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: unavailable.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ state: 'failed', attempts: 5, failureCode: 'mailbox-not-ready' })] })
+  expect(messages).toHaveLength(before + 1)
+})
+
+test('retention deletion removes notification receipts and refuses an active provider lease', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-retention-owner@example.test', name: 'Notify retention owner', roles: ['owner'] }, overrideAccess: true })
+  const inquiry = await (payload as any).create({ collection: 'inquiries', data: { name: 'Retention recipient', email: 'notify-retention@example.test', message: 'Synthetic retention record.', topic: 'general', sourcePage: '/test', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: crypto.randomUUID() }, overrideAccess: true })
+  const outbox = await payload.create({ collection: 'notification-outbox', data: { inquiry: inquiry.id, kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: {}, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email'], sourceType: 'inquiry', sourceID: inquiry.id, availableAt: new Date().toISOString() }, overrideAccess: true })
+  const delivery = await (payload as any).create({ collection: 'notification-deliveries', data: { outbox: outbox.id, idempotencyKey: `${outbox.id}:staff:${owner.id}:email`, recipient: { type: 'staff', id: owner.id, email: owner.email }, state: 'processing', attempts: 1, nextAttemptAt: new Date().toISOString(), leaseToken: 'active-provider-attempt', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+  const req = await createLocalReq({}, payload); req.context.retentionPurge = true
+  await expect(payload.delete({ collection: 'inquiries', id: inquiry.id, overrideAccess: true, req })).rejects.toThrow('actively sending')
+  await (payload as any).update({ collection: 'notification-deliveries', id: delivery.id, data: { state: 'unknown', leaseExpiresAt: null }, overrideAccess: true })
+  await payload.delete({ collection: 'inquiries', id: inquiry.id, overrideAccess: true, req })
+  expect((await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: outbox.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
+})
+
+test('terminal parents do not starve a later queued event and a revoked recipient is never sent', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-fair-owner@example.test', name: 'Notify fair owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification fair mailbox', primaryAddress: 'notify-fair@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-fair-user', password: 'notify-fair-password' }, owner.id)
+  await service.testSMTPMailbox(payload, mailbox.id, owner.id)
+  await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify-fair@example.test' }, owner.id)
+  const make = (recipient = owner) => payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: {}, recipientRules: ['owner'], recipients: [{ type: 'staff', id: recipient.id, email: recipient.email }], channels: ['email'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  const events = [] as Awaited<ReturnType<typeof make>>[]
+  for (let index = 0; index < 26; index += 1) events.push(await make())
+  const before = messages.length
+  for (let index = 0; index < 26; index += 1) await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'delivered' })
+  expect(messages).toHaveLength(before + 26)
+  for (const event of events) expect(await payload.findByID({ collection: 'notification-outbox', id: event.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'delivered' })
+
+  const revoked = await payload.create({ collection: 'users', data: { email: 'notify-revoked@example.test', name: 'Notify revoked', roles: ['owner'], disabled: true }, overrideAccess: true })
+  const unsent = await make(revoked)
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'failed' })
+  expect(messages).toHaveLength(before + 26)
+  expect(await (payload as any).find({ collection: 'notification-deliveries', where: { outbox: { equals: unsent.id } }, limit: 1, overrideAccess: true })).toMatchObject({ docs: [expect.objectContaining({ failureCode: 'recipient-no-longer-eligible' })] })
+})
+
+test('expired processing receipts become unknown and release the first-25 window', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'notify-stale-owner@example.test', name: 'Notify stale owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureSMTPMailbox(payload, { name: 'Notification stale mailbox', primaryAddress: 'notify-stale@example.test', aliases: [], host: '127.0.0.1', port, security: 'starttls', username: 'notify-stale-user', password: 'notify-stale-password' }, owner.id); await service.testSMTPMailbox(payload, mailbox.id, owner.id); await service.setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notify-stale@example.test' }, owner.id)
+  const make = () => payload.create({ collection: 'notification-outbox', data: { kind: 'new-lead', idempotencyKey: crypto.randomUUID(), state: 'queued', payload: {}, recipientRules: ['owner'], recipients: [{ type: 'staff', id: owner.id, email: owner.email }], channels: ['email'], sourceType: 'inquiry', sourceID: crypto.randomUUID(), availableAt: new Date().toISOString() }, overrideAccess: true })
+  for (let index = 0; index < 25; index += 1) { const outbox = await make(); await (payload as any).create({ collection: 'notification-deliveries', data: { outbox: outbox.id, idempotencyKey: `${outbox.id}:staff:${owner.id}:email`, recipient: { type: 'staff', id: owner.id, email: owner.email }, state: 'processing', attempts: 1, nextAttemptAt: new Date().toISOString(), leaseToken: 'crashed', leaseExpiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true }) }
+  const later = await make(); const before = messages.length
+  await expect(dispatchOneNotification(payload)).resolves.toBeNull()
+  await expect(dispatchOneNotification(payload)).resolves.toMatchObject({ state: 'delivered' })
+  expect(messages).toHaveLength(before + 1)
+  expect(await payload.findByID({ collection: 'notification-outbox', id: later.id, overrideAccess: true })).toMatchObject({ state: 'delivered' })
+  const unknown = await (payload as any).find({ collection: 'notification-deliveries', where: { failureCode: { equals: 'lease-expired-outcome-unknown' } }, limit: 0, pagination: false, overrideAccess: true }); expect(unknown.totalDocs).toBeGreaterThanOrEqual(25)
 })

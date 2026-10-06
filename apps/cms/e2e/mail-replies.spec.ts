@@ -51,6 +51,31 @@ test('ENG-020/033 reviews the persisted envelope, reconfirms edits, and cannot r
   } finally { await context.close() }
 })
 
+test('ENG-020 reads only the persisted matched inbound timeline entry as escaped text', async ({ browser }) => {
+  const { context, page } = await composer(browser)
+  try {
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline).toContainText('Persisted matched reply')
+    await expect(timeline).toContainText('window.bad = true Persisted inbound timeline body')
+    await expect(timeline).toContainText('cv.pdf')
+    await expect(timeline).not.toContainText('fixture-unrelated-message')
+    await expect(page.locator('script:text("window.bad")')).toHaveCount(0)
+  } finally { await context.close() }
+})
+
+test('ENG-020 clears a prior lead timeline before showing the newly selected lead', async ({ browser }) => {
+  const { context, page } = await composer(browser)
+  try {
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline).toContainText('Persisted matched reply')
+    const loadedSecondTimeline = page.waitForResponse((response) => response.url().includes('/api/mail-threads/lead/') && response.status() === 200)
+    await page.getByRole('button', { name: /Timeline switch lead/ }).click()
+    await loadedSecondTimeline
+    await expect(timeline).toContainText('No matched mail in this conversation yet.')
+    await expect(timeline).not.toContainText('Persisted matched reply')
+  } finally { await context.close() }
+})
+
 test('ENG-033 an ambiguous send does not offer a repeat send or reuse its confirmation', async ({ browser }) => {
   const { context, reply, requests } = await composer(browser, true)
   try {

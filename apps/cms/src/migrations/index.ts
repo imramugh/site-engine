@@ -35,12 +35,16 @@ import * as migration_20261004_235511_media_immutable_versions from './20261004_
 import * as migration_20261005_114210_site_identity_navigation_1_5 from './20261005_114210_site_identity_navigation_1_5';
 import * as migration_20261005_133859 from './20261005_133859';
 import * as migration_20261005_145826_mailbox_workspace from './20261005_145826_mailbox_workspace';
+import * as migration_20261005_230000_mail_threads from './20261005_230000_mail_threads';
+import * as migration_20261005_231000_notification_user_preferences from './20261005_231000_notification_user_preferences';
+import * as migration_20261005_234000_mcp_privacy from './20261005_234000_mcp_privacy';
 import * as migration_20261005_164500_crawler_policy_1_7 from './20261005_164500_crawler_policy_1_7';
 import * as migration_20261005_170000_redirect_creator_attribution from './20261005_170000_redirect_creator_attribution';
 import * as migration_20261005_180000_inquiry_spam_lifecycle from './20261005_180000_inquiry_spam_lifecycle';
 import * as migration_20261005_181000_application_contact_fields from './20261005_181000_application_contact_fields';
 import * as migration_20261005_190000_retention_privacy from './20261005_190000_retention_privacy';
 import * as migration_20261005_191000_mail_replies from './20261005_191000_mail_replies';
+import * as migration_20261005_200000_notification_delivery from './20261005_200000_notification_delivery';
 
 export const migrations = [
   {
@@ -258,4 +262,16 @@ export const migrations = [
     down: migration_20261005_191000_mail_replies.down,
     name: '20261005_191000_mail_replies',
   },
+  {
+    up: migration_20261005_200000_notification_delivery.up,
+    down: migration_20261005_200000_notification_delivery.down,
+    name: '20261005_200000_notification_delivery',
+  },
+  {
+    up: migration_20261005_230000_mail_threads.up,
+    down: migration_20261005_230000_mail_threads.down,
+    name: '20261005_230000_mail_threads',
+  },
+  { up: migration_20261005_231000_notification_user_preferences.up, down: migration_20261005_231000_notification_user_preferences.down, name: '20261005_231000_notification_user_preferences' },
+  { up: migration_20261005_234000_mcp_privacy.up, down: migration_20261005_234000_mcp_privacy.down, name: '20261005_234000_mcp_privacy' },
 ];

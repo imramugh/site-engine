@@ -1,1 +1,17 @@
-{ "name": "starter", "version": "1.1.0", "contract": "1.1.0", "entry": "./dist/index.js", "motion": { "presets": ["subtle", "ambient", "signature"], "intentFallbacks": {} } }
+{
+  "name": "starter",
+  "version": "1.7.0",
+  "contract": "1.7.0",
+  "entry": "./dist/index.js",
+  "standardBlocks": ["hero", "incidentBar", "pillarGrid", "featureGrid", "splitList", "chipList", "testimonials", "faq", "callout", "relatedServices", "cta", "richText", "contact", "media", "imageText", "gallery", "logoStrip", "video"],
+  "motion": { "presets": ["subtle", "ambient", "signature"], "intentFallbacks": {} },
+  "contractSurface": {
+    "version": 1,
+    "standardBlocks": ["hero", "incidentBar", "pillarGrid", "featureGrid", "splitList", "chipList", "testimonials", "faq", "callout", "relatedServices", "cta", "richText", "contact", "media", "imageText", "gallery", "logoStrip", "video"],
+    "templates": ["landing", "standard", "listing", "pillar", "service", "article", "job"],
+    "backgrounds": ["default", "subtle", "brand", "accent", "highlight", "inverse"],
+    "logoTones": ["default", "inverse"],
+    "components": { "layout": "./src/components/Layout.astro", "blockRenderer": "./src/components/BlockRenderer.astro" },
+    "assets": ["./fonts/DejaVuSans.ttf", "./LICENSES/DejaVu.txt", "./fonts/PROVENANCE.md"]
+  }
+}

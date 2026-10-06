@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import styles from './lead-workspace.module.css'
 import { PermanentDeleteDialog } from '../permanent-delete-dialog'
 import { MailReplyComposer } from '../mail-reply-composer'
+import { MailThreadTimeline } from '../mail-thread-timeline'
 
 type Assignee = { id: string; name: string; email: string }
 type Stage = 'new' | 'qualified' | 'contacted' | 'proposal' | 'won' | 'lost'
@@ -76,6 +77,7 @@ function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, o
     </dl>
     <section className={styles.message}><h3>Inquiry</h3><p>{lead.message}</p></section>
     <MailReplyComposer key={lead.id} target="lead" id={lead.id} recipient={lead.email} />
+    <MailThreadTimeline key={lead.id} target="lead" id={lead.id} />
     <form className={styles.editForm} onSubmit={(event) => { event.preventDefault(); void onSave({ stage, assignee: assignee || null, notes, nextAction }) }}>
       <label>Stage<select value={stage} onChange={(event) => setStage(event.target.value as Stage)}>{transitions[lead.stage].map((value) => <option key={value} value={value}>{stageLabels[value]}</option>)}</select></label>
       <label>Active assignee<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="">Unassigned</option>{assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>

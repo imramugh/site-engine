@@ -8,11 +8,13 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, test } from 'vitest'
 import { getPayload } from 'payload'
 import { createAIWorkerAPI } from '../scripts/run-ai-worker.mjs'
+import { createNotificationWorkerAPI } from '../scripts/run-notification-worker.mjs'
 import { hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-oauth-proxy-http-'))
 const bridgeSecret = 'synthetic-proxy-bridge-secret'
 const aiWorkerToken = 'synthetic-ai-worker-token-for-proxy-http-tests'
+const notificationWorkerToken = 'synthetic-notification-worker-token-for-proxy-http-tests'
 const port = await new Promise<number>((resolve) => {
   const server = createServer()
   server.listen(0, '127.0.0.1', () => {
@@ -28,6 +30,7 @@ Object.assign(process.env, {
   PAYLOAD_PUBLIC_SERVER_URL: origin,
   OAUTH_BRIDGE_SECRET: bridgeSecret,
   AI_WORKER_TOKEN: aiWorkerToken,
+  NOTIFICATION_WORKER_TOKEN: notificationWorkerToken,
 })
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
@@ -75,7 +78,7 @@ afterAll(async () => {
   }
   await payload?.destroy()
   rmSync(directory, { recursive: true, force: true })
-  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'AI_WORKER_TOKEN', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
+  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'AI_WORKER_TOKEN', 'NOTIFICATION_WORKER_TOKEN', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
 })
 
 test('actual Next proxy exempts only the secret-authenticated OAuth bridge from Origin CSRF', async () => {
@@ -115,4 +118,15 @@ test('actual Next proxy admits only the exact authenticated AI worker endpoint w
     const denied = await fetch(`${origin}${path}`, { method: 'POST' })
     assert.equal(denied.status, 403)
   }
+}, 45_000)
+
+test('actual Next proxy admits only the exact authenticated notification worker endpoint without Origin', async () => {
+  const worker = createNotificationWorkerAPI({ cmsOrigin: origin, token: notificationWorkerToken })
+  assert.equal(await worker(), null)
+  for (const supplied of [undefined, 'wrong-notification-worker-token-for-proxy-http-tests']) {
+    const headers = new Headers(); if (supplied) headers.set('authorization', `Bearer ${supplied}`)
+    assert.equal((await fetch(`${origin}/api/internal/notification-worker/run`, { method: 'POST', headers })).status, 401)
+  }
+  for (const method of ['PUT', 'PATCH']) assert.equal((await fetch(`${origin}/api/internal/notification-worker/run`, { method })).status, 403)
+  for (const path of ['/api/internal/notification-worker/other', '/api/internal/notification-worker/run/other']) assert.equal((await fetch(`${origin}${path}`, { method: 'POST' })).status, 403)
 }, 45_000)

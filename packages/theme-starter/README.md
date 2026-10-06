@@ -1,13 +1,55 @@
 # Neutral starter theme
 
-`@site-engine/theme-starter` exposes a typed descriptor for the standard template, block, appearance, motion, and chrome surface. It uses only neutral tokens and system fonts so it can be packed and tested without a private theme repository.
+`@site-engine/theme-starter` is a public neutral reference package for the
+engine contract. It includes standard templates, blocks, appearance choices,
+motion hooks, and accessible layout components without private repositories,
+client copy, assets, credentials, or routes.
 
-Theme-specific extensions must use a namespaced identifier such as `exampleAgency/notice`, declare their contract compatibility, and must not replace or change a standard block's meaning. The engine owns content, routing, and accessibility semantics; a theme supplies tokens, classes, and presentation.
+The current manifest is **1.7.0**. Its renderer accepts every frozen public
+snapshot contract from 1.0.0 through 1.7.0. A 1.0.0 snapshot has no Hero
+secondary CTA or supporting panel; 1.1.0 introduced those fields, and later
+contracts add structured site, contact, inquiry, navigation, and crawler data
+that the host and starter render together. The 1.1.0 manifest remains a
+historic release; publish a new immutable version for later contract fields.
 
-## Hero fields
+## Assets and extension rules
 
-The standard Hero accepts its original eyebrow, heading, body, and optional primary CTA. It may also include an optional `secondaryCta` and a `supportPanel` with an optional eyebrow, required heading and body, optional internal CTA, and optional E.164 `phoneCta`. The starter renders the actions together, labels the supporting content as an `aside`, and collapses the two-column presentation to one column on narrow screens. Themes should omit empty optional wrappers and validate internal link and telephone targets at their rendering boundary.
+The starter uses neutral tokens and self-hosts unmodified DejaVu Sans with
+`font-display: swap`. It was copied from Debian `fonts-dejavu-core` 2.37-8.
+Its checksum and primary DejaVu project links are in
+[fonts/PROVENANCE.md](fonts/PROVENANCE.md); the complete upstream notice,
+including Arev/Tavmjong terms, is in [LICENSES/DejaVu.txt](LICENSES/DejaVu.txt).
 
-The public contract is now `1.1.0`. It continues to parse frozen `1.0.0` snapshots, but `secondaryCta` and `supportPanel` are rejected from `1.0.0` snapshots. A selected theme must declare the exact snapshot contract, so a `1.1.0` snapshot requires a `1.1.0` renderer manifest. The starter renderer can still render legacy `1.0.0` snapshot data.
+`theme.json` declares a version-1 `contractSurface` with every standard block,
+template, background, logo tone, components, and local font/license assets.
+Theme-specific additions need a namespace such as `exampleAgency/notice`, a
+compatible contract range, and must not redefine standard block meaning.
 
-Private theme integration must publish a new immutable theme version with `contract: "1.1.0"`, preserve its existing `1.0.0` package for frozen releases, render the optional Hero fields, and update the private registry entry. Selecting that theme creates a reviewed `1.1.0` candidate while the live `1.0.0` release retains its own pins. Operations must make the candidate snapshot, renderer environment, and release artifact agree on `1.1.0`; it must not rewrite older snapshot or theme pins.
+## Build and validate
+
+```sh
+corepack pnpm@12.8.1 build:packages
+corepack pnpm@12.8.1 --filter @site-engine/theme-starter pack
+node packages/engine/dist/theme-package-cli.js /path/to/extracted-theme
+```
+
+The validator does not import modules or execute install scripts. It rejects
+missing or inconsistent surface declarations, traversal, every symlinked path
+component, oversized artifacts, and missing entry/component/type files. A
+successful JSON receipt contains the registry-compatible canonical manifest
+digest and SHA-256 file receipts. It proves reviewed extracted files, not
+visual quality; keep the static build and browser checks in the release gate.
+
+The packed-consumer test installs local contract, engine, and starter tarballs
+offline with lifecycle scripts disabled, validates the installed starter, then
+removes `BlockRenderer.astro` and proves rejection:
+
+```sh
+corepack pnpm@12.8.1 exec vitest run packages/theme-starter/tests
+corepack pnpm@12.8.1 --filter @site-engine/site build
+corepack pnpm@12.8.1 exec playwright test apps/site/e2e/site.spec.ts --grep ENG-038
+```
+
+The browser fixture covers every standard block and template at desktop and
+mobile sizes, retains screenshots as test artifacts, runs axe, and checks
+reduced-motion behavior.
