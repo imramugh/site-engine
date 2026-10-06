@@ -15,6 +15,8 @@ type Preview = { status?: string; revision?: number; changeHash?: string; includ
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
 export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[]; indexNow?: { sent?: boolean; reason?: string; batches?: number; status?: number; replayed?: boolean } }
 export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
+export const PUBLISH_STAGES = ['dispatched', 'building', 'built', 'activating'] as const
+type PublishStage = typeof PUBLISH_STAGES[number]
 const MAX_PUBLISH_ATTEMPTS = 3
 const MAX_PUBLISH_WORKER_BODY_BYTES = 16 * 1024
 
@@ -29,6 +31,15 @@ async function recordPublishFailure(payload: Payload, req: PayloadRequest, job: 
   const id = String(job.id)
   await payload.create({ collection: 'audit-events', data: { event: 'publish.failed', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(job.snapshot), errorCode: cleanErrorCode(errorCode), buildLink: `/operations?publish=${id}` } }, overrideAccess: true, req })
   await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
+}
+export async function recordPublishStage(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, stage: string, now = new Date()) {
+  requireTransaction(req, 'Publish stage')
+  if (!(PUBLISH_STAGES as readonly string[]).includes(stage)) throw new Error('Unknown publish stage.')
+  const job = await payload.findByID({ collection: 'publish-outbox', id, depth: 1, overrideAccess: true, req }) as unknown as Record<string, unknown>
+  if (job.status !== 'processing' || job.leaseToken !== leaseToken || !job.leaseExpiresAt || new Date(String(job.leaseExpiresAt)).getTime() <= now.getTime()) throw new Error('The publish lease is no longer current.')
+  const snapshot = job.snapshot as Record<string, unknown> | undefined
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_stage', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(snapshot), sequence: Number(job.sequence), stage: stage as PublishStage, attempt: Number(job.attempts), correlationID: String(job.correlationID) } }, overrideAccess: true, req })
+  return job
 }
 export function scheduledPublicationTime(value: unknown, now = Date.now()): string | undefined {
   if (value === undefined) return undefined
@@ -78,8 +89,10 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
   }
   if (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
   if (!current) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
-  const captured = capturedSnapshot(change.collection, current)
-  const currentSnapshot = captured && change.collection === 'assets' ? publicAssetSnapshot(captured) : captured
+  // Baseline media is already a portable reference, with `variants` rather
+  // than Payload upload `sizes`. Re-projecting it would lose file identities
+  // and focal points and prevent a valid replacement/removal from reversing.
+  const currentSnapshot = change.collection === 'assets' ? publicAssetSnapshot(current) : capturedSnapshot(change.collection, current)
   if (!currentSnapshot) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
   if (change.after === null) {
     if (!same(currentSnapshot, change.before)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
@@ -160,8 +173,7 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       const merged = change.before === null
         ? structuredClone(change.after)
         : mergeCapturedChange(styleGuide, change)
-      if (!merged) throw new Error('Style guide cannot be removed.')
-      styleGuide = merged
+      styleGuide = merged ?? undefined
     }
     if (change.collection === 'assets') {
       validateCapturedAssetIntegrity(change)
@@ -208,7 +220,8 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   // Contract upgrades are only caused by the reviewed theme selection itself.
   // Ordinary content edits keep the immutable baseline pin intact.
   const contractVersion = selectedThemeTransition ? selectedTheme?.contract : base.settings.contractVersion
-  const candidate = SiteSnapshotSchema.parse({ ...structuredClone(base), settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
+  const { styleGuide: _priorStyleGuide, ...baseFields } = structuredClone(base)
+  const candidate = SiteSnapshotSchema.parse({ ...baseFields, settings: { ...siteSettings, contractVersion, ...(selectedTheme ? { theme: selectedTheme } : {}), themeSettings, sections: [...sections.values()].sort((a, b) => a.id.localeCompare(b.id)) }, ...(styleGuide ? { styleGuide } : {}), pages: candidatePages.sort((a, b) => a.id.localeCompare(b.id)), redirects: [...redirects.values()].sort((a, b) => a.from.localeCompare(b.from)), media: [...media.values()].sort((a, b) => a.id.localeCompare(b.id)), changeSets: [] })
   const oldRoutes = deriveRoutes(base).routes
   const newRoutes = deriveRoutes(candidate).routes
   const occupiedPaths = new Set(newRoutes.map(route => route.path))
@@ -303,6 +316,7 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   const preview = set.preview as Preview | undefined
   if (preview?.status !== 'ready' || preview.revision !== expectedRevision || preview.changeHash !== expectedChangeHash || preview.contentHash !== contentHash || preview.contentHash !== previewContentHash || preview.baselineSnapshotID !== baseline.snapshotID || preview.baselineSequence !== baseline.sequence || !Array.isArray(preview.includedChangeKeys) || !keysEqual(preview.includedChangeKeys, includedChangeKeys)) throw new Error('A ready private preview for this exact candidate with its exact baseline is required before approval.')
   if (!exactQualityProof(set.quality, { revision: expectedRevision, changeHash: expectedChangeHash, contentHash, includedChangeKeys, baselineSnapshotID: baseline.snapshotID, baselineSequence: baseline.sequence, previewJobID: input.previewJobID })) throw new Error('A passing deterministic quality proof for this exact candidate is required before approval.')
+  if (candidate.settings.contractVersion !== versions.contractVersion || (candidate.settings.theme && candidate.settings.theme.version !== versions.themeVersion)) throw new Error('The publication version pins do not match the reviewed candidate. Rebuild its preview before approval.')
   const excluded = changes.filter((change) => !includedChangeKeys.includes(`${change.collection}:${change.id}`))
   if (excluded.length) await payload.create({ collection: 'change-sets', data: { name: `${String(set.name)} — remaining changes`, actor: idOf(set.actor), state: 'open', revision: 0, changes: excluded }, overrideAccess: true, req, context: { editorialInternal: true } })
   const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence }, overrideAccess: true, req, context: { editorialInternal: true } })
@@ -415,6 +429,7 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: terminal ? 'failed' : 'pending', errorCode: cleanErrorCode(errorCode), lastError: cleanErrorCode(errorCode), nextAttemptAt, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
   if (terminal) await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, errorCode)
+  else await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_retry', detail: { publishJob: id, changeSet: idOf(job.changeSet), sequence: Number(job.sequence), attempt: Number(job.attempts), errorCode: cleanErrorCode(errorCode), nextAttemptAt, correlationID: String(job.correlationID) } }, overrideAccess: true, req })
   return updated.docs[0]
 }
 
@@ -453,6 +468,9 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks, ...(artifact.indexNow ? { indexNow: artifact.indexNow } : {}) }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: 'completed', completedAt: now.toISOString(), completionEvidence: artifact, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  const changeSet = job.changeSet as unknown as Record<string, unknown> | undefined
+  const reviewer = idOf((snapshot as unknown as Record<string, unknown>).approvedBy)
+  await payload.create({ collection: 'audit-events', data: { event: 'publish.completed', user: reviewer, actor: reviewer, detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: snapshotID, release: release.id, sequence: Number(job.sequence), actor: idOf(changeSet?.actor), reviewer, publishTime: now.toISOString(), result: 'deployed', correlationID: String(job.correlationID) } }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_indexnow', detail: { publishOutbox: id, release: release.id, ...(artifact.indexNow ?? { sent: false, reason: 'not-reported' }) } }, overrideAccess: true, req, context: { editorialInternal: true } })
   const changeSetID = idOf(job.changeSet)
   if (!changeSetID) throw new Error('Publish job is missing its change set.')

@@ -18,6 +18,8 @@ export type CapturedChange = {
   after: Record<string, unknown> | null
   beforeHash: string | null
   afterHash: string | null
+  /** A reviewable public removal retains its draft and bytes until retention. */
+  retainedDraftHash?: string
 }
 
 const mutableFields: Record<CapturedCollection, readonly string[]> = {
@@ -111,7 +113,7 @@ export function snapshot(collection: CapturedCollection, document: Record<string
   }))
 }
 
-function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
+export function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
   // Payload applies partial updates. Explicit nulls clear fields that were absent
   // from the baseline rather than leaving a later editor's addition behind.
   // Asset bytes and generated variants are immutable. A discard restores only
@@ -124,6 +126,7 @@ function restoration(collection: CapturedCollection, value: Record<string, unkno
     // Draft persistence cannot accept the snapshot-only published status.
     // Restoring an archived draft returns it to the ordinary draft workflow.
     if (collection === 'pages' && field === 'status') return [field, 'draft']
+    if (collection === 'pages' && field === 'noindex' && !(field in value)) return [field, false]
     // Payload group traversal requires an object even when every nested value
     // is being cleared. The collection hook normalizes these empty groups.
     if (collection === 'site-settings' && field === 'logos' && !(field in value)) return [field, { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }]
@@ -151,7 +154,7 @@ export function publicAssetSnapshot(value: Record<string, unknown>): Record<stri
   return publicFields
 }
 
-async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
   const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY', ...(capturedAssetHasMetadata(before) ? ['caption', 'credit', 'tags'] : [])].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
   if (before.filename === current.filename) return { ...metadata, currentFileVersion: null, currentFile: null }
   const versions = await payload.find({
@@ -237,7 +240,7 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
   return payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Promise<Record<string, unknown>>
 }
 
-function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
+export function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
   let current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
   if (collection === 'assets' && current && !capturedAssetHasMetadata(expected)) current = publicAssetSnapshot(current)
   if (collection === 'pages') return normalizePageOptionalNulls(current, expected)
@@ -252,10 +255,12 @@ export async function markStaleIfNeeded(payload: Payload, set: Record<string, un
   const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
   let changed = expired
   if (!expired) for (const change of changes) {
-    if (!change.afterHash) continue
+    const expectedHash = change.retainedDraftHash ?? change.afterHash
+    if (!expectedHash) continue
     try {
-      const doc = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
-      if (hash(currentChange(change.collection, doc, change.after)) !== change.afterHash) { changed = true; break }
+      const found = await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })
+      const doc = found.docs[0] as unknown as Record<string, unknown> | undefined
+      if (hash(currentChange(change.collection, doc, change.retainedDraftHash ? change.before : change.after)) !== expectedHash) { changed = true; break }
     } catch { changed = true; break }
   }
   if (!changed) return set
@@ -335,15 +340,18 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
   if (action === 'discard') {
     for (const change of [...changes].reverse()) {
       let current: Record<string, unknown> | undefined
-      try { current = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { current = undefined }
-      if (hash(currentChange(change.collection, current, change.after)) !== change.afterHash) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
+      current = (await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Record<string, unknown> | undefined
+      if (hash(currentChange(change.collection, current, change.retainedDraftHash ? change.before : change.after)) !== (change.retainedDraftHash ?? change.afterHash)) throw new Error('Cannot discard because a later draft edit changed this record. Refresh and resolve it first.')
+      if (change.retainedDraftHash) continue // Preparing a removal never mutated this draft.
       if (change.before === null) {
         await payload.delete({ collection: change.collection, id: change.id, overrideAccess: true, req, context: { editorialInternal: true } })
       } else {
         const data = change.collection === 'assets' && current
           ? await assetRestoration(payload, req, current, change.before)
           : restoration(change.collection, change.before)
-        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
+        const archivedPage = change.collection === 'pages' && change.before.status === 'archived'
+        if (archivedPage) data.status = 'archived'
+        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(archivedPage ? { archiveInternal: true } : {}), ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
       }
     }
   }
@@ -351,9 +359,10 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     const rebased: CapturedChange[] = []
     for (const change of changes) {
       let current: Record<string, unknown> | undefined
-      try { current = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { current = undefined }
-      const after = currentChange(change.collection, current, change.after)
-      if (hash(after) !== change.afterHash) throw new Error('This change set conflicts with a later draft edit. Resolve the conflict before refreshing.')
+      current = (await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Record<string, unknown> | undefined
+      const after = currentChange(change.collection, current, change.retainedDraftHash ? change.before : change.after)
+      if (hash(after) !== (change.retainedDraftHash ?? change.afterHash)) throw new Error('This change set conflicts with a later draft edit. Resolve the conflict before refreshing.')
+      if (change.retainedDraftHash) { rebased.push(change); continue }
       if (!equivalent(change.before, after)) rebased.push(change)
     }
     set = await payload.update({ collection: 'change-sets', id, data: { state: 'open', changes: rebased, staleAt: null, reviewedAt: new Date().toISOString(), revision: Number(set.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
@@ -378,18 +387,14 @@ export async function createNamedChangeSet(payload: Payload, req: PayloadRequest
 export type ChangeConflict = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; proposed: Record<string, unknown> | null; current: Record<string, unknown> | null; currentHash: string | null; canReapply: boolean }
 type ConflictChoice = { collection: CapturedCollection; id: string; currentHash: string | null; choice: 'retain-current' | 'reapply-proposed' }
 
-function missingCapturedRecord(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status?: unknown }).status === 404)
-}
-
 async function conflictsFor(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<ChangeConflict[]> {
   const conflicts: ChangeConflict[] = []
   for (const change of changes) {
     let raw: Record<string, unknown> | undefined
-    try { raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch (error) { if (!missingCapturedRecord(error)) throw error; raw = undefined }
-    const current = currentChange(change.collection, raw, change.after)
+    raw = (await payload.find({ collection: change.collection, where: { id: { equals: change.id } }, limit: 1, depth: 0, draft: true, overrideAccess: true, req })).docs[0] as unknown as Record<string, unknown> | undefined
+    const current = currentChange(change.collection, raw, change.retainedDraftHash ? change.before : change.after)
     const currentHash = hash(current)
-    if (currentHash !== change.afterHash) conflicts.push({ collection: change.collection, id: change.id, before: change.before, proposed: change.after, current, currentHash, canReapply: Boolean(change.before && change.after && raw) })
+    if (currentHash !== (change.retainedDraftHash ?? change.afterHash)) conflicts.push({ collection: change.collection, id: change.id, before: change.before, proposed: change.after, current, currentHash, canReapply: Boolean(change.before && change.after && raw) })
   }
   return conflicts
 }

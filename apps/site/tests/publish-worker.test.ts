@@ -23,7 +23,7 @@ describe('publish worker', () => {
     const render = async (rendererOptions: Parameters<typeof import('../scripts/build-snapshot.mjs').buildSnapshot>[0] & Record<string, unknown>) => { renders.push(rendererOptions); return (await import('../scripts/build-snapshot.mjs')).buildSnapshot(rendererOptions); };
     try { await expect(runPublishOnce({ api, buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${address.port}`, versionPins: pins, registry, render })).resolves.toBe(true); }
     finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
-    expect(calls).toEqual(['claim', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
+    expect(calls).toEqual(['claim', 'renew', 'log', 'log', 'log', 'renew', 'complete']); expect(renders[0]).toMatchObject({ themeSelection: selection, versionPins: pins }); expect(await readFile(join(root, 'releases/current/healthz'), 'utf8')).toContain('ok');
   }, 60_000);
   it('serves approved archive and slug-change redirects from the worker-built immutable artifact', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
@@ -60,7 +60,7 @@ describe('publish worker', () => {
       const redirects = await readFile(join(releasesRoot, 'current', 'redirects.json'), 'utf8');
       expect(redirects).toContain(oldPath); expect(redirects).toContain(priorSlugPath);
     } finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
-    expect(calls).toEqual(['claim', 'renew', 'complete']);
+    expect(calls).toEqual(['claim', 'renew', 'log', 'log', 'log', 'renew', 'complete']);
   }, 60_000);
   it('uses the frozen approval manifest when a newer draft exists by the time the worker publishes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root);
@@ -75,6 +75,7 @@ describe('publish worker', () => {
       if (action === 'claim') { mutableDraft.pages[0]!.title = 'Edited after approval'; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job, snapshot: approved, contentHash, versionPins: pins })); return; }
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (action === 'renew') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken: body.leaseToken } })); return; }
+      if (action === 'log') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job })); return; }
       if (action === 'complete') { completedArtifact = body.artifact; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { status: 'completed' } })); return; }
       response.writeHead(400).end();
     });
@@ -84,7 +85,7 @@ describe('publish worker', () => {
       await expect(runPublishOnce({ api: createPublishAPI({ cmsOrigin: `http://127.0.0.1:${cmsAddress.port}`, token }), buildRoot: root, releasesRoot, publicOrigin: `http://127.0.0.1:${publicAddress.port}`, versionPins: pins })).resolves.toBe(true);
       const html = await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8');
       expect(html).toContain('Approved immutable title'); expect(html).not.toContain(mutableDraft.pages[0]!.title);
-      expect(completedArtifact).toMatchObject({ sourceContentHash: contentHash }); expect(calls).toEqual(['claim', 'renew', 'complete']);
+      expect(completedArtifact).toMatchObject({ sourceContentHash: contentHash }); expect(calls).toEqual(['claim', 'renew', 'log', 'log', 'log', 'renew', 'complete']);
     } finally { await Promise.all([new Promise<void>((done, reject) => cms.close(error => error ? reject(error) : done())), new Promise<void>((done, reject) => publicServer.close(error => error ? reject(error) : done()))]); }
   }, 60_000);
   it('recovers a dropped completion response without a second activation or duplicate terminal release', async () => {
@@ -98,6 +99,7 @@ describe('publish worker', () => {
       if (action === 'claim') { const leaseToken = claims++ ? 'c'.repeat(36) : job.leaseToken; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken }, snapshot, contentHash, versionPins: pins })); return; }
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (action === 'renew') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { ...job, leaseToken: body.leaseToken } })); return; }
+      if (action === 'log') { response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job })); return; }
       if (action === 'complete') { completionTokens.push(body.leaseToken); if (terminalReleases === 0) { terminalReleases += 1; response.destroy(); return; } response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ job: { status: 'completed' } })); return; }
       // The first worker's best-effort fail request must not erase the durable completion.
       if (action === 'fail') { response.writeHead(409).end(); return; }
@@ -179,6 +181,13 @@ describe('publish worker', () => {
     await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, healthProbe: async () => true })).rejects.toThrow('LEASE_LOST');
     await expect(readFile(join(root, 'releases/current/healthz'))).rejects.toThrow();
   }, 60_000);
+  it('renews the lease while a build is running and aborts before activation when it is lost', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot); const calls: string[] = [];
+    const api = async (action: string) => { calls.push(action); return action === 'claim' ? { job, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job: { ...job, leaseToken: 'lost' } } : { job: {} }; };
+    const render = async ({ signal }: { signal?: AbortSignal }) => { await new Promise(resolve => setTimeout(resolve, 15)); if (signal?.aborted) throw signal.reason; throw new Error('renderer should have been aborted'); };
+    await expect(runPublishOnce({ api, buildRoot: root, releasesRoot: join(root, 'releases'), publicOrigin: 'https://example.test', versionPins: pins, render, leaseRenewIntervalMs: 1 })).rejects.toThrow('LEASE_LOST');
+    expect(calls).toEqual(expect.arrayContaining(['claim', 'renew'])); expect(calls).not.toContain('fail'); await expect(readFile(join(root, 'releases/current/healthz'))).rejects.toThrow();
+  });
   it('rejects an HTTP 200 health response that proves the old artifact and rolls back', async () => {
     const root = await mkdtemp(join(tmpdir(), 'publish-worker-')); roots.push(root); const snapshot = structuredClone(neutralFixture); const contentHash = (await import('./../scripts/run-preview-worker.mjs')).hash(snapshot);
     const api = async (action: string) => action === 'claim' ? { job, snapshot, contentHash, versionPins: pins } : action === 'renew' ? { job } : { job: {} };
