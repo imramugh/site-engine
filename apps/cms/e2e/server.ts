@@ -240,7 +240,7 @@ let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
 let firstEditableApplicationID: string | undefined
 const mcpBearer = 'synthetic-e2e-mcp-bearer'
-let mcpIdentity: { userId: string; sessionId: string } | undefined
+let mcpIdentity: { userId: string; sessionId: string; scopes: string[] } | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -283,7 +283,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: mcpIdentity.scopes, userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
@@ -564,8 +564,8 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
-  if (request.method === 'POST' && request.url === '/__e2e/mcp-identity') {
-    void (async () => { const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: leadOwnerID!, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: leadOwnerID!, sessionId: String(session.id) }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
+  if (request.method === 'POST' && /^\/__e2e\/mcp-identity(?:\?[^/]*)?$/.test(request.url ?? '')) {
+    void (async () => { const content = new URL(request.url ?? '/', cmsOrigin).searchParams.get('content') === '1'; const user = content ? localOwnerID! : leadOwnerID!; const scopes = content ? ['mcp:content:read'] : ['mcp:leads:read', 'mcp:leads:reply']; const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: user, sessionId: String(session.id), scopes }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
   }
   const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
   if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {
