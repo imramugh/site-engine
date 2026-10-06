@@ -25,6 +25,8 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     const set = await created.json() as { id: string }
     const body = { pageID, blockID, field: 'heading', value: 'Saved after SQLite lock release', expectedValueHash: createHash('sha256').update(heading!).digest('hex'), changeSetID: set.id }
     const before = await session.page.request.get(`/api/pages/${pageID}?draft=true`).then((response) => response.json()) as { blocks: Array<{ id: string; heading?: string }> }
+    const aged = await session.page.request.post('/__e2e/session/age-last-seen')
+    expect(aged.status(), await aged.text()).toBe(204)
     const lock = await session.page.request.post('/__e2e/sqlite-lock')
     expect(lock.status(), await lock.text()).toBe(204)
     const started = Date.now()
@@ -33,14 +35,12 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     expect(blocked.headers()['retry-after']).toBe('1')
     expect(await blocked.json()).toEqual({ error: 'Saving is temporarily busy. Please retry.' })
     expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
-    // A held writer lock can also make this read take Payload's retryable
-    // error path when its sliding session refresh is due. WAL can otherwise
-    // serve the read. Assert either documented response, then prove rollback
-    // only after releasing the lock when the page can be read reliably.
+    // The forced sliding refresh must not make Payload's generated REST route
+    // treat a verified session as anonymous when the writer lock rejects only
+    // that non-authoritative timestamp update.
     const lockedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
-    expect([200, 503]).toContain(lockedRead.status())
-    if (lockedRead.status() === 503) await expect(lockedRead.json()).resolves.toEqual({ error: 'Authentication is temporarily unavailable. Please retry.' })
-    else expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
+    expect(lockedRead.status(), await lockedRead.text()).toBe(200)
+    expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
     const released = await session.page.request.post('/__e2e/sqlite-lock/release')
     expect(released.status(), await released.text()).toBe(204)
     const unchangedResponse = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
