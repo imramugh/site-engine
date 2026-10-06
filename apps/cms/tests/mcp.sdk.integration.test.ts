@@ -8,6 +8,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createClient } from '@libsql/client'
+import sharp from 'sharp'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
@@ -165,8 +166,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, permanently delete content')
-      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
+      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -610,6 +611,28 @@ test('an Approver grant updates existing pages but cannot create pages or approv
   } finally {
     await sdk.transport.close()
   }
+})
+
+test('MCP media tools use scoped effective users and revisioned metadata writes', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-editor-${randomUUID()}@example.test`, name: 'MCP Media Editor', roles: ['editor'] }, overrideAccess: true })
+  const approver = await payload.create({ collection: 'users', data: { email: `mcp-media-approver-${randomUUID()}@example.test`, name: 'MCP Media Approver', roles: ['approver'] }, overrideAccess: true })
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const asset = await payload.create({ collection: 'assets', data: { alt: 'Original media metadata', decorative: false }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media.png', size: bytes.length }, user: editor, overrideAccess: false })
+  const [editorSession, approverSession] = await Promise.all([sessionFor(editor.id), sessionFor(approver.id)])
+  tokens.set('mcp-media-editor', { clientId: 'mcp-media-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('mcp-media-approver', { clientId: 'mcp-media-approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [writer, reader] = await Promise.all([clientFor('mcp-media-editor'), clientFor('mcp-media-approver')])
+  try {
+    const found = resultJson(await writer.client.callTool({ name: 'find_media', arguments: { q: 'Original media' } })) as { assets: Array<{ id: string }> }
+    expect(found.assets).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id })]))
+    expect(resultJson(await writer.client.callTool({ name: 'get_media_usage', arguments: { id: asset.id } }))).toEqual({ id: asset.id, usages: [] })
+    const set = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP media metadata' } })) as { id: string; revision: number }
+    const saved = resultJson(await writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Updated media metadata', decorative: false, focalX: 50, focalY: 50, tags: ['mcp'] } })) as { draft: { assetId: string; changeSetRevision: number }; checks: unknown[] }
+    expect(saved).toMatchObject({ draft: { assetId: asset.id, changeSetRevision: set.revision + 1 }, checks: [] })
+    await expect(writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'invalid', decorative: false, focalX: 50, focalY: 50, unknown: true } })).resolves.toMatchObject({ isError: true })
+    expect(resultJson(await reader.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'Denied metadata update', decorative: false, focalX: 50, focalY: 50 } }))).toEqual({ error: 'role_access_required' })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated media metadata', tags: ['mcp'] })
+  } finally { await Promise.all([writer.transport.close(), reader.transport.close()]) }
 })
 
 
