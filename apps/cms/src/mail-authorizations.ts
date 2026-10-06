@@ -109,3 +109,14 @@ export async function revokeMailAuthorization(payload: Payload, actor: Actor, gr
     return revoked
   })
 }
+
+/** Discard an unconfirmed envelope without creating a send grant. */
+export async function cancelPreparedMailDraft(payload: Payload, actor: Actor, draftID: string) {
+  return withPayloadTransaction(payload, async (req) => {
+    const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+    if (!await freshAuthorizedActor(payload, actor, draft, req)) throw new Error('mail_authorization_required')
+    if (draft.state !== 'prepared') throw new Error('authorization_not_usable')
+    await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'canceled' }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.draft_cancelled', user: actor.id, actor: actor.id, detail: { draft: draft.id } }, overrideAccess: true, req })
+  })
+}

@@ -3,7 +3,7 @@ import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { hasRole } from '../../../../../src/access'
 import { cookieName, readCookie, serverSessionStrategy, SESSION_COOKIE } from '../../../../../src/identity'
-import { authorizeReply, cancelReply, prepareReply, sendReply } from '../../../../../src/mail-replies'
+import { authorizeReply, cancelPreparedReply, cancelReply, prepareReply, sendReply } from '../../../../../src/mail-replies'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
@@ -47,6 +47,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ target
     const draft = await payload.findByID({ collection: 'mail-drafts', id: resolvedDraftID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
     const relation = target === 'lead' ? draft.lead : draft.application; const relationID = typeof relation === 'string' ? relation : (relation as { id?: string } | null)?.id
     if (relationID !== id) throw new Error('invalid_reply')
+    if (body.action === 'cancel-prepared') return Response.json({ cancelled: await cancelPreparedReply(payload, actor, resolvedDraftID) }, { headers: noStore })
     if (body.action === 'authorize') return Response.json({ authorization: await authorizeReply(payload, actor, resolvedDraftID) }, { headers: noStore })
     if (body.action === 'cancel') return Response.json({ authorization: await cancelReply(payload, actor, body.grantID) }, { headers: noStore })
     if (body.action === 'send') return Response.json({ delivery: await sendReply(payload, actor, body.grantID) }, { headers: noStore })
