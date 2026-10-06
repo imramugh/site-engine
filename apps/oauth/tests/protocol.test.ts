@@ -50,7 +50,7 @@ await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', re
 try {
   const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(protectedMetadata.status, 200);
-  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'] });
+  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'] });
 
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`);
   assert.equal(discovery.status, 200);
@@ -200,6 +200,7 @@ try {
   assert.equal(activeBody.clientId, client.client_id);
   assert.equal(activeBody.resource, resource);
   assert.deepEqual(activeBody.scopes, ['mcp:content:read', 'mcp:leads:read']);
+  assert.equal(activeBody.scopes.includes('mcp:leads:write'), false, 'a token consented before the write scope cannot gain it implicitly');
   assert.equal(activeBody.userId, 'synthetic-user');
   assert.equal(activeBody.sessionId, 'synthetic-user-session');
   assert.equal(typeof activeBody.expiresAt, 'number');

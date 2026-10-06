@@ -43,13 +43,13 @@ test('real OAuth tokens can be safely listed and their full family revoked by ma
   const oauth = createOAuthService({ issuer, resource, databasePath: join(directory, 'oauth.sqlite'), cookieKeys: ['one-long-test-key', 'two-long-test-key'], jwks: { keys: [{ ...key, kid: 'real', use: 'sig', alg: 'RS256' }] }, sessionBridge: createHttpSessionBridge({ cmsOrigin, secret: bridgeSecret }) })
   await new Promise<void>((resolve) => oauth.server.listen(oauthPort, '127.0.0.1', resolve))
   try {
-    const user = await payload.create({ collection: 'users', data: { email: 'real-oauth@example.test', name: 'Real OAuth', roles: ['editor'] }, overrideAccess: true })
+    const user = await payload.create({ collection: 'users', data: { email: 'real-oauth@example.test', name: 'Real OAuth', roles: ['owner'] }, overrideAccess: true })
     const sessionToken = newOpaqueToken(); const now = new Date().toISOString()
     const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(sessionToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    const registration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude Desktop', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read offline_access' }) })
+    const registration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude Desktop', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:leads:read mcp:leads:write offline_access' }) })
     const client = await registration.json() as { client_id: string }; assert.equal(registration.status, 201)
     const verifier = randomBytes(48).toString('base64url'); const challenge = createHash('sha256').update(verifier).digest('base64url')
-    const authorization = `${issuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read offline_access', resource, code_challenge: challenge, code_challenge_method: 'S256' })}`
+    const authorization = `${issuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:leads:read mcp:leads:write offline_access', resource, code_challenge: challenge, code_challenge_method: 'S256' })}`
     const cookies = new Map<string, string>([[cookieName(SESSION_COOKIE), `${cookieName(SESSION_COOKIE)}=${sessionToken}`]])
     let next = new URL(authorization); let callback: URL | undefined
     for (let count = 0; count < 8; count++) {
@@ -70,11 +70,11 @@ test('real OAuth tokens can be safely listed and their full family revoked by ma
     assert.equal(tokenResponse.status, 200)
     const tokens = await tokenResponse.json() as { access_token: string; refresh_token: string }
     const introspect = () => fetch(`${origin}/internal/introspect`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'real-bridge-introspection-secret' }, body: JSON.stringify({ token: tokens.access_token, resource }) })
-    assert.equal((await introspect()).status, 200); assert.equal((await (await introspect()).json() as { active: boolean }).active, true)
+    assert.equal((await introspect()).status, 200); assert.deepEqual((await (await introspect()).json() as { active: boolean; scopes: string[] }).scopes, ['mcp:leads:read', 'mcp:leads:write'])
     const manage = (body: object) => fetch(`${origin}/internal/grants`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'real-bridge-introspection-secret' }, body: JSON.stringify(body) })
     const ownList = await manage({ operation: 'list', userId: user.id }); assert.equal(ownList.status, 200)
     const listed = await ownList.json() as { grants: Array<{ managementId: string; userId: string; clientName: string; scopes: string[]; sessionId?: string }> }
-    assert.equal(listed.grants.length, 1); assert.equal(listed.grants[0]?.userId, user.id); assert.equal(listed.grants[0]?.clientName, 'Claude Desktop'); assert.deepEqual(listed.grants[0]?.scopes, ['mcp:content:read']); assert.equal(listed.grants[0]?.sessionId, undefined)
+    assert.equal(listed.grants.length, 1); assert.equal(listed.grants[0]?.userId, user.id); assert.equal(listed.grants[0]?.clientName, 'Claude Desktop'); assert.deepEqual(listed.grants[0]?.scopes, ['mcp:leads:read', 'mcp:leads:write']); assert.equal(listed.grants[0]?.sessionId, undefined)
     const secondSessionToken = newOpaqueToken()
     const secondSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(secondSessionToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
     const secondRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Second Claude', redirect_uris: ['http://127.0.0.1/second-callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read offline_access' }) })
