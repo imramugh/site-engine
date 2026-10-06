@@ -40,3 +40,19 @@ test('DST fallback uses the local calendar day as the durable idempotency bounda
   expect(outbox.totalDocs).toBe(1)
   expect(outbox.docs[0]?.idempotencyKey).toBe(`follow-ups-due:${due.id}:2026-11-01`)
 })
+test('bounded keyset polls reach every due lead once and wrap for a later earlier-id lead', async () => {
+  const user = await payload.create({ collection: 'users', data: { email: 'fairness@example.test', name: 'Fairness', roles: ['sales'] }, overrideAccess: true })
+  const early = await lead('000-fairness@example.test', user.id, { nextActionDueAt: '2030-01-01T00:00:00.000Z' })
+  const leads = [early]
+  for (let index = 1; index < 5; index += 1) leads.push(await lead(`${index}-fairness@example.test`, user.id, { nextActionDueAt: '2026-10-01T00:00:00.000Z' }))
+  const now = new Date('2026-10-04T12:00:00.000Z')
+  await enqueueDueFollowUps(payload, now, 2); await enqueueDueFollowUps(payload, now, 2); await enqueueDueFollowUps(payload, now, 2)
+  let outbox = await payload.find({ collection: 'notification-outbox', where: { kind: { equals: 'follow-ups-due' } }, limit: 200, depth: 0, overrideAccess: true })
+  const inquiryID = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value ? String((value as { id: unknown }).id) : ''
+  expect(outbox.docs.filter(item => leads.slice(1).some(lead => lead.id === inquiryID(item.inquiry))).length).toBe(4)
+  await payload.update({ collection: 'inquiries', id: early.id, data: { nextActionDueAt: '2026-10-01T00:00:00.000Z' }, overrideAccess: true })
+  await enqueueDueFollowUps(payload, now, 2); await enqueueDueFollowUps(payload, now, 2); await enqueueDueFollowUps(payload, now, 2)
+  outbox = await payload.find({ collection: 'notification-outbox', where: { kind: { equals: 'follow-ups-due' } }, limit: 200, depth: 0, overrideAccess: true })
+  expect(outbox.docs.filter(item => leads.some(lead => lead.id === inquiryID(item.inquiry))).length).toBe(5)
+  expect(new Set(outbox.docs.filter(item => leads.some(lead => lead.id === inquiryID(item.inquiry))).map(item => item.idempotencyKey)).size).toBe(5)
+})
