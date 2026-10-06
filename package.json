@@ -7,12 +7,12 @@
     "pnpm": ">=12.8.1 <13"
   },
   "scripts": {
-    "build": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && corepack pnpm@12.8.1 --filter @site-engine/site build && corepack pnpm@12.8.1 --filter @site-engine/cms build && corepack pnpm@12.8.1 --filter @site-engine/oauth build",
+    "build": "corepack pnpm@12.8.1 --filter @site-engine/contract build && corepack pnpm@12.8.1 --filter @site-engine/engine build && corepack pnpm@12.8.1 --filter @site-engine/checks build && corepack pnpm@12.8.1 --filter @site-engine/theme-starter build && node scripts/build-neutral-gallery.mjs && corepack pnpm@12.8.1 --filter @site-engine/site build && corepack pnpm@12.8.1 --filter @site-engine/cms build && corepack pnpm@12.8.1 --filter @site-engine/oauth build",
     "dev:site": "corepack pnpm@12.8.1 --filter @site-engine/site dev",
     "dev:cms": "corepack pnpm@12.8.1 --filter @site-engine/cms dev",
     "preview:site": "corepack pnpm@12.8.1 --filter @site-engine/site preview",
     "test": "corepack pnpm@12.8.1 test:unit && corepack pnpm@12.8.1 test:e2e && corepack pnpm@12.8.1 test:e2e:cms",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run && corepack pnpm@12.8.1 --filter @site-engine/theme-conformance test",
     "test:db": "corepack pnpm@12.8.1 --filter @site-engine/cms test:db",
     "test:e2e": "corepack pnpm@12.8.1 exec playwright test",
     "test:e2e:cms": "corepack pnpm@12.8.1 exec playwright test --config playwright.cms.config.ts",

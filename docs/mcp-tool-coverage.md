@@ -23,6 +23,10 @@ explicit change set, current revision/page hash where applicable, contract
 validation and returned checks. Administrative theme/site writes also require
 Owner permission. A rollback prepares another reviewable draft.
 
+The [block gallery and recipe workflow](block-gallery.md) documents all eighteen
+recipe block types, explicit media/consent selections, schema-derived metadata,
+template filtering and the human review boundary.
+
 The server exposes no approval, publication, user-management or permanent-delete
 tool. Unknown top-level arguments are rejected before the handler runs, including
 attempts to supply `overrideAccess`. Embedded content remains subject to the

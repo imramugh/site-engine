@@ -24,9 +24,10 @@
     "@payloadcms/richtext-lexical": "3.90.2",
     "@site-engine/checks": "workspace:*",
     "@site-engine/contract": "workspace:*",
+    "@site-engine/engine": "workspace:*",
     "graphql": "16.14.2",
     "ipaddr.js": "2.5.0",
-    "next": "16.3.8",
+    "next": "16.4.0",
     "nodemailer": "10.0.9",
     "openid-client": "6.8.8",
     "otpauth": "9.5.2",
@@ -34,18 +35,17 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "sharp": "0.35.5",
-    "zod": "4.6.5",
-    "@site-engine/engine": "workspace:*"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "drizzle-orm": "0.45.2",
     "esbuild": "0.28.2",
     "jose": "6.2.12",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vitest": "5.0.3",
-    "drizzle-orm": "0.45.2"
+    "vitest": "5.0.3"
   }
 }

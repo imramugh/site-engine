@@ -3,13 +3,14 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createHash, randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import { z } from 'zod'
-import { AppearanceOptions, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
+import { AppearanceOptions, AppearanceSchema, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
 import { compatibilityReport, getInstalledTheme, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
 import { changeSetQuality, createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
-import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
+import { blockCatalog, deterministicRecipeBlockID, recipeBlocks, recipeRequiredSelections } from './block-gallery'
+import { galleryCatalog, sectionPresetCatalog, templateCatalog } from './block-gallery-catalog'
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
 import { canonicalHash } from './publishing'
 import { prepareReply, sendMcpReply } from './mail-replies'
@@ -26,6 +27,7 @@ import { registerMcpAIDraftTools } from './mcp-ai-drafts'
 import { auditInvocationResult, auditInvocationStart, containsOverrideAccess, invocationRequestReferences, invocationResultReferences, newInvocation } from './mcp-invocation-audit'
 import { archivePage, normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import type { RemoteImage } from './media-url-ingestion'
+import { loadPublishedPreviewBaseline } from './review-preview'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -81,7 +83,17 @@ export const blockLibrary = {
   blockTypes: Object.keys(BlockSchemas),
   templates: Object.fromEntries(TemplateSchema.options.map((template) => [template, TemplateAllowedBlocks[template]])),
   appearance: AppearanceOptions,
-  catalog: blockCatalog.map(({ type, name, description, allowedTemplates, fieldLimits, insertable }) => ({ type, name, description, allowedTemplates, fieldLimits, insertable })),
+  // `catalog` remains compatible with existing clients; these richer additive
+  // catalogues let a recipe client render every contract field and variant.
+  catalog: galleryCatalog,
+  templateCatalog,
+  sectionPresetCatalog,
+  recipe: {
+    selection: { fields: 'A strict contract-block field object. It cannot set id, type, hidden, or appearance.' },
+    requiredSelections: recipeRequiredSelections,
+    pageFields: ['parentId', 'kicker', 'lede', 'seoDescription', 'noindex', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'],
+  },
+  gallery: { url: '/block-gallery' },
 }
 
 type RpcRequest = { jsonrpc: '2.0'; id?: string | number | null; method: string; params?: Record<string, unknown> }
@@ -228,6 +240,16 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     if (!manifest) return { status: 'not-configured', selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: [] }
     return { selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
   }
+  const galleryThemeMetadata = async () => {
+    const baseline = await loadPublishedPreviewBaseline(payload)
+    const selection = baseline?.manifest.settings.theme
+    if (!selection) return { extensions: [] as string[] }
+    const installed = getInstalledTheme(await loadThemeRegistry(), selection.id, selection.version)
+    // Only describe the package pinned by the published snapshot.  Registry
+    // entries can change independently and must not relabel gallery output.
+    if (!installed || installed.manifestDigest !== selection.manifestDigest || installed.manifest.contract !== selection.contract) return { extensions: [] as string[] }
+    return { theme: { id: selection.id, version: selection.version, manifestDigest: selection.manifestDigest }, extensions: [...installed.manifest.extensionBlocks] }
+  }
   const themeCompatibility = async (id: string, version: string) => {
     const [registry, manifest] = await Promise.all([loadThemeRegistry(), publishedManifest()])
     const installed = getInstalledTheme(registry, id, version)
@@ -325,7 +347,10 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
       return { source: 'frozen-published-snapshot', terms: Array.isArray(terms) ? terms.map((term) => ({ avoid: (term as { avoid?: unknown }).avoid, prefer: (term as { prefer?: unknown }).prefer })) : [] }
     } catch { return { error: 'read_failed' } }
   }
-  const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
+  // Recipe selections legitimately contain nested contract fields: a 40-block
+  // recipe remains bounded by its strict schema and the 32 KiB request limit.
+  // Keep the SDK's independent raw-argument traversal ceiling above that shape.
+  const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 2048 })
   const registerTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name, definition, handler) => {
     const tool = definition as { inputSchema?: unknown; _meta?: Record<string, unknown> }
@@ -398,9 +423,12 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const stalePagesInput = z.object({ limit: z.number().int().min(1).max(100).optional(), cursor: z.string().regex(/^p:[1-9][0-9]{0,5}$/).optional() }).strict()
   const stalePagesOutput = z.object({ source: z.literal('current-editable-draft'), asOf: z.string().datetime(), items: z.array(stalePageOutput).max(100), page: z.number().int().min(1), nextCursor: z.string().nullable() }).strict()
   const styleGuideOutput = z.object({ source: z.literal('current-editable-draft'), bannedPhrases: z.array(z.string()), preferredTerms: z.array(z.object({ avoid: z.string(), prefer: z.string() }).strict()), canadianSpelling: z.enum(['off', 'warn']).optional(), maximumSentenceWords: z.number().int().positive().optional(), minimumReadingEase: z.number().optional() }).strict()
-  server.registerTool('get_block_library', { title: 'Get block library', description: `Read supported block and template metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? text(blockLibrary) : denied(contentReadScope))
+  server.registerTool('get_block_library', { title: 'Get block library', description: `Read supported block and template metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => {
+    if (!read) return denied(contentReadScope)
+    try { return text({ ...blockLibrary, gallery: { ...blockLibrary.gallery, ...(await galleryThemeMetadata()) } }) } catch { return unavailable() }
+  })
   server.registerTool('get_tree', { title: 'Get content tree', description: `Read the scoped section and draft-page tree. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: treeOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { return structured(await tree()) } catch { return unavailable() } })
-  server.registerTool('list_block_types', { title: 'List block types', description: `Read block types, fields, limits, and allowed templates. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ blockTypes: z.array(blockTypeOutput) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ blockTypes: blockLibrary.catalog }) : denied(contentReadScope))
+  server.registerTool('list_block_types', { title: 'List block types', description: `Read block types, fields, limits, and allowed templates. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ blockTypes: z.array(blockTypeOutput) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ blockTypes: blockCatalog.map(({ type, name, description, allowedTemplates, fieldLimits, insertable }) => ({ type, name, description, allowedTemplates, fieldLimits, insertable })) }) : denied(contentReadScope))
   server.registerTool('list_templates', { title: 'List templates', description: `Read templates and their allowed blocks. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ templates: z.array(templateOutput) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ templates: TemplateSchema.options.map((template) => ({ template, allowedBlocks: [...TemplateAllowedBlocks[template]] })) }) : denied(contentReadScope))
   server.registerTool('list_section_presets', { title: 'List section presets', description: `Read neutral section presets and allowed templates. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ presets: z.record(z.string(), z.array(z.string())) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ presets: SectionPresets }) : denied(contentReadScope))
   server.registerTool('list_appearance_options', { title: 'List appearance options', description: `Read supported appearance tokens. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ appearance: z.object({ backgrounds: z.array(z.string()), widths: z.array(z.string()), spacings: z.array(z.string()), motionIntents: z.array(z.string()), logoTones: z.array(z.string()) }).strict() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ appearance: AppearanceOptions }) : denied(contentReadScope))
@@ -516,7 +544,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const sectionFields = z.object({ name: z.string().min(1).max(80), summary: z.string().min(1).max(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), allowedTemplates: z.array(z.enum(TemplateSchema.options)).min(1) }).strict()
   server.registerTool('create_section', { title: 'Create section', description: `Create a draft section in an explicit open change set. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), requestKey: z.string().uuid(), ...sectionFields.shape }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, ...data }) => sectionWrite(undefined, changeSetId, expectedChangeSetRevision, { id: requestKey, pageIds: [], ...data }))
   server.registerTool('update_section', { title: 'Update section', description: `Update a draft section in an explicit open change set. ${toolLimits}`, inputSchema: z.object({ id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), name: z.string().min(1).max(80).optional(), summary: z.string().min(1).max(300).nullable().optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(), allowedTemplates: z.array(z.enum(TemplateSchema.options)).min(1).optional() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ id, changeSetId, expectedChangeSetRevision, ...data }) => sectionWrite(id, changeSetId, expectedChangeSetRevision, data))
-  const pageWrite = async (id: string | undefined, changeSetId: string, expectedChangeSetRevision: number, data: Record<string, unknown>) => {
+  const pageWrite = async (id: string | undefined, changeSetId: string, expectedChangeSetRevision: number, data: Record<string, unknown>, validate?: (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never) => Promise<void>) => {
     if (!write) return denied(contentWriteScope)
     try {
       const result = await withPayloadTransaction(payload, async (req) => {
@@ -536,6 +564,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
           }
           throw new Error('revision_conflict')
         }
+        await validate?.(req)
         req.headers.set('x-site-engine-change-set', changeSetId)
         const doc = await (id
           ? payload.update({ collection: 'pages', id, data, draft: true, user: current as never, overrideAccess: false, req })
@@ -545,12 +574,39 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
         return { page: doc, revision: Number(captured.revision ?? 0), quality }
       })
       return structured({ ...page(result.page as unknown as Record<string, unknown>), changeSetId, changeSetRevision: result.revision, checks: result.quality.checks, warnings: result.quality.warnings, readiness: result.quality.readiness ?? null })
-    } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable']) }
+    } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'recipe_reference_unavailable']) }
   }
   server.registerTool('create_page', { title: 'Create page', description: `Create a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, ...data }) => pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey }))
-  const recipeAppearance = z.object({ background: z.enum(AppearanceOptions.backgrounds), width: z.enum(AppearanceOptions.widths), spacing: z.enum(AppearanceOptions.spacings), motionIntent: z.enum(AppearanceOptions.motionIntents), logoTone: z.enum(AppearanceOptions.logoTones) })
-  server.registerTool('create_page_from_recipe', { title: 'Create page from recipe', description: `Create an ordered, template-compatible draft recipe in an explicit open change set. ${toolLimits}`, inputSchema: { changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid(), blocks: z.array(z.object({ type: z.enum(Object.keys(BlockSchemas) as [string, ...string[]]), appearance: recipeAppearance.optional() })).min(1).max(40) }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, blocks, ...data }) => {
-    try { return pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey, blocks: recipeBlocks(data.template, blocks, [], (index, type) => deterministicRecipeBlockID(requestKey, index, type)) }) } catch (error) { return { isError: true, ...text({ error: error instanceof Error ? error.message : 'invalid_recipe' }) } }
+  const recipeAppearance = AppearanceSchema.partial().strict()
+  // Transport accepts a discoverable field object; recipeBlocks immediately
+  // validates it against the selected strict BlockSchema before any mutation.
+  const recipeSelection = z.object({ type: z.enum(Object.keys(BlockSchemas) as [string, ...string[]]), appearance: recipeAppearance.optional(), fields: z.record(z.string(), z.unknown()).optional() }).strict()
+  const recipePageFields = {
+    parentId: z.string().uuid().optional(), kicker: z.string().min(1).max(160).optional(), lede: z.string().min(1).max(500).optional(), seoDescription: z.string().min(1).max(160).optional(), noindex: z.boolean().optional(), publishedAt: z.string().datetime().optional(), lastReviewed: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional(), businessCase: BusinessCaseSchema.optional(),
+  }
+  const recipeReferencesAccessible = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageData: Record<string, unknown>) => {
+    const media = new Set<string>(); const pages = new Set<string>()
+    if (typeof pageData.parentId === 'string') pages.add(pageData.parentId)
+    for (const block of Array.isArray(pageData.blocks) ? pageData.blocks : []) {
+      if (!block || typeof block !== 'object' || Array.isArray(block)) continue
+      const record = block as Record<string, unknown>
+      if (record.type === 'relatedServices' && Array.isArray(record.pageIds)) for (const id of record.pageIds) if (typeof id === 'string') pages.add(id)
+      for (const key of ['mediaId', 'posterMediaId', 'captionsMediaId']) if (typeof record[key] === 'string') media.add(record[key])
+      if (Array.isArray(record.mediaIds)) for (const id of record.mediaIds) if (typeof id === 'string') media.add(id)
+    }
+    try {
+      const [referencedPages, referencedAssets] = await Promise.all([
+        Promise.all([...pages].map((id) => payload.findByID({ collection: 'pages', id, depth: 0, draft: true, user: current as never, overrideAccess: false, req }))),
+        Promise.all([...media].map((id) => payload.findByID({ collection: 'assets', id, depth: 0, user: current as never, overrideAccess: false, req }))),
+      ])
+      if (referencedPages.some((page) => (page as { status?: unknown; _status?: unknown }).status === 'archived' || (page as { _status?: unknown })._status === 'archived') || referencedAssets.some((asset) => Boolean((asset as { deletedAt?: unknown }).deletedAt))) throw new Error('recipe_reference_unavailable')
+    } catch { throw new Error('recipe_reference_unavailable') }
+  }
+  server.registerTool('create_page_from_recipe', { title: 'Create page from recipe', description: `Create an ordered, template-compatible draft recipe in an explicit open change set. Required media, page, and testimonial fields must be supplied explicitly. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid(), blocks: z.array(recipeSelection).min(1).max(40), ...recipePageFields }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, blocks, ...data }) => {
+    try {
+      const pageData = { ...data, id: requestKey, blocks: recipeBlocks(data.template, blocks, [], (index, type) => deterministicRecipeBlockID(requestKey, index, type)) }
+      return pageWrite(undefined, changeSetId, expectedChangeSetRevision, pageData, (req) => recipeReferencesAccessible(req, pageData))
+    } catch (error) { return { isError: true, ...text({ error: error instanceof Error ? error.message : 'invalid_recipe' }) } }
   })
   server.registerTool('update_page', { title: 'Update page', description: `Update a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160).optional(), summary: z.string().min(24).max(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ id, changeSetId, expectedChangeSetRevision, ...data }) => pageWrite(id, changeSetId, expectedChangeSetRevision, data))
   const editableSet = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, changeSetId: string, expectedChangeSetRevision: number) => {
