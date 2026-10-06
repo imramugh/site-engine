@@ -2,15 +2,18 @@ import { createHash } from 'node:crypto'
 import type { Payload } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 
+const locks = new Map<string, Promise<void>>()
+async function exclusive<T>(key: string, fn: () => Promise<T>) { const prior = locks.get(key) ?? Promise.resolve(); let release: () => void = () => undefined; const current = new Promise<void>(resolve => { release = resolve }); locks.set(key, current); await prior; try { return await fn() } finally { release(); if (locks.get(key) === current) locks.delete(key) } }
 const relationID = (value: unknown) => typeof value === 'string' ? value : String((value as { id?: string } | null)?.id ?? '')
 const email = (value: unknown) => String(value ?? '').trim().toLowerCase()
 const addressHash = (value: unknown) => createHash('sha256').update(email(value)).digest('hex')
 
 /** Explicitly binds a safe, same-address suggestion; it never imports message content. */
 export async function adoptMailConversationSuggestion(payload: Payload, input: { suggestionID: string; target: 'lead' | 'application'; targetID: string; actor: string }) {
-  return withPayloadTransaction(payload, async req => {
+  return exclusive(input.suggestionID, () => withPayloadTransaction(payload, async req => {
     const suggestion = await payload.findByID({ collection: 'mail-conversation-suggestions', id: input.suggestionID, depth: 0, overrideAccess: true, req })
-    if (suggestion.target !== input.target || suggestion.adoptedAt) throw new Error('suggestion_not_usable')
+    if (suggestion.target !== input.target) throw new Error('suggestion_not_usable')
+    if (suggestion.adoptedAt) { const prior = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: suggestion.mailbox } }, { provider: { equals: suggestion.provider } }, { providerConversationID: { equals: suggestion.providerConversationID } }] }, limit: 1, depth: 0, overrideAccess: true, req }); if (prior.docs[0]) return prior.docs[0]; throw new Error('suggestion_not_usable') }
     const collection = input.target === 'lead' ? 'inquiries' : 'applications'
     const record = await payload.findByID({ collection, id: input.targetID, depth: 0, overrideAccess: true, req }) as { email?: string }
     if (addressHash(record.email) !== suggestion.addressHash) throw new Error('suggestion_not_usable')
@@ -24,5 +27,5 @@ export async function adoptMailConversationSuggestion(payload: Payload, input: {
     await payload.update({ collection: 'mail-conversation-suggestions', id: suggestion.id, data: { adoptedAt: new Date().toISOString(), adoptedBy: input.actor }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'mail.conversation_adopted', user: input.actor, actor: input.actor, detail: { suggestion: suggestion.id, target: input.target, targetID: input.targetID, mailbox: relationID(suggestion.mailbox), provider: suggestion.provider } }, overrideAccess: true, req })
     return thread
-  })
+  }))
 }
