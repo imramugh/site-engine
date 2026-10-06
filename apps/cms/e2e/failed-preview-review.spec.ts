@@ -8,8 +8,10 @@ test('reviewer sees a failed structured-data preview diagnostic and cannot appro
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-on-page-reviewer-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
-  const seeded = await page.request.post('/__e2e/failed-preview-review'); expect(seeded.ok(), await seeded.text()).toBeTruthy()
-  const { id } = await seeded.json() as { id: string }
+  const seeded = await page.request.post('/__e2e/failed-preview-review')
+  if (!seeded.ok()) throw new Error(await seeded.text())
+  const { id, status } = await seeded.json() as { id: string; status: string }
+  expect(status).toBe('failed')
   await page.goto(`/review/${id}`)
   await expect(page.getByRole('alert').filter({ hasText: 'Generated structured data' })).toContainText('Generated structured data')
   await expect(page.getByText('STRUCTURED_DATA_INVALID · structuredData.12345678-1234-4234-8234-1234567890ab · 12345678-1234-4234-8234-1234567890ac')).toBeVisible()
