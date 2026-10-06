@@ -991,7 +991,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const wirePreviewBlocks = useCallback(() => {
     previewBlockCleanup.current()
     const document = previewFrame.current?.contentDocument
-    if (!document || !draft) {
+    if (!document?.head || document.readyState === 'loading' || !draft) {
       setPreviewInteractive(undefined)
       return
     }
