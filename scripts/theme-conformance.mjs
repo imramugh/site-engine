@@ -204,7 +204,8 @@ function fixture() {
         mediaId: id(201),
       }),
       block(16, "gallery", { mediaIds: [id(201)] }),
-      block(17, "logoStrip", { mediaIds: [id(202)] }),
+      { ...block(17, "logoStrip", { mediaIds: [id(202)] }), appearance: { ...appearance, logoTone: "inverse" } },
+      block(19, "logoStrip", { mediaIds: [id(202)] }),
       block(18, "video", {
         mediaId: id(203),
         posterMediaId: id(204),
@@ -452,6 +453,12 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
               (element) => element.dataset.logoTone,
             ),
           ).size === 2,
+        inverseLogoStrip:
+          !requireTokenCoverage ||
+          [...document.querySelectorAll(':is([data-logo-tone="inverse"] [data-block-type="logoStrip"], [data-logo-tone="inverse"][data-block="logoStrip"]) img')].some((image) => getComputedStyle(image).filter !== "none"),
+        defaultLogoStrip:
+          !requireTokenCoverage ||
+          [...document.querySelectorAll(':is([data-logo-tone="default"] [data-block-type="logoStrip"], [data-logo-tone="default"][data-block="logoStrip"]) img')].some((image) => getComputedStyle(image).filter === "none"),
         motionIntents:
           !requireTokenCoverage ||
           new Set(
