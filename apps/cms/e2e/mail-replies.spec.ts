@@ -60,6 +60,7 @@ test('ENG-020 reads only the persisted matched inbound timeline entry as escaped
     await expect(timeline).toContainText('Persisted matched reply')
     await expect(timeline).toContainText('window.bad = true Persisted inbound timeline body')
     await expect(timeline).toContainText('cv.pdf')
+    await expect(timeline.getByRole('link', { name: 'cv.pdf' })).toHaveAttribute('href', /\/api\/mail-attachments\/lead\/[0-9a-f-]+\/0$/)
     await expect(timeline).not.toContainText('fixture-unrelated-message')
     await expect(page.locator('script:text("window.bad")')).toHaveCount(0)
   } finally { await context.close() }

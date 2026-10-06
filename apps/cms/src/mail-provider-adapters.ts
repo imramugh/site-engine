@@ -12,6 +12,7 @@ export type Envelope = {
   outboundRFCMessageID?: string;
 };
 const maximum = 262_144;
+const attachmentMaximum = 10 * 1024 * 1024;
 const timeout = 10_000;
 const graph = "https://graph.microsoft.com";
 const gmail = "https://gmail.googleapis.com";
@@ -131,6 +132,32 @@ async function json(response: Response): Promise<Record<string, unknown>> {
     throw new Error("provider_malformed_response");
   }
 }
+async function bytes(response: Response, limit: number) {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (!Number.isSafeInteger(declared) || declared > limit) throw new Error("provider_response_too_large");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("provider_malformed_response");
+  const chunks: Uint8Array[] = []; let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read(); if (next.done) break;
+      total += next.value.byteLength;
+      if (total > limit) { await reader.cancel(); throw new Error("provider_response_too_large"); }
+      chunks.push(next.value);
+    }
+  } finally { reader.releaseLock(); }
+  const output = new Uint8Array(total); let offset = 0;
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+  return output;
+}
+async function attachmentJSON(response: Response) {
+  const raw = await bytes(response, Math.ceil(attachmentMaximum * 4 / 3) + 1024);
+  try {
+    const value: unknown = JSON.parse(new TextDecoder().decode(raw));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    return value as Record<string, unknown>;
+  } catch { throw new Error("provider_malformed_response"); }
+}
 function graphDelta(folderID: string, cursor?: string) {
   if (!opaque(folderID)) throw new Error("invalid_cursor");
   const path = `/v1.0/me/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
@@ -174,6 +201,17 @@ function graphMessage(value: Record<string, unknown>) {
       size: number;
     }>,
   };
+}
+async function graphAttachments(fetcher: Fetcher, token: string, messageID: string) {
+  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size,@odata.type`, { headers: graphAuth(token) });
+  if (!response.ok) fail(response.status)
+  const value = await json(response)
+  if (!Array.isArray(value.value) || value.value.length > 20) throw new Error('provider_malformed_response')
+  return value.value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object').flatMap((entry) => {
+    const type = entry['@odata.type']
+    if (type !== '#microsoft.graph.fileAttachment' && type !== '#microsoft.graph.itemAttachment' || !opaque(entry.id)) return []
+    return [{ name: clean(entry.name, 255), contentType: clean(entry.contentType, 120), size: Number(entry.size) || 0, providerAttachmentID: String(entry.id) }]
+  })
 }
 export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
   return {
@@ -254,7 +292,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         throw new Error("provider_malformed_response");
       if (value.value.length > 500) throw new Error("provider_page_too_large");
       const next = value["@odata.nextLink"] ?? value["@odata.deltaLink"];
-      const messages = value.value.map((entry) => {
+      const messages = await Promise.all(value.value.map(async (entry) => {
         if (!entry || typeof entry !== "object")
           throw new Error("provider_malformed_response");
         const raw = entry as Record<string, unknown>;
@@ -262,8 +300,9 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         const message = graphMessage(raw);
         if (!message.messageId || !message.threadId)
           throw new Error("provider_malformed_response");
+        if (raw.hasAttachments === true) message.attachments = await graphAttachments(fetcher, token, message.messageId)
         return message;
-      });
+      }));
       return {
         cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
         messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
@@ -339,6 +378,7 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
       name: clean(part.filename, 255),
       contentType: clean(part.mimeType, 120),
       size: Number((part.body as { size?: unknown })?.size) || 0,
+      providerAttachmentID: opaque((part.body as { attachmentId?: unknown })?.attachmentId) ? String((part.body as { attachmentId: string }).attachmentId) : undefined,
     }));
   const date = Number(message.internalDate);
   return {
@@ -352,6 +392,26 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
     rfcMessageID: rfcMessageID(header("message-id")),
     rfcReferences: rfcReferences(header("references")),
     attachments,
+  };
+}
+export function gmailAttachment(fetcher: Fetcher) {
+  return async (token: string, messageID: string, attachmentID: string) => {
+    if (!opaque(messageID) || !opaque(attachmentID)) throw new Error("invalid_attachment");
+    const response = await request(fetcher, `${gmail}/gmail/v1/users/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}`, { headers: auth(token) });
+    if (!response.ok) fail(response.status);
+    const value = await attachmentJSON(response);
+    if (typeof value.data !== "string" || !/^[A-Za-z0-9_-]*$/.test(value.data)) throw new Error("provider_malformed_response");
+    const output = Buffer.from(value.data, "base64url");
+    if (output.length > attachmentMaximum) throw new Error("provider_response_too_large");
+    return new Uint8Array(output);
+  };
+}
+export function microsoftAttachment(fetcher: Fetcher) {
+  return async (token: string, messageID: string, attachmentID: string) => {
+    if (!opaque(messageID) || !opaque(attachmentID)) throw new Error("invalid_attachment");
+    const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}/$value`, { headers: graphAuth(token) });
+    if (!response.ok) fail(response.status);
+    return bytes(response, attachmentMaximum);
   };
 }
 export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {

@@ -9,7 +9,7 @@ const clean = (value: unknown, limit: number) => String(value ?? '').replace(/<[
 const addressHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const inFlight = new Map<string, Promise<unknown>>()
 
-export type InboundMessage = { mailbox: string; provider: 'smtp' | 'microsoft' | 'google'; conversationID: string; messageID: string; rfcMessageID?: string; rfcReferences?: string; sender: string; recipient: string; subject: string; body: string; receivedAt: string; attachmentMetadata?: Array<{ name?: unknown; contentType?: unknown; size?: unknown }> }
+export type InboundMessage = { mailbox: string; provider: 'smtp' | 'microsoft' | 'google'; conversationID: string; messageID: string; rfcMessageID?: string; rfcReferences?: string; sender: string; recipient: string; subject: string; body: string; receivedAt: string; attachmentMetadata?: Array<{ name?: unknown; contentType?: unknown; size?: unknown; providerAttachmentID?: unknown }> }
 type InboundResult = { matched: false; suggested: boolean } | { matched: true; duplicate: boolean; message: unknown }
 
 /**
@@ -54,7 +54,7 @@ async function appendMatchedInboundInner(payload: Payload, input: InboundMessage
     if (existingThread !== thread.id) throw new Error('provider_message_collision')
     return { matched: true as const, duplicate: true as const, message: existing.docs[0] }
   }
-  const attachments = Array.isArray(input.attachmentMetadata) ? input.attachmentMetadata.slice(0, 20).map((attachment) => ({ name: clean(attachment?.name, 200), contentType: clean(attachment?.contentType, 100), size: typeof attachment?.size === 'number' && Number.isSafeInteger(attachment.size) && attachment.size >= 0 ? attachment.size : null })) : []
+  const attachments = Array.isArray(input.attachmentMetadata) ? input.attachmentMetadata.slice(0, 20).map((attachment) => ({ name: clean(attachment?.name, 200), contentType: clean(attachment?.contentType, 100), size: typeof attachment?.size === 'number' && Number.isSafeInteger(attachment.size) && attachment.size >= 0 ? attachment.size : null, ...(typeof attachment?.providerAttachmentID === 'string' && opaque.test(attachment.providerAttachmentID) ? { providerAttachmentID: attachment.providerAttachmentID } : {}) })) : []
   const target = typeof thread.lead === 'string' ? { lead: thread.lead } : thread.lead ? { lead: thread.lead.id } : { application: typeof thread.application === 'string' ? thread.application : thread.application?.id }
   try {
     const message = await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox, ...target, providerMessageID: messageID, ...(input.rfcMessageID ? { rfcMessageID: input.rfcMessageID, ...(input.rfcReferences ? { rfcReferences: input.rfcReferences } : {}) } : {}), direction: 'inbound', sender, recipient, subject: clean(input.subject, 500), body: clean(input.body, 20_000), receivedAt: new Date(input.receivedAt).toISOString(), attachmentMetadata: attachments }, depth: 0, overrideAccess: true })
