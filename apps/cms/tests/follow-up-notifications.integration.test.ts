@@ -24,6 +24,7 @@ test('due assigned active leads enqueue once after 08:00 local time and exclude 
   await lead('unassigned@example.test', user.id, { assignee: null })
   expect(await enqueueDueFollowUps(payload, new Date('2026-10-05T11:59:00.000Z'))).toBe(0)
   await Promise.all([enqueueDueFollowUps(payload, new Date('2026-10-05T12:00:00.000Z')), enqueueDueFollowUps(payload, new Date('2026-10-05T12:00:00.000Z'))])
+  await enqueueDueFollowUps(payload, new Date('2026-10-05T12:00:00.000Z'))
   const outbox = await payload.find({ collection: 'notification-outbox', where: { inquiry: { equals: due.id } }, limit: 10, depth: 0, overrideAccess: true })
   expect(outbox.totalDocs).toBe(1)
   expect(outbox.docs[0]).toMatchObject({ kind: 'follow-ups-due', idempotencyKey: `follow-ups-due:${due.id}:2026-10-05`, payload: { day: '2026-10-05' } })
