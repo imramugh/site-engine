@@ -22,8 +22,11 @@ including Arev/Tavmjong terms, is in [LICENSES/DejaVu.txt](LICENSES/DejaVu.txt).
 
 `theme.json` declares a version-1 `contractSurface` with every standard block,
 template, background, logo tone, components, and local font/license assets.
-Theme-specific additions need a namespace such as `exampleAgency/notice`, a
-compatible contract range, and must not redefine standard block meaning.
+Declare theme-specific blocks in `extensionBlocks` with an `x-` prefix, such
+as `x-example-agency-notice`. Declare theme settings in `settingKeys` with a
+theme-owned prefix, such as `example-agency-notice-tone`. Both use lowercase
+letters, digits and hyphens; slash-separated names are invalid. Keep the
+declared contract version compatible and do not redefine standard blocks.
 
 ## Build and validate
 

@@ -1,7 +1,7 @@
 import { createServer as createHTTPServer, request as requestUpstream, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer } from 'node:https'
 import { once } from 'node:events'
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,6 +23,7 @@ import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
 import { prepareReply } from '../src/mail-replies.js'
+import { mediaFilePath } from '../src/media.js'
 import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -178,7 +179,25 @@ const suggestionRoute = await import('../app/api/mail-suggestions/[target]/[id]/
 const { setReplyDeliveryForTest } = await import('../src/mail-replies.js')
 const { sendAreaMail } = await import('../src/mailboxes.js')
 const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
-const fixtureReplyDeliveries: Array<{ threadID: string | null; mime: string; messageID: string }> = []
+const standaloneReplyDeliveryLedger = join(temporaryDirectory, 'standalone-mail-reply-deliveries.ndjson')
+const standaloneProviderBridge = join(temporaryDirectory, 'standalone-mail-provider-bridge.cjs')
+writeFileSync(standaloneReplyDeliveryLedger, '')
+writeFileSync(standaloneProviderBridge, `
+const { appendFileSync } = require('node:fs')
+const originalFetch = globalThis.fetch
+globalThis.fetch = async (input, init = {}) => {
+  const url = String(input)
+  if (url.includes('oauth2.googleapis.com/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
+  if (url.endsWith('/gmail/v1/users/me/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
+  if (url.endsWith('/gmail/v1/users/me/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] })
+  if (url.endsWith('/gmail/v1/users/me/messages/send')) {
+    const body = JSON.parse(String(init.body || '{}'))
+    appendFileSync(process.env.CMS_E2E_MAIL_DELIVERY_LEDGER, JSON.stringify({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime: Buffer.from(String(body.raw || ''), 'base64url').toString('utf8'), messageID: 'fixture-provider-send' }) + '\\n')
+    return Response.json({ id: 'fixture-provider-send', threadId: body.threadId || 'fixture-new-thread' })
+  }
+  return originalFetch(input, init)
+}
+`)
 if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
   if (url.includes('/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
   if (url.endsWith('/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
@@ -186,7 +205,7 @@ if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, are
   if (url.endsWith('/messages/send')) {
     const body = JSON.parse(String(init.body)) as { raw?: string; threadId?: string }
     const mime = Buffer.from(String(body.raw ?? ''), 'base64url').toString('utf8')
-    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' })
+    appendFileSync(standaloneReplyDeliveryLedger, JSON.stringify({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' }) + '\n')
     return Response.json({ id: 'fixture-provider-send', threadId: body.threadId ?? 'fixture-new-thread' })
   }
   throw new Error('unexpected_fixture_provider_request')
@@ -210,11 +229,15 @@ let readiness: ReturnType<typeof createHTTPServer>
 let next: ChildProcess | undefined
 let stopping = false
 let localOwnerID: string | undefined
+let leadOwnerID: string | undefined
 let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
 let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
 let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
+let firstEditableApplicationID: string | undefined
+const mcpBearer = 'synthetic-e2e-mcp-bearer'
+let mcpIdentity: { userId: string; sessionId: string } | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -253,6 +276,12 @@ function previewContentType(path: string): string {
 
 async function provider(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url || '/', issuerOrigin)
+  if (url.pathname === '/internal/introspect' && request.method === 'POST') {
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
+    if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+  }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
   }
@@ -334,6 +363,7 @@ async function seed(): Promise<void> {
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06'), recoveryHash('synthetic-identity-owner-code-07')] }, overrideAccess: true })
   const leadOwner = await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
+  leadOwnerID = String(leadOwner.id)
   const leadEditor = await payload.create({ collection: 'users', data: { email: 'lead-editor.synthetic@example.test', name: 'Synthetic Lead Editor', roles: ['editor'] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
@@ -462,7 +492,8 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'inquiries', data: { email: 'restore-spam.synthetic@example.test', name: 'Restore spam fixture', message: 'A persisted spam submission that can be restored.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-spam-restore', stage: 'qualified', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'qualified', urgent: false }, overrideAccess: true })
   await payload.create({ collection: 'inquiries', data: { email: 'delete-spam.synthetic@example.test', name: 'Delete spam fixture', message: 'A persisted spam submission that can be permanently deleted.', topic: 'general', sourcePage: '/contact', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-leads-spam-delete', stage: 'new', spam: true, spamMarkedAt: new Date().toISOString(), spamPreviousStage: 'new', urgent: false }, overrideAccess: true })
   for (let index = 0; index < 51; index += 1) await payload.create({ collection: 'inquiries', data: { email: `proposal-${index}@synthetic.example.test`, message: `Synthetic proposal lead ${index}.`, topic: 'project', sourcePage: '/proposal-fixture', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `synthetic-leads-proposal-${index}`, stage: 'proposal', urgent: false }, overrideAccess: true })
-  await payload.create({ collection: 'applications', data: { name: 'Synthetic candidate', email: 'candidate.synthetic@example.test', coverLetter: 'Synthetic application for role-scoped badge verification.', consent: true, jobId: 'synthetic-role', resumeKey: `${randomUUID()}-${'a'.repeat(64)}`, idempotencyKey: 'synthetic-application-new', status: 'new' }, overrideAccess: true })
+  const firstEditableApplication = await payload.create({ collection: 'applications', data: { name: 'Synthetic candidate', email: 'candidate.synthetic@example.test', coverLetter: 'Synthetic application for role-scoped badge verification.', consent: true, jobId: 'synthetic-role', resumeKey: `${randomUUID()}-${'a'.repeat(64)}`, idempotencyKey: 'synthetic-application-new', status: 'new' }, overrideAccess: true })
+  firstEditableApplicationID = firstEditableApplication.id
   await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-pending', sequence: 2, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-pending', includedChangeKeys: [], status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-processing', sequence: 3, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-processing', includedChangeKeys: [], status: 'processing', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-operations-failed', sequence: 4, snapshot: snapshot.id, changeSet: submitted.id, reviewRevision: 1, changeHash: 'synthetic-operations-failed', includedChangeKeys: [], status: 'failed', attempts: 2, errorCode: 'synthetic_publish_failure', lastError: 'Synthetic failure detail.', correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
@@ -472,7 +503,27 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
-  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') { json(response, { deliveries: fixtureReplyDeliveries.map(item => ({ threadID: item.threadID, mime: item.mime, messageID: item.messageID })) }); return }
+  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') {
+    const deliveries = readFileSync(standaloneReplyDeliveryLedger, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { threadID: string | null; mime: string; messageID: string })
+    json(response, { deliveries }); return
+  }
+  if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-attachment-state') {
+    void (async () => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { action?: unknown; assetID?: unknown; grantID?: unknown }
+      if (body.action === 'mutate-asset' || body.action === 'delete-asset') {
+        if (typeof body.assetID !== 'string') throw new Error('missing_asset')
+        const asset = await payload.findByID({ collection: 'assets', id: body.assetID, depth: 0, overrideAccess: true }) as { currentFile?: { filename?: unknown }; filename?: unknown }
+        if (body.action === 'mutate-asset') writeFileSync(mediaFilePath(String(asset.currentFile?.filename ?? asset.filename)), Buffer.from('mutated after human confirmation'))
+        else await payload.update({ collection: 'assets', id: body.assetID, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+      } else if (body.action === 'revoke-role') await payload.update({ collection: 'users', id: leadOwnerID!, data: { roles: ['editor'] }, overrideAccess: true })
+      else if (body.action === 'restore-role') await payload.update({ collection: 'users', id: leadOwnerID!, data: { roles: ['owner'] }, overrideAccess: true })
+      else if (body.action !== 'grant-state') throw new Error('invalid_attachment_fixture_action')
+      const grant = typeof body.grantID === 'string' ? await payload.findByID({ collection: 'mail-authorizations', id: body.grantID, depth: 0, overrideAccess: true }) : undefined
+      json(response, { ...(grant ? { grant: { consumedAt: grant.consumedAt, revokedAt: grant.revokedAt } } : {}) })
+    })().catch(() => { response.writeHead(500); response.end() })
+    return
+  }
   if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-fixture') {
     void (async () => {
       const state = new URL(await startMailboxOAuth(payload, 'google', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
@@ -487,13 +538,31 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: conversationID }, overrideAccess: true })
         await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: messageID, rfcMessageID, direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject, body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
       }
+      const applicationThread = await payload.create({ collection: 'mail-threads', data: { application: firstEditableApplicationID!, mailbox: mailbox.id, provider: 'google', providerConversationID: 'fixture-oauth-application-thread' }, overrideAccess: true })
+      await payload.create({ collection: 'mail-thread-messages', data: { thread: applicationThread.id, mailbox: mailbox.id, application: firstEditableApplicationID!, providerMessageID: 'fixture-oauth-application-message', rfcMessageID: '<fixture-oauth-application@example.test>', direction: 'inbound', sender: 'candidate.synthetic@example.test', recipient: 'fixture-reply@example.test', subject: 'Fixture hiring reply', body: 'Fixture hiring correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
       const adoptionLead = await payload.create({ collection: 'inquiries', data: { name: `Suggestion adoption ${mailbox.id}`, email: `suggestion-${mailbox.id}@example.test`, message: 'Dedicated suggestion fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `suggestion-${mailbox.id}`, stage: 'new' }, overrideAccess: true })
       await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: `fixture-unmatched-${mailbox.id}`, messageID: `fixture-unmatched-message-${mailbox.id}`, sender: String(adoptionLead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
-      const prepared = new URL(`https://fixture.test${request.url}`).searchParams.get('prepared') === '1'
-      const preparedDraft = prepared ? await prepareReply(payload, 'lead', firstEditableLeadID!, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }) : undefined
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
+      const careersMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'careers' } }, limit: 1, depth: 0, overrideAccess: true })
+      if (careersMapping.docs[0]) await payload.update({ collection: 'mailbox-area-mappings', id: careersMapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+      else await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'careers', mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+      const fixtureURL = new URL(`https://fixture.test${request.url}`)
+      const prepared = fixtureURL.searchParams.get('prepared') === '1'
+      const deep = fixtureURL.searchParams.get('deep') === '1'
+      const withAttachment = fixtureURL.searchParams.get('attachment') === '1'
+      const deepLead = deep ? await payload.create({ collection: 'inquiries', data: { name: 'Deep linked assistant lead', email: `deep-link-${mailbox.id}@example.test`, message: 'A direct confirmation target that is outside the first lead page.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `deep-link-${mailbox.id}`, stage: 'new' }, overrideAccess: true }) : undefined
+      if (deepLead) await payload.update({ collection: 'inquiries', id: deepLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
+      const preparedTarget = deepLead?.id ?? firstEditableLeadID!
+      const preparedDraft = prepared ? await prepareReply(payload, 'lead', preparedTarget, leadOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }, { clientIDHash: 'a'.repeat(64), actorID: leadOwnerID!, oauthSessionID: 'fixture-assistant-origin-session' }) : undefined
+      const attachmentBytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#2563eb' } }).png().toBuffer()
+      const attachmentOwner = withAttachment ? await payload.findByID({ collection: 'users', id: leadOwnerID!, depth: 0, overrideAccess: true }) : undefined
+      const attachment = withAttachment ? await payload.create({ collection: 'assets', data: { alt: 'Synthetic SDK reply attachment' }, file: { data: attachmentBytes, mimetype: 'image/png', name: 'sdk-reply-attachment.png', size: attachmentBytes.length }, user: attachmentOwner, overrideAccess: false }) : undefined
+      const attachmentDescriptor = attachment ? { source: 'asset' as const, sourceID: String(attachment.id), filename: 'sdk-reply-attachment.png', mimeType: 'image/png', size: attachmentBytes.length, sha256: createHash('sha256').update(attachmentBytes).digest('hex') } : undefined
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(deepLead ? { deepLead: deepLead.id, deepLeadName: deepLead.name } : {}), ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}), ...(attachmentDescriptor ? { attachment: { ...attachmentDescriptor, bytes: attachmentBytes.toString('base64') } } : {}) })
     })().catch(() => { response.writeHead(500); response.end() })
     return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/mcp-identity') {
+    void (async () => { const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: leadOwnerID!, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: leadOwnerID!, sessionId: String(session.id) }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
   }
   const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
   if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {
@@ -626,6 +695,25 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'auth-sessions', id: docs[0].id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) : Promise.reject(new Error('Session missing')))
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to age session.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/session/age-last-seen') {
+    const sessionCookie = request.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('site_engine_session=') || part.startsWith('__Host-site_engine_session='))
+    const token = sessionCookie?.slice(sessionCookie.indexOf('=') + 1)
+    if (!token) { response.writeHead(401); response.end('Session missing.'); return }
+    void payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? payload.update({ collection: 'auth-sessions', id: docs[0].id, data: { lastSeenAt: new Date(Date.now() - 61_000).toISOString() }, overrideAccess: true }) : Promise.reject(new Error('Session missing')))
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to age session.'); })
+    return
+  }
+  if (request.method === 'GET' && request.url === '/__e2e/session/state') {
+    const sessionCookie = request.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('site_engine_session=') || part.startsWith('__Host-site_engine_session='))
+    const token = sessionCookie?.slice(sessionCookie.indexOf('=') + 1)
+    if (!token) { response.writeHead(401); response.end('Session missing.'); return }
+    void payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? json(response, { lastSeenAt: docs[0].lastSeenAt }) : Promise.reject(new Error('Session missing')))
+      .catch(() => { response.writeHead(500); response.end('Unable to inspect session.'); })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
@@ -764,6 +852,8 @@ async function main(): Promise<void> {
   cmsProxy.listen(e2ePort, '127.0.0.1')
   await once(cmsProxy, 'listening')
   await seed()
+  process.env.OAUTH_INTERNAL_ORIGIN = issuerOrigin
+  process.env.OAUTH_INTROSPECTION_SECRET = 'synthetic-e2e-mcp-secret'
   await runAstroBuild()
   // Production deployments use Webpack. Keep the default fast, but let the
   // browser suite exercise the same standalone artifact before release.
@@ -777,7 +867,7 @@ async function main(): Promise<void> {
   if (existsSync(join(appDirectory, 'public'))) cpSync(join(appDirectory, 'public'), join(standaloneDirectory, 'public'), { recursive: true })
   next = spawn(process.execPath, [join(standaloneDirectory, 'server.js')], {
     cwd: process.cwd(),
-    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: String(e2ePort + 2) },
+    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, NODE_OPTIONS: `--require=${standaloneProviderBridge}`, CMS_E2E_MAIL_DELIVERY_LEDGER: standaloneReplyDeliveryLedger, PORT: String(e2ePort + 2) },
     stdio: 'inherit',
   })
   next.once('exit', (status) => { if (!stopping) void stop(status ?? 1) })

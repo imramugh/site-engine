@@ -27,7 +27,8 @@ descriptive output; the reviewed short site description is included there and
 in organization structured data.
 
 The supported token mapping was reviewed against the vendor documentation on
-2026-10-05:
+2026-10-05. The next quarterly review is due on 2027-01-05; reviewers update
+the versioned metadata and recheck the vendor tokens before changing groups:
 
 - [OpenAI crawlers](https://developers.openai.com/api/docs/bots)
 - [Anthropic bots](https://support.claude.com/en/articles/8896518-does-anthropic-crawl-data-from-the-web-and-how-can-site-owners-block-the-crawler)

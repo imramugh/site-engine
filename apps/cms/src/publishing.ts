@@ -3,7 +3,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { hasRole } from './access'
 import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable, SESSION_COOKIE } from './identity'
-import { markStaleIfNeeded, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
+import { markStaleIfNeeded, publicAssetSnapshot, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
 import { validateRedirectSet } from './redirect-lifecycle'
 import { deriveRoutes } from '@site-engine/engine'
 import { enqueueNotification } from './notification-settings'
@@ -13,7 +13,7 @@ type Change = { collection: CapturedCollection; id: string; before: Record<strin
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
 type Preview = { status?: string; revision?: number; changeHash?: string; includedChangeKeys?: string[]; contentHash?: string; baselineSnapshotID?: string; baselineSequence?: number; versionPins?: PreviewVersions }
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
-export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[] }
+export type VerifiedArtifact = { digest: string; sourceContentHash: string; themeVersion: string; engineVersion: string; contractVersion: string; checks: { name: string; status: 'passed' }[]; indexNow?: { sent?: boolean; reason?: string; batches?: number; status?: number; replayed?: boolean } }
 export const REQUIRED_PUBLISH_HEALTH_CHECKS = ['artifact-integrity', 'public-health'] as const
 const MAX_PUBLISH_ATTEMPTS = 3
 const MAX_PUBLISH_WORKER_BODY_BYTES = 16 * 1024
@@ -78,7 +78,8 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
   }
   if (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
   if (!current) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
-  const currentSnapshot = capturedSnapshot(change.collection, current)
+  const captured = capturedSnapshot(change.collection, current)
+  const currentSnapshot = captured && change.collection === 'assets' ? publicAssetSnapshot(captured) : captured
   if (!currentSnapshot) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
   if (change.after === null) {
     if (!same(currentSnapshot, change.before)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
@@ -96,6 +97,11 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
     else delete merged[key]
   }
   return merged
+}
+
+function validateCapturedAssetIntegrity(change: Change): void {
+  if (change.before !== null && (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash)) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
+  if (change.after !== null && change.afterHash !== null && canonicalHash(change.after) !== change.afterHash) throw new Error('The captured change is invalid. Refresh the change set before approval.')
 }
 
 export function buildCandidate(base: SiteSnapshot, changes: Change[], includedChangeKeys: readonly string[], versions: Versions): SiteSnapshot {
@@ -158,7 +164,9 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       styleGuide = merged
     }
     if (change.collection === 'assets') {
-      const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, change)
+      validateCapturedAssetIntegrity(change)
+      const publicChange: Change = { ...change, before: change.before && publicAssetSnapshot(change.before), after: change.after && publicAssetSnapshot(change.after), beforeHash: change.before ? canonicalHash(publicAssetSnapshot(change.before)) : null, afterHash: change.after ? canonicalHash(publicAssetSnapshot(change.after)) : null }
+      const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, publicChange)
       if (merged === null) media.delete(change.id)
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
@@ -435,9 +443,10 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   if (latest.docs[0] && Number(latest.docs[0].sequence) >= Number(job.sequence)) throw new Error('An out-of-order publish job cannot activate an older release.')
   const snapshotID = idOf(snapshot)
   if (!snapshotID) throw new Error('Publish job is missing its immutable snapshot.')
-  const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks, ...(artifact.indexNow ? { indexNow: artifact.indexNow } : {}) }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: 'completed', completedAt: now.toISOString(), completionEvidence: artifact, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_indexnow', detail: { publishOutbox: id, release: release.id, ...(artifact.indexNow ?? { sent: false, reason: 'not-reported' }) } }, overrideAccess: true, req, context: { editorialInternal: true } })
   const changeSetID = idOf(job.changeSet)
   if (!changeSetID) throw new Error('Publish job is missing its change set.')
   await payload.update({ collection: 'change-sets', id: changeSetID, data: { state: 'published' }, overrideAccess: true, req, context: { editorialInternal: true } })

@@ -7,6 +7,7 @@ import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
 import { activatePublicRelease, verifyPublicArtifact } from './public-release.mjs';
+import { publishActivatedReleaseIndexNow } from './indexnow.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a, b], [c, d]) => a.localeCompare(c)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
@@ -34,8 +35,8 @@ async function externalHealthProbe(origin, expected, signal) {
   try { const response = await fetch(`${origin}/healthz`, { redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000), headers: { accept: 'application/json' } }); if (!response.ok) return false; return sameProof(await response.json(), expected); } catch { return false; }
 }
 function validLease(lease, identity, signal) { return !signal?.aborted && lease?.id === identity.id && lease?.leaseToken === identity.leaseToken && Number.isFinite(Date.parse(lease?.leaseExpiresAt ?? '')) && Date.parse(lease.leaseExpiresAt) > Date.now(); }
-/** @param {{ api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, buildRoot: string, releasesRoot: string, publicOrigin: string, healthOrigin?: string, versionPins: Record<string, string>, registry?: Map<string, unknown>, render?: typeof buildSnapshot, signal?: AbortSignal, healthProbe?: (proof: { jobID: string, sequence: number, contentHash: string, versionPins: Record<string, string> }) => Promise<boolean> }} options */
-export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, healthProbe }) {
+/** @param {{ api: (action: string, body?: Record<string, unknown>, signal?: AbortSignal) => Promise<any>, buildRoot: string, releasesRoot: string, publicOrigin: string, healthOrigin?: string, versionPins: Record<string, string>, registry?: Map<string, unknown>, render?: typeof buildSnapshot, signal?: AbortSignal, healthProbe?: (proof: { jobID: string, sequence: number, contentHash: string, versionPins: Record<string, string> }) => Promise<boolean>, indexNowPublisher?: (options: { releasesRoot: string, jobID: string, sequence: number, contentHash: string, publicOrigin: string }) => Promise<Record<string, unknown>> }} options */
+export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigin, healthOrigin = publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, healthProbe, indexNowPublisher = publishActivatedReleaseIndexNow }) {
   const input = claim(await api('claim', {}, signal), versionPins); if (!input) return false;
   verifyThemeSelection(input.snapshot, registry);
   const identity = { id: input.job.id, leaseToken: input.job.leaseToken }; let scratch;
@@ -55,7 +56,10 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
     await activatePublicRelease({ releasesRoot, artifact, jobID: identity.id, sequence: input.job.sequence, pins: input.pins, health: () => probe(expectedProof), assertLease: async () => {
       const renewed = await api('renew', identity, signal); if (!validLease(renewed?.job, identity, signal)) throw new WorkerError('LEASE_LOST'); return true;
     } });
-    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] };
+    let indexNow;
+    try { indexNow = await indexNowPublisher({ releasesRoot, jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, publicOrigin }); }
+    catch { indexNow = { sent: false, reason: 'ancillary-failure' }; }
+    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }], indexNow };
     await api('complete', { ...identity, artifact: evidence }, signal); return true;
   } catch (error) {
     if (error?.code !== 'LEASE_LOST') { try { await api('fail', { ...identity, errorCode: error?.code ?? 'BUILD_FAILED' }, signal); } catch {} }
