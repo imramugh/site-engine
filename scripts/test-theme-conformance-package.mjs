@@ -38,6 +38,11 @@ try {
   const evidence = join(temp, "evidence");
   const positive = await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", evidence], { cwd: consumer });
   const result = JSON.parse(positive.stdout.trim().split("\n").at(-1)); if (result.blocks !== 18 || result.cases !== 14) throw new Error(`Unexpected packed result: ${positive.stdout}`);
+  const checkerLogo = join(consumer, "node_modules/@site-engine/theme-conformance/harness/public/media/sample-logo.svg");
+  const validLogo = await readFile(checkerLogo, "utf8");
+  await writeFile(checkerLogo, '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120"><rect width="240" height="120" fill="#fff"/></svg>');
+  await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", join(temp, "invisible-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted an invisible inverse logo glyph."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
+  await writeFile(checkerLogo, validLogo);
   const bad = join(temp, "bad-theme"); await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), bad, { recursive: true });
   const manifest = JSON.parse(await readFile(join(bad, "theme.json"), "utf8")); delete manifest.contractSurface.components.blockRenderer; await writeFile(join(bad, "theme.json"), JSON.stringify(manifest));
   await execFile(process.execPath, [cli, bad, "--artifacts-dir", join(temp, "bad-evidence")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a missing blockRenderer."); }, error => { if (!String(error.stderr).includes("blockRenderer")) throw error; });
