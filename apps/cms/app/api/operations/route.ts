@@ -124,7 +124,7 @@ async function GETHandler(request: Request) {
         reviewer: stageReviewer ? (stageReviewer.name || stageReviewer.email) : reviewer ? (reviewer.name || reviewer.email) : null,
         actor: stageActor ? (stageActor.name || stageActor.email) : actor ? (actor.name || actor.email) : null,
         resultAt: typeof stage?.publishTime === 'string' ? stage.publishTime : typeof stage?.createdAt === 'string' ? stage.createdAt : typeof job.completedAt === 'string' ? job.completedAt : null,
-        buildLogURL: null,
+        buildLogURL: `/operations?publish=${job.id}`,
       }
     }),
     buildLog: publish ? (() => {
@@ -132,7 +132,7 @@ async function GETHandler(request: Request) {
       if (!job) return null
       const events = (buildEvents?.docs ?? []).filter(event => ['editorial.publish_stage', 'editorial.publish_retry', 'publish.failed', 'publish.completed'].includes(String(event.event))).map(event => {
         const detail = safeDetail(String(event.event), event.detail) ?? {}
-        return { id: String(event.id), event: String(event.event), createdAt: String(event.createdAt), stage: typeof detail.stage === 'string' ? detail.stage : null, result: typeof detail.result === 'string' ? detail.result : null, attempt: typeof detail.attempt === 'number' ? detail.attempt : null, correlationID: typeof detail.correlationID === 'string' ? detail.correlationID : null }
+        return { id: String(event.id), event: String(event.event), createdAt: String(event.createdAt), stage: typeof detail.stage === 'string' ? detail.stage : null, result: typeof detail.result === 'string' ? detail.result : null, errorCode: typeof detail.errorCode === 'string' ? detail.errorCode : null, attempt: typeof detail.attempt === 'number' ? detail.attempt : null, correlationID: typeof detail.correlationID === 'string' ? detail.correlationID : null }
       })
       return { id: String(job.id), sequence: Number(job.sequence), status: String(job.status), attempts: Number(job.attempts ?? 0), events }
     })() : null,

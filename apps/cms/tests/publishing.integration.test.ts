@@ -395,6 +395,18 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(completion.docs).toHaveLength(1)
     expect(completion.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, release: completed.id, sequence: 1, actor: current.editor.id, reviewer: current.reviewer.id, publishTime: new Date(started.getTime() + 500).toISOString(), result: 'deployed', correlationID: job!.correlationID })
     expect(JSON.stringify(completion.docs[0]!.detail)).not.toMatch(/leaseToken|authorization|secret/i)
+    const operations = await import('../app/api/operations/route.js')
+    const owner = await ownerSession('build-log')
+    const logURL = `http://cms.test/api/operations?publish=${job!.id}`
+    expect((await operations.GET(new Request(logURL))).status).toBe(403)
+    expect((await operations.GET(new Request(logURL, { headers: current.headers }))).status).toBe(403)
+    const response = await operations.GET(new Request(logURL, { headers: owner.headers }))
+    expect(response.status).toBe(200)
+    const projection = await response.json()
+    expect(projection.buildLog).toMatchObject({ id: job!.id, status: 'completed', events: expect.arrayContaining([expect.objectContaining({ stage: 'building' }), expect.objectContaining({ result: 'deployed' })]) })
+    expect(projection.releaseHistory.find((entry: { id: string }) => entry.id === job!.id)).toMatchObject({ state: 'Deployed', actor: 'Editor', reviewer: 'Reviewer', buildLogURL: `/operations?publish=${job!.id}` })
+    expect(JSON.stringify(projection.buildLog)).not.toMatch(/leaseToken|authorization|secret/i)
+    expect((await operations.GET(new Request('http://cms.test/api/operations?publish=not-a-job', { headers: owner.headers }))).status).toBe(400)
   })
 
   it('returns a frozen immutable context when the private worker claims an approval', async () => {

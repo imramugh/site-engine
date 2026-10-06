@@ -46,7 +46,7 @@ type ReleaseHistory = {
   resultAt: string | null;
   buildLogURL: string | null;
 };
-type BuildLog = null | { id: string; sequence: number; status: string; attempts: number; events: Array<{ id: string; event: string; createdAt: string; stage: string | null; result: string | null; attempt: number | null; correlationID: string | null }> };
+type BuildLog = null | { id: string; sequence: number; status: string; attempts: number; events: Array<{ id: string; event: string; createdAt: string; stage: string | null; result: string | null; errorCode: string | null; attempt: number | null; correlationID: string | null }> };
 type Data = {
   audit: { docs: Row[]; page: number; totalPages: number };
   releaseHistory: ReleaseHistory[];
@@ -93,7 +93,7 @@ function failureMessage(response: Response) {
 }
 function BuildLogPanel({ log }: { log: BuildLog }) {
   if (!log) return null;
-  return <section className={styles.releaseHistory} aria-label="Build log"><header><div><h2>Build log · release #{log.sequence}</h2><p>{log.events.length ? 'Persisted publish stages and results.' : 'No retained build events.'}</p></div></header>{log.events.length > 0 && <ol>{log.events.map(event => <li key={event.id}><strong>{event.stage ?? event.result ?? event.event}</strong><dl><div><dt>When</dt><dd><time dateTime={event.createdAt}>{date(event.createdAt)}</time></dd></div>{event.attempt !== null && <div><dt>Attempt</dt><dd>{event.attempt}</dd></div>}{event.correlationID && <div><dt>Correlation ID</dt><dd>{event.correlationID}</dd></div>}</dl></li>)}</ol>}</section>
+  return <section className={styles.releaseHistory} aria-label="Build log"><header><div><h2>Build log · release #{log.sequence}</h2><p>{log.events.length ? 'Persisted publish stages and results.' : 'No retained build events.'}</p></div></header>{log.events.length > 0 && <ol>{log.events.map(event => <li key={event.id}><strong>{event.stage ?? event.result ?? event.event.replaceAll(/[._-]+/g, ' ')}</strong>{event.errorCode && <p>{event.errorCode}</p>}<dl><div><dt>When</dt><dd><time dateTime={event.createdAt}>{date(event.createdAt)}</time></dd></div>{event.attempt !== null && <div><dt>Attempt</dt><dd>{event.attempt}</dd></div>}{event.correlationID && <div><dt>Correlation ID</dt><dd>{event.correlationID}</dd></div>}</dl></li>)}</ol>}</section>
 }
 export function OperationsDashboard({ children }: { children?: ReactNode }) {
   const [data, setData] = useState<Data>(),

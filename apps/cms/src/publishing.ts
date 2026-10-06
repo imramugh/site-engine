@@ -89,8 +89,10 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
   }
   if (!change.beforeHash || canonicalHash(change.before) !== change.beforeHash) throw new Error('The captured baseline is invalid. Refresh the change set before approval.')
   if (!current) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
-  const captured = capturedSnapshot(change.collection, current)
-  const currentSnapshot = captured && change.collection === 'assets' ? publicAssetSnapshot(captured) : captured
+  // Baseline media is already a portable reference, with `variants` rather
+  // than Payload upload `sizes`. Re-projecting it would lose file identities
+  // and focal points and prevent a valid replacement/removal from reversing.
+  const currentSnapshot = change.collection === 'assets' ? publicAssetSnapshot(current) : capturedSnapshot(change.collection, current)
   if (!currentSnapshot) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
   if (change.after === null) {
     if (!same(currentSnapshot, change.before)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
@@ -426,6 +428,7 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: terminal ? 'failed' : 'pending', errorCode: cleanErrorCode(errorCode), lastError: cleanErrorCode(errorCode), nextAttemptAt, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
   if (terminal) await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, errorCode)
+  else await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_retry', detail: { publishJob: id, changeSet: idOf(job.changeSet), sequence: Number(job.sequence), attempt: Number(job.attempts), errorCode: cleanErrorCode(errorCode), nextAttemptAt, correlationID: String(job.correlationID) } }, overrideAccess: true, req })
   return updated.docs[0]
 }
 

@@ -1,9 +1,10 @@
 import type { Payload, PayloadRequest } from 'payload'
 import { freshStaff, type Role } from './access'
 import { withPayloadTransaction } from './auth-transaction'
-import { importReviewedSnapshot } from './reviewed-snapshot-import'
+import { captureReviewedRollback } from './reviewed-rollback'
+import type { CapturedChange } from './editorial'
 import { fieldDiffs } from './field-diffs'
-import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
+import { SiteSnapshotSchema } from '@site-engine/contract'
 
 type Actor = { id: string; name?: string | null; email?: string | null; roles?: Role[] | null; disabled?: boolean | null }
 const relationID=(value:unknown)=>typeof value==='string'?value:value&&typeof value==='object'&&'id'in value?String((value as {id:unknown}).id):undefined
@@ -39,7 +40,7 @@ const displayValue = (value: unknown): string => {
   return text.length > 4000 ? `${text.slice(0, 4000)}…` : text
 }
 function reviewedDiff(changes: Array<Record<string, unknown>>) {
-  const allowed = changes.filter(change => ['pages', 'sections', 'site-settings', 'theme-settings', 'assets', 'redirects'].includes(String(change.collection)))
+  const allowed = changes.filter(change => ['pages', 'sections', 'site-settings', 'theme-settings', 'style-guides', 'assets', 'redirects'].includes(String(change.collection)))
   let truncated = false
   const entries = allowed.flatMap(change => {
     const title = record(change.after).title ?? record(change.before).title ?? words(String(change.collection))
@@ -53,13 +54,13 @@ function reviewedDiff(changes: Array<Record<string, unknown>>) {
 type RollbackMode = 'release' | 'change'
 type RollbackRequest = { mode?: RollbackMode; changeKeys?: string[] }
 const rollbackKey = (change: Record<string, unknown>) => `${String(change.collection)}:${String(change.id)}`
-const supportedCollection = (value: unknown) => ['pages', 'sections', 'redirects', 'site-settings', 'theme-settings'].includes(String(value))
+const supportedCollection = (value: unknown) => ['pages', 'sections', 'redirects', 'assets', 'style-guides', 'site-settings', 'theme-settings'].includes(String(value))
 const selectedChanges = (set: Record<string, unknown> | undefined, outbox: Record<string, unknown>, request: RollbackRequest = {}) => {
   const changes = Array.isArray(set?.changes) ? set!.changes.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : []
   const included = Array.isArray(outbox.includedChangeKeys) ? outbox.includedChangeKeys.filter((key): key is string => typeof key === 'string') : []
   if (!included.length) throw new Error('This release has no approved captured changes to roll back.')
   const approved = changes.filter(change => included.includes(rollbackKey(change)))
-  if (approved.length !== included.length || approved.some(change => !supportedCollection(change.collection) || change.before === null)) throw new Error('This release includes an approved change that requires a manual reviewed change.')
+  if (approved.length !== included.length || approved.some(change => !supportedCollection(change.collection))) throw new Error('This release includes an approved change that requires a manual reviewed change.')
   if (request.mode === 'change') {
     if (!Array.isArray(request.changeKeys) || request.changeKeys.length !== 1 || new Set(request.changeKeys).size !== 1) throw new Error('Choose exactly one approved change to roll back.')
     const selected = approved.filter(change => rollbackKey(change) === request.changeKeys![0])
@@ -68,32 +69,6 @@ const selectedChanges = (set: Record<string, unknown> | undefined, outbox: Recor
   }
   if (request.mode && request.mode !== 'release') throw new Error('Choose a supported rollback scope.')
   return approved
-}
-const identity = (collection: string, value: Record<string, unknown>) => collection === 'redirects' ? String(value.from ?? '') : String(value.id ?? '')
-function replaceSnapshotRecord(target: SiteSnapshot, previous: SiteSnapshot, change: Record<string, unknown>) {
-  const collection = String(change.collection)
-  if (collection === 'site-settings') { target.settings = structuredClone(previous.settings); return }
-  if (collection === 'theme-settings') { target.settings.theme = structuredClone(previous.settings.theme); target.settings.themeSettings = structuredClone(previous.settings.themeSettings); return }
-  const list = collection === 'pages' ? target.pages : collection === 'sections' ? target.settings.sections : target.redirects
-  const earlier = collection === 'pages' ? previous.pages : collection === 'sections' ? previous.settings.sections : previous.redirects
-  const after = record(change.after); const before = record(change.before)
-  const key = identity(collection, after) || identity(collection, before) || String(change.id)
-  const index = list.findIndex(item => identity(collection, item as unknown as Record<string, unknown>) === key)
-  const prior = earlier.find(item => identity(collection, item as unknown as Record<string, unknown>) === key || (collection === 'redirects' && identity(collection, item as unknown as Record<string, unknown>) === identity(collection, before)))
-  if (!prior) {
-    if (index >= 0) throw new Error('This rollback would remove published content. Prepare a manual reviewed change instead.')
-    return
-  }
-  if (index >= 0) list[index] = structuredClone(prior) as never
-  else list.push(structuredClone(prior) as never)
-}
-function rollbackTarget(current: unknown, previous: unknown, changes: Record<string, unknown>[]) {
-  const target = SiteSnapshotSchema.parse(structuredClone(current)); const prior = SiteSnapshotSchema.parse(previous)
-  for (const change of changes) replaceSnapshotRecord(target, prior, change)
-  // The importer can only reconcile media already present in the draft asset store.
-  const targetMedia = new Set(target.media.map(item => item.id)); const currentMedia = new Set(SiteSnapshotSchema.parse(current).media.map(item => item.id))
-  if ([...currentMedia].some(id => !targetMedia.has(id)) || [...targetMedia].some(id => !currentMedia.has(id))) throw new Error('This rollback changes immutable assets. Prepare a manual reviewed change instead.')
-  return target
 }
 
 export async function projectChangeLog(payload:Payload,events:Array<Record<string,any>>){
@@ -128,8 +103,7 @@ export async function prepareReviewedRollbackCore(payload:Payload,req:PayloadReq
   const sequence=Number(latest.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
   const currentSnapshot=record(latest.snapshot),previousSnapshot=record(previous?.snapshot)
   if(!previous||!currentSnapshot.manifest||!previousSnapshot.manifest)throw new Error('An earlier immutable release is required for rollback.')
-  const manifest=rollbackTarget(currentSnapshot.manifest,previousSnapshot.manifest,changes)
-  return importReviewedSnapshot({payload,req,actor,name:request.mode==='change'?`Rollback change from release #${sequence}`:`Rollback release #${sequence}`,manifest,baseline:currentSnapshot.manifest})
+  return captureReviewedRollback(payload,req,actor.id,request.mode==='change'?`Rollback change from release #${sequence}`:`Rollback release #${sequence}`,SiteSnapshotSchema.parse(currentSnapshot.manifest),changes as CapturedChange[])
 }
 
 export async function prepareReviewedRollback(payload:Payload,actor:Actor,headers:Headers,releaseID:string,request:RollbackRequest={}){

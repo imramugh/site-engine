@@ -141,14 +141,14 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     await payload.update({ collection: 'pages', id: page.id, data: { title: 'Current title' }, draft: true, user: other, overrideAccess: false })
     const before = await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })
     const beforeAudit = await payload.count({ collection: 'audit-events', overrideAccess: true })
-    const original = payload.findByID.bind(payload)
-    ;(payload as unknown as { findByID: typeof payload.findByID }).findByID = (async (args: Parameters<typeof payload.findByID>[0]) => {
-      if (args.collection === 'pages' && args.id === page.id) throw new Error('injected captured-record read failure')
+    const original = payload.find.bind(payload)
+    ;(payload as unknown as { find: typeof payload.find }).find = (async (args: Parameters<typeof payload.find>[0]) => {
+      if (args.collection === 'pages' && (args.where?.id as { equals?: string } | undefined)?.equals === page.id) throw new Error('injected captured-record read failure')
       return original(args)
-    }) as typeof payload.findByID
+    }) as typeof payload.find
     try {
       await expect(withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: editor, id: set.id }))).rejects.toThrow('injected captured-record read failure')
-    } finally { ;(payload as unknown as { findByID: typeof payload.findByID }).findByID = original }
+    } finally { ;(payload as unknown as { find: typeof payload.find }).find = original }
     expect((await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })).state).toBe(before.state)
     expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
   })
