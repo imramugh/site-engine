@@ -30,9 +30,9 @@ const replaceInput = z.object({ id: z.string().uuid(), changeSetId: z.string().u
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(code === 'temporarily_unavailable' ? { error: code, retryAfterSeconds: 1 } : { error: code }) }] })
 const clean = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-const editableSet = async (payload: Payload, req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer T) => unknown ? T : never, current: Current, changeSetId: string, revision: number) => {
-  req.headers.set('x-site-engine-change-set', changeSetId)
-  const set = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision?: number; state?: string; actor?: string | { id?: string } }
+const editableSet = async (payload: Payload, req: (Parameters<typeof withPayloadTransaction>[1] extends (req: infer T) => unknown ? T : never) | undefined, current: Current, changeSetId: string, revision: number) => {
+  req?.headers.set('x-site-engine-change-set', changeSetId)
+  const set = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, ...(req ? { req } : {}) }) as unknown as { revision?: number; state?: string; actor?: string | { id?: string } }
   const actor = typeof set.actor === 'string' ? set.actor : set.actor?.id
   if (set.revision !== revision || actor !== current.id || !['open', 'changes-requested'].includes(String(set.state))) throw new Error('revision_conflict')
 }
@@ -82,10 +82,13 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
   server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
+      // Fetches can take the full remote-image deadline; never hold SQLite's write
+      // transaction while waiting on an external server.
+      await editableSet(payload, undefined, current, changeSetId, expectedChangeSetRevision)
+      const file = await decoded(source, remoteImporter)
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
         const focal = await mediaFocalContractVersion(payload, await loadInitialPreviewBaseline(), req)
-        const file = await decoded(source, remoteImporter)
         const asset = await payload.create({ collection: 'assets', data: { ...metadata, ...(focal ? { focalX: canonicalFocalPoint(metadata.focalX), focalY: canonicalFocalPoint(metadata.focalY) } : {}) }, file, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focal } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
@@ -97,9 +100,11 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
   server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
+      await editableSet(payload, undefined, current, changeSetId, expectedChangeSetRevision)
+      const file = await decoded(source, remoteImporter)
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
-        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file: await decoded(source, remoteImporter), user: current, req })
+        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file, user: current, req })
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
         return { replacement, revision: changed.revision, checks: quality.checks }
