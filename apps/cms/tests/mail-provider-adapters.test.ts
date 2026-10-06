@@ -83,3 +83,15 @@ describe('provider-shaped threaded reads', () => {
     expect(urls[1]).toContain('pageToken=next%2Btoken')
   })
 })
+
+describe('Graph upload-session URL boundary', () => {
+  const bytes = new Uint8Array(3 * 1024 * 1024)
+  const bad = ['http://outlook.office.com/api/v2.0/AttachmentSessions(\'x\')?t=1','https://127.0.0.1/api/v2.0/AttachmentSessions(\'x\')?t=1','https://evil.example/api/v2.0/AttachmentSessions(\'x\')?t=1','https://outlook.office.com:444/api/v2.0/AttachmentSessions(\'x\')?t=1','https://u@outlook.office.com/api/v2.0/AttachmentSessions(\'x\')?t=1','https://outlook.office.com/api/v2.0/AttachmentSessions(\'x\')?t=1#x']
+  for (const uploadUrl of bad) it(`rejects ${uploadUrl}`, async () => { const calls:string[]=[]; const digest=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'); const graph=microsoftAdapter(async url=>{calls.push(url); return url.endsWith('/me/messages')?Response.json({id:'draft',conversationId:'thread'}):Response.json({uploadUrl},{status:201})},'a@test.test'); await expect(graph.send('t',{sender:'a@test.test',recipient:'b@test.test',subject:'s',body:'b',attachments:[{filename:'large.pdf',mimeType:'application/pdf',size:bytes.length,sha256:digest,bytes}]})).rejects.toThrow('provider_malformed_response'); expect(calls.some(url=>url.endsWith('/send'))).toBe(false); expect(calls).not.toContain(uploadUrl) })
+})
+
+describe('Graph upload-session response boundary', () => {
+  const bytes = new Uint8Array(3 * 1024 * 1024)
+  const url="https://outlook.office.com/api/v2.0/Users('a')/Messages('draft')/AttachmentSessions('x')?authtoken=x"
+  for (const mode of ['offset','intermediate202','final200','429','403','session','network']) it(`rejects ${mode} without send`, async () => { const calls:string[]=[]; const digest=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'); let n=0; const graph=microsoftAdapter(async target=>{calls.push(target); if(target.endsWith('/me/messages'))return Response.json({id:'draft',conversationId:'thread'}); if(target.endsWith('/createUploadSession'))return mode==='session'?new Response('',{status:403}):Response.json({uploadUrl:url},{status:201}); if(target===url){n++; if(mode==='network')throw Error('offline'); if(mode==='429')return new Response('',{status:429}); if(mode==='403')return new Response('',{status:403}); const final=n===10; if(mode==='final200'&&final)return Response.json({}, {status:200}); if(mode==='intermediate202'&&!final)return Response.json({nextExpectedRanges:['327680-']},{status:202}); return Response.json({nextExpectedRanges:[mode==='offset'?'1-':`${n*327680}-`]},{status:200})} throw Error(target)},'a@test.test'); await expect(graph.send('t',{sender:'a@test.test',recipient:'b@test.test',subject:'s',body:'b',attachments:[{filename:'large.pdf',mimeType:'application/pdf',size:bytes.length,sha256:digest,bytes}]})).rejects.toThrow(); expect(calls.some(x=>x.endsWith('/send'))).toBe(false) })
+})
