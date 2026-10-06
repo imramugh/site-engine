@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-process.env.MAILBOX_SYNC_WORKER_TOKEN = 't'.repeat(32)
+process.env.MAILBOX_WORKER_TOKEN = 't'.repeat(32)
 const { createMailboxSyncWorkerRunHandler, mailboxSyncWorkerAuthorized, runMailboxSyncCycle } = await import('../src/mailbox-sync-worker.js')
 
 describe('mailbox sync worker', () => {

@@ -5,7 +5,7 @@ const noStore = { 'Cache-Control': 'no-store' }
 const workerBudgetMS = 35_000
 
 export function mailboxSyncWorkerAuthorized(request: Request): boolean {
-  const secret = process.env.MAILBOX_SYNC_WORKER_TOKEN
+  const secret = process.env.MAILBOX_WORKER_TOKEN
   const authorization = request.headers.get('authorization')
   if (!secret || Buffer.byteLength(secret) < 32 || !authorization?.startsWith('Bearer ')) return false
   const supplied = Buffer.from(authorization.slice(7)); const expected = Buffer.from(secret)
