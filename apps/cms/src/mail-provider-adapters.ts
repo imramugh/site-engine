@@ -21,6 +21,7 @@ const auth = (token: string) => ({
   authorization: `Bearer ${token}`,
   "content-type": "application/json",
 });
+const graphAuth = (token: string) => ({ ...auth(token), Prefer: 'IdType="ImmutableId"' });
 const clean = (value: unknown, limit = 20_000) =>
   String(value ?? "")
     .replace(/<[^>]*>/g, " ")
@@ -188,7 +189,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
           `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/reply`,
           {
             method: "POST",
-            headers: auth(token),
+            headers: graphAuth(token),
             body: JSON.stringify({
               message: {
                 subject: input.subject,
@@ -204,7 +205,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       }
       const draft = await request(fetcher, `${graph}/v1.0/me/messages`, {
         method: "POST",
-        headers: auth(token),
+        headers: graphAuth(token),
         body: JSON.stringify({
           subject: input.subject,
           body: { contentType: "Text", content: input.body },
@@ -220,7 +221,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       const sent = await request(
         fetcher,
         `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`,
-        { method: "POST", headers: auth(token) },
+        { method: "POST", headers: graphAuth(token) },
       );
       if (sent.status !== 202) fail(sent.status);
       return { accepted: true as const, id, threadID };
@@ -230,7 +231,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       const response = await request(
         fetcher,
         `${graph}/v1.0/me/messages/${encodeURIComponent(id)}?$select=id,conversationId,body,subject`,
-        { headers: auth(token) },
+        { headers: graphAuth(token) },
       );
       if (!response.ok) fail(response.status);
       const output = graphMessage(await json(response));
@@ -245,7 +246,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
     },
     async poll(token: string, folderID: string, cursor?: string) {
       const response = await request(fetcher, graphDelta(folderID, cursor), {
-        headers: { ...auth(token), Prefer: "odata.maxpagesize=100" },
+        headers: { ...graphAuth(token), Prefer: 'odata.maxpagesize=100, IdType="ImmutableId"' },
       });
       if (!response.ok) fail(response.status);
       const value = await json(response);
@@ -275,7 +276,7 @@ export function microsoftIdentity(fetcher: Fetcher) {
     const response = await request(
       fetcher,
       `${graph}/v1.0/me?$select=mail,userPrincipalName`,
-      { headers: auth(token) },
+      { headers: graphAuth(token) },
     );
     if (!response.ok) fail(response.status);
     const value = await json(response);

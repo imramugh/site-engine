@@ -294,4 +294,51 @@ describe('local mail authorization transactions', () => {
       await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
     } finally { setReplyDeliveryForTest() }
   })
+  it('binds an initial Microsoft draft with immutable IDs and never retries an ambiguous send', async () => {
+    Object.assign(process.env, { PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.reply.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 4).toString('base64url'), MAILBOX_MICROSOFT_CLIENT_ID: 'microsoft-client', MAILBOX_MICROSOFT_CLIENT_SECRET: 'microsoft-secret' })
+    const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
+    const owner = await actor('owner')
+    const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, owner.sessionToken)).searchParams.get('state')!
+    const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, owner.sessionToken, async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : Response.json({ mail: 'graph-initial@example.test' }))
+    const lead = await payload.create({ collection: 'inquiries', data: { email: 'graph-recipient@example.test', message: 'Graph', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
+    const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'leads' } }, limit: 1, depth: 0, overrideAccess: true })
+    await payload.update({ collection: 'mailbox-area-mappings', id: mapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'graph-initial@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'graph-initial@example.test', subject: 'Graph initial', body: 'Approved Graph body' })
+    const grant = await authorizeMailDraft(payload, owner, draft.id, future())
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
+      calls.push({ url, init })
+      if (url.includes('/token')) return Response.json({ access_token: 'access' })
+      if (url.includes('/v1.0/me?')) return Response.json({ mail: 'graph-initial@example.test' })
+      if (url.endsWith('/v1.0/me/messages')) return Response.json({ id: 'immutable-message', conversationId: 'graph-conversation' })
+      if (url.endsWith('/v1.0/me/messages/immutable-message/send')) return new Response(null, { status: 202 })
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'microsoft', messageID: 'immutable-message', threadID: 'graph-conversation' })
+      const graphCalls = calls.filter(call => call.url.includes('graph.microsoft.com'))
+      expect(graphCalls.map(call => call.url)).toEqual(expect.arrayContaining(['https://graph.microsoft.com/v1.0/me/messages', 'https://graph.microsoft.com/v1.0/me/messages/immutable-message/send']))
+      expect(graphCalls.every(call => new Headers(call.init.headers).get('prefer') === 'IdType="ImmutableId"')).toBe(true)
+      await expect(payload.find({ collection: 'mail-threads', where: { and: [{ lead: { equals: lead.id } }, { providerConversationID: { equals: 'graph-conversation' } }] }, limit: 1, depth: 0, overrideAccess: true })).resolves.toMatchObject({ docs: [expect.objectContaining({ mailbox: mailbox.id })] })
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+    } finally { setReplyDeliveryForTest() }
+
+    const ambiguous = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'graph-initial@example.test', subject: 'Ambiguous Graph', body: 'One attempt only' })
+    const ambiguousGrant = await authorizeMailDraft(payload, owner, ambiguous.id, future())
+    let sends = 0
+    setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url) => {
+      if (url.includes('/token')) return Response.json({ access_token: 'access' })
+      if (url.includes('/v1.0/me?')) return Response.json({ mail: 'graph-initial@example.test' })
+      if (url.endsWith('/v1.0/me/messages')) return Response.json({ id: 'ambiguous-message', conversationId: 'ambiguous-conversation' })
+      if (url.endsWith('/v1.0/me/messages/ambiguous-message/send')) { sends += 1; throw new Error('connection dropped after acceptance') }
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      await expect(sendReply(payload, owner, ambiguousGrant.id)).rejects.toThrow()
+      await expect(sendReply(payload, owner, ambiguousGrant.id)).rejects.toThrow('authorization_not_usable')
+      expect(sends).toBe(1)
+      await expect(payload.findByID({ collection: 'mail-drafts', id: ambiguous.id, depth: 0, overrideAccess: true })).resolves.toMatchObject({ state: 'delivery-unknown' })
+    } finally { setReplyDeliveryForTest() }
+  })
+
 })
