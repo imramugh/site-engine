@@ -1110,6 +1110,7 @@ export interface Application {
   resumeKey: string;
   idempotencyKey: string;
   status?: ('new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed') | null;
+  notes?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2456,6 +2457,7 @@ export interface ApplicationsSelect<T extends boolean = true> {
   resumeKey?: T;
   idempotencyKey?: T;
   status?: T;
+  notes?: T;
   updatedAt?: T;
   createdAt?: T;
 }

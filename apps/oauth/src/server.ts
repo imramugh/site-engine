@@ -7,7 +7,7 @@ import Provider from 'oidc-provider';
 import { createHashedAdapter, findGrantBinding, listManagedGrants, openOAuthDatabase, revokeGrantFamily, revokeManagedGrant, storeGrantBinding, touchManagedGrant } from './adapter.js';
 import { createHttpSessionBridge } from './session-bridge.js';
 
-const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'];
+const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'];
 
 export type SessionUser = { id: string; enabled: boolean; scopes: readonly string[]; sessionId?: string };
 /** Bridge supplied by the private CMS process; this package provides no login route. */
