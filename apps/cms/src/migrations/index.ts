@@ -295,3 +295,5 @@ export const migrations = [
   { up: migration_20261006_009000_preview_render_diagnostics.up, down: migration_20261006_009000_preview_render_diagnostics.down, name: '20261006_009000_preview_render_diagnostics' },
   { up: migration_20261006_009000_crm_private_records.up, down: migration_20261006_009000_crm_private_records.down, name: '20261006_009000_crm_private_records' },
 ];
+import * as migration_20261006_010500_azure_openai from './20261006_010500_azure_openai';
+migrations.push({ up: migration_20261006_010500_azure_openai.up, down: migration_20261006_010500_azure_openai.down, name: '20261006_010500_azure_openai' });
