@@ -55,7 +55,7 @@ test('ENG-018 renders the complete active-theme library and captures an ordered 
   await page.getByRole('button', { name: 'Insert into draft' }).click()
   const response = await responsePromise
   expect(response.status()).toBe(201)
-  const body = await response.json() as { page: { blocks: Array<{ type: string; appearance: { background: string } }> }; changeSetRevision: number }
+  const body = await response.json() as { page: { id: string; blocks: Array<{ type: string; appearance: { background: string } }> }; changeSetRevision: number }
   expect(body.changeSetRevision).toBe(1)
   expect(body.page.blocks.map((block) => block.type)).toEqual(['faq', 'callout'])
   expect(body.page.blocks[1]?.appearance.background).toBe('accent')
@@ -63,12 +63,12 @@ test('ENG-018 renders the complete active-theme library and captures an ordered 
   const submitted = await page.request.post('/api/editorial/submit', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID } })
   expect(submitted.ok(), await submitted.text()).toBeTruthy()
   const reviewer = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
-  await reviewer.addCookies([{ name: 'site_engine_session', value: 'synthetic-on-page-reviewer-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' }])
+  await reviewer.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-on-page-reviewer-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const prepared = await reviewer.request.post('/api/editorial/prepare-preview', { headers: { origin, 'content-type': 'application/json' }, data: { id: setID, includedChangeKeys: [`pages:${body.page.id}`] } })
   expect(prepared.ok(), await prepared.text()).toBeTruthy()
   expect((await reviewer.request.post('/__e2e/direct-preview-worker')).ok()).toBeTruthy()
   const review = await reviewer.newPage(); await review.goto(`/review/${setID}`)
-  const rendered = review.locator('[data-block]')
+  const rendered = review.frameLocator('iframe[title]').locator('[data-block]')
   await expect(rendered).toHaveCount(2)
   await expect(rendered.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-block')))).resolves.toEqual(['faq', 'callout'])
   await reviewer.close()
