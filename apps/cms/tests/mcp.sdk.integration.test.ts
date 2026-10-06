@@ -505,6 +505,38 @@ test('MCP returns a retryable HTTP response when its request audit is blocked by
   try { expect((await client.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_change_set' })])) } finally { await client.client.close() }
 }, 15_000)
 
+test('MCP mutation returns a retryable tool error when a writer locks SQLite after its request audit', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-mutation-busy-${randomUUID()}@example.test`, name: 'MCP Mutation Busy', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-mutation-busy-token', { clientId: 'mcp-mutation-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sdk = await clientFor('mcp-mutation-busy-token')
+  const beforeSets = await payload.count({ collection: 'change-sets', overrideAccess: true })
+  const beforeOutbox = await payload.count({ collection: 'publish-outbox', overrideAccess: true })
+  const originalCreate = payload.create.bind(payload)
+  const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+  let lock: Awaited<ReturnType<typeof external.transaction>> | undefined
+  let armed = true
+  ;(payload as unknown as { create: typeof payload.create }).create = (async (args: Parameters<typeof payload.create>[0]) => {
+    const result = await originalCreate(args)
+    if (armed && args.collection === 'audit-events' && (args.data as { event?: unknown }).event === 'mcp.request') {
+      armed = false; lock = await external.transaction('write')
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
+    }
+    return result
+  }) as typeof payload.create
+  try {
+    const blocked = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } }))
+    expect(blocked).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    expect((await payload.count({ collection: 'change-sets', overrideAccess: true })).totalDocs).toBe(beforeSets.totalDocs)
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
+  } finally {
+    ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
+    await lock?.rollback(); external.close()
+  }
+  expect(resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Retry mutation' } }))).toMatchObject({ state: 'open', revision: 0 })
+  await sdk.transport.close()
+}, 15_000)
+
 test('ENG-017 content-write tools require scope and preserve draft review boundaries', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-write@example.test', name: 'MCP Writer', roles: ['editor'] }, overrideAccess: true })
   const session = await sessionFor(editor.id)
