@@ -1269,7 +1269,7 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     const hash = pageEditorHash(pageEditorProjection(record))
     await expect(readonly.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
     const unavailable = resultJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { error: string }
-    expect(unavailable).toEqual({ error: 'ai_provider_unavailable' })
+    expect(unavailable).toEqual({ error: 'ai_job_default_unavailable' })
     const configuration = await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'test', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
     await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'summary', provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
     await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'meta', provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
@@ -1282,5 +1282,19 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     const overBudget = structuredJson(await sdk.client.callTool({ name: 'suggest_meta', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { jobId: string }
     await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:01.000Z'), transport: async () => { throw new Error('budget should prevent transport') } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
     expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: overBudget.jobId } }))).toMatchObject({ status: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN', suggestion: null })
+
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1_000_000 } as never, overrideAccess: true })
+    await payload.create({ collection: 'ai-job-defaults', data: { jobType: 'alt', provider: 'openai', model: 'gpt-test', fallbackProvider: 'anthropic' }, overrideAccess: true })
+    await payload.create({ collection: 'integration-configurations', data: { provider: 'anthropic', model: 'claude-fallback', encryptedCredential: encryptCredential('fallback-secret', 'anthropic'), credentialFingerprint: 'fallback', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    const image = await sharp({ create: { width: 20, height: 10, channels: 3, background: '#123456' } }).png().toBuffer()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Original human alt text', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-alt-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    const queuedAlt = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })) as { jobId: string; notApplied: boolean }
+    expect(queuedAlt.notApplied).toBe(true)
+    let providerRequest: Request | undefined
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:02.000Z'), transport: async request => { providerRequest = request; return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A blue rectangular image.' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) } })
+    expect(await providerRequest?.json()).toMatchObject({ model: 'gpt-test', input: [{ content: [{ type: 'input_text' }, { type: 'input_image', image_url: expect.stringMatching(/^data:image\/webp;base64,/) }] }] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original human alt text' })
+    await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Changed after suggestion' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toMatchObject({ status: 'completed', stale: true, notApplied: true, suggestion: { text: 'A blue rectangular image.', untrusted: true } })
   } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
 })
