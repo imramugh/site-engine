@@ -402,12 +402,13 @@ export async function handleMcp(request: Request): Promise<Response> {
   server.registerTool('get_reply_status', { title: 'Get prepared reply confirmation status', description: 'Read whether this assistant-prepared reply has a current human confirmation. Returns opaque handles only to the same assistant identity that prepared it.', inputSchema: z.object({ draftID: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: [{ type: 'oauth2', scopes: [leadsReadScope, leadsReplyScope] }, { type: 'oauth2', scopes: [careersReadScope, careersReplyScope] }], authorization: { requiredScopes: ['reply read and reply scope for the draft target'], effectiveUserRequired: true } } }, async ({ draftID }) => {
     try {
       const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
-      const application = Boolean(draft.application); const scopeOK = application ? careers && identity.scopes.includes(careersReadScope) && identity.scopes.includes(careersReplyScope) : leads && identity.scopes.includes(leadsReadScope) && identity.scopes.includes(leadsReplyScope)
+      const application = Boolean(draft.application); const scopeOK = application ? careers && identity.scopes.includes(careersReadScope) && identity.scopes.includes(careersReplyScope) && roles.some((role) => role === 'owner' || role === 'hiring') : leads && identity.scopes.includes(leadsReadScope) && identity.scopes.includes(leadsReplyScope) && roles.some((role) => role === 'owner' || role === 'sales')
       const actor = relationID(draft.assistantActor)
       if (!scopeOK || draft.assistantClientIDHash !== auditClient(identity.clientId) || actor !== identity.userId || draft.assistantOAuthSessionID !== identity.sessionId) return { isError: true, ...text({ error: 'not_found' }) }
-      const grants = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draftID } }, { revokedAt: { exists: false } }, { consumedAt: { exists: false } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true })
+      const grants = await payload.find({ collection: 'mail-authorizations', where: { and: [{ draft: { equals: draftID } }, { revokedAt: { exists: false } }, { consumedAt: { exists: false } }, { expiresAt: { greater_than: new Date().toISOString() } }] }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true })
       const grant = grants.docs[0] as unknown as Record<string, unknown> | undefined
-      return structured({ draftID, state: String(draft.state), grantID: grant?.id ?? null, expiresAt: typeof grant?.expiresAt === 'string' ? grant.expiresAt : null })
+      const usable = String(draft.state) === 'authorized' && grant?.draftRevision === draft.revision
+      return structured({ draftID, state: String(draft.state), grantID: usable ? grant?.id ?? null : null, expiresAt: usable && typeof grant?.expiresAt === 'string' ? grant.expiresAt : null })
     } catch { return { isError: true, ...text({ error: 'not_found' }) } }
   })
   const writeSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentWriteScope] }], requiredScopes: [contentWriteScope], effectiveUserRequired: true }
