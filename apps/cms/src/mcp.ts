@@ -20,6 +20,7 @@ import { mcpCatalogMeta } from './mcp-catalog'
 import { registerMediaTools } from './mcp-media'
 import { registerReviewTools } from './mcp-review'
 import { registerChangeLogTools } from './mcp-change-log'
+import { archivePage } from './redirect-lifecycle'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -28,7 +29,7 @@ const knownMethods = new Set([
   'resources/list', 'resources/templates/list', 'resources/read',
   'prompts/list', 'prompts/get',
 ])
-const knownTools = new Set(['list_changes', 'request_rollback', 'start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set', 'create_section', 'update_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'find_media', 'get_media_usage', 'update_media', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'get_reply_status', 'send_reply'])
+const knownTools = new Set(['list_changes', 'request_rollback', 'start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'find_media', 'get_media_usage', 'update_media', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'get_reply_status', 'send_reply'])
 const protectedReadMethods = new Set(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'])
 const contentReadScope = 'mcp:content:read'
 const contentWriteScope = 'mcp:content:write'
@@ -141,7 +142,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (!identity.active) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
   if (!rateLimit(`client:${identity.clientId}`) || !rateLimit(`user:${identity.userId}`)) return new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '60' } })
   const tool = typeof body.params?.name === 'string' ? body.params.name : undefined
-  const required = body.method === 'tools/call' && ['list_leads', 'get_lead'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['prepare_reply', 'get_reply_status', 'send_reply'].includes(tool ?? '') ? undefined : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && ['request_rollback', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_section', 'update_section', 'create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_media'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
+  const required = body.method === 'tools/call' && ['list_leads', 'get_lead'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['prepare_reply', 'get_reply_status', 'send_reply'].includes(tool ?? '') ? undefined : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && ['request_rollback', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_section', 'update_section', 'archive_section', 'create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_media'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'www-authenticate': `${challenge(origin.origin)}, error="insufficient_scope", scope="${required}"`, 'cache-control': 'no-store' } })
   if (body.method === 'tools/list' && !identity.scopes.some((scope) => [contentReadScope, leadsReadScope, careersReadScope].includes(scope))) return new Response(JSON.stringify({ error: 'insufficient_scope', required: 'mcp:content:read mcp:leads:read mcp:careers:read' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
@@ -480,6 +481,64 @@ export async function handleMcp(request: Request): Promise<Response> {
     try { return pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey, blocks: recipeBlocks(data.template, blocks, [], (index, type) => deterministicRecipeBlockID(requestKey, index, type)) }) } catch (error) { return { isError: true, ...text({ error: error instanceof Error ? error.message : 'invalid_recipe' }) } }
   })
   server.registerTool('update_page', { title: 'Update page', description: `Update a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160).optional(), summary: z.string().min(24).max(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ id, changeSetId, expectedChangeSetRevision, ...data }) => pageWrite(id, changeSetId, expectedChangeSetRevision, data))
+  const editableSet = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, changeSetId: string, expectedChangeSetRevision: number) => {
+    const set = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision?: number; state?: string; actor?: unknown }
+    const actor = typeof set.actor === 'string' ? set.actor : (set.actor as { id?: string } | undefined)?.id
+    if (set.state !== 'open' || actor !== (current as { id: string }).id) throw new Error('change_set_unavailable')
+    if (set.revision !== expectedChangeSetRevision) throw new Error('revision_conflict')
+    req.headers.set('x-site-engine-change-set', changeSetId)
+  }
+  const structuralPageHash = (record: Record<string, unknown>) => canonicalHash({ ...pageEditorProjection(record), sectionId: relationID(record.sectionId), parentId: relationID(record.parentId), template: record.template })
+  const currentPage = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageId: string, expectedPageHash: string) => {
+    const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
+    if (structuralPageHash(existing) !== expectedPageHash) throw new Error('STALE_PAGE_EDIT')
+    if (existing.status === 'archived') throw new Error('page_not_editable')
+    return existing
+  }
+  const structuralFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'STALE_PAGE_EDIT', 'page_not_editable'])
+  const structuralPageSchema = { pageId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedPageHash: z.string().regex(/^[a-f0-9]{64}$/) }
+  server.registerTool('duplicate_page', { title: 'Duplicate page', description: `Copy a draft page into an explicit open change set. The copy receives a caller-supplied title, URL segment, and stable request key. ${toolLimits}`, inputSchema: z.object({ ...structuralPageSchema, title: z.string().min(1).max(160), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), requestKey: z.string().uuid() }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, title, slug, requestKey }) => {
+    if (!write) return denied(contentWriteScope)
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const source = await currentPage(req, pageId, expectedPageHash)
+        const blocks = Array.isArray(source.blocks) ? structuredClone(source.blocks).map((block: Record<string, unknown>) => ({ ...block, id: randomUUID() })) : []
+        return payload.create({ collection: 'pages', data: { id: requestKey, title, slug, summary: source.summary, sectionId: source.sectionId, parentId: source.parentId, template: source.template, blocks, kicker: source.kicker, lede: source.lede, seoDescription: source.seoDescription, noindex: source.noindex === true, publishedAt: source.publishedAt, lastReviewed: source.lastReviewed, jobPosting: source.jobPosting, businessCase: source.businessCase } as never, draft: true, user: current as never, overrideAccess: false, req })
+      })
+      return text(page(result as unknown as Record<string, unknown>))
+    } catch (error) { return structuralFailure(error) }
+  })
+  server.registerTool('move_page', { title: 'Move page', description: `Move a draft page to a section and optional parent through an explicit open change set. ${toolLimits}`, inputSchema: z.object({ ...structuralPageSchema, sectionId: z.string().uuid(), parentId: z.string().uuid().nullable() }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, sectionId, parentId }) => {
+    if (!write) return denied(contentWriteScope)
+    try { const result = await withPayloadTransaction(payload, async (req) => { req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision); await currentPage(req, pageId, expectedPageHash); return payload.update({ collection: 'pages', id: pageId, data: { sectionId, parentId }, draft: true, user: current as never, overrideAccess: false, req }) }); return text(page(result as unknown as Record<string, unknown>)) } catch (error) { return structuralFailure(error) }
+  })
+  server.registerTool('change_page_template', { title: 'Change page template', description: `Change a draft page template when its existing blocks and tree placement remain valid. ${toolLimits}`, inputSchema: z.object({ ...structuralPageSchema, template: z.enum(TemplateSchema.options) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, template }) => {
+    if (!write) return denied(contentWriteScope)
+    try { const result = await withPayloadTransaction(payload, async (req) => { req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision); await currentPage(req, pageId, expectedPageHash); return payload.update({ collection: 'pages', id: pageId, data: { template }, draft: true, user: current as never, overrideAccess: false, req }) }); return text(page(result as unknown as Record<string, unknown>)) } catch (error) { return structuralFailure(error) }
+  })
+  server.registerTool('archive_page', { title: 'Archive page', description: `Archive a draft page only after reference checks and create its required permanent redirect in the same change set. ${toolLimits}`, inputSchema: z.object({ ...structuralPageSchema, redirectTo: z.string().min(1).max(512) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, redirectTo }) => {
+    if (!write) return denied(contentWriteScope)
+    try { const result = await withPayloadTransaction(payload, async (req) => { req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision); await currentPage(req, pageId, expectedPageHash); return archivePage({ payload, req, pageID: pageId, target: redirectTo, removeNavigationReference: true }) }); return text({ pageId, archived: true, redirect: result.redirect ?? null }) } catch (error) { return structuralFailure(error) }
+  })
+  server.registerTool('archive_section', { title: 'Archive section', description: `Archive every page in a section after reference checks and redirect each published route to the required target. The section is retained as an empty draft record for review history. ${toolLimits}`, inputSchema: z.object({ sectionId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), redirectTo: z.string().min(1).max(512) }).strict(), annotations: { readOnlyHint: false }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ sectionId, changeSetId, expectedChangeSetRevision, redirectTo }) => {
+    if (!write) return denied(contentWriteScope)
+    try {
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never; await editableSet(req, changeSetId, expectedChangeSetRevision)
+        const sectionRecord = await payload.findByID({ collection: 'sections', id: sectionId, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
+        const found = await payload.find({ collection: 'pages', where: { sectionId: { equals: sectionId } }, limit: 0, pagination: false, depth: 0, draft: true, user: current as never, overrideAccess: false, req })
+        const pages = found.docs as unknown as Array<Record<string, unknown>>
+        await payload.update({ collection: 'sections', id: sectionId, data: { pageIds: [], landingPageId: null }, draft: true, user: current as never, overrideAccess: false, req })
+        delete (req.context as Record<string, unknown>).editorialInternal
+        const depth = (candidate: Record<string, unknown>) => { let value = 0; let parent = typeof candidate.parentId === 'string' ? candidate.parentId : undefined; const ids = new Set<string>(); while (parent && !ids.has(parent)) { ids.add(parent); value += 1; parent = pages.find(page => page.id === parent)?.parentId as string | undefined }; return value }
+        const redirects: unknown[] = []
+        for (const candidate of [...pages].sort((left, right) => depth(right) - depth(left))) redirects.push((await archivePage({ payload, req, pageID: String(candidate.id), target: redirectTo })).redirect ?? null)
+        return { section: section(sectionRecord), pageIds: pages.map(candidate => String(candidate.id)), redirects }
+      })
+      return text({ ...result, archived: true })
+    } catch (error) { return structuralFailure(error) }
+  })
   const structureFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'fixed_block', 'invalid_order', 'invalid_block', 'items_not_supported', 'invalid_item_index'])
   const editableStructure = (block: { type: string }) => blockCatalog.some((item) => item.type === block.type && item.insertable)
   const blockSave = async (tool: string, pageId: string, changeSetId: string, expectedChangeSetRevision: number, expectedPageHash: string, mutate: (draft: ReturnType<typeof pageEditorProjection>, existingRecord: Record<string, unknown>) => { batch: Record<string, unknown>; diff: Record<string, unknown> }) => {
