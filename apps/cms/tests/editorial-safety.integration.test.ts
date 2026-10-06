@@ -132,6 +132,27 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Current editor changed again')
   })
 
+  it('rolls back stale marking and audit when a captured-record read fails for a non-404 error', async () => {
+    const { editor, page } = await fixture('conflict-read-failure')
+    const other = await payload.create({ collection: 'users', data: { email: 'conflict-read-failure-other@example.test', name: 'Other editor', roles: ['editor'] }, overrideAccess: true })
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Captured title' }, draft: true, user: editor, overrideAccess: false })
+    const set = await setFor(editor.id)
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'submit' }))
+    await payload.update({ collection: 'pages', id: page.id, data: { title: 'Current title' }, draft: true, user: other, overrideAccess: false })
+    const before = await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })
+    const beforeAudit = await payload.count({ collection: 'audit-events', overrideAccess: true })
+    const original = payload.findByID.bind(payload)
+    ;(payload as unknown as { findByID: typeof payload.findByID }).findByID = (async (args: Parameters<typeof payload.findByID>[0]) => {
+      if (args.collection === 'pages' && args.id === page.id) throw new Error('injected captured-record read failure')
+      return original(args)
+    }) as typeof payload.findByID
+    try {
+      await expect(withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: editor, id: set.id }))).rejects.toThrow('injected captured-record read failure')
+    } finally { ;(payload as unknown as { findByID: typeof payload.findByID }).findByID = original }
+    expect((await payload.findByID({ collection: 'change-sets', id: set.id, depth: 0, overrideAccess: true })).state).toBe(before.state)
+    expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
+  })
+
   it('does not let a demoted Owner reapply an owner-only site-settings change or write a resolution audit', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'demoted-settings-owner@example.test', name: 'Demoted settings owner', roles: ['owner'] }, overrideAccess: true })
     const otherOwner = await payload.create({ collection: 'users', data: { email: 'current-settings-owner@example.test', name: 'Current settings owner', roles: ['owner'] }, overrideAccess: true })

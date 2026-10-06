@@ -159,7 +159,12 @@ async function GETHandler(request: Request, context: { params: Promise<{ action:
     if (action === 'conflicts') {
       const id = new URL(request.url).searchParams.get('id')
       if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: 'A change set is required.' }, { status: 400 })
-      return Response.json(await changeSetConflicts({ payload, req: { payload, headers: request.headers, user: authenticated.user } as never, actor: authenticated.user as never, id }), { headers: { 'Cache-Control': 'no-store' } })
+      const result = await withPayloadTransaction(payload, async (req) => {
+        req.user = authenticated.user
+        req.headers = request.headers
+        return changeSetConflicts({ payload, req, actor: authenticated.user as never, id })
+      })
+      return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
     }
     if (action === 'preview-route') {
       if (!actor.roles?.some((role) => role === 'owner' || role === 'approver')) return Response.json({ error: 'Reviewer role required.' }, { status: 403 })
@@ -187,6 +192,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ action:
     return Response.json({ sets, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     if (isAuthenticationSQLiteContention(error)) throw error
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     return Response.json({ error: 'Unable to load change sets.' }, { status: 403 })
   }
 }
