@@ -11,6 +11,7 @@ import { createClient } from '@libsql/client'
 import sharp from 'sharp'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
+import { transitionChangeSet } from '../src/editorial'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { canonicalHash } from '../src/publishing'
@@ -696,12 +697,15 @@ test('MCP media tools use scoped effective users and revisioned metadata writes'
     expect(found.assets).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id })]))
     expect(resultJson(await writer.client.callTool({ name: 'get_media_usage', arguments: { id: asset.id } }))).toEqual({ id: asset.id, usages: [] })
     const set = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP media metadata' } })) as { id: string; revision: number }
-    const saved = resultJson(await writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Updated media metadata', decorative: false, focalX: 50, focalY: 50, tags: ['mcp'] } })) as { draft: { assetId: string; changeSetRevision: number }; checks: unknown[] }
+    const saved = resultJson(await writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Updated media metadata', decorative: false, caption: 'Captured media caption', credit: 'Captured media credit', focalX: 50, focalY: 50, tags: ['mcp'] } })) as { draft: { assetId: string; changeSetRevision: number }; checks: unknown[] }
     expect(saved).toMatchObject({ draft: { assetId: asset.id, changeSetRevision: set.revision + 1 }, checks: [{ name: 'contract-and-tree', status: 'passed', errors: [] }] })
+    expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ changes: [expect.objectContaining({ collection: 'assets', id: asset.id, after: expect.objectContaining({ caption: 'Captured media caption', credit: 'Captured media credit', tags: ['mcp'] }) })] })
     await expect(writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'invalid', decorative: false, focalX: 50, focalY: 50, unknown: true } })).resolves.toMatchObject({ isError: true })
-    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated media metadata', tags: ['mcp'] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated media metadata', caption: 'Captured media caption', credit: 'Captured media credit', tags: ['mcp'] })
+    await withPayloadTransaction(payload, async (req) => { req.user = editor as never; await transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }) })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original media metadata', caption: null, credit: null, tags: [] })
     expect(resultJson(await reader.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'Denied metadata update', decorative: false, focalX: 50, focalY: 50 } }))).toEqual({ error: 'role_access_required' })
-    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Updated media metadata', tags: ['mcp'] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original media metadata', tags: [] })
   } finally { await Promise.all([writer.transport.close(), reader.transport.close()]) }
 })
 

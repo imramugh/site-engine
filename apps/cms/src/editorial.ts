@@ -64,7 +64,7 @@ function normalizeSiteOptionalNulls(value: Record<string, unknown> | null, prior
 
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined, includeFocalPoint = false): Record<string, unknown> | null {
   if (!document) return null
-  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint)
+  if (collection === 'assets') return { ...snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint), caption: typeof document.caption === 'string' ? document.caption : null, credit: typeof document.credit === 'string' ? document.credit : null, tags: Array.isArray(document.tags) ? document.tags.filter((tag): tag is string => typeof tag === 'string') : [] }
   return Object.fromEntries(mutableFields[collection].flatMap((field): [string, unknown][] => {
     const value = document[field]
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
@@ -140,8 +140,18 @@ function capturedAssetHasFocalPoint(value: Record<string, unknown> | null | unde
   return Boolean(value && (Object.prototype.hasOwnProperty.call(value, 'focalX') || Object.prototype.hasOwnProperty.call(value, 'focalY')))
 }
 
+function capturedAssetHasMetadata(value: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(value && ['caption', 'credit', 'tags'].some((field) => Object.prototype.hasOwnProperty.call(value, field)))
+}
+
+/** CMS-only media metadata is reviewable in captures but never part of a public snapshot. */
+export function publicAssetSnapshot(value: Record<string, unknown>): Record<string, unknown> {
+  const { caption: _caption, credit: _credit, tags: _tags, ...publicFields } = value
+  return publicFields
+}
+
 async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY'].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
+  const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY', ...(capturedAssetHasMetadata(before) ? ['caption', 'credit', 'tags'] : [])].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
   if (before.filename === current.filename) return { ...metadata, currentFileVersion: null, currentFile: null }
   const versions = await payload.find({
     collection: 'asset-file-versions',
@@ -224,7 +234,8 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 }
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
-  const current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
+  let current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
+  if (collection === 'assets' && current && !capturedAssetHasMetadata(expected)) current = publicAssetSnapshot(current)
   if (collection === 'pages') return normalizePageOptionalNulls(current, expected)
   if (collection === 'site-settings') return normalizeSiteOptionalNulls(current, expected)
   return current
@@ -262,7 +273,7 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
         case 'pages': return PageSchema.safeParse({ id: change.id, ...normalizePageOptionalNulls(change.after), status: 'draft' })
         case 'sections': return SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
         case 'redirects': return RedirectSchema.safeParse(change.after)
-        case 'assets': return MediaReferenceSchema.safeParse({ id: change.id, ...change.after })
+        case 'assets': return MediaReferenceSchema.safeParse({ id: change.id, ...publicAssetSnapshot(change.after) })
         case 'theme-settings': return ThemeSelectionSchema.safeParse(change.after.selection)
         case 'site-settings': return SiteSettingsDraftSchema.safeParse(change.after)
         case 'style-guides': return StyleGuideSchema.safeParse(change.after)
