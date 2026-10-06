@@ -73,6 +73,17 @@ async function GETHandler(request: Request) {
 
   const projected = await projectChangeLog(payload, audit.docs as unknown as Array<Record<string, unknown>>)
   const releasesByOutbox = new Map(releaseHistory.docs.map((release) => [relationID(release.outbox), release]))
+  const snapshotIDs = publishHistory.docs.map(job => relationID(job.snapshot)).filter((id): id is string => Boolean(id))
+  const snapshots = snapshotIDs.length ? await payload.find({ collection: 'publish-snapshots', where: { id: { in: snapshotIDs } }, limit: 100, depth: 0, overrideAccess: true }) : { docs: [] as Record<string, unknown>[] }
+  const snapshotsByID = new Map(snapshots.docs.map(snapshot => [String(snapshot.id), snapshot]))
+  const releaseSetIDs = snapshots.docs.map(snapshot => relationID(snapshot.changeSet)).filter((id): id is string => Boolean(id))
+  const releaseSets = releaseSetIDs.length ? await payload.find({ collection: 'change-sets', where: { id: { in: releaseSetIDs } }, limit: 100, depth: 0, overrideAccess: true }) : { docs: [] as Record<string, unknown>[] }
+  const releaseSetsByID = new Map(releaseSets.docs.map(set => [String(set.id), set]))
+  const usersByID = new Map(users.docs.map(user => [String(user.id), user]))
+  const stageEvents = await payload.find({ collection: 'audit-events', where: { or: [{ event: { equals: 'editorial.publish_stage' } }, { event: { equals: 'publish.completed' } }, { event: { equals: 'publish.failed' } }] }, sort: '-createdAt', limit: 500, depth: 0, overrideAccess: true })
+  const stageByOutbox = new Map<string, Record<string, unknown>>()
+  for (const event of stageEvents.docs) { const detail = safeDetail(String(event.event), event.detail); const id = relationID(detail?.publishJob); if (id && !stageByOutbox.has(id)) stageByOutbox.set(id, { ...detail, createdAt: event.createdAt }) }
+  const releaseLabel = (status: unknown) => status === 'pending' ? 'Queued' : status === 'processing' ? 'Building' : status === 'completed' ? 'Deployed' : status === 'failed' ? 'Failed' : 'Queued'
   return Response.json({
     summary: {
       pendingReviews: reviews.totalDocs,
@@ -88,15 +99,28 @@ async function GETHandler(request: Request) {
     retention: { ...retention, failedJobs: retentionFailures.totalDocs, backupNotice: 'Deletion markers are replayed before a restored backup serves traffic. Immutable backups age out on their configured schedule.' },
     releaseHistory: publishHistory.docs.map((job) => {
       const release = releasesByOutbox.get(String(job.id))
+      const snapshot = snapshotsByID.get(relationID(job.snapshot) ?? '')
+      const set = snapshot ? releaseSetsByID.get(relationID(snapshot.changeSet) ?? '') : undefined
+      const stage = stageByOutbox.get(String(job.id))
+      const reviewer = snapshot ? usersByID.get(relationID(snapshot.approvedBy) ?? '') : undefined
+      const actor = set ? usersByID.get(relationID(set.actor) ?? '') : undefined
+      const stageReviewer = usersByID.get(relationID(stage?.reviewer) ?? '')
+      const stageActor = usersByID.get(relationID(stage?.actor) ?? '')
       return {
         id: String(job.id),
         sequence: Number(job.sequence),
         status: String(job.status),
+        state: releaseLabel(job.status),
         attempts: Number(job.attempts ?? 0),
         retryReason: typeof job.errorCode === 'string' ? job.errorCode : null,
         correlationID: String(job.correlationID),
         nextAttemptAt: typeof job.nextAttemptAt === 'string' ? job.nextAttemptAt : null,
         activatedAt: typeof release?.activatedAt === 'string' ? release.activatedAt : null,
+        publishedAt: typeof snapshot?.createdAt === 'string' ? snapshot.createdAt : null,
+        reviewer: stageReviewer ? (stageReviewer.name || stageReviewer.email) : reviewer ? (reviewer.name || reviewer.email) : null,
+        actor: stageActor ? (stageActor.name || stageActor.email) : actor ? (actor.name || actor.email) : null,
+        resultAt: typeof stage?.publishTime === 'string' ? stage.publishTime : typeof stage?.createdAt === 'string' ? stage.createdAt : typeof job.completedAt === 'string' ? job.completedAt : null,
+        buildLogURL: null,
       }
     }),
     audit: {
@@ -124,10 +148,13 @@ async function POSTHandler(request: Request) {
     if (Buffer.byteLength(text) > 4096) return Response.json({ error: 'The rollback request is too large.' }, { status: 413, headers: noStore })
     const body: unknown = JSON.parse(text)
     if (!body || typeof body !== 'object' || Array.isArray(body) || (body as { action?: unknown }).action !== 'prepare-rollback' || typeof (body as { releaseID?: unknown }).releaseID !== 'string') return Response.json({ error: 'Choose a release to prepare for rollback.' }, { status: 400, headers: noStore })
+    const rollback = body as { releaseID: string; mode?: unknown; changeKeys?: unknown }
+    if (rollback.mode !== undefined && rollback.mode !== 'release' && rollback.mode !== 'change') return Response.json({ error: 'Choose a supported rollback scope.' }, { status: 400, headers: noStore })
+    if (rollback.changeKeys !== undefined && (!Array.isArray(rollback.changeKeys) || rollback.changeKeys.length > 1 || rollback.changeKeys.some(key => typeof key !== 'string' || key.length > 200))) return Response.json({ error: 'Choose one approved change to roll back.' }, { status: 400, headers: noStore })
     const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
     const actor = auth.user as { id: string; name?: string; email?: string; roles?: ('owner')[]; disabled?: boolean } | null
     if (!actor || !hasRole(actor, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
-    const set = await prepareReviewedRollback(payload, actor, request.headers, (body as { releaseID: string }).releaseID)
+    const set = await prepareReviewedRollback(payload, actor, request.headers, rollback.releaseID, { mode: rollback.mode as 'release' | 'change' | undefined, changeKeys: rollback.changeKeys as string[] | undefined })
     return Response.json({ changeSet: { id: set.id, name: set.name, state: set.state }, reviewURL: '/editorial' }, { status: 201, headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Rollback preparation failed.' }, { status: 400, headers: noStore }) }
 }
