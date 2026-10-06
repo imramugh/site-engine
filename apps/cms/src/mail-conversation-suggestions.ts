@@ -13,7 +13,9 @@ export async function adoptMailConversationSuggestion(payload: Payload, input: {
   return exclusive(input.suggestionID, () => withPayloadTransaction(payload, async req => {
     const suggestion = await payload.findByID({ collection: 'mail-conversation-suggestions', id: input.suggestionID, depth: 0, overrideAccess: true, req })
     if (suggestion.target !== input.target) throw new Error('suggestion_not_usable')
-    if (suggestion.adoptedAt) { const prior = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: suggestion.mailbox } }, { provider: { equals: suggestion.provider } }, { providerConversationID: { equals: suggestion.providerConversationID } }] }, limit: 1, depth: 0, overrideAccess: true, req }); if (prior.docs[0]) return prior.docs[0]; throw new Error('suggestion_not_usable') }
+    // Validate the requested target and its current mailbox mapping before the
+    // idempotent path too. Otherwise an adopted suggestion could disclose its
+    // thread ID to a different record on a later retry.
     const collection = input.target === 'lead' ? 'inquiries' : 'applications'
     const record = await payload.findByID({ collection, id: input.targetID, depth: 0, overrideAccess: true, req }) as { email?: string }
     if (addressHash(record.email) !== suggestion.addressHash) throw new Error('suggestion_not_usable')
@@ -21,7 +23,13 @@ export async function adoptMailConversationSuggestion(payload: Payload, input: {
     const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true, req })
     if (relationID(mapping.docs[0]?.mailbox) !== relationID(suggestion.mailbox)) throw new Error('suggestion_not_usable')
     const existing = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: suggestion.mailbox } }, { provider: { equals: suggestion.provider } }, { providerConversationID: { equals: suggestion.providerConversationID } }] }, limit: 1, depth: 0, overrideAccess: true, req })
-    const thread = existing.docs[0] ?? await payload.create({ collection: 'mail-threads', data: { [input.target]: input.targetID, mailbox: suggestion.mailbox, provider: suggestion.provider, providerConversationID: suggestion.providerConversationID } as never, overrideAccess: true, req })
+    const prior = existing.docs[0]
+    if (suggestion.adoptedAt) {
+      const bound = prior && (input.target === 'lead' ? relationID(prior.lead) === input.targetID : relationID(prior.application) === input.targetID)
+      if (bound) return prior
+      throw new Error('suggestion_not_usable')
+    }
+    const thread = prior ?? await payload.create({ collection: 'mail-threads', data: { [input.target]: input.targetID, mailbox: suggestion.mailbox, provider: suggestion.provider, providerConversationID: suggestion.providerConversationID } as never, overrideAccess: true, req })
     const bound = input.target === 'lead' ? relationID(thread.lead) === input.targetID : relationID(thread.application) === input.targetID
     if (!bound) throw new Error('suggestion_not_usable')
     await payload.update({ collection: 'mail-conversation-suggestions', id: suggestion.id, data: { adoptedAt: new Date().toISOString(), adoptedBy: input.actor }, overrideAccess: true, req })
