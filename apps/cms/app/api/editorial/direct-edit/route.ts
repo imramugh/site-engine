@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { executeDirectEdit, type DirectEditInput } from '../../../../src/direct-edit'
 import { serverSessionStrategy } from '../../../../src/identity'
+import { isRetryableSQLiteError } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -51,8 +52,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(result, { headers: noStore })
   } catch (error) {
     const code = error instanceof Error ? error.message : ''
-    const status = code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : code === 'BODY_TOO_LARGE' ? 413 : 400
-    const message = status === 409 ? 'This field has changed. Reload before saving.' : status === 403 ? 'You cannot edit this draft.' : 'Unable to save this direct edit.'
-    return Response.json({ error: message }, { status, headers: noStore })
+    const status = isRetryableSQLiteError(error) ? 503 : code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : code === 'BODY_TOO_LARGE' ? 413 : 400
+    const message = status === 503 ? 'Saving is temporarily busy. Please retry.' : status === 409 ? 'This field has changed. Reload before saving.' : status === 403 ? 'You cannot edit this draft.' : 'Unable to save this direct edit.'
+    return Response.json({ error: message }, { status, headers: status === 503 ? { ...noStore, 'Retry-After': '1' } : noStore })
   }
 }

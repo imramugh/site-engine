@@ -3,13 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { createClient } from '@libsql/client'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { applyDirectEdit, directEditValueHash, executeDirectEdit } from '../src/direct-edit'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-direct-edit-'))
-process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+const dbPath = join(directory, 'cms.sqlite')
+process.env.DATABASE_URI = `file:${dbPath}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-direct-edit'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = join(directory, 'bootstrap-token')
@@ -88,6 +90,34 @@ describe('ENG-026 draft-only direct hero edits', () => {
     const page = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
     expect((page.blocks as { heading: string }[])[0]?.heading).toBe('Concurrent winner')
   })
+
+  it('reproduces retryable route backpressure under an independent SQLite writer lock', async () => {
+    const editor = await actor(); const current = await fixture(editor); const cookie = await session(editor)
+    const beforeAudit = await payload.count({ collection: 'audit-events', overrideAccess: true })
+    const beforeOutbox = await payload.count({ collection: 'publish-outbox', overrideAccess: true })
+    const external = createClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    let blocked: Response | undefined
+    const started = Date.now()
+    try {
+      await lock.execute('UPDATE pages SET updated_at = updated_at WHERE id = ?', [current.page.id])
+      blocked = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    expect(blocked?.status).toBe(503)
+    expect(blocked?.headers.get('Retry-After')).toBe('1')
+    await expect(blocked?.json()).resolves.toEqual({ error: 'Saving is temporarily busy. Please retry.' })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
+    expect(Date.now() - started).toBeLessThan(12_000)
+    const unchanged = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    expect((unchanged.blocks as { heading: string }[])[0]?.heading).toBe('Original heading')
+    expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
+    const retried = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
+    expect(retried.status).toBe(200)
+  }, 20_000)
 
   it('returns a stale conflict for competing values from one baseline without changing another Hero field', async () => {
     const editor = await actor(); const current = await fixture(editor)
