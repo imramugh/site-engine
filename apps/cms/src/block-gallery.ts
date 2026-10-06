@@ -61,6 +61,24 @@ export const blockCatalog = blockTypes.map((type) => ({
 const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
 
 export type RecipeSelection = { type: Block['type']; appearance?: Partial<Block['appearance']>; fields?: Record<string, unknown> }
+export type RecipeReference = { collection: 'assets'; id: string; mimePrefix: 'image/' | 'video/' | 'text/vtt' } | { collection: 'pages'; id: string }
+
+/** References introduced by a fully validated recipe block, including its
+ * appearance media. Callers resolve them with their own actor inside the
+ * mutation transaction before a page write is attempted. */
+export function recipeBlockReferences(blocks: readonly Block[]): RecipeReference[] {
+  const references: RecipeReference[] = []
+  const asset = (id: string, mimePrefix: Extract<RecipeReference, { collection: 'assets' }>['mimePrefix']) => references.push({ collection: 'assets', id, mimePrefix })
+  for (const block of blocks) {
+    if (block.type === 'relatedServices') block.pageIds.forEach((id) => references.push({ collection: 'pages', id }))
+    if (block.type === 'media' || block.type === 'imageText') asset(block.mediaId, 'image/')
+    if (block.type === 'gallery' || block.type === 'logoStrip') block.mediaIds.forEach((id) => asset(id, 'image/'))
+    if (block.type === 'video') { asset(block.mediaId, 'video/'); asset(block.posterMediaId, 'image/'); asset(block.captionsMediaId, 'text/vtt') }
+    if (block.appearance.backgroundImage) asset(block.appearance.backgroundImage.mediaId, 'image/')
+    if (block.appearance.backgroundVideo) { asset(block.appearance.backgroundVideo.mediaId, 'video/'); asset(block.appearance.backgroundVideo.posterMediaId, 'image/') }
+  }
+  return references
+}
 
 function selection(value: unknown): RecipeSelection {
   if (typeof value === 'string') return { type: value as Block['type'] }

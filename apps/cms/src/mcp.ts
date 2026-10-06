@@ -9,7 +9,7 @@ import { compatibilityReport, getInstalledTheme, installedThemes as listInstalle
 import config from '../payload.config'
 import { changeSetQuality, createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
-import { blockCatalog, deterministicRecipeBlockID, recipeBlocks, recipeRequiredSelections } from './block-gallery'
+import { blockCatalog, deterministicRecipeBlockID, recipeBlockReferences, recipeBlocks, recipeRequiredSelections } from './block-gallery'
 import { galleryCatalog, sectionPresetCatalog, templateCatalog } from './block-gallery-catalog'
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
 import { canonicalHash } from './publishing'
@@ -585,21 +585,14 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     parentId: z.string().uuid().optional(), kicker: z.string().min(1).max(160).optional(), lede: z.string().min(1).max(500).optional(), seoDescription: z.string().min(1).max(160).optional(), noindex: z.boolean().optional(), publishedAt: z.string().datetime().optional(), lastReviewed: z.string().datetime().optional(), jobPosting: JobPostingSchema.optional(), businessCase: BusinessCaseSchema.optional(),
   }
   const recipeReferencesAccessible = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageData: Record<string, unknown>) => {
-    const media = new Set<string>(); const pages = new Set<string>()
-    if (typeof pageData.parentId === 'string') pages.add(pageData.parentId)
-    for (const block of Array.isArray(pageData.blocks) ? pageData.blocks : []) {
-      if (!block || typeof block !== 'object' || Array.isArray(block)) continue
-      const record = block as Record<string, unknown>
-      if (record.type === 'relatedServices' && Array.isArray(record.pageIds)) for (const id of record.pageIds) if (typeof id === 'string') pages.add(id)
-      for (const key of ['mediaId', 'posterMediaId', 'captionsMediaId']) if (typeof record[key] === 'string') media.add(record[key])
-      if (Array.isArray(record.mediaIds)) for (const id of record.mediaIds) if (typeof id === 'string') media.add(id)
-    }
+    const references = recipeBlockReferences(Array.isArray(pageData.blocks) ? pageData.blocks as Parameters<typeof recipeBlockReferences>[0] : [])
+    if (typeof pageData.parentId === 'string') references.push({ collection: 'pages', id: pageData.parentId })
     try {
       const [referencedPages, referencedAssets] = await Promise.all([
-        Promise.all([...pages].map((id) => payload.findByID({ collection: 'pages', id, depth: 0, draft: true, user: current as never, overrideAccess: false, req }))),
-        Promise.all([...media].map((id) => payload.findByID({ collection: 'assets', id, depth: 0, user: current as never, overrideAccess: false, req }))),
+        Promise.all(references.filter((reference) => reference.collection === 'pages').map((reference) => payload.findByID({ collection: 'pages', id: reference.id, depth: 0, draft: true, user: current as never, overrideAccess: false, req }))),
+        Promise.all(references.filter((reference) => reference.collection === 'assets').map(async (reference) => ({ reference, asset: await payload.findByID({ collection: 'assets', id: reference.id, depth: 0, user: current as never, overrideAccess: false, req }) as { deletedAt?: unknown; mimeType?: unknown } }))),
       ])
-      if (referencedPages.some((page) => (page as { status?: unknown; _status?: unknown }).status === 'archived' || (page as { _status?: unknown })._status === 'archived') || referencedAssets.some((asset) => Boolean((asset as { deletedAt?: unknown }).deletedAt))) throw new Error('recipe_reference_unavailable')
+      if (referencedPages.some((page) => (page as { status?: unknown; _status?: unknown }).status === 'archived' || (page as { _status?: unknown })._status === 'archived') || referencedAssets.some(({ reference, asset }) => Boolean(asset.deletedAt) || typeof asset.mimeType !== 'string' || !asset.mimeType.startsWith(reference.mimePrefix))) throw new Error('recipe_reference_unavailable')
     } catch { throw new Error('recipe_reference_unavailable') }
   }
   server.registerTool('create_page_from_recipe', { title: 'Create page from recipe', description: `Create an ordered, template-compatible draft recipe in an explicit open change set. Required media, page, and testimonial fields must be supplied explicitly. ${toolLimits}`, inputSchema: z.object({ changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160), summary: z.string().min(24).max(300), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), sectionId: z.string().uuid(), template: z.enum(TemplateSchema.options), requestKey: z.string().uuid(), blocks: z.array(recipeSelection).min(1).max(40), ...recipePageFields }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ changeSetId, expectedChangeSetRevision, requestKey, blocks, ...data }) => {

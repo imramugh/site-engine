@@ -487,13 +487,13 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; expect(pageEditorProjection(afterFixedRecord)).toEqual(beforeFixed)
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
     const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [
-      { type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' } },
+      { type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } } },
       { type: 'faq', appearance: { background: 'subtle', width: 'content', spacing: 'spacious', motionIntent: 'ambient', logoTone: 'default' } },
       { type: 'testimonials', appearance: { background: 'highlight', width: 'full', spacing: 'default', motionIntent: 'signature', logoTone: 'inverse' }, fields: { items: [{ quote: 'A consent-confirmed SDK testimonial.', attribution: 'SDK customer', permissionConfirmed: true }] } },
     ] }
     const recipePage = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as { id: string; blocks: Array<{ id: string; type: string; appearance: Record<string, string>; items?: Array<{ quote: string; attribution: string; permissionConfirmed: boolean }> }> }
     expect(recipePage.blocks.map((block) => block.type)).toEqual(['callout', 'faq', 'testimonials'])
-    expect(recipePage.blocks[0]?.appearance).toMatchObject({ background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' })
+    expect(recipePage.blocks[0]?.appearance).toMatchObject({ background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } })
     expect(recipePage.blocks[1]?.appearance).toMatchObject({ background: 'subtle', width: 'content', spacing: 'spacious', motionIntent: 'ambient', logoTone: 'default' })
     expect(recipePage.blocks[2]).toMatchObject({ appearance: { background: 'highlight', width: 'full', spacing: 'default', motionIntent: 'signature', logoTone: 'inverse' }, items: [{ quote: 'A consent-confirmed SDK testimonial.', attribution: 'SDK customer', permissionConfirmed: true }] })
     const recipeReplay = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as typeof recipePage
