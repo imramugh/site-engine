@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { decryptCredential, encryptCredential, providerConnectionTransport, publicIntegration, testConnection } from '../src/integrations'
+import { azureResourceEndpoint, decryptCredential, encryptCredential, providerConnectionTransport, publicIntegration, testConnection } from '../src/integrations'
 
 const key = Buffer.alloc(32, 7).toString('base64url')
 
@@ -48,6 +48,20 @@ describe('ENG-023 credential envelopes', () => {
     expect(requests[2]!.headers.get('x-goog-api-key')).toBe('secret')
     expect(requests[3]!.headers.get('authorization')).toBe('Bearer secret')
     expect(requests.map(item => item.url).join('\n')).not.toContain('secret')
+  })
+
+  it('restricts Azure resources to an HTTPS Azure hostname and uses its non-billable v1 model endpoint', async () => {
+    expect(azureResourceEndpoint('https://reviewed-resource.openai.azure.com/')).toBe('https://reviewed-resource.openai.azure.com')
+    for (const value of ['http://reviewed-resource.openai.azure.com/', 'https://127.0.0.1/', 'https://reviewed-resource.openai.azure.com/openai/v1/responses', 'https://reviewed-resource.openai.azure.com/?x=1', 'https://reviewed-resource.openai.azure.com.evil.test/']) expect(azureResourceEndpoint(value)).toBeUndefined()
+    const requests: Array<{ url: string; headers: Headers }> = []
+    await expect(providerConnectionTransport({ provider: 'azure-openai', model: 'deployment', credential: 'azure-test-key', azureResourceEndpoint: 'https://reviewed-resource.openai.azure.com/' }, async (input, init) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) })
+      return new Response('{}', { status: 200 })
+    })).resolves.toEqual({ ok: true, code: 'connected' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.url).toBe('https://reviewed-resource.openai.azure.com/openai/v1/models')
+    expect(requests[0]!.headers.get('api-key')).toBe('azure-test-key')
+    expect(requests[0]!.url).not.toContain('azure-test-key')
   })
 
   it('normalizes provider failures without exposing provider response data', async () => {
