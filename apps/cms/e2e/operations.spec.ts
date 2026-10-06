@@ -129,6 +129,33 @@ test('ENG-037 lets only a fresh Owner manage retention in Operations and require
   await editor.context.close()
 })
 
+test('ENG-030 records duplicate and out-of-order callbacks in the Owner release history', async ({ browser }) => {
+  const owner = await newPage(browser, 'owner')
+  const callback = await owner.page.request.post('/__e2e/publish-callback-history')
+  expect(callback.status()).toBe(200)
+  const proof = await callback.json() as { duplicateReleaseID: string; outOfOrder: string; retry: { id: string; status: string; attempts: number; retryReason: string; correlationID: string } }
+  expect(proof.duplicateReleaseID).toMatch(/^[0-9a-f-]{36}$/)
+  expect(proof.outOfOrder).toBe('An out-of-order publish job cannot activate an older release.')
+  expect(proof.retry).toMatchObject({ status: 'pending', attempts: 1, retryReason: 'STALE_CALLBACK' })
+
+  const response = await owner.page.request.get('/api/operations')
+  expect(response.status()).toBe(200)
+  const data = await response.json() as { releaseHistory: Array<{ id: string; attempts: number; retryReason: string | null; correlationID: string }> }
+  expect(data.releaseHistory).toContainEqual(expect.objectContaining({ id: proof.retry.id, attempts: 1, retryReason: 'STALE_CALLBACK', correlationID: proof.retry.correlationID }))
+
+  await owner.page.goto('/operations')
+  const history = owner.page.getByLabel('Release history')
+  const row = history.locator('[data-release-history-row]').filter({ hasText: proof.retry.correlationID })
+  await expect(row).toContainText('Attempts')
+  await expect(row).toContainText('1')
+  await expect(row).toContainText('Retry reason')
+  await expect(row).toContainText('STALE_CALLBACK')
+  await expect(row).toContainText(proof.retry.correlationID)
+  await owner.page.addScriptTag({ path: axeSource })
+  expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await owner.context.close()
+})
+
 test('ENG-022 exposes the role-aware Leads and Applications links through the admin navigation', async ({ browser }) => {
   const owner = await newPage(browser, 'owner')
   await owner.page.goto('/admin')

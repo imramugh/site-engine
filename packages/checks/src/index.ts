@@ -3,11 +3,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SiteSnapshotSchema, type Block, type Page, type SiteSnapshot } from '@site-engine/contract';
 
-export async function withIsolatedSqlitePath<T>(run: (path: string) => Promise<T>): Promise<T> {
+export type IsolatedSqlite = Readonly<{ directory: string; path: string; uri: string }>;
+
+/** Runs against a fresh file SQLite location and removes its database and journal files afterwards. */
+export async function withIsolatedSqlite<T>(run: (database: IsolatedSqlite) => Promise<T>): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), 'site-engine-sqlite-'));
-  try { return await run(join(directory, 'cms.sqlite')); } finally { await rm(directory, { recursive: true, force: true }); }
+  const path = join(directory, 'cms.sqlite');
+  try { return await run({ directory, path, uri: `file:${path}` }); } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
+/** @deprecated Prefer withIsolatedSqlite when a database URI or fixture root is also needed. */
+export async function withIsolatedSqlitePath<T>(run: (path: string) => Promise<T>): Promise<T> {
+  return withIsolatedSqlite(({ path }) => run(path));
 }
 export const artifactName = (story: string, browser: string, test: string) => `${story}-${browser}-${test.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
+
+/** Removes credentials from logs before a failure artifact leaves an isolated test workspace. */
+export function scrubFailureLog(value: string): string {
+  return value
+    .replace(/(authorization\s*[:=]\s*(?:bearer|basic)\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|secret|password|cookie)\s*[=:]\s*["']?)[^\s,"';}]+/gi, '$1[REDACTED]')
+    .replace(/(https?:\/\/[^\s/:@]+:)[^\s@/]+@/gi, '$1[REDACTED]@');
+}
 
 export { assertBoundaries, inspectBoundaries } from './assert-boundaries.js';
 

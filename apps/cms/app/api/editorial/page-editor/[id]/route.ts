@@ -9,6 +9,7 @@ import {
 } from '../../../../../src/page-editor'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { loadInitialPreviewBaseline } from '../../../../../src/review-preview'
+import { changeSetQuality, type CapturedChange } from '../../../../../src/editorial'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
@@ -133,6 +134,14 @@ async function POSTHandler(
         actor: authenticated.user as never,
         save,
         initialBaseline,
+        evaluateQuality: (transaction, changeSet) =>
+          changeSetQuality(
+            payload,
+            transaction,
+            Array.isArray(changeSet.changes)
+              ? changeSet.changes as CapturedChange[]
+              : [],
+          ),
       }),
       { headers: noStore },
     )

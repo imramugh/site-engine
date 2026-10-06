@@ -486,6 +486,15 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     ).rejects.toThrow('STALE_CHANGE_SET')
   })
 
+  it('rolls back a page-editor save when its in-transaction readiness evaluator fails', async () => {
+    const editor = await actor()
+    const current = await fixture(editor)
+    const input = save(current.page as unknown as Record<string, unknown>, current.set, 'Must roll back')
+    await expect(executePageEditorSave({ payload, actor: editor as never, save: input, evaluateQuality: async () => { throw new Error('injected readiness failure') } })).rejects.toThrow('injected readiness failure')
+    expect(await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })).toMatchObject({ title: 'Full page editor fixture' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ revision: 0, changes: [] })
+  })
+
   it('enforces role, ownership, editable state, origin, bounded input and the exact public projection', async () => {
     const editor = await actor()
     const owner = await actor('owner')
@@ -669,5 +678,13 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
         )
       ).status,
     ).toBe(413)
+    const saved = await route(routeInput, { origin: 'http://cms.test', cookie })
+    expect(saved.status).toBe(200)
+    await expect(saved.json()).resolves.toMatchObject({
+      quality: {
+        checks: [expect.objectContaining({ name: 'contract-and-tree' })],
+        readiness: expect.objectContaining({ publishable: expect.any(Boolean) }),
+      },
+    })
   })
 })

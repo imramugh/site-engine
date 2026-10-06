@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { checkSiteSnapshot, type QualityReport } from '@site-engine/checks'
 import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
@@ -223,6 +224,9 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   } else changes.push(change)
   await req.payload.update({ collection: 'change-sets', id: String(changeSet.id), data: { changes, revision: Number(changeSet.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } })
   await req.payload.create({ collection: 'audit-events', data: { event: 'editorial.change_captured', user: actor.id, actor: actor.id, detail: { changeSet: changeSet.id, collection, id: doc.id } }, overrideAccess: true, req })
+  // Editorial diagnostics guide correction; only the collection's contract and
+  // tree hooks above may abort the write.
+  ;(doc as Record<string, unknown>).readiness = await currentDraftReadiness(req.payload, req, changes)
 }
 
 function assertActor(actor: Actor | undefined): asserts actor is Actor {
@@ -264,7 +268,24 @@ export type ChangeSetQualityCheck = {
   errors: Array<{ collection: string; id: string; message: string }>
 }
 
-export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[] }> {
+/** Evaluate the identical normalized candidate that preview and publication
+ * use: captured changes are applied to the frozen queue/public baseline. */
+export async function currentDraftReadiness(payload: Payload, req: PayloadRequest, changes: CapturedChange[], options: { asOf?: Date | string } = {}): Promise<QualityReport> {
+  try {
+    const [{ currentPreviewBaseline }, { buildCandidate }] = await Promise.all([import('./review-preview'), import('./publishing')])
+    const base = await currentPreviewBaseline(payload, req)
+    if (!base) throw new Error('No configured baseline')
+    const candidate = buildCandidate(base.manifest, changes, changes.map(change => `${change.collection}:${change.id}`), base.versions)
+    return checkSiteSnapshot(candidate, { ...(options.asOf ? { asOf: options.asOf } : {}), style: candidate.styleGuide })
+  } catch {
+    // A stale or malformed capture must remain available for repair. The
+    // contract/tree evaluator is the only write-aborting quality gate.
+    const unavailable = { code: 'READINESS_CANDIDATE_UNAVAILABLE', severity: 'blocker' as const, path: '$', message: 'Readiness cannot be evaluated until the captured draft can be assembled against its publication baseline.', remediation: 'Correct the draft or refresh the change set, then review readiness again.' }
+    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: false, issues: [unavailable], blockers: [unavailable], warnings: [], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }
+  }
+}
+
+export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[], options: { asOf?: Date | string } = {}): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[]; readiness: QualityReport }> {
   const errors: { collection: string; id: string; message: string }[] = []
   for (const change of changes) {
     if (!change.after) continue
@@ -294,7 +315,8 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
       errors.push(...treeErrors.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.field}: ${issue.message}` })))
     }
   }
-  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: ['A private comparison can be prepared after review submission.'] }
+  const readiness = await currentDraftReadiness(payload, req, changes, options)
+  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: readiness.warnings.map(issue => `${issue.code}: ${issue.message}`), readiness }
 }
 
 export async function transitionChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; action: 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' }): Promise<Record<string, unknown>> {

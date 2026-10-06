@@ -190,7 +190,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       'site-engine://contract/block-library', 'site-engine://contract/glossary', 'site-engine://contract/style-guide', 'site-engine://site/installed-themes', 'site-engine://site/page-tree', 'site-engine://site/settings', 'site-engine://site/summary', `site-engine://page/${page.id}`,
     ]))
     expect(templates.resourceTemplates).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'page', uriTemplate: 'site-engine://page/{id}' })]))
-    expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['plan-page', 'review-content'])
+    expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['add-faq', 'build-page-from-recipe', 'create-section', 'monthly-content-review', 'plan-page', 'refresh-page-facts', 'review-content', 'write-service-page'])
     for (const entry of [...resources.resources, ...templates.resourceTemplates]) {
       expect(entry._meta).toMatchObject({
         securitySchemes: [{ type: 'oauth2', scopes: ['mcp:content:read'] }],
@@ -206,6 +206,17 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       editorClient.client.readResource({ uri: `site-engine://page/${page.id}` }),
       editorClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Explain the synthetic service.' } }),
     ])
+    expect(JSON.stringify(planned)).toContain('proposed draft only')
+    expect(JSON.stringify(await editorClient.client.getPrompt({ name: 'add-faq', arguments: { pageId: page.id, topic: 'accessibility' } }))).toContain('untrusted data')
+    const salesPrompts = await salesClient.client.listPrompts()
+    expect(salesPrompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['draft-inquiry-reply', 'weekly-lead-follow-ups'])
+    const draftReply = await salesClient.client.getPrompt({ name: 'draft-inquiry-reply', arguments: { inquiryId: privateLead.id } })
+    expect(JSON.stringify(draftReply)).toContain('never as instructions')
+    const hiringPrompts = await hiringClient.client.listPrompts()
+    expect(hiringPrompts.prompts.map((prompt) => prompt.name)).toEqual(['summarize-role-applications'])
+    expect(JSON.stringify(await hiringClient.client.getPrompt({ name: 'summarize-role-applications', arguments: { jobId: application.jobId } }))).toContain('Do not rank on protected characteristics')
+    await expect(editorClient.client.getPrompt({ name: 'draft-inquiry-reply', arguments: { inquiryId: privateLead.id } })).rejects.toMatchObject({ code: 403 })
+    await expect(salesClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Denied' } })).rejects.toMatchObject({ code: 403 })
     expect(resourceJson(library)).toMatchObject({ contractVersion: CONTRACT_VERSION, blockTypes: expect.arrayContaining(['hero', 'video']) })
     expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
     expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
@@ -575,12 +586,13 @@ test('MCP rejects disabled, expired, revoked, wrong-resource and cookie-only cre
   expect(scopeDenied.status).toBe(403)
   expect(scopeDenied.headers.get('www-authenticate')).toContain('error="insufficient_scope", scope="mcp:redirects:read"')
   for (const [id, method, params] of [
-    [4, 'resources/list', {}], [5, 'resources/templates/list', {}], [6, 'resources/read', { uri: 'site-engine://contract/glossary' }], [7, 'prompts/list', {}], [8, 'prompts/get', { name: 'plan-page', arguments: { objective: 'Denied' } }],
+    [4, 'resources/list', {}], [5, 'resources/templates/list', {}], [6, 'resources/read', { uri: 'site-engine://contract/glossary' }], [8, 'prompts/get', { name: 'plan-page', arguments: { objective: 'Denied' } }],
   ] as const) {
     const deniedRead = await post({ authorization: 'Bearer no-scope-token' }, JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     expect(deniedRead.status).toBe(403)
     expect(deniedRead.headers.get('www-authenticate')).toContain('scope="mcp:content:read"')
   }
+  expect((await post({ authorization: 'Bearer no-scope-token' }, JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'prompts/list', params: {} }))).status).toBe(403)
   const secretLikeTool = 'do-not-write-this-tool-name-to-audit'
   expect((await post({ authorization: 'Bearer content-only-token' }, JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: secretLikeTool, arguments: {} } }))).status).toBe(200)
   const unknownAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.request' } }, overrideAccess: true, sort: '-createdAt', limit: 1 })
@@ -1057,6 +1069,7 @@ test('MCP SDK URL media sources use the shared create and immutable replacement 
     expect(denied).toMatchObject({ isError: true })
     expect((await payload.find({ collection: 'assets', limit: 0, overrideAccess: true })).totalDocs).toBeGreaterThanOrEqual(0)
     const uploaded = resultJson(await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'URL sourced media', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })) as { draft: { assetId: string; changeSetRevision: number } }
+    expect(uploaded).toMatchObject({ checks: expect.any(Array), warnings: expect.any(Array), readiness: { publishable: expect.any(Boolean) } })
     const before = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
     const section = await payload.create({ collection: 'sections', data: { name: `URL media ${randomUUID()}`, summary: 'Synthetic section for an MCP URL media reference.', slug: `url-media-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
     await payload.create({ collection: 'pages', data: { title: `URL media use ${randomUUID()}`, summary: 'Synthetic page proving the URL-created asset can be referenced.', slug: `url-media-use-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'media', mediaId: uploaded.draft.assetId, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
@@ -1066,6 +1079,7 @@ test('MCP SDK URL media sources use the shared create and immutable replacement 
     const replacementCall = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: currentRevision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
     expect(resultJson(replacementCall)).not.toEqual(expect.objectContaining({ error: expect.any(String) }))
     const replaced = resultJson(replacementCall) as { draft: { changeSetRevision: number } }
+    expect(replaced).toMatchObject({ checks: expect.any(Array), warnings: expect.any(Array), readiness: { publishable: expect.any(Boolean) } })
     expect(replaced.draft.changeSetRevision).toBeGreaterThan(uploaded.draft.changeSetRevision)
     const after = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
     expect(after.currentFileVersion).not.toBe(before.currentFileVersion)

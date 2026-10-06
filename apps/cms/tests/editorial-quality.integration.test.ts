@@ -6,10 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import sharp from 'sharp'
 import { SiteSnapshotSchema } from '@site-engine/contract'
+import { checkSiteSnapshot } from '@site-engine/checks'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { markStaleIfNeeded, transitionChangeSet } from '../src/editorial'
-import { canonicalHash, changeSetHash } from '../src/publishing'
+import { currentDraftReadiness, markStaleIfNeeded, snapshot, transitionChangeSet } from '../src/editorial'
+import { buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { prepareReviewPreview } from '../src/review-preview'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-editorial-quality-'))
@@ -144,5 +145,32 @@ describe('editorial quality captures all portable change collections', () => {
       const set = await payload.create({ collection: 'change-sets', data: { name: `Malformed ${collection}`, actor: actor.id, state: 'open', revision: 0, changes: [{ collection, id: randomUUID(), before: null, after, beforeHash: null, afterHash: null }] }, overrideAccess: true, context: { editorialInternal: true } })
       await expect(withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor, id: set.id, action: 'submit' }))).rejects.toThrow(/quality checks failed/i)
     }
+  })
+
+  it('retains an editorially imperfect SQLite draft and returns the common static-check report', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: `readiness-owner-${randomUUID()}@example.test`, name: 'Readiness Owner', roles: ['owner'] }, overrideAccess: true })
+    await payload.create({ collection: 'site-settings', data: { siteName: 'Readiness Test', defaultLocale: 'en' }, draft: true, user: owner, overrideAccess: false })
+    const section = await payload.create({ collection: 'sections', data: { name: 'Readiness', summary: 'A section used to retain an imperfect editorial draft.', slug: `readiness-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, draft: true, user: owner, overrideAccess: false })
+    const saved = await payload.create({ collection: 'pages', data: { title: 'A', summary: 'A sufficiently long summary for a retained editorial draft.', slug: `brief-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'A useful heading', body: 'A useful body.', hidden: false, appearance }] }, draft: true, user: owner, overrideAccess: false }) as unknown as Record<string, unknown>
+    const returned = saved.readiness as { blockers?: Array<{ code: string }>; warnings?: Array<{ code: string }> }
+    expect(await payload.findByID({ collection: 'pages', id: String(saved.id), draft: true, overrideAccess: true })).toMatchObject({ title: 'A' })
+    const set = await setFor(owner.id)
+    const report = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, set.changes as never, { asOf: '2026-10-06T00:00:00.000Z' }))
+    expect({ blockers: returned.blockers?.map(issue => issue.code), warnings: returned.warnings?.map(issue => issue.code) }).toEqual({ blockers: report.blockers.map(issue => issue.code), warnings: report.warnings.map(issue => issue.code) })
+  })
+
+  it('matches static heading, link, and style diagnostics for a captured draft candidate', async () => {
+    const page = contract14Baseline.pages[0]!
+    const before = snapshot('pages', page as unknown as Record<string, unknown>)!
+    const changed = { ...before, blocks: [{ id: randomUUID(), type: 'hero', heading: 'Heading', body: '### skipped heading. forbidden phrase.', cta: { label: 'Broken', href: '/missing-route' }, hidden: false, appearance }] }
+    const changes = [
+      { collection: 'pages' as const, id: page.id, before, after: changed, beforeHash: canonicalHash(before), afterHash: canonicalHash(changed) },
+      { collection: 'style-guides' as const, id: randomUUID(), before: null, after: { bannedPhrases: ['forbidden phrase'], preferredTerms: [], canadianSpelling: 'off', maximumSentenceWords: 30, minimumReadingEase: 30 }, beforeHash: null, afterHash: null },
+    ]
+    const candidate = buildCandidate(contract14Baseline, changes, changes.map(change => `${change.collection}:${change.id}`), { themeVersion: 'synthetic-theme', engineVersion: 'synthetic-engine', contractVersion: '1.4.0' })
+    const staticReport = checkSiteSnapshot(candidate, { asOf: '2026-10-06T00:00:00.000Z', style: candidate.styleGuide })
+    const draftReport = await withPayloadTransaction(payload, req => currentDraftReadiness(payload, req, changes, { asOf: '2026-10-06T00:00:00.000Z' }))
+    expect(draftReport.issues.map(issue => issue.code)).toEqual(staticReport.issues.map(issue => issue.code))
+    expect(draftReport.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['HEADING_ORDER', 'INTERNAL_LINK_BROKEN', 'STYLE_BANNED_PHRASE']))
   })
 })

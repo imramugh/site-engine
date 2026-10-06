@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
@@ -15,11 +15,12 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob } from '../src/review-preview.js'
-import { buildCandidate, canonicalHash } from '../src/publishing.js'
+import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
 import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
 import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
+import { buildSnapshot } from '../../site/scripts/build-snapshot.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
@@ -713,13 +714,19 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         if (action === 'fail') return withPayloadTransaction(payload, inner => failPreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), String(body.errorCode), undefined, body.diagnostics))
         throw new Error('Unsupported failed-preview worker action.')
       }
-      const render = async () => {
-        const error = new Error('Generated structured data must contain schema.org @context and an @graph array.') as Error & { diagnostics?: unknown[] }
-        error.diagnostics = [{ code: 'STRUCTURED_DATA_INVALID', path: `structuredData.${onPageReviewPageID}`, pageId: onPageReviewPageID, blockId: onPageReviewBlockID, message: error.message }]
-        throw error
+      const components = mkdtempSync(join(temporaryDirectory, 'malformed-structured-data-theme-'))
+      try {
+        const starterLayout = createRequire(import.meta.url).resolve('@site-engine/theme-starter/components/Layout.astro')
+        cpSync(dirname(starterLayout), components, { recursive: true })
+        const layout = join(components, 'Layout.astro')
+        const source = readFileSync(layout, 'utf8')
+        writeFileSync(layout, source.replace("set:html={JSON.stringify(schema).replaceAll('<', '\\\\u003c')}", "set:html={'{'}"))
+        const render = (input: Record<string, unknown>) => buildSnapshot({ ...input, themeComponentsRoot: components } as Parameters<typeof buildSnapshot>[0])
+        try { await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, render, heartbeatMs: 60_000, signal: undefined }) }
+        catch (error) { if (!(error instanceof Error) || error.message !== 'BUILD_FAILED') throw error }
+      } finally {
+        rmSync(components, { recursive: true, force: true })
       }
-      try { await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, render, heartbeatMs: 60_000, signal: undefined }) }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'BUILD_FAILED') throw error }
       const failed = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true })
       if (failed.status !== 'failed') throw new Error('Structured-data diagnostic job did not fail.')
       return { id, status: failed.status }
@@ -890,6 +897,31 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       payload.count({ collection: 'published-releases', overrideAccess: true }),
     ]).then(([outbox, releases]) => json(response, { outbox: outbox.docs[0] ? { id: outbox.docs[0].id, status: outbox.docs[0].status } : null, releaseCount: releases.totalDocs }))
       .catch(() => { response.writeHead(500); response.end('Unable to read publish state.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/publish-callback-history') {
+    void (async () => {
+      const baseline = await payload.find({ collection: 'publish-outbox', where: { sequence: { equals: 1 } }, limit: 1, depth: 0, overrideAccess: true })
+      const prior = baseline.docs[0]
+      if (!prior) throw new Error('Duplicate callback baseline is missing.')
+      const releaseRows = await payload.find({ collection: 'published-releases', where: { outbox: { equals: prior.id } }, limit: 1, depth: 0, overrideAccess: true })
+      const release = releaseRows.docs[0]
+      if (!release || !release.artifact || typeof release.artifact !== 'object') throw new Error('Duplicate callback release is missing.')
+      const duplicate = await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(prior.id), 'duplicate-callback-token', release.artifact as VerifiedArtifact))
+      const claimed = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date()))
+      if (!claimed || Number(claimed.sequence) !== 2) throw new Error('Older callback fixture is not the publish queue head.')
+      const snapshotID = typeof claimed.snapshot === 'string' ? claimed.snapshot : String(claimed.snapshot.id)
+      const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: snapshotID, depth: 0, overrideAccess: true })
+      const artifact: VerifiedArtifact = { digest: 'c'.repeat(64), sourceContentHash: String(snapshot.contentHash), themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion), checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }
+      let outOfOrder = ''
+      const retried = await withPayloadTransaction(payload, async req => {
+        try { await completePublishJob(payload, req, String(claimed.id), String(claimed.leaseToken), artifact) }
+        catch (error) { outOfOrder = error instanceof Error ? error.message : 'Publish callback failed.' }
+        if (outOfOrder !== 'An out-of-order publish job cannot activate an older release.') throw new Error(outOfOrder)
+        return retryPublishJob(payload, req, String(claimed.id), String(claimed.leaseToken), 'STALE_CALLBACK')
+      })
+      return { duplicateReleaseID: duplicate.id, outOfOrder, retry: { id: retried.id, status: retried.status, attempts: retried.attempts, retryReason: retried.errorCode, correlationID: retried.correlationID } }
+    })().then(value => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to exercise publish callback history.') })
     return
   }
   const upstream = requestUpstream({

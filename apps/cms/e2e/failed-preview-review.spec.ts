@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
-test('reviewer sees a failed structured-data preview diagnostic and cannot approve it', async ({ browser }) => {
+test('reviewer sees a real renderer structured-data diagnostic and cannot approve it', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-on-page-reviewer-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -13,8 +13,10 @@ test('reviewer sees a failed structured-data preview diagnostic and cannot appro
   const { id, status } = await seeded.json() as { id: string; status: string }
   expect(status).toBe('failed')
   await page.goto(`/review/${id}`)
-  await expect(page.getByRole('alert').filter({ hasText: 'Generated structured data' })).toContainText('Generated structured data')
-  await expect(page.getByText('STRUCTURED_DATA_INVALID · structuredData.12345678-1234-4234-8234-1234567890ab · 12345678-1234-4234-8234-1234567890ac')).toBeVisible()
+  const pageDiagnostic = page.getByRole('alert').filter({ hasText: 'STRUCTURED_DATA_INVALID · structuredData.12345678-1234-4234-8234-1234567890ab' })
+  await expect(pageDiagnostic).toContainText('Generated structured data must be a JSON object.')
+  await expect(pageDiagnostic.getByText('STRUCTURED_DATA_INVALID · structuredData.12345678-1234-4234-8234-1234567890ab')).toBeVisible()
+  await expect(page.getByText('12345678-1234-4234-8234-1234567890ac', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Return to Reviews' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Approve/ })).toHaveCount(0)
   await page.addScriptTag({ path: axeSource })
