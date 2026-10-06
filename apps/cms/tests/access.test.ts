@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hasRole } from '../src/access.js'
 import { isRetryableSQLiteError, markAuthenticationSQLiteContention, sqliteAuthenticationBoundary, sqliteBackpressureResponse } from '../src/sqlite.js'
-import { hasFreshAuthentication, SESSION_IDLE_SECONDS, sessionIsUsable } from '../src/identity'
+import { hasFreshAuthentication, SESSION_IDLE_SECONDS, serverSessionStrategy, sessionIsUsable } from '../src/identity'
 import { decryptSecret, encryptSecret, recoveryHash, recoveryMatches } from '../src/totp'
 
 const { default: configPromise } = await import('../payload.config.js')
@@ -49,6 +49,16 @@ describe('role matrix (ENG-007)', () => {
     const now = Date.now()
     expect(sessionIsUsable({ expiresAt: new Date(now + 60_000).toISOString(), lastSeenAt: new Date(now - (SESSION_IDLE_SECONDS * 1000) - 1).toISOString() }, now)).toBe(false)
     expect(hasFreshAuthentication({ authenticatedAt: new Date(now - (15 * 60 * 1000) - 1).toISOString() }, now)).toBe(false)
+  })
+
+  it('does not suppress refresh failures that are not retryable SQLite contention, or auth reads', async () => {
+    const token = 'unit-session-token'
+    const session = { id: 'session-id', tokenHash: token, user: 'user-id', authenticatedAt: new Date().toISOString(), lastSeenAt: new Date(Date.now() - 61_000).toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    const args = (payload: Record<string, unknown>) => ({ headers: new Headers({ cookie: `site_engine_session=${token}` }), payload }) as never
+    const updateFailure = new Error('validation failed')
+    await expect(serverSessionStrategy.authenticate(args({ find: async () => ({ docs: [session] }), findByID: async () => ({ id: 'user-id', email: 'unit@example.test', name: 'Unit', roles: ['editor'] }), update: async () => { throw updateFailure } }))).rejects.toBe(updateFailure)
+    const readFailure = new Error('read failed')
+    await expect(serverSessionStrategy.authenticate(args({ find: async () => { throw readFailure } }))).rejects.toBe(readFailure)
   })
 
   it('encrypts TOTP material and accepts a recovery code only by its stored hash (ENG-007)', () => {

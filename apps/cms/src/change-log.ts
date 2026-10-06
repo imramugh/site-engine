@@ -71,17 +71,20 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
   })
 }
 
+export async function prepareReviewedRollbackCore(payload:Payload,req:PayloadRequest,actor:Actor,releaseID:string){
+  if(!req.transactionID)throw new Error('Rollback preparation must run inside a database transaction.')
+  const latest=(await payload.find({collection:'published-releases',sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
+  if(!latest||String(latest.id)!==releaseID)throw new Error('Only the current release can be prepared for rollback.')
+  const outbox=record(latest.outbox),setID=relationID(outbox.changeSet)
+  const set=setID?await payload.findByID({collection:'change-sets',id:setID,depth:0,overrideAccess:true,req}):undefined
+  if(!rollbackSupported(set as unknown as Record<string,unknown>|undefined))throw new Error('This release requires a manual reviewed change and cannot be rolled back automatically.')
+  const sequence=Number(latest.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
+  const currentSnapshot=record(latest.snapshot),previousSnapshot=record(previous?.snapshot)
+  if(!previous||!currentSnapshot.manifest||!previousSnapshot.manifest)throw new Error('An earlier immutable release is required for rollback.')
+  return importReviewedSnapshot({payload,req,actor,name:`Rollback release #${sequence}`,manifest:previousSnapshot.manifest,baseline:currentSnapshot.manifest})
+}
+
 export async function prepareReviewedRollback(payload:Payload,actor:Actor,headers:Headers,releaseID:string){
   if(!(await freshStaff(['owner'])({req:{payload,user:actor,headers} as never})))throw new Error('Fresh Owner authentication is required.')
-  return withPayloadTransaction(payload,async(req:PayloadRequest)=>{req.user=actor as never;req.headers=headers
-    const latest=(await payload.find({collection:'published-releases',sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
-    if(!latest||String(latest.id)!==releaseID)throw new Error('Only the current release can be prepared for rollback.')
-    const outbox=record(latest.outbox),setID=relationID(outbox.changeSet)
-    const set=setID?await payload.findByID({collection:'change-sets',id:setID,depth:0,overrideAccess:true,req}):undefined
-    if(!rollbackSupported(set as unknown as Record<string,unknown>|undefined))throw new Error('This release requires a manual reviewed change and cannot be rolled back automatically.')
-    const sequence=Number(latest.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
-    const currentSnapshot=record(latest.snapshot),previousSnapshot=record(previous?.snapshot)
-    if(!previous||!currentSnapshot.manifest||!previousSnapshot.manifest)throw new Error('An earlier immutable release is required for rollback.')
-    return importReviewedSnapshot({payload,req,actor,name:`Rollback release #${sequence}`,manifest:previousSnapshot.manifest,baseline:currentSnapshot.manifest})
-  })
+  return withPayloadTransaction(payload,async(req:PayloadRequest)=>{req.user=actor as never;req.headers=headers;return prepareReviewedRollbackCore(payload,req,actor,releaseID)})
 }

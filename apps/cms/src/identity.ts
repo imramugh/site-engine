@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { AuthStrategy, AuthStrategyFunctionArgs } from 'payload'
 import type { AuthSession, User } from '../payload-types'
-import { markAuthenticationSQLiteContention } from './sqlite'
+import { isRetryableSQLiteError, markAuthenticationSQLiteContention } from './sqlite'
 
 export const SESSION_COOKIE = '__Host-site_engine_session'
 export const OIDC_TRANSACTION_COOKIE = '__Host-site_engine_oidc'
@@ -58,8 +58,13 @@ export const serverSessionStrategy: AuthStrategy = {
     if (user.disabled) return { user: null }
     // Idle expiry is sliding, and the authoritative timestamp is in SQLite rather
     // than a JWT claim. Throttle the write while still refreshing active sessions.
+    // A lock after all identity checks have succeeded cannot turn that verified
+    // request into an anonymous one: Payload's generated REST router swallows
+    // auth-strategy errors and maps them to 403. Leave the refresh for a later
+    // request, while continuing to fail closed for every other auth read/write.
     if (Date.now() - new Date(session.lastSeenAt).getTime() > 60_000) {
-      await payload.update({ collection: 'auth-sessions', id: session.id, data: { lastSeenAt: new Date().toISOString() }, overrideAccess: true })
+      try { await payload.update({ collection: 'auth-sessions', id: session.id, data: { lastSeenAt: new Date().toISOString() }, overrideAccess: true }) }
+      catch (error) { if (!isRetryableSQLiteError(error)) throw error }
     }
     // Authenticated user objects can reach admin client props. Never include
     // credential material fetched with the trusted Local API.

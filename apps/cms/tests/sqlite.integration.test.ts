@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createClient } from '@libsql/client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { cookieName, hashOpaqueToken, newOpaqueToken, serverSessionStrategy, SESSION_COOKIE } from '../src/identity'
@@ -176,6 +177,31 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     const audit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.disabled' } }, overrideAccess: true })
     expect(audit.totalDocs).toBeGreaterThan(0)
   })
+
+  it('defers only an aged verified session refresh while SQLite has a writer, and still denies invalid identities', async () => {
+    const aged = new Date(Date.now() - 61_000).toISOString()
+    const future = new Date(Date.now() + 60_000).toISOString()
+    const identity = async (email: string, options: { disabled?: boolean; revoked?: boolean; expired?: boolean } = {}) => {
+      const user = await payload.create({ collection: 'users', data: { email, name: email, roles: ['editor'], disabled: options.disabled }, overrideAccess: true })
+      const token = newOpaqueToken()
+      const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: user.id, authenticatedAt: new Date().toISOString(), lastSeenAt: aged, expiresAt: options.expired ? new Date(Date.now() - 1_000).toISOString() : future, ...(options.revoked ? { revokedAt: new Date().toISOString() } : {}) }, overrideAccess: true })
+      return { user, session, headers: new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${token}` }) }
+    }
+    const valid = await identity('refresh-lock-valid@example.test')
+    const expired = await identity('refresh-lock-expired@example.test', { expired: true })
+    const revoked = await identity('refresh-lock-revoked@example.test', { revoked: true })
+    const disabled = await identity('refresh-lock-disabled@example.test', { disabled: true })
+    const external = createClient({ url: `file:${db}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute({ sql: 'UPDATE auth_sessions SET updated_at = updated_at WHERE id = ?', args: [valid.session.id] })
+      await expect(serverSessionStrategy.authenticate({ headers: valid.headers, payload })).resolves.toMatchObject({ user: { id: valid.user.id } })
+      expect((await payload.findByID({ collection: 'auth-sessions', id: valid.session.id, overrideAccess: true })).lastSeenAt).toBe(aged)
+      for (const invalid of [expired, revoked, disabled]) await expect(serverSessionStrategy.authenticate({ headers: invalid.headers, payload })).resolves.toEqual({ user: null })
+    } finally { await lock.rollback(); external.close() }
+    await expect(serverSessionStrategy.authenticate({ headers: valid.headers, payload })).resolves.toMatchObject({ user: { id: valid.user.id } })
+    expect(Date.parse((await payload.findByID({ collection: 'auth-sessions', id: valid.session.id, overrideAccess: true })).lastSeenAt)).toBeGreaterThan(Date.parse(aged))
+  }, 15_000)
   it('keeps emergency credentials private and rejects owner API edits to those fields', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'private-owner@example.test', name: 'Private owner', roles: ['owner'], emergencyTotpSecret: 'synthetic-encrypted-secret', emergencyRecoveryHashes: ['synthetic-hash'], emergencyLastCounter: 123 }, overrideAccess: true })
     const token = newOpaqueToken(); const now = new Date().toISOString()

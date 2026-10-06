@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import styles from './careers-workspace.module.css'
 import { PermanentDeleteDialog } from '../permanent-delete-dialog'
 import { MailReplyComposer } from '../mail-reply-composer'
@@ -15,6 +16,8 @@ const label = (value: string): string => value.charAt(0).toUpperCase() + value.s
 const employmentLabel = (value?: string): string => value ? value.toLowerCase().split('_').map(label).join(' ') : ''
 
 export function ApplicationDashboard({ owner = false }: { owner?: boolean }) {
+  const searchParams = useSearchParams()
+  const requestedApplication = searchParams.get('application')
   const [view, setView] = useState<'roles' | 'applications'>('roles')
   const [applications, setApplications] = useState<Application[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
@@ -51,6 +54,15 @@ export function ApplicationDashboard({ owner = false }: { owner?: boolean }) {
     finally { if (currentRequest === requestID.current) setLoading(false) }
   }
   useEffect(() => { void load(1, '', '') }, [])
+  useEffect(() => {
+    if (!requestedApplication) return
+    let cancelled = false
+    void fetch(`/api/hiring/applications/${encodeURIComponent(requestedApplication)}`, { cache: 'no-store' }).then(async response => {
+      if (!response.ok) throw new Error('The requested application is unavailable.')
+      return response.json() as Promise<{ application: Application }>
+    }).then(({ application }) => { if (!cancelled) { setView('applications'); setApplications(current => current.some(item => item.id === application.id) ? current : [application, ...current]); void show(application); setError('') } }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : 'The requested application is unavailable.') })
+    return () => { cancelled = true }
+  }, [requestedApplication])
 
   const updateStage = async (application: Application, status: Stage) => {
     setError(''); setSaving(application.id)
