@@ -1,7 +1,9 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { defaultNotificationPreferences, parseNotificationPreferences, readNotificationPreferences, saveNotificationPreferences } from '../../../src/notification-settings'
 import { serverSessionStrategy } from '../../../src/identity'
 
@@ -18,7 +20,7 @@ async function boundedJSON(request: Request) {
 }
 async function actor(request: Request) { const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); return { payload, user: auth.user as { id?: string; roles?: string[] } | null } }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, user } = await actor(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
   const [events, mapping] = await Promise.all([readNotificationPreferences(payload), payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true })])
@@ -29,7 +31,7 @@ export async function GET(request: Request) {
   return privateJSON({ events, defaults: defaultNotificationPreferences, capabilities: { emailDelivery, smsDelivery: false, producers: { 'new-lead': true, 'active-incident-lead': true, 'new-job-application': true, 'change-set-submitted': true, 'follow-ups-due': false, 'publish-or-integration-failed': true } } })
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return privateJSON({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await actor(request)
@@ -38,5 +40,8 @@ export async function POST(request: Request) {
     if (!events) return privateJSON({ error: 'Notification preferences are invalid.' }, 400)
     await withPayloadTransaction(payload, (req) => saveNotificationPreferences(payload, req, events, user.id!))
     return privateJSON({ events })
-  } catch (error) { return privateJSON({ error: error instanceof RangeError ? 'Notification settings request is too large.' : 'Notification preferences could not be saved.' }, error instanceof RangeError ? 413 : 400) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? privateJSON({ error: error instanceof RangeError ? 'Notification settings request is too large.' : 'Notification preferences could not be saved.' }, error instanceof RangeError ? 413 : 400) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

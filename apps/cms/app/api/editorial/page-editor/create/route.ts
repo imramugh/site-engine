@@ -1,7 +1,9 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { createPageDraft } from '../../../../../src/page-creator'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -41,7 +43,7 @@ async function boundedBody(request: Request): Promise<unknown> {
   }
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request))
     return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
@@ -53,6 +55,8 @@ export async function POST(request: Request) {
     const result = await createPageDraft({ payload, actor: authenticated.user as never, value })
     return Response.json(result, { status: result.replayed ? 200 : 201, headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const code = error instanceof Error ? error.message : ''
     const status = code === 'EDITOR_ROLE_REQUIRED' ? 403
       : code === 'REQUEST_KEY_REUSED' ? 409
@@ -65,3 +69,5 @@ export async function POST(request: Request) {
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

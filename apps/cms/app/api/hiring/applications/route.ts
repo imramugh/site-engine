@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { hasRole } from '../../../../src/access'
@@ -7,7 +8,7 @@ export const dynamic = 'force-dynamic'
 const stages = ['new', 'reviewing', 'interview', 'offer', 'hired', 'declined', 'closed'] as const
 const id = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   const user = authenticated.user as { id?: string; roles?: ('owner' | 'hiring')[]; disabled?: boolean } | null
@@ -36,3 +37,5 @@ export async function GET(request: Request): Promise<Response> {
     stageCounts: Object.fromEntries(stages.map((status, index) => [status, counts[index]?.totalDocs ?? 0])),
   }, { headers: { 'Cache-Control': 'no-store' } })
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

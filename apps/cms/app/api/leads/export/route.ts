@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { hasRole } from '../../../../src/access'
@@ -8,7 +9,7 @@ import { LeadFilterError, leadWhere, parseLeadFilters } from '../../../../src/le
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   if (!hasRole(authenticated.user as never, ['owner', 'sales'])) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
@@ -24,3 +25,5 @@ export async function GET(request: Request): Promise<Response> {
   const csv = [columns.join(','), ...result.docs.map((lead) => columns.map((column) => csvEscape((lead as unknown as Record<string, unknown>)[column])).join(','))].join('\r\n')
   return new Response(csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="leads.csv"', 'Cache-Control': 'no-store' } })
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

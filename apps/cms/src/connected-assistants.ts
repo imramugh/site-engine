@@ -1,4 +1,4 @@
-const allowedScopes = new Set(['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'])
+const allowedScopes = new Set(['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'])
 const managementID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 export type AssistantGrant = { managementId: string; userId: string; clientId: string; clientName: string; resource: string; scopes: string[]; createdAt: number; lastUsedAt?: number; expiresAt: number }
 

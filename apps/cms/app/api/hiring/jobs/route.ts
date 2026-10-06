@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { hasRole } from '../../../../src/access'
@@ -20,7 +21,7 @@ type JobPage = {
 
 const location = (page: JobPage): string => [page.jobPosting?.location?.addressLocality, page.jobPosting?.location?.addressRegion, page.jobPosting?.location?.addressCountry].filter(Boolean).join(', ')
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   const user = authenticated.user as { id?: string; roles?: ('owner' | 'hiring')[]; disabled?: boolean } | null
@@ -50,3 +51,5 @@ export async function GET(request: Request): Promise<Response> {
   jobs.sort((left, right) => left.title.localeCompare(right.title))
   return Response.json({ jobs, canPostRole }, { headers: { 'Cache-Control': 'no-store' } })
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

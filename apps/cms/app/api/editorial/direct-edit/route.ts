@@ -1,8 +1,9 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { executeDirectEdit, type DirectEditInput } from '../../../../src/direct-edit'
 import { serverSessionStrategy } from '../../../../src/identity'
-import { isRetryableSQLiteError } from '../../../../src/sqlite'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -40,7 +41,7 @@ async function body(request: Request): Promise<unknown> {
   try { return JSON.parse(new TextDecoder().decode(bytes)) } catch { throw new Error('INVALID_BODY') }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const edit = input(await body(request))
@@ -51,9 +52,13 @@ export async function POST(request: Request): Promise<Response> {
     const result = await executeDirectEdit({ payload, actor: authenticated.user as never, edit })
     return Response.json(result, { headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const code = error instanceof Error ? error.message : ''
-    const status = isRetryableSQLiteError(error) ? 503 : code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : code === 'BODY_TOO_LARGE' ? 413 : 400
-    const message = status === 503 ? 'Saving is temporarily busy. Please retry.' : status === 409 ? 'This field has changed. Reload before saving.' : status === 403 ? 'You cannot edit this draft.' : 'Unable to save this direct edit.'
-    return Response.json({ error: message }, { status, headers: status === 503 ? { ...noStore, 'Retry-After': '1' } : noStore })
+    const status = code === 'EDITOR_ROLE_REQUIRED' || code === 'CHANGE_SET_NOT_EDITABLE' || code === 'SECTION_NOT_ACCESSIBLE' ? 403 : code === 'STALE_DIRECT_EDIT' ? 409 : code === 'BODY_TOO_LARGE' ? 413 : 400
+    const message = status === 409 ? 'This field has changed. Reload before saving.' : status === 403 ? 'You cannot edit this draft.' : 'Unable to save this direct edit.'
+    return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)
