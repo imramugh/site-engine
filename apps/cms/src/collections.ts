@@ -912,6 +912,7 @@ export const AIJobDefaults: CollectionConfig = {
   fields: [
     { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
     { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'model', type: 'text', required: true, maxLength: 160 },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
   ],
 }

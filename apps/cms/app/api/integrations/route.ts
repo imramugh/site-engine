@@ -74,7 +74,7 @@ async function GETHandler(request: Request) {
   const oauthConfigured = Boolean(process.env.OAUTH_INTERNAL_ORIGIN && process.env.OAUTH_INTROSPECTION_SECRET && publicOrigin)
   return privateJSON({
     integrations: records.docs.map((doc) => publicIntegration(doc as unknown as Record<string, unknown>)),
-    aiJobDefaults: aiJobDefaults.docs.map((doc) => ({ jobType: doc.jobType, provider: doc.provider, fallbackProvider: doc.fallbackProvider ?? null })),
+    aiJobDefaults: aiJobDefaults.docs.map((doc) => ({ jobType: doc.jobType, provider: doc.provider, model: doc.model, fallbackProvider: doc.fallbackProvider ?? null })),
     capabilities: {
       identity: {
         google: { configured: Boolean(google), users: googleUsers.totalDocs, enrollment: 'invited-only', roleAssignment: 'manual' },
@@ -98,12 +98,12 @@ async function POSTHandler(request: Request) {
     const body = await readBody(request)
     if (body.action === 'configure-ai-default') {
       const types = ['summary', 'meta', 'faq', 'alt', 'lead-reply']
-      if (typeof body.jobType !== 'string' || !types.includes(body.jobType) || !isProvider(body.provider) || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider))) return failure()
+      if (typeof body.jobType !== 'string' || !types.includes(body.jobType) || !isProvider(body.provider) || typeof body.model !== 'string' || !body.model.trim() || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider))) return failure()
       const existing = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: body.jobType } }, limit: 1, depth: 0, overrideAccess: true })
-      const data = { jobType: body.jobType, provider: body.provider, fallbackProvider: body.fallbackProvider ?? null }
+      const data = { jobType: body.jobType, provider: body.provider, model: body.model.trim(), fallbackProvider: body.fallbackProvider ?? null }
       const saved = existing.docs[0] ? await payload.update({ collection: 'ai-job-defaults', id: existing.docs[0].id, data: data as never, overrideAccess: true }) : await payload.create({ collection: 'ai-job-defaults', data: data as never, overrideAccess: true })
       await payload.create({ collection: 'audit-events', data: { event: 'ai.job_default_configured', actor: user.id, detail: data }, overrideAccess: true })
-      return privateJSON({ aiJobDefault: { jobType: saved.jobType, provider: saved.provider, fallbackProvider: saved.fallbackProvider ?? null } })
+      return privateJSON({ aiJobDefault: { jobType: saved.jobType, provider: saved.provider, model: saved.model, fallbackProvider: saved.fallbackProvider ?? null } })
     }
     if (!isProvider(body.provider)) return failure()
     if (body.action === 'test') {

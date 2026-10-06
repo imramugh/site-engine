@@ -748,6 +748,7 @@ export interface AiJobDefault {
   id: string;
   jobType: 'summary' | 'meta' | 'faq' | 'alt' | 'lead-reply';
   provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  model: string;
   fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
   updatedAt: string;
   createdAt: string;
@@ -2198,6 +2199,7 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
 export interface AiJobDefaultsSelect<T extends boolean = true> {
   jobType?: T;
   provider?: T;
+  model?: T;
   fallbackProvider?: T;
   updatedAt?: T;
   createdAt?: T;
