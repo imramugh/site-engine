@@ -595,7 +595,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             !state.motionIntents
           )
             throw new Error(
-              `${path} ${width}px failed public conformance: ${JSON.stringify({ violations: violations.map((item) => item.id), ...state })}`,
+              `${path} ${width}px failed public conformance: ${JSON.stringify({ violations: violations.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })), ...state })}`,
             );
           if (path === "general/matrix") {
             await page.reload({ waitUntil: "networkidle" });
