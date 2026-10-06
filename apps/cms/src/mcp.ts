@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createHash, randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import { z } from 'zod'
-import { AppearanceOptions, BlockSchemas, BusinessCaseSchema, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
+import { AppearanceOptions, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
 import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
@@ -193,7 +193,7 @@ export async function handleMcp(request: Request): Promise<Response> {
     const homepageID = relationID(settings.homepageId)
     if (homepageID && !currentPages.some((page) => page.id === homepageID && page.template === 'landing')) delete settings.homepageId
     return { rawPages, manifest: {
-      settings: { contractVersion: '1.5.0', siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
+      settings: { contractVersion: CONTRACT_VERSION, siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
       pages: currentPages,
       redirects: redirects.docs.map((doc) => captured('redirects', doc)),
       media: assets.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) })),
