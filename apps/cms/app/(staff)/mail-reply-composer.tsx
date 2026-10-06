@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import styles from './mail-reply-composer.module.css'
 
 type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string }
-type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; canAuthorize: boolean }
+type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; canAuthorize: boolean }
 type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: string } }
 
 export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 'application'; id: string; recipient: string }) {
@@ -44,6 +44,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
       const value = await response.json() as Options
       if (!current()) return
       setOptions(value)
+      setDraft(value.preparedDraft ?? null)
       setSender(value.senders[0]?.address ?? '')
       const threads = value.threads ?? []
       setThreadID(threads[0]?.id ?? '')

@@ -13,7 +13,7 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   if (!user || !hasRole(user as never, target === 'lead' ? ['owner', 'sales'] : ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403, headers: noStore })
   try { await payload.findByID({ collection: target === 'lead' ? 'inquiries' : 'applications', id, depth: 0, overrideAccess: false, user: user as never }) } catch { return Response.json({ error: 'Record not found.' }, { status: 404, headers: noStore }) }
   const area = target === 'lead' ? 'leads' : 'careers'; const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
-  if (!mapping.docs[0]) return Response.json({ senders: [], threads: [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  if (!mapping.docs[0]) return Response.json({ senders: [], threads: [], preparedDraft: null, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
   const mailboxID = typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true })
   const address = String(mapping.docs[0].senderAddress).toLowerCase(); const verified = mailbox.health === 'connected' && (String(mailbox.primaryAddress).toLowerCase() === address || (Array.isArray(mailbox.verifiedAliases) && mailbox.verifiedAliases.map(String).includes(address)))
@@ -25,7 +25,9 @@ export async function GET(request: Request, context: { params: Promise<{ target:
       return message.docs[0] ? { id: String(thread.providerConversationID), subject: String(message.docs[0].subject) } : undefined
     })).then(items => items.filter((item): item is { id: string; subject: string } => Boolean(item)))
   }
-  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  const prepared = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'prepared' } }] }, sort: '-updatedAt', limit: 1, depth: 0, overrideAccess: true })
+  const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string } | undefined
+  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body } : null, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
 }
 export async function POST(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL

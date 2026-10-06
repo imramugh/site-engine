@@ -212,3 +212,31 @@ test('ENG-020 adopts a persisted same-address conversation only after an explici
     await expect(timeline.getByRole('button', { name: 'Adopt conversation' })).toHaveCount(before - 1)
   } finally { await context.close() }
 })
+
+
+test('ENG-020 displays an assistant-prepared envelope for human confirmation without sending first', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    const fixture = await page.request.post(`${origin}/__e2e/mail-reply-fixture?prepared=1`)
+    expect(fixture.ok()).toBe(true)
+    expect((await fixture.json() as { preparedDraft?: string }).preparedDraft).toEqual(expect.any(String))
+    const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('Fixture OAuth reply B')
+    await expect(review).toContainText('MCP prepared exact body')
+    expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length)
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
+    const after = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    expect(after.deliveries).toHaveLength(before.deliveries.length + 1)
+    expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-thread-b' })
+    expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture OAuth reply B\r\n')
+    expect(after.deliveries.at(-1)?.mime).toContain('MCP prepared exact body')
+  } finally { await context.close() }
+})

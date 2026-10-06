@@ -22,6 +22,7 @@ import { runPreviewOnce } from '../../site/scripts/run-preview-worker.mjs'
 import { encryptSecret, recoveryHash } from '../src/totp.js'
 import { mintResumeLink } from '../src/resume-links.js'
 import { appendMatchedInbound } from '../src/mail-inbound.js'
+import { prepareReply } from '../src/mail-replies.js'
 import { createRequire } from 'node:module'
 
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -472,7 +473,7 @@ async function seed(): Promise<void> {
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') { json(response, { deliveries: fixtureReplyDeliveries.map(item => ({ threadID: item.threadID, mime: item.mime, messageID: item.messageID })) }); return }
-  if (request.method === 'POST' && request.url === '/__e2e/mail-reply-fixture') {
+  if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-fixture') {
     void (async () => {
       const state = new URL(await startMailboxOAuth(payload, 'google', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
       const mailbox = await completeMailboxOAuth(payload, 'google', state, 'fixture-code', localOwnerID!, leadSessionTokens.owner, async (url) => url.includes('/token') ? Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'fixture-reply@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] }))
@@ -488,7 +489,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       }
       const adoptionLead = await payload.create({ collection: 'inquiries', data: { name: `Suggestion adoption ${mailbox.id}`, email: `suggestion-${mailbox.id}@example.test`, message: 'Dedicated suggestion fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `suggestion-${mailbox.id}`, stage: 'new' }, overrideAccess: true })
       await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: `fixture-unmatched-${mailbox.id}`, messageID: `fixture-unmatched-message-${mailbox.id}`, sender: String(adoptionLead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name })
+      const prepared = new URL(`https://fixture.test${request.url}`).searchParams.get('prepared') === '1'
+      const preparedDraft = prepared ? await prepareReply(payload, 'lead', firstEditableLeadID!, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }) : undefined
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
