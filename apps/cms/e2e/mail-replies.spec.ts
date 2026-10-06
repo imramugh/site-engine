@@ -117,7 +117,7 @@ test('ENG-020 real handler grounds the selected OAuth conversation before sendin
     const reply = page.locator('[data-mail-reply-composer]')
     await expect(reply.getByLabel('Existing conversation')).toHaveCount(1)
     await expect(reply.getByLabel('Existing conversation').getByRole('option')).toHaveCount(3)
-    await reply.getByLabel('Existing conversation').selectOption('fixture-oauth-thread')
+    await reply.getByLabel('Existing conversation').selectOption('fixture-oauth-thread-b')
     await reply.getByLabel('Reply message').fill('Approved fixture body')
     await reply.getByRole('button', { name: 'Prepare reply' }).click()
     await expect(page.request.get(`${origin}/__e2e/mail-reply-deliveries`).then(response => response.json())).resolves.toEqual({ deliveries: [] })
@@ -125,8 +125,8 @@ test('ENG-020 real handler grounds the selected OAuth conversation before sendin
     await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
     const evidence = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
     expect(evidence.deliveries).toHaveLength(1)
-    expect(evidence.deliveries[0]).toMatchObject({ threadID: 'fixture-oauth-thread' })
-    expect(evidence.deliveries[0].mime).toContain('Subject: Fixture OAuth reply\r\n')
+    expect(evidence.deliveries[0]).toMatchObject({ threadID: 'fixture-oauth-thread-b' })
+    expect(evidence.deliveries[0].mime).toContain('Subject: Fixture OAuth reply B\r\n')
     expect(evidence.deliveries[0].mime).toContain('Approved fixture body')
   } finally { await context.close() }
 })

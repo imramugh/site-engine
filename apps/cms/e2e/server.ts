@@ -478,9 +478,14 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'leads' } }, limit: 1, depth: 0, overrideAccess: true })
       if (mapping.docs[0]) await payload.update({ collection: 'mailbox-area-mappings', id: mapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
       else await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
-      const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: 'fixture-oauth-thread' }, overrideAccess: true })
-      await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: 'fixture-oauth-message', rfcMessageID: '<fixture-oauth@example.test>', direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject: 'Fixture OAuth reply', body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread' })
+      for (const [conversationID, messageID, rfcMessageID, subject] of [
+        ['fixture-oauth-thread-a', 'fixture-oauth-message-a', '<fixture-oauth-a@example.test>', 'Fixture OAuth reply A'],
+        ['fixture-oauth-thread-b', 'fixture-oauth-message-b', '<fixture-oauth-b@example.test>', 'Fixture OAuth reply B'],
+      ]) {
+        const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: conversationID }, overrideAccess: true })
+        await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: messageID, rfcMessageID, direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject, body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+      }
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b' })
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
