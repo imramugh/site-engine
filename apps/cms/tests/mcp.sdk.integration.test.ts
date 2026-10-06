@@ -269,6 +269,21 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       const lead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id } })) as { visitor: unknown; message: unknown }
       expect(JSON.stringify([lead.visitor, lead.message])).not.toContain(phone)
     }
+    await payload.update({ collection: 'inquiries', id: privateLead.id, data: { nextAction: 'Call +1 (416) 555-0199 before the next reply.', nextActionDueAt: '2026-10-07T00:00:00.000Z' }, overrideAccess: true })
+    for (let index = 0; index < 26; index += 1) await payload.create({ collection: 'external-replies', data: { lead: privateLead.id, sentAt: new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString(), subject: `Private +1 416 555 0199 reply ${index}`, summary: `Visitor requested a call at +1 (416) 555-0199, item ${index}.`, recordedBy: sales.id, idempotencyKey: `private-timeline-${index}` }, overrideAccess: true })
+    const firstPrivateTimeline = structuredJson(await salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: privateLead.id, limit: 25 } })) as { externalReplies: Array<{ id: string; subject: { text: string; untrusted: boolean }; summary: { text: string; untrusted: boolean } }>; externalRepliesNextCursor: string | null }
+    expect(firstPrivateTimeline.externalReplies).toHaveLength(25)
+    expect(firstPrivateTimeline.externalRepliesNextCursor).toBe('p:2')
+    expect(firstPrivateTimeline.externalReplies[0]).toMatchObject({ subject: { untrusted: true }, summary: { untrusted: true } })
+    expect(firstPrivateTimeline.externalReplies.map((reply) => `${reply.subject.text}\n${reply.summary.text}`).join('\n')).not.toContain('416')
+    const secondPrivateTimeline = structuredJson(await salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: privateLead.id, limit: 25, externalRepliesCursor: firstPrivateTimeline.externalRepliesNextCursor } })) as { externalReplies: Array<{ id: string }>; externalRepliesNextCursor: string | null }
+    expect(secondPrivateTimeline.externalReplies).toHaveLength(1)
+    expect(secondPrivateTimeline.externalReplies[0]?.id).not.toBe(firstPrivateTimeline.externalReplies[0]?.id)
+    expect(secondPrivateTimeline.externalRepliesNextCursor).toBeNull()
+    const redactedFollowUps = structuredJson(await salesClient.client.callTool({ name: 'list_follow_ups', arguments: { dueBefore: '2026-10-08T00:00:00.000Z' } })) as { items: Array<{ inquiry: { id: string }; nextAction: { text: string; untrusted: boolean } }> }
+    const privateFollowUp = redactedFollowUps.items.find((item) => item.inquiry.id === privateLead.id)
+    expect(privateFollowUp?.nextAction).toMatchObject({ untrusted: true })
+    expect(privateFollowUp?.nextAction.text).not.toContain('416')
     await payload.create({ collection: 'mcp-privacy-settings', data: { key: 'active', hidePhone: false }, overrideAccess: true })
     const visibleLead = resultJson(await ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id: privateLead.id } })) as { visitor: { phone: string | null }; message: { text: string } }
     expect(visibleLead.visitor.phone).toBe('+14165550199')
@@ -278,7 +293,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     await expect(salesReplyClient.client.callTool({ name: 'update_inquiry', arguments: { id: inquiry.id, expectedUpdatedAt: inquiry.updatedAt, stage: 'contacted' } })).rejects.toMatchObject({ code: 403 })
     expect(structuredJson(await salesWriteClient.client.callTool({ name: 'update_inquiry', arguments: { id: inquiry.id, expectedUpdatedAt: inquiry.updatedAt, stage: 'contacted', nextAction: 'Follow up', nextActionDueAt: '2026-10-07T00:00:00.000Z' } }))).toMatchObject({ id: inquiry.id, stage: 'contacted' })
     await expect(salesWriteClient.client.callTool({ name: 'update_inquiry', arguments: { id: inquiry.id, expectedUpdatedAt: inquiry.updatedAt, stage: 'qualified' } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'stale_record' }) })] })
-    expect(structuredJson(await salesWriteClient.client.callTool({ name: 'list_follow_ups', arguments: { dueBefore: '2026-10-08T00:00:00.000Z' } }))).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ inquiry: expect.objectContaining({ id: inquiry.id }), nextAction: 'Follow up' })]) })
+    expect(structuredJson(await salesWriteClient.client.callTool({ name: 'list_follow_ups', arguments: { dueBefore: '2026-10-08T00:00:00.000Z' } }))).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ inquiry: expect.objectContaining({ id: inquiry.id }), nextAction: { text: 'Follow up', untrusted: true } })]) })
     await expect(ownerPersonalClient.client.callTool({ name: 'get_lead', arguments: { id: spamLead.id } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'not_found' }) })] })
     await expect(ownerPersonalClient.client.callTool({ name: 'list_leads', arguments: { limit: 26 } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: expect.stringContaining('expected number to be <=25') })] })
     const applicantResult = await ownerPersonalClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })
@@ -295,17 +310,17 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(structuredJson(await salesWriteClient.client.callTool({ name: 'record_reply', arguments: replyRecord }))).toEqual({ id: inquiry.id, recorded: true })
     expect(structuredJson(await salesWriteClient.client.callTool({ name: 'record_reply', arguments: replyRecord }))).toEqual({ id: inquiry.id, recorded: true })
     await expect(salesWriteClient.client.callTool({ name: 'record_reply', arguments: { ...replyRecord, expectedUpdatedAt: '2020-01-01T00:00:00.000Z', sentAt: '2026-10-08T00:00:00.000Z' } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'stale_record' }) })] })
-    const externalReplies = await payload.find({ collection: 'external-replies', where: { lead: { equals: inquiry.id } }, limit: 10, depth: 0, overrideAccess: true })
-    expect(externalReplies.docs).toHaveLength(1)
-    expect(externalReplies.docs[0]).toMatchObject({ lead: inquiry.id, subject: replyRecord.subject, summary: replyRecord.summary, recordedBy: sales.id })
+    const externalReplies = await payload.find({ collection: 'external-replies', where: { lead: { equals: inquiry.id } }, limit: 100, depth: 0, overrideAccess: true })
+    const recordedReply = externalReplies.docs.find((reply) => reply.subject === replyRecord.subject)
+    expect(recordedReply).toMatchObject({ lead: inquiry.id, subject: replyRecord.subject, summary: replyRecord.summary, recordedBy: sales.id })
     const replyAudits = await payload.find({ collection: 'audit-events', where: { event: { equals: 'lead.external_reply_recorded' } }, limit: 10, depth: 0, overrideAccess: true })
     const replyAudit = replyAudits.docs.find((audit) => (audit.detail as Record<string, unknown> | undefined)?.leadId === inquiry.id)
-    expect(replyAudit).toMatchObject({ detail: { clientIdHash: createHash('sha256').update('sales-write-client').digest('hex'), leadId: inquiry.id, externalReplyId: externalReplies.docs[0]?.id, sentAt: replyRecord.sentAt } })
+    expect(replyAudit).toMatchObject({ detail: { clientIdHash: createHash('sha256').update('sales-write-client').digest('hex'), leadId: inquiry.id, externalReplyId: recordedReply?.id, sentAt: replyRecord.sentAt } })
     expect(JSON.stringify(replyAudit)).not.toContain(replyRecord.subject)
     expect(JSON.stringify(replyAudit)).not.toContain(replyRecord.summary)
     await expect(salesClient.client.callTool({ name: 'record_reply', arguments: replyRecord })).rejects.toMatchObject({ code: 403 })
     const replyTimeline = structuredJson(await salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: inquiry.id } })) as { externalReplies: Array<Record<string, unknown>>; items: unknown[] }
-    expect(replyTimeline).toMatchObject({ externalReplies: [expect.objectContaining({ subject: replyRecord.subject, summary: replyRecord.summary, sentAt: replyRecord.sentAt })] })
+    expect(replyTimeline.externalReplies).toEqual(expect.arrayContaining([expect.objectContaining({ subject: { text: replyRecord.subject, untrusted: true }, summary: { text: replyRecord.summary, untrusted: true }, sentAt: replyRecord.sentAt })]))
     expect(replyTimeline.items).toHaveLength(0)
     await expect(salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: spamLead.id } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'not_found' }) })] })
     expect(resultJson(await salesClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } }))).toMatchObject({ id: expect.any(String) }); await expect(salesClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })).rejects.toMatchObject({ code: 403 })
