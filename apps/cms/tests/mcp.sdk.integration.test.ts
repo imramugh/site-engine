@@ -686,3 +686,22 @@ test('MCP reply grants bind the SDK origin to a separate fresh human confirmatio
     setReplyDeliveryForTest()
   }
 })
+
+test('MCP sends a human-confirmed careers reply with only careers read and reply scopes', async () => {
+  const hiring = await payload.create({ collection: 'users', data: { email: `mcp-careers-send-${randomUUID()}@example.test`, name: 'Hiring sender', roles: ['hiring'] }, overrideAccess: true })
+  const application = await payload.create({ collection: 'applications', data: { name: 'Careers applicant', email: `mcp-careers-applicant-${randomUUID()}@example.test`, coverLetter: 'Application.', consent: true, jobId: randomUUID(), resumeKey: `${randomUUID()}-${'c'.repeat(64)}`, idempotencyKey: randomUUID(), status: 'new' }, overrideAccess: true })
+  const originSession = await sessionFor(hiring.id)
+  const confirmationToken = newOpaqueToken()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(confirmationToken), user: hiring.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+  const tokenName = `mcp-careers-send-token-${randomUUID()}`
+  tokens.set(tokenName, { clientId: `mcp-careers-send-client-${randomUUID()}`, userId: hiring.id, sessionId: originSession.id, scopes: ['mcp:careers:read', 'mcp:careers:reply'] })
+  const sdk = await clientFor(tokenName)
+  let deliveries = 0
+  setReplyDeliveryForTest(async (_payload, area, envelope) => { deliveries += 1; expect(area).toBe('careers'); expect(envelope).toMatchObject({ recipient: application.email, subject: 'Interview details', body: 'Please choose a time.' }); return { provider: 'smtp', messageID: 'careers-sdk-send' } })
+  try {
+    const draft = structuredJson(await sdk.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'team@example.test', subject: 'Interview details', body: 'Please choose a time.' } })) as { draft: { id: string } }
+    const grant = await authorizeMailDraft(payload, { id: hiring.id, sessionToken: confirmationToken }, draft.draft.id, new Date(Date.now() + 60_000))
+    expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID: draft.draft.id, grantID: grant.id } }))).toMatchObject({ provider: 'smtp', messageID: 'careers-sdk-send' })
+    expect(deliveries).toBe(1)
+  } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
+})
