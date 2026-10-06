@@ -43,7 +43,7 @@ function bridgeEndpoint(origin: string): URL | undefined {
 export function createHttpSessionBridge(options: HttpSessionBridgeOptions): SessionBridge {
   const endpoint = bridgeEndpoint(options.cmsOrigin)
   if (!endpoint || !options.secret) {
-    return { resolve: async () => undefined, find: async () => undefined }
+    return { resolve: async () => { throw new Error('OAuth session bridge is not configured') }, find: async () => { throw new Error('OAuth session bridge is not configured') } }
   }
   const request = async (body: Record<string, string>, cookie?: string): Promise<SessionUser | undefined> => {
     const controller = new AbortController()
@@ -54,21 +54,24 @@ export function createHttpSessionBridge(options: HttpSessionBridgeOptions): Sess
         headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': options.secret, ...(cookie ? { cookie } : {}) },
         body: JSON.stringify(body),
       })
-      if (!response.ok || !response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return undefined
+      if (response.status === 401 || response.status === 404) return undefined
+      if (!response.ok || !response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new Error('OAuth session bridge is unavailable')
       const reader = response.body?.getReader()
-      if (!reader) return undefined
+      if (!reader) throw new Error('OAuth session bridge is unavailable')
       const chunks: Uint8Array[] = []; let total = 0
       while (true) {
         const next = await reader.read()
         if (next.done) break
         total += next.value.byteLength
-        if (total > MAX_RESPONSE_BYTES) { await reader.cancel(); return undefined }
+        if (total > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new Error('OAuth session bridge response exceeded the safe limit') }
         chunks.push(next.value)
       }
       const bytes = new Uint8Array(total); let offset = 0
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
-      return sessionUser(JSON.parse(new TextDecoder().decode(bytes)))
-    } catch { return undefined } finally { clearTimeout(timeout); controller.abort() }
+      const user = sessionUser(JSON.parse(new TextDecoder().decode(bytes)))
+      if (!user) throw new Error('OAuth session bridge returned an invalid response')
+      return user
+    } catch (error) { throw error } finally { clearTimeout(timeout); controller.abort() }
   }
   return {
     resolve: async (incoming) => {

@@ -16,6 +16,7 @@ export type RegistrationFailureReason = 'invalid_request' | 'public_client_requi
 export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean; onRegistrationFailure?: (reason: RegistrationFailureReason) => void };
 
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
+class SessionBridgeUnavailable extends Error {}
 type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
 type Grant = { addResourceScope(resource: string, scope: string): void; addOIDCScope(scope: string): void; save(): Promise<string> };
 type ProviderWithGrants = Provider & { Grant: { new (attributes: { accountId: string; clientId: string }): Grant; find(id: string): Promise<Grant | undefined> }; Client: { find(id: string): Promise<{ clientName?: string } | undefined> } };
@@ -142,6 +143,16 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     touchManagedGrant(db, record.grantId);
     return { binding, user };
   };
+  const activeManagedGrants = async (userId?: string) => {
+    const active = [];
+    for (const binding of listManagedGrants(db, userId)) {
+      let user: SessionUser | undefined;
+      try { user = await bridge.find(binding.userId, binding.sessionId); } catch { throw new SessionBridgeUnavailable(); }
+      if (!user || !user.enabled || user.id !== binding.userId || user.sessionId !== binding.sessionId || !binding.scopes.every((scope) => user.scopes.includes(scope))) continue;
+      active.push(binding);
+    }
+    return active;
+  };
   const lookupToken = async (model: 'AuthorizationCode' | 'RefreshToken' | 'AccessToken', value: string): Promise<TokenRecord | undefined> => {
     try { return await (provider as unknown as Record<string, { find(id: string): Promise<TokenRecord | undefined> }>)[model].find(value); } catch { return undefined; }
   };
@@ -217,10 +228,10 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
       if (request.method !== 'POST' || !secretMatches(typeof suppliedSecret === 'string' ? suppliedSecret : undefined, process.env.OAUTH_INTROSPECTION_SECRET)) return json(response, 401, { error: 'unauthorized' });
       try {
         const body = await requestJson(request); const keys = Object.keys(body);
-        if (body.operation === 'list' && keys.every((key) => key === 'operation' || key === 'userId') && (body.userId === undefined || typeof body.userId === 'string')) return json(response, 200, { grants: listManagedGrants(db, body.userId as string | undefined).map(({ sessionId: _sessionId, ...grant }) => grant) });
+        if (body.operation === 'list' && keys.every((key) => key === 'operation' || key === 'userId') && (body.userId === undefined || typeof body.userId === 'string')) return json(response, 200, { grants: (await activeManagedGrants(body.userId as string | undefined)).map(({ sessionId: _sessionId, ...grant }) => grant) });
         if (body.operation === 'revoke' && keys.every((key) => key === 'operation' || key === 'managementId' || key === 'userId') && typeof body.managementId === 'string' && (body.userId === undefined || typeof body.userId === 'string')) return revokeManagedGrant(db, body.managementId, body.userId as string | undefined) ? json(response, 200, { revoked: true }) : json(response, 404, { error: 'not_found' });
         throw new Error('invalid');
-      } catch { return json(response, 400, { error: 'invalid_request' }); }
+      } catch (error) { return error instanceof SessionBridgeUnavailable ? json(response, 503, { error: 'session_bridge_unavailable' }) : json(response, 400, { error: 'invalid_request' }); }
     }
     if (requestUrl.pathname === '/internal/introspect') {
       const suppliedSecret = request.headers['x-oauth-introspection-secret'];

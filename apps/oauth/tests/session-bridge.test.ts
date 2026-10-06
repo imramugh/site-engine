@@ -36,14 +36,14 @@ test('HTTP CMS bridge sends only the CMS session cookie and accepts the exact mi
 test('HTTP CMS bridge rejects unsafe origins, redirects, and non-JSON responses', async () => {
   for (const cmsOrigin of ['http://user:pass@cms.test', 'http://cms.test/private', 'http://cms.test/?query=yes', 'http://cms.test/#fragment']) {
     const bridge = createHttpSessionBridge({ cmsOrigin, secret: 'shared-secret', fetch: async () => { throw new Error('must not fetch') } })
-    assert.equal(await bridge.resolve(incoming('site_engine_session=opaque-session')), undefined)
+    await assert.rejects(() => bridge.resolve(incoming('site_engine_session=opaque-session')))
   }
   let redirect: RequestRedirect | undefined
   const bridge = createHttpSessionBridge({
     cmsOrigin: 'http://cms.test', secret: 'shared-secret',
     fetch: async (_url, init) => { redirect = init?.redirect; return new Response('not-json', { headers: { 'content-type': 'text/plain' } }) },
   })
-  assert.equal(await bridge.resolve(incoming('site_engine_session=opaque-session')), undefined)
+  await assert.rejects(() => bridge.resolve(incoming('site_engine_session=opaque-session')))
   assert.equal(redirect, 'error')
 })
 
@@ -56,17 +56,17 @@ test('HTTP CMS bridge cancels oversized chunked responses and fails closed on ba
       cancel() { cancelled = true },
     }), { headers: { 'content-type': 'application/json' } }),
   })
-  assert.equal(await oversized.resolve(incoming('site_engine_session=opaque-session')), undefined)
+  await assert.rejects(() => oversized.resolve(incoming('site_engine_session=opaque-session')))
   assert.equal(cancelled, true)
   const unavailable = createHttpSessionBridge({ cmsOrigin: 'http://cms.test', secret: 'shared-secret', fetch: async () => new Response(null, { status: 503, headers: { 'content-type': 'application/json' } }) })
-  assert.equal(await unavailable.resolve(incoming('site_engine_session=opaque-session')), undefined)
+  await assert.rejects(() => unavailable.resolve(incoming('site_engine_session=opaque-session')))
 })
 
 test('HTTP CMS bridge fails closed for malformed responses and timeouts', async () => {
   const malformed = createHttpSessionBridge({
     cmsOrigin: 'http://cms.test', secret: 'shared-secret', fetch: async () => Response.json({ user: { id: 'user-1', sessionId: 'session-1', scopes: [], email: 'never-accepted@example.test' } }),
   })
-  assert.equal(await malformed.resolve(incoming('site_engine_session=opaque-session')), undefined)
+  await assert.rejects(() => malformed.resolve(incoming('site_engine_session=opaque-session')))
 
   const timeout = createHttpSessionBridge({
     cmsOrigin: 'http://cms.test', secret: 'shared-secret', timeoutMs: 5,
@@ -74,6 +74,6 @@ test('HTTP CMS bridge fails closed for malformed responses and timeouts', async 
       init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     }),
   })
-  assert.equal(await timeout.resolve(incoming('site_engine_session=opaque-session')), undefined)
+  await assert.rejects(() => timeout.resolve(incoming('site_engine_session=opaque-session')))
   assert.equal(await timeout.find('user-1'), undefined)
 })
