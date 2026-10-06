@@ -16,8 +16,7 @@ export function createMailboxWorkerAPI({ cmsOrigin, token, fetchImpl = fetch, ti
     const response = await fetchImpl(`${origin}/api/internal/mailbox-worker/run`, { method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: { authorization: `Bearer ${token}` } })
     if (!response.ok) { await response.body?.cancel(); throw new MailboxWorkerError(response.status === 401 ? 'WORKER_UNAUTHORIZED' : 'CMS_UNAVAILABLE') }
     let body; try { body = await response.json() } catch { throw new MailboxWorkerError('INVALID_CMS_RESPONSE') }
-    if (body?.mailbox === null && body?.processed === 0) return null
-    if (typeof body?.mailbox !== 'string' || typeof body?.processed !== 'number' || !Number.isSafeInteger(body.processed) || body.processed < 0 || Object.keys(body).some(key => key !== 'mailbox' && key !== 'processed')) throw new MailboxWorkerError('INVALID_CMS_RESPONSE')
+    if (!body || Array.isArray(body) || Object.keys(body).some(key => key !== 'mailbox' && key !== 'processed') || !Number.isSafeInteger(body.processed) || body.processed < 0 || (body.mailbox === null ? body.processed !== 0 : typeof body.mailbox !== 'string' || !body.mailbox.length)) throw new MailboxWorkerError('INVALID_CMS_RESPONSE')
     return body
   }
 }
