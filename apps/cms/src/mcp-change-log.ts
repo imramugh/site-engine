@@ -28,8 +28,8 @@ export function registerChangeLogTools(input: { server: McpServer; payload: Payl
   const { server, payload, current, sessionID, read, write, contentSecurity, writeSecurity } = input
   const owner = () => hasRole(current, ['owner'])
   const reviewer = () => hasRole(current, ['owner', 'approver'])
-  const reviewContentSecurity = { ...contentSecurity, requiredRoles: ['owner', 'approver'] }
-  const reviewWriteSecurity = { ...writeSecurity, requiredRoles: ['owner', 'approver'] }
+  const reviewContentSecurity: Record<string, unknown> = { ...contentSecurity, requiredRoles: ['owner', 'approver'] }
+  const reviewWriteSecurity: Record<string, unknown> = { ...writeSecurity, requiredRoles: ['owner', 'approver'] }
   const failure = (cause: unknown) => error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && ['owner_access_required', 'fresh_authentication_required'].includes(cause.message) ? cause.message : 'rollback_unavailable')
   server.registerTool('list_changes', { title: 'List reviewed changes', description: 'List recent reviewed content and publication changes. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ limit: z.number().int().min(1).max(100).optional() }).strict(), outputSchema: z.object({ items: z.array(change) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: reviewContentSecurity.securitySchemes as unknown[], authorization: reviewContentSecurity } }, async ({ limit = 25 }) => {
     if (!read) return error('role_access_required'); if (!reviewer()) return error('owner_access_required')

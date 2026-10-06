@@ -39,11 +39,13 @@ let next: ChildProcess | undefined
 let build: ChildProcess | undefined
 
 function runNext(args: string[]): Promise<void> {
-  const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', ...args], { cwd: cmsRoot, env: process.env, stdio: 'ignore' })
+  const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', ...args], { cwd: cmsRoot, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+  let diagnostics = ''
+  for (const stream of [child.stdout, child.stderr]) stream?.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(-12000) })
   build = child
   return new Promise((resolve, reject) => {
     child.once('error', reject)
-    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Next ${args[0]} exited with ${code}`)))
+    child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Next ${args[0]} exited with ${code}: ${diagnostics}`)))
   })
 }
 

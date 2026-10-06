@@ -69,8 +69,8 @@ describe('ENG-010 reviewed rollback', () => {
     await release(later, [capture(after.pages[1], later.pages[1])])
     const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(historical.id))
     const proposed = candidate(later, set)
-    expect(proposed.pages.find((page: any) => page.id === before.pages[0].id).summary).toBe(before.pages[0].summary)
-    expect(proposed.pages.find((page: any) => page.id === later.pages[1].id).summary).toBe(later.pages[1].summary)
+    expect(proposed.pages.find((page: any) => page.id === before.pages[0].id)!.summary).toBe(before.pages[0].summary)
+    expect(proposed.pages.find((page: any) => page.id === later.pages[1].id)!.summary).toBe(later.pages[1].summary)
     expect(set.state).toBe('open')
   })
   it('refuses historical reversal when a later release changed the same content', async () => {
