@@ -252,6 +252,26 @@ test('ENG-020 displays an assistant-prepared envelope, retains it for editing, a
   } finally { await context.close() }
 })
 
+test('ENG-033 opens an assistant deep link beyond the first lead page and lets the real browser session confirm its exact envelope', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?prepared=1&deep=1`)).json() as { deepLead: string; deepLeadName: string; preparedDraft: string }
+    expect(fixture).toMatchObject({ deepLead: expect.any(String), preparedDraft: expect.any(String) })
+    await page.goto(`/leads?lead=${encodeURIComponent(fixture.deepLead)}&draft=${encodeURIComponent(fixture.preparedDraft)}`)
+    const detail = page.getByRole('complementary', { name: 'Lead details' })
+    await expect(detail).toContainText(fixture.deepLeadName)
+    const reply = page.locator('[data-mail-reply-composer]')
+    await expect(reply.getByText('Prepared by assistant')).toBeVisible()
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('Fixture OAuth reply B')
+    await expect(review).toContainText('MCP prepared exact body')
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toBeVisible()
+  } finally { await context.close() }
+})
+
 test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through the real handler', async ({ browser }) => {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-sales-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
