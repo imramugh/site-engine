@@ -79,7 +79,7 @@ test('ENG-010 allows an Approver to inspect Operations and prepare a selected ro
   const session = await approver(browser)
   try {
     await session.page.goto('/editorial')
-    await session.page.getByRole('link', { name: 'Operations', exact: true }).click()
+    await session.page.getByRole('link', { name: 'Change log', exact: true }).click()
     await expect(session.page).toHaveURL(/\/operations/)
     await expect(session.page.getByRole('heading', { name: /Operations|Change log/i })).toBeVisible()
     await expect(session.page.getByText(/Retention/i)).toHaveCount(0)
