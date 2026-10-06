@@ -251,3 +251,21 @@ test('ENG-020 displays an assistant-prepared envelope, retains it for editing, a
     expect(after.deliveries.at(-1)?.mime).toContain('Edited MCP prepared body')
   } finally { await context.close() }
 })
+
+test('ENG-033 lets a fresh Sales user confirm and send a lead reply through the real handler', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-sales-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await reply.getByLabel('Reply subject').fill('Sales-confirmed reply')
+    await reply.getByLabel('Reply message').fill('Sales exact body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
+  } finally { await context.close() }
+})

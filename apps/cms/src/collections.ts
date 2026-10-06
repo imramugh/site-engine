@@ -637,7 +637,7 @@ export const MailDrafts: CollectionConfig = {
     { name: 'application', type: 'relationship', relationTo: 'applications' },
     { name: 'threadID', type: 'text', required: true }, { name: 'recipient', type: 'email', required: true }, { name: 'sender', type: 'email', required: true },
     { name: 'subject', type: 'text', required: true }, { name: 'body', type: 'textarea', required: true }, { name: 'attachmentHashes', type: 'json', defaultValue: [] },
-    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'revoked', 'expired', 'consumed', 'sent', 'failed', 'delivery-unknown'] },
+    { name: 'revision', type: 'number', required: true, defaultValue: 1, min: 1 }, { name: 'state', type: 'select', required: true, defaultValue: 'prepared', options: ['prepared', 'authorized', 'canceled', 'revoked', 'expired', 'consumed', 'sent', 'failed', 'delivery-unknown'] },
   ],
   hooks: {
     beforeChange: [async ({ data, originalDoc, operation, req }) => {

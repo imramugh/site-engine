@@ -20,7 +20,7 @@ const draftGrant = (draft: Record<string, unknown>): DraftDocument => {
 }
 const consumptionLocks = new Map<string, Promise<void>>()
 
-async function freshOwner(payload: Payload, actor: Actor, req: PayloadRequest): Promise<boolean> {
+async function freshAuthorizedActor(payload: Payload, actor: Actor, draft: DraftDocument, req: PayloadRequest): Promise<boolean> {
   if (!actor.sessionToken) return false
   const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(actor.sessionToken) } }, limit: 1, depth: 0, overrideAccess: true, req })
   const session = sessions.docs[0]
@@ -28,10 +28,10 @@ async function freshOwner(payload: Payload, actor: Actor, req: PayloadRequest): 
   if (!session || sessionUserID !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) return false
   try {
     const user = await payload.findByID({ collection: 'users', id: actor.id, depth: 0, overrideAccess: true, req })
-    return !user.disabled && user.roles?.includes('owner') === true
-  } catch {
-    return false
-  }
+    if (user.disabled) return false
+    const roles = user.roles ?? []
+    return roles.includes('owner') || (!draft.application && roles.includes('sales')) || (Boolean(draft.application) && roles.includes('hiring'))
+  } catch { return false }
 }
 
 async function exclusivelyConsume<T>(grantID: string, operation: () => Promise<T>): Promise<T> {
@@ -51,8 +51,8 @@ async function exclusivelyConsume<T>(grantID: string, operation: () => Promise<T
 export async function authorizeMailDraft(payload: Payload, actor: Actor, draftID: string, expiresAt: Date) {
   if (expiresAt <= new Date()) throw new Error('authorization_expired')
   return withPayloadTransaction(payload, async (req) => {
-    if (!await freshOwner(payload, actor, req)) throw new Error('owner_authorization_required')
     const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+    if (!await freshAuthorizedActor(payload, actor, draft, req)) throw new Error('mail_authorization_required')
     if (!draft.application) await assertLeadAcceptsOutbound(payload, draft.lead, req)
     else await payload.findByID({ collection: 'applications', id: draft.application, depth: 0, overrideAccess: true, req })
     if (['consumed', 'sent', 'delivery-unknown'].includes(draft.state)) throw new Error('draft_already_dispatched')
@@ -67,27 +67,43 @@ export async function authorizeMailDraft(payload: Payload, actor: Actor, draftID
 }
 
 export async function consumeMailAuthorization(payload: Payload, actor: Actor, grantID: string, now = new Date()) {
-  return exclusivelyConsume(grantID, () => withPayloadTransaction(payload, async (req) => {
-    if (!await freshOwner(payload, actor, req)) throw new Error('owner_authorization_required')
-    const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
-    const draftID = typeof grant.draft === 'string' ? grant.draft : String((grant.draft as { id?: string })?.id)
-    const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
-    if (!draft.application) await assertLeadAcceptsOutbound(payload, draft.lead, req)
-    else await payload.findByID({ collection: 'applications', id: draft.application, depth: 0, overrideAccess: true, req })
-    if (draft.state !== 'authorized' || !authorizationUsable(grant as never, draft, now)) throw new Error('authorization_not_usable')
-    const consumed = await payload.update({ collection: 'mail-authorizations', id: grantID, data: { consumedAt: now.toISOString() }, overrideAccess: true, req })
-    await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'consumed' }, overrideAccess: true, req })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_consumed', user: actor.id, actor: actor.id, detail: { draft: draft.id, grant: grantID } }, overrideAccess: true, req })
-    // Dispatch uses this exact authorized value, never a later mutable draft read.
-    return { ...consumed, envelope: Object.freeze({ ...draft, attachmentHashes: [...draft.attachmentHashes] }) }
-  }))
+  return exclusivelyConsume(grantID, async () => {
+    const outcome = await withPayloadTransaction(payload, async (req) => {
+      const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+      const draftID = typeof grant.draft === 'string' ? grant.draft : String((grant.draft as { id?: string })?.id)
+      const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+      if (!await freshAuthorizedActor(payload, actor, draft, req)) throw new Error('mail_authorization_required')
+      if (!draft.application) await assertLeadAcceptsOutbound(payload, draft.lead, req)
+      else await payload.findByID({ collection: 'applications', id: draft.application, depth: 0, overrideAccess: true, req })
+      if (draft.state !== 'authorized' || !authorizationUsable(grant as never, draft, now)) {
+        if (draft.state === 'authorized' && new Date(String(grant.expiresAt)) <= now) return { expired: draft }
+        throw new Error('authorization_not_usable')
+      }
+      const consumed = await payload.update({ collection: 'mail-authorizations', id: grantID, data: { consumedAt: now.toISOString() }, overrideAccess: true, req })
+      await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'consumed' }, overrideAccess: true, req })
+      await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_consumed', user: actor.id, actor: actor.id, detail: { draft: draft.id, grant: grantID } }, overrideAccess: true, req })
+      return { consumed, draft }
+    })
+    const expired = outcome.expired
+    if (expired) {
+      await payload.update({ collection: 'mail-drafts', id: expired.id, data: { state: 'expired' }, overrideAccess: true })
+      await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_expired', user: actor.id, actor: actor.id, detail: { draft: expired.id, grant: grantID } }, overrideAccess: true })
+      throw new Error('authorization_not_usable')
+    }
+    return { ...outcome.consumed, envelope: Object.freeze({ ...outcome.draft, attachmentHashes: [...outcome.draft.attachmentHashes] }) }
+  })
 }
 
 export async function revokeMailAuthorization(payload: Payload, actor: Actor, grantID: string, now = new Date()) {
   return withPayloadTransaction(payload, async (req) => {
-    if (!await freshOwner(payload, actor, req)) throw new Error('owner_authorization_required')
-    const grant = await payload.update({ collection: 'mail-authorizations', id: grantID, data: { revokedAt: now.toISOString() }, overrideAccess: true, req })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_revoked', user: actor.id, actor: actor.id, detail: { grant: grantID } }, overrideAccess: true, req })
-    return grant
+    const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+    const draftID = typeof grant.draft === 'string' ? grant.draft : String((grant.draft as { id?: string })?.id)
+    const draft = draftGrant(await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>)
+    if (!await freshAuthorizedActor(payload, actor, draft, req)) throw new Error('mail_authorization_required')
+    if (['consumed', 'sent', 'delivery-unknown'].includes(draft.state)) throw new Error('authorization_not_usable')
+    const revoked = await payload.update({ collection: 'mail-authorizations', id: grantID, data: { revokedAt: now.toISOString() }, overrideAccess: true, req })
+    if (draft.state === 'authorized' || draft.state === 'prepared') await payload.update({ collection: 'mail-drafts', id: draft.id, data: { state: 'canceled' }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.authorization_cancelled', user: actor.id, actor: actor.id, detail: { draft: draft.id, grant: grantID } }, overrideAccess: true, req })
+    return revoked
   })
 }

@@ -1069,7 +1069,7 @@ export interface MailDraft {
     | boolean
     | null;
   revision: number;
-  state: 'prepared' | 'authorized' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
+  state: 'prepared' | 'authorized' | 'canceled' | 'revoked' | 'expired' | 'consumed' | 'sent' | 'failed' | 'delivery-unknown';
   updatedAt: string;
   createdAt: string;
 }

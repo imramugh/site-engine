@@ -156,26 +156,30 @@ describe('local mail authorization transactions', () => {
     await expect(consumeMailAuthorization(payload, owner, revoked.id)).rejects.toThrow('authorization_not_usable')
     const grants = await Promise.all([expired.id, revoked.id].map((id) => payload.findByID({ collection: 'mail-authorizations', id, depth: 0, overrideAccess: true })))
     expect(grants.map((grant) => grant.consumedAt)).toEqual([null, null])
+    expect(await payload.findByID({ collection: 'mail-drafts', id: expiredDraft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'expired' })
+    expect(await payload.findByID({ collection: 'mail-drafts', id: revokedDraft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'canceled' })
   })
 
-  it('requires a current owner for authorization, revocation, and consumption', async () => {
-    const owner = await actor('owner')
-    const sales = await actor('sales')
-    const prepared = await draft()
-    await expect(authorizeMailDraft(payload, sales, prepared.id, future())).rejects.toThrow('owner_authorization_required')
-    const grant = await authorizeMailDraft(payload, owner, prepared.id, future())
-    await expect(revokeMailAuthorization(payload, sales, grant.id)).rejects.toThrow('owner_authorization_required')
-    await expect(consumeMailAuthorization(payload, sales, grant.id)).rejects.toThrow('owner_authorization_required')
+  it('allows only a fresh canonical role for the selected draft domain', async () => {
+    const owner = await actor('owner'); const sales = await actor('sales'); const hiring = await actor('hiring'); const leadDraft = await draft()
+    await expect(authorizeMailDraft(payload, sales, leadDraft.id, future())).resolves.toMatchObject({ authorizedBy: expect.objectContaining({ id: sales.id }) })
+    await expect(authorizeMailDraft(payload, hiring, leadDraft.id, future())).rejects.toThrow('mail_authorization_required')
+    const application = await payload.create({ collection: 'applications', data: { name: 'Applicant', email: `app-${randomUUID()}@example.test`, coverLetter: 'Private.', consent: true, jobId: randomUUID(), resumeKey: 'test-only', idempotencyKey: randomUUID() }, overrideAccess: true })
+    const applicationDraft = await prepareReply(payload, 'application', application.id, owner.id, { sender: 'team@example.test', subject: 'Hiring', body: 'Private hiring reply.' })
+    await expect(authorizeMailDraft(payload, sales, applicationDraft.id, future())).rejects.toThrow('mail_authorization_required')
+    const hiringGrant = await authorizeMailDraft(payload, hiring, applicationDraft.id, future())
+    await payload.update({ collection: 'users', id: hiring.id, data: { roles: ['sales'] }, overrideAccess: true })
+    await expect(consumeMailAuthorization(payload, hiring, hiringGrant.id)).rejects.toThrow('mail_authorization_required')
+    await payload.update({ collection: 'users', id: sales.id, data: { disabled: true }, overrideAccess: true })
+    await expect(consumeMailAuthorization(payload, sales, (await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.id } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]!.id)).rejects.toThrow('mail_authorization_required')
   })
 
-  it('verifies the canonical owner and fresh authentication instead of caller role claims', async () => {
-    const owner = await actor('owner')
-    const sales = await actor('sales')
-    const prepared = await draft()
-    await expect(authorizeMailDraft(payload, { ...sales, roles: ['owner'] } as unknown as Actor, prepared.id, future())).rejects.toThrow('owner_authorization_required')
+  it('rejects caller role claims and stale authentication against canonical state', async () => {
+    const owner = await actor('owner'); const sales = await actor('sales'); const prepared = await draft()
+    await expect(authorizeMailDraft(payload, { ...sales, roles: ['owner'] } as unknown as Actor, prepared.id, future())).resolves.toMatchObject({ authorizedBy: expect.objectContaining({ id: sales.id }) })
     const session = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(owner.sessionToken) } }, limit: 1, depth: 0, overrideAccess: true })
     await payload.update({ collection: 'auth-sessions', id: session.docs[0]!.id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true })
-    await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('owner_authorization_required')
+    await expect(authorizeMailDraft(payload, owner, prepared.id, future())).rejects.toThrow('mail_authorization_required')
   })
 
   it('supersedes an earlier grant so a draft has one active authorization', async () => {
