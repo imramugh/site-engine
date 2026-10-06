@@ -904,6 +904,18 @@ export const IntegrationConfigurations: CollectionConfig = {
   ],
 }
 
+/** Owner-selected routing for durable assistant job classes. Credentials remain
+ * in integration-configurations; these records contain no secrets. */
+export const AIJobDefaults: CollectionConfig = {
+  slug: 'ai-job-defaults', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  fields: [
+    { name: 'jobType', type: 'select', required: true, unique: true, options: ['summary', 'meta', 'faq', 'alt', 'lead-reply'] },
+    { name: 'provider', type: 'select', required: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+    { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter'] },
+  ],
+}
+
 /** Private operational control for the information MCP tools may disclose. */
 export const McpPrivacySettings: CollectionConfig = {
   slug: 'mcp-privacy-settings',
