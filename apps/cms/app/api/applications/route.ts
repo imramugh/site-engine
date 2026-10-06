@@ -3,6 +3,7 @@ import { getPayload } from 'payload'
 import { REST_GET } from '@payloadcms/next/routes'
 import config from '../../../payload.config'
 import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, removeResume, storeResume, validateResume } from '../../../src/applications'
+import { isRetryableSQLiteError, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 export const GET = (request: Request) => REST_GET(config)(request, { params: Promise.resolve({ slug: ['applications'] }) })
@@ -31,6 +32,6 @@ export async function POST(request: Request) {
     const digest = createHash('sha256').update(bytes).digest('hex'); const matches = (prior: { name: string; email: string; telephone?: string | null; linkedIn?: string | null; coverLetter: string; consent: boolean; jobId: string; resumeKey: string }) => prior.name === name && prior.email === applicantEmail && (prior.telephone ?? null) === telephone && (prior.linkedIn ?? null) === linkedIn && prior.coverLetter === coverLetter && prior.consent && prior.jobId === jobId && prior.resumeKey.endsWith(`-${digest}`)
     const existing = await payload.find({ collection: 'applications', where: { idempotencyKey: { equals: key } }, overrideAccess: true }); if (existing.docs[0]) { if (!matches(existing.docs[0] as never)) throw new Error('Idempotency key collision.'); return Response.json({ id: existing.docs[0].id }, { status: 200 }) }
     const resumeKey = storeResume({ data: bytes, name: resume.name })
-    try { const doc = await payload.create({ collection: 'applications', data: { name, email: applicantEmail, telephone, linkedIn, coverLetter, consent: true, jobId, resumeKey, idempotencyKey: key }, overrideAccess: true }); return Response.json({ id: doc.id }, { status: 201 }) } catch { removeResume(resumeKey); const collision = await payload.find({ collection: 'applications', where: { idempotencyKey: { equals: key } }, overrideAccess: true }); if (collision.docs[0] && matches(collision.docs[0] as never)) return Response.json({ id: collision.docs[0].id }, { status: 200 }); throw new Error('Application storage failed.') }
-  } catch (error) { return Response.json({ error: error instanceof RangeError ? 'application_too_large' : 'invalid_application' }, { status: error instanceof RangeError ? 413 : 400 }) }
+    try { const doc = await payload.create({ collection: 'applications', data: { name, email: applicantEmail, telephone, linkedIn, coverLetter, consent: true, jobId, resumeKey, idempotencyKey: key }, overrideAccess: true }); return Response.json({ id: doc.id }, { status: 201 }) } catch (error) { if (isRetryableSQLiteError(error)) throw error; removeResume(resumeKey); const collision = await payload.find({ collection: 'applications', where: { idempotencyKey: { equals: key } }, overrideAccess: true }); if (collision.docs[0] && matches(collision.docs[0] as never)) return Response.json({ id: collision.docs[0].id }, { status: 200 }); throw new Error('Application storage failed.') }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: 'application_temporarily_busy' }) ?? Response.json({ error: error instanceof RangeError ? 'application_too_large' : 'invalid_application' }, { status: error instanceof RangeError ? 413 : 400 }) }
 }

@@ -5,6 +5,7 @@ import { hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
 import { prepareReviewedRollback, projectChangeLog } from '../../../src/change-log'
 import { retentionPolicy } from '../../../src/retention'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -110,5 +111,5 @@ export async function POST(request: Request) {
     if (!actor || !hasRole(actor, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
     const set = await prepareReviewedRollback(payload, actor, request.headers, (body as { releaseID: string }).releaseID)
     return Response.json({ changeSet: { id: set.id, name: set.name, state: set.state }, reviewURL: '/editorial' }, { status: 201, headers: noStore })
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Rollback preparation failed.' }, { status: 400, headers: noStore }) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Rollback preparation failed.' }, { status: 400, headers: noStore }) }
 }

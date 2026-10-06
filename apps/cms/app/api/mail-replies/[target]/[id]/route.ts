@@ -3,6 +3,7 @@ import config from '../../../../../payload.config'
 import { hasRole } from '../../../../../src/access'
 import { cookieName, readCookie, serverSessionStrategy, SESSION_COOKIE } from '../../../../../src/identity'
 import { authorizeReply, cancelReply, prepareReply, sendReply } from '../../../../../src/mail-replies'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -39,5 +40,5 @@ export async function POST(request: Request, context: { params: Promise<{ target
     if (body.action === 'cancel') return Response.json({ authorization: await cancelReply(payload, actor, body.grantID) }, { headers: noStore })
     if (body.action === 'send') return Response.json({ delivery: await sendReply(payload, actor, body.grantID) }, { headers: noStore })
     throw new Error('invalid_reply')
-  } catch (error) { const code = error instanceof Error ? error.message : ''; return Response.json({ error: code === 'owner_authorization_required' ? 'A freshly authenticated Owner must confirm this exact reply.' : code === 'authorization_not_usable' ? 'This confirmation is expired, changed, cancelled, or already used.' : 'The reply could not be processed.' }, { status: code === 'authorization_not_usable' ? 409 : 422, headers: noStore }) }
+  } catch (error) { const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore); if (backpressure) return backpressure; const code = error instanceof Error ? error.message : ''; return Response.json({ error: code === 'owner_authorization_required' ? 'A freshly authenticated Owner must confirm this exact reply.' : code === 'authorization_not_usable' ? 'This confirmation is expired, changed, cancelled, or already used.' : 'The reply could not be processed.' }, { status: code === 'authorization_not_usable' ? 409 : 422, headers: noStore }) }
 }

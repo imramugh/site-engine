@@ -4,6 +4,7 @@ import { hasRole } from '../../../src/access'
 import { createAcceptedInquiry, leadStages, manualInquiryInput } from '../../../src/inquiries'
 import { serverSessionStrategy } from '../../../src/identity'
 import { LeadFilterError, leadWhere, parseLeadFilters, type LeadFilters } from '../../../src/lead-filters'
+import { sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -104,7 +105,8 @@ export async function POST(request: Request): Promise<Response> {
   }
   const { input, errors } = manualInquiryInput(body)
   if (!input) return Response.json({ errors }, { status: 422, headers: noStore })
-  const result = await createAcceptedInquiry(payload, input, user)
+  let result
+  try { result = await createAcceptedInquiry(payload, input, user) } catch (error) { return sqliteBackpressureResponse(error, { errors: { form: 'The lead service is temporarily busy. Please retry.' } }, noStore) ?? Response.json({ errors: { form: 'The lead could not be saved.' } }, { status: 400, headers: noStore }) }
   if ('suppressed' in result) return Response.json({ error: 'Manual leads cannot use spam fields.' }, { status: 400, headers: noStore })
   return Response.json({ lead: view(result.inquiry as unknown as Record<string, unknown>) }, { status: 201, headers: noStore })
 }
