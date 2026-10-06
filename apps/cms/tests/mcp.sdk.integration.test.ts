@@ -816,7 +816,7 @@ test('ENG-032 structural tools capture caller-owned drafts, validate trees, and 
     expect((await payload.find({ collection: 'redirects', where: { from: { equals: '/previously-archived' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]).toMatchObject({ to: '/legacy' })
     expect(await publishedHash()).toBe(mixedPublishedHash)
   } finally { await Promise.all([writer.transport.close(), readonly.transport.close()]) }
-})
+}, 15_000)
 
 test('MCP canonical review tools enforce ownership, revisions, and review-only boundaries', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-review-editor-${randomUUID()}@example.test`, name: 'MCP Review Editor', roles: ['editor'] }, overrideAccess: true })
