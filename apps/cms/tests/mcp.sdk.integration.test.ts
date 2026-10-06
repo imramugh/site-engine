@@ -613,6 +613,75 @@ test('an Approver grant updates existing pages but cannot create pages or approv
   }
 })
 
+test('MCP media search retains tagged used assets past the first 100 results', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-pagination-${randomUUID()}@example.test`, name: 'MCP Media Pagination', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `MCP media pagination ${randomUUID()}`, summary: 'Synthetic section for MCP media pagination coverage.', slug: `mcp-media-pagination-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const tag = `mcp-pagination-${randomUUID()}`
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const assets: Array<{ id: string }> = []
+  for (let index = 0; index < 101; index++) assets.push(await payload.create({
+    collection: 'assets', data: { alt: `MCP pagination asset ${index}`, decorative: false, tags: [tag] },
+    file: { data: bytes, mimetype: 'image/png', name: `mcp-pagination-${index}.png`, size: bytes.length }, user: editor, overrideAccess: false,
+  }) as { id: string })
+  const lateAsset = assets[100]!
+  const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
+  await payload.create({
+    collection: 'pages',
+    data: {
+      title: 'MCP media pagination references', summary: 'Synthetic page that references every paginated media fixture asset.', slug: `mcp-media-references-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard',
+      blocks: Array.from({ length: Math.ceil(assets.length / 12) }, (_, group) => ({ id: randomUUID(), type: 'gallery', mediaIds: assets.slice(group * 12, group * 12 + 12).map((asset) => asset.id), hidden: false, appearance })),
+    }, user: editor, overrideAccess: false,
+  })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-media-pagination', { clientId: 'mcp-media-pagination-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read'] })
+  const sdk = await clientFor('mcp-media-pagination')
+  try {
+    const first = resultJson(await sdk.client.callTool({ name: 'find_media', arguments: { tag, usage: 'used', page: 1, pageSize: 25 } })) as { assets: Array<{ id: string }>; total: number; page: number; pageSize: number; totalPages: number }
+    expect(first).toMatchObject({ total: 101, page: 1, pageSize: 25, totalPages: 5 })
+    const pages = [first]
+    for (let page = 2; page <= first.totalPages; page++) pages.push(resultJson(await sdk.client.callTool({ name: 'find_media', arguments: { tag, usage: 'used', page, pageSize: 25 } })) as typeof first)
+    const foundIDs = pages.flatMap((found) => found.assets.map((asset) => asset.id))
+    expect(foundIDs).toHaveLength(101)
+    expect(new Set(foundIDs)).toEqual(new Set(assets.map((asset) => asset.id)))
+    expect(foundIDs).toContain(lateAsset.id)
+    expect(resultJson(await sdk.client.callTool({ name: 'get_media_usage', arguments: { id: lateAsset.id } }))).toMatchObject({ id: lateAsset.id, usages: [expect.objectContaining({ locations: expect.arrayContaining([expect.stringContaining('mediaIds')]) })] })
+  } finally { await sdk.transport.close() }
+}, 30_000)
+
+test('MCP update_media reports a retryable SQLite writer lock without a partial mutation', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-busy-${randomUUID()}@example.test`, name: 'MCP Media Busy', roles: ['editor'] }, overrideAccess: true })
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const asset = await payload.create({ collection: 'assets', data: { alt: 'Original locked media metadata', decorative: false, tags: ['before-lock'] }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media-busy.png', size: bytes.length }, user: editor, overrideAccess: false })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-media-busy', { clientId: 'mcp-media-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sdk = await clientFor('mcp-media-busy')
+  const set = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP media busy mutation' } })) as { id: string; revision: number }
+  const originalCreate = payload.create.bind(payload)
+  const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+  let lock: Awaited<ReturnType<typeof external.transaction>> | undefined
+  let armed = true
+  ;(payload as unknown as { create: typeof payload.create }).create = (async (args: Parameters<typeof payload.create>[0]) => {
+    const result = await originalCreate(args)
+    if (armed && args.collection === 'audit-events' && (args.data as { event?: unknown }).event === 'mcp.request') {
+      armed = false; lock = await external.transaction('write')
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
+    }
+    return result
+  }) as typeof payload.create
+  try {
+    const blocked = await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })
+    expect(blocked).toMatchObject({ isError: true })
+    expect(resultJson(blocked)).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await lock?.rollback(); lock = undefined
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original locked media metadata', tags: ['before-lock'] })
+    expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ revision: set.revision })
+  } finally {
+    ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
+    await lock?.rollback(); external.close()
+    await sdk.transport.close()
+  }
+}, 15_000)
+
 test('MCP media tools use scoped effective users and revisioned metadata writes', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-editor-${randomUUID()}@example.test`, name: 'MCP Media Editor', roles: ['editor'] }, overrideAccess: true })
   const approver = await payload.create({ collection: 'users', data: { email: `mcp-media-approver-${randomUUID()}@example.test`, name: 'MCP Media Approver', roles: ['approver'] }, overrideAccess: true })
