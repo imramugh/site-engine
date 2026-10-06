@@ -346,7 +346,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     if (Array.isArray(id) || !validIdentifier(id)) return resource(resourceUri, { error: 'invalid_resource' })
     try { return resource(resourceUri, page(await payload.findByID({ collection: 'pages', id, depth: 0, draft: true, user: current, overrideAccess: false }) as unknown as Record<string, unknown>)) } catch { return resource(resourceUri, { error: 'read_failed' }) }
   })
-  registerMcpPrompts({ server, contentRead: read, leadsRead: leads, careersRead: careers, toolLimits })
+  registerMcpPrompts({ server, contentRead: read, contentWrite: write, leadsRead: leads, careersRead: careers, toolLimits })
   const strictEmpty = z.object({}).strict()
   const sectionOutput = z.object({ id: z.string().uuid(), name: z.string(), slug: z.string(), summary: z.string().nullable(), allowedTemplates: z.array(z.string()), landingPageId: z.string().uuid().nullable(), pageIds: z.array(z.string().uuid()), sectionHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict()
   const treePageOutput = z.object({ id: z.string().uuid(), title: z.string(), slug: z.string(), template: z.enum(TemplateSchema.options), status: z.string(), sectionId: z.string().uuid(), parentId: z.string().uuid().nullable() }).strict()
