@@ -86,7 +86,7 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
       return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
     } catch { return error('image_input_unavailable') }
   })
-  server.registerTool('get_ai_suggestion', { title: 'Get AI suggestion status', description: 'Read one of your AI suggestion jobs. Completed text remains a human-review draft and is never applied automatically.', inputSchema: z.object({ jobId: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ jobId }) => {
+  server.registerTool('get_ai_suggestion', { title: 'Get AI suggestion status', description: 'Read one of your AI suggestion jobs. Completed text remains a human-review draft and is never applied automatically. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ jobId: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ jobId }) => {
     if (!read) return error('insufficient_scope')
     try {
       const job = await payload.findByID({ collection: 'configured-ai-jobs', id: jobId, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
