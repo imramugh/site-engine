@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import sharp from 'sharp'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Payload } from 'payload'
 import { z } from 'zod'
@@ -9,7 +10,7 @@ import { canonicalHash } from './publishing'
 import { pageEditorHash, pageEditorProjection } from './page-editor'
 import type { IntegrationProvider } from './integrations'
 import { providerCapabilities } from './ai-providers'
-import { mediaStorageDirectory } from './media'
+import { mediaStorageDirectory, validateRasterUpload } from './media'
 
 type Current = { id: string; roles?: string[] }
 type Target = { collection: 'pages' | 'assets'; id: string; revision: string }
@@ -71,9 +72,16 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
       const filename = typeof asset.filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/.test(asset.filename) ? asset.filename : ''
       const mime = typeof asset.mimeType === 'string' && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.mimeType) ? asset.mimeType : ''
       if (!filename || !mime) return error('image_input_unavailable')
-      const bytes = await readFile(resolve(mediaStorageDirectory(), filename)); if (!bytes.length || bytes.length > 60_000) return error('image_input_unavailable')
+      const root = mediaStorageDirectory(); const path = resolve(root, filename)
+      if (!path.startsWith(`${root}/`)) return error('image_input_unavailable')
+      const info = await stat(path); if (!info.isFile() || info.size <= 0 || info.size > 15 * 1024 * 1024) return error('image_input_unavailable')
+      const file = await open(path, 'r'); let original: Buffer
+      try { original = Buffer.alloc(info.size); const read = await file.read(original, 0, original.length, 0); if (read.bytesRead !== original.length) return error('image_input_unavailable') } finally { await file.close() }
+      await validateRasterUpload({ data: original, mimetype: mime, name: filename, size: original.length })
+      const bytes = await sharp(original, { failOn: 'error', limitInputPixels: 16_000_000 }).rotate().resize({ width: 768, height: 768, fit: 'inside', withoutEnlargement: true }).webp({ quality: 70 }).toBuffer()
+      if (!bytes.length || bytes.length > 350_000) return error('image_input_unavailable')
       const target = { collection: 'assets', id, revision: revision('assets', asset) } as Target
-      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: selected.provider, fallbackProvider: selected.fallbackProvider ?? null, input: envelope('alt', target, { instruction: 'Describe only visible image content for concise accessible alt text.' }), imageDataUrl: `data:${mime};base64,${bytes.toString('base64')}`, maxOutputTokens: 240, idempotencyKey })
+      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: selected.provider, fallbackProvider: selected.fallbackProvider ?? null, input: envelope('alt', target, { instruction: 'Describe only visible image content for concise accessible alt text.' }), imageDataUrl: `data:image/webp;base64,${bytes.toString('base64')}`, maxOutputTokens: 240, idempotencyKey })
       return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
     } catch { return error('image_input_unavailable') }
   })

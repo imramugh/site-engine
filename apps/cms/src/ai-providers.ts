@@ -58,7 +58,7 @@ function requestBody(provider: IntegrationProvider, model: string, input: string
 }
 // The reservation includes serialized JSON framing and the requested completion budget.
 // Providers can bill internal reasoning beyond visible text; unreported usage retains the full reservation.
-function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number): number { return Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8') }
+function reservedInputTokens(provider: IntegrationProvider, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string): number { return Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens, imageDataUrl)), 'utf8') }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal): Request {
   const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens, imageDataUrl))
   if (provider === 'openai') return new Request(providerCapabilities.openai.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
@@ -199,6 +199,7 @@ async function reserve(
         current.model,
         job.input,
         job.maxOutputTokens,
+        job.imageDataUrl,
       );
       const reservedMicroUsd = costMicroUsd(
         requestInputTokens,
