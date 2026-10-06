@@ -1,5 +1,6 @@
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261006_009000_preview_render_diagnostics from './20261006_009000_preview_render_diagnostics';
+import * as migration_20261006_009000_crm_private_records from './20261006_009000_crm_private_records';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
 import * as migration_20261003_033949_invitation_token_binding from './20261003_033949_invitation_token_binding';
@@ -292,4 +293,5 @@ export const migrations = [
   { up: migration_20261006_007000_mcp_mail_confirmation.up, down: migration_20261006_007000_mcp_mail_confirmation.down, name: '20261006_007000_mcp_mail_confirmation' },
   { up: migration_20261006_008000_mail_draft_attachments.up, down: migration_20261006_008000_mail_draft_attachments.down, name: '20261006_008000_mail_draft_attachments' },
   { up: migration_20261006_009000_preview_render_diagnostics.up, down: migration_20261006_009000_preview_render_diagnostics.down, name: '20261006_009000_preview_render_diagnostics' },
+  { up: migration_20261006_009000_crm_private_records.up, down: migration_20261006_009000_crm_private_records.down, name: '20261006_009000_crm_private_records' },
 ];

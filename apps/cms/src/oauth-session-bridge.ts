@@ -10,6 +10,8 @@ const redirectsRead = 'mcp:redirects:read'
 const redirectsWrite = 'mcp:redirects:write'
 const leadsRead = 'mcp:leads:read'
 const careersRead = 'mcp:careers:read'
+const leadsWrite = 'mcp:leads:write'
+const careersWrite = 'mcp:careers:write'
 const leadsReply = 'mcp:leads:reply'
 const careersReply = 'mcp:careers:reply'
 
@@ -17,18 +19,18 @@ export type OAuthBridgeUser = { id: string; sessionId: string; scopes: readonly 
 type BridgeRequest = { operation: 'resolve' } | { operation: 'validate'; sessionId: string; userId: string }
 
 const roleScopes: Record<string, readonly string[]> = {
-  owner: [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsReply, careersRead, careersReply],
+  owner: [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply],
   editor: [contentRead, contentWrite, redirectsRead, redirectsWrite],
   approver: [contentRead, contentWrite, redirectsRead],
-  sales: [leadsRead, leadsReply],
-  hiring: [careersRead, careersReply],
+  sales: [leadsRead, leadsWrite, leadsReply],
+  hiring: [careersRead, careersWrite, careersReply],
 }
 
 /** Canonical roles are additive. Preserve a stable scope order for OAuth and
  * MCP clients, while never adding a scope outside the role allowlist. */
 function scopesForRoles(roles: readonly string[] | null | undefined): string[] {
   const granted = new Set((roles ?? []).flatMap((role) => roleScopes[role] ?? []))
-  return [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsReply, careersRead, careersReply].filter((scope) => granted.has(scope))
+  return [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply].filter((scope) => granted.has(scope))
 }
 
 function relationId(value: AuthSession['user']): string | undefined {
