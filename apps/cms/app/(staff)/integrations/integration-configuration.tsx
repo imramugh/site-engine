@@ -5,9 +5,9 @@ import styles from './integration-configuration.module.css'
 import { EmailWorkspace } from './email-workspace'
 import { NotificationPreferences } from './notification-preferences'
 
-type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral'
+type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'mistral' | 'azure-openai'
 type Tab = 'ai' | 'email' | 'signin' | 'assistants' | 'notifications'
-type Integration = { id: string; provider: Provider; model: string | null; fallbackProvider: Provider | null; monthlyCapMicroUsd: number | null; monthlyUsageMicroUsd: number; usageMonth: string | null; inputMicroUsdPerMillionTokens: number | null; outputMicroUsdPerMillionTokens: number | null; pricingSource: string | null; pricingAsOf: string | null; health: string; testedAt: string | null; credentialConfigured: boolean; credentialHint: string | null }
+type Integration = { id: string; provider: Provider; model: string | null; azureResourceEndpoint: string | null; azureApiVersion: string | null; fallbackProvider: Provider | null; monthlyCapMicroUsd: number | null; monthlyUsageMicroUsd: number; usageMonth: string | null; inputMicroUsdPerMillionTokens: number | null; outputMicroUsdPerMillionTokens: number | null; pricingSource: string | null; pricingAsOf: string | null; health: string; testedAt: string | null; credentialConfigured: boolean; credentialHint: string | null }
 type FederatedIdentity = { configured: boolean; users: number; enrollment: 'invited-only'; roleAssignment: 'manual'; issuer?: string | null; allowedTenant?: string | null }
 type Capabilities = { identity: { google: FederatedIdentity; microsoft: FederatedIdentity; emergencyOwner: { configured: boolean; users: number; lastUsedAt: string | null; sensitiveReauthMinutes: number } }; assistants: { oauthConfigured: boolean; endpoint: string | null }; email: { workerConfigured: boolean }; notifications: { queued: number; delivered: number; failed: number } }
 type JobDefault = { jobType: 'summary' | 'meta' | 'faq' | 'alt' | 'lead-reply'; provider: Provider; model: string; fallbackProvider: Provider | null }
