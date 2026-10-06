@@ -202,7 +202,19 @@ export async function handleMcp(request: Request): Promise<Response> {
     const settings = withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy'])
     const guide = guides.docs[0] ? captured('style-guides', guides.docs[0]) : undefined
     const rawPages = new Map(pages.docs.map((doc) => [String((doc as { id: unknown }).id), doc as unknown as Record<string, unknown>]))
-    const currentPages: Array<Record<string, unknown>> = pages.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...withoutNulls(captured('pages', doc), ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) }))
+    const currentPages: Array<Record<string, unknown>> = pages.docs.map((doc) => {
+      const raw = doc as unknown as Record<string, unknown>
+      const capturedPage = withoutNulls(captured('pages', doc), ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'])
+      // Payload's draft projection can omit date fields from a nested document
+      // capture even though the document itself carries the authoritative value.
+      // Keep review freshness attached to the same editable draft being audited.
+      return {
+        id: String(raw.id),
+        ...capturedPage,
+        ...(typeof raw.lastReviewed === 'string' ? { lastReviewed: raw.lastReviewed } : {}),
+        ...(typeof raw.updatedAt === 'string' ? { updatedAt: raw.updatedAt } : {}),
+      }
+    })
     const homepageID = relationID(settings.homepageId)
     if (homepageID && !currentPages.some((page) => page.id === homepageID && page.template === 'landing')) delete settings.homepageId
     return { rawPages, manifest: {

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import styles from './lead-workspace.module.css'
 import { PermanentDeleteDialog } from '../permanent-delete-dialog'
 import { MailReplyComposer } from '../mail-reply-composer'
@@ -93,6 +94,8 @@ function LeadDetail({ lead, assignees, saving, owner, onClose, onSave, onSpam, o
 }
 
 export function LeadDashboard({ owner = false }: { owner?: boolean }) {
+  const searchParams = useSearchParams()
+  const requestedLead = searchParams.get('lead')
   const [data, setData] = useState<Data>(emptyData)
   const [mode, setMode] = useState<'pipeline' | 'list' | 'spam'>('pipeline')
   const [filters, setFilters] = useState<Filters>({ stage: '', urgent: false, assignee: '', sourcePage: '', received: '90', page: 1 })
@@ -120,6 +123,15 @@ export function LeadDashboard({ owner = false }: { owner?: boolean }) {
     finally { setLoading(false) }
   }
   useEffect(() => { void load({ stage: '', urgent: false, assignee: '', sourcePage: '', received: '90', page: 1 }, false, 'pipeline') }, [])
+  useEffect(() => {
+    if (!requestedLead) return
+    let cancelled = false
+    void fetch(`/api/leads/${encodeURIComponent(requestedLead)}`, { cache: 'no-store' }).then(async response => {
+      if (!response.ok) throw new Error('The requested lead is unavailable.')
+      return response.json() as Promise<{ lead: Lead }>
+    }).then(({ lead }) => { if (!cancelled) { setData(current => ({ ...current, leads: current.leads.some(item => item.id === lead.id) ? current.leads : [lead, ...current.leads] })); setSelected(lead.id); setError('') } }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : 'The requested lead is unavailable.') })
+    return () => { cancelled = true }
+  }, [requestedLead])
   useEffect(() => {
     if (!dialogOpen) return
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') closeDialog() }
