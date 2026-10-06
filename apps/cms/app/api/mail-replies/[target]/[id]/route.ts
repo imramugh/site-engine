@@ -13,11 +13,19 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   if (!user || !hasRole(user as never, target === 'lead' ? ['owner', 'sales'] : ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403, headers: noStore })
   try { await payload.findByID({ collection: target === 'lead' ? 'inquiries' : 'applications', id, depth: 0, overrideAccess: false, user: user as never }) } catch { return Response.json({ error: 'Record not found.' }, { status: 404, headers: noStore }) }
   const area = target === 'lead' ? 'leads' : 'careers'; const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
-  if (!mapping.docs[0]) return Response.json({ senders: [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  if (!mapping.docs[0]) return Response.json({ senders: [], threads: [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
   const mailboxID = typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true })
   const address = String(mapping.docs[0].senderAddress).toLowerCase(); const verified = String(mailbox.primaryAddress).toLowerCase() === address || (Array.isArray(mailbox.verifiedAliases) && mailbox.verifiedAliases.map(String).includes(address))
-  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  let threads: Array<{ id: string; subject: string }> = []
+  if (verified && (mailbox.provider === 'google' || mailbox.provider === 'microsoft')) {
+    const found = await payload.find({ collection: 'mail-threads', where: { and: [{ [target]: { equals: id } }, { mailbox: { equals: mailboxID } }, { provider: { equals: mailbox.provider } }] }, limit: 50, sort: '-updatedAt', depth: 0, overrideAccess: true })
+    threads = await Promise.all(found.docs.map(async (thread) => {
+      const message = await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, limit: 1, sort: '-receivedAt', depth: 0, overrideAccess: true })
+      return message.docs[0] ? { id: String(thread.providerConversationID), subject: String(message.docs[0].subject) } : undefined
+    })).then(items => items.filter((item): item is { id: string; subject: string } => Boolean(item)))
+  }
+  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
 }
 export async function POST(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
