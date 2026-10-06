@@ -3,8 +3,9 @@ import config from '../../../../../../payload.config'
 import { hasRole } from '../../../../../../src/access'
 import { cookieName, readCookie, SESSION_COOKIE, serverSessionStrategy } from '../../../../../../src/identity'
 import { completeMailboxOAuth } from '../../../../../../src/mailbox-oauth'
+import { sqliteAuthenticationBoundary } from '../../../../../../src/sqlite'
 
-export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {
+async function GETHandler(request: Request, { params }: { params: Promise<{ provider: string }> }) {
   const provider = (await params).provider
   const token = readCookie(request.headers, cookieName(SESSION_COOKIE))
   if (provider !== 'microsoft' && provider !== 'google') return new Response('Not found', { status: 404 })
@@ -21,3 +22,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     return Response.redirect(integration('authorization_failed'), 302)
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

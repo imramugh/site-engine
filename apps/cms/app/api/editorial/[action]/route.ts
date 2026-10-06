@@ -172,7 +172,13 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     if (error instanceof ApprovalAuthorizationDenied) {
-      await auditApprovalDenial(await getPayload({ config }), error.userID, error.reason)
+      try {
+        await auditApprovalDenial(await getPayload({ config }), error.userID, error.reason)
+      } catch (auditError) {
+        const backpressure = sqliteBackpressureResponse(auditError, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+        if (backpressure) return backpressure
+        throw auditError
+      }
       return Response.json({ error: error.message }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
     }
     const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
