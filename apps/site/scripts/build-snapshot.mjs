@@ -16,10 +16,14 @@ import { nginxRedirectInclude } from './redirect-artifact.mjs';
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 async function files(directory, root = directory) { const entries = await readdir(directory, { withFileTypes: true }); return (await Promise.all(entries.map(async entry => { if (entry.isSymbolicLink()) throw new Error('Artifact contains a symbolic link.'); return entry.isDirectory() ? files(join(directory, entry.name), root) : [[relative(root, join(directory, entry.name)), sha(await readFile(join(directory, entry.name)))]]; }))).flat(); }
-function qualityError(report) {
-  if (report.publishable) return undefined;
-  return `Quality checks failed: ${report.blockers.map((item) => `${item.code} (${item.path}): ${item.message}`).join('; ')}`;
+export class QualityDiagnosticError extends Error {
+  constructor(report) {
+    const diagnostics = report.blockers.map(({ code, path, pageId, blockId, message }) => ({ code, path, ...(pageId ? { pageId } : {}), ...(blockId ? { blockId } : {}), message }));
+    super(`Quality checks failed: ${diagnostics.map((item) => `${item.code} (${item.path}): ${item.message}`).join('; ')}`);
+    this.name = 'QualityDiagnosticError'; this.diagnostics = diagnostics;
+  }
 }
+function qualityError(report) { return report.publishable ? undefined : new QualityDiagnosticError(report); }
 export async function generatedStructuredData(snapshot, artifact, required) {
   const routes = deriveRoutes(snapshot, snapshot.settings.homepageId).routes.filter(({ page }) => page.status === 'published');
   const entries = await Promise.all(routes.map(async ({ page, canonicalPath }) => {
@@ -200,7 +204,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   const style = snapshot.styleGuide;
   const initialQuality = checkSiteSnapshot(snapshot, { style });
   const initialQualityError = qualityError(initialQuality);
-  if (initialQualityError) throw new Error(initialQualityError);
+  if (initialQualityError) throw initialQualityError;
   // Workers pass immutable pins for each render. The standalone renderer keeps
   // the legacy configured-version fallback only when no pins were supplied.
   const pins = versionPins === undefined
@@ -217,7 +221,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
     const renderedQuality = checkSiteSnapshot(snapshot, { style, structuredData: await generatedStructuredData(snapshot, staged, themeComponentsRoot === undefined) });
     const renderedQualityError = qualityError(renderedQuality);
-    if (renderedQualityError) throw new Error(renderedQualityError);
+    if (renderedQualityError) throw renderedQualityError;
     await copyReferencedMedia(snapshot, staged);
     const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
     if (symbol) {
