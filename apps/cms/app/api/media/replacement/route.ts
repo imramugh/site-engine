@@ -29,6 +29,8 @@ async function POSTHandler(request: Request) {
     const result = await replaceAssetFile({ payload, assetID, idempotencyKey, file, user: user as never })
     return json(result)
   } catch (error) {
+    if (error instanceof Error && error.message === 'idempotency_conflict') return json({ error: 'This replacement key was already used for different content.' }, 409)
+    if (error instanceof Error && error.message === 'asset_in_bin') return json({ error: 'Restore this asset before replacing its file.' }, 409)
     return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? json({ error: 'Unable to replace this asset file.' }, 400)
   }
 }
