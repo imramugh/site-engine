@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -14,6 +14,9 @@ import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlo
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { canonicalHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
+import { authorizeMailDraft } from '../src/mail-authorizations'
+import { prepareReply, setReplyDeliveryForTest } from '../src/mail-replies'
+import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -596,4 +599,90 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const applicationDraft = resultJson(await hiringClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'Interview details', body: 'A prepared hiring response only.' } })) as { draft: { target: string; state: string } }
     expect(applicationDraft.draft).toMatchObject({ target: 'application', state: 'prepared' })
   } finally { await Promise.all([contentOnly.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
+})
+
+test('MCP reply grants bind the SDK origin to a separate fresh human confirmation and refuse every invalidated send before delivery', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-bound-owner-${randomUUID()}@example.test`, name: 'Bound reply owner', roles: ['owner'] }, overrideAccess: true })
+  const other = await payload.create({ collection: 'users', data: { email: `mcp-bound-other-${randomUUID()}@example.test`, name: 'Other reply owner', roles: ['owner'] }, overrideAccess: true })
+  const lead = await payload.create({ collection: 'inquiries', data: { email: `mcp-bound-lead-${randomUUID()}@example.test`, name: 'Bound lead', message: 'Please reply through the confirmed channel.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
+  const originSession = await sessionFor(owner.id)
+  const confirmationToken = newOpaqueToken()
+  const confirmationSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(confirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+  const otherSession = await sessionFor(other.id)
+  const clientID = `mcp-bound-client-${randomUUID()}`
+  const clientHash = createHash('sha256').update(clientID).digest('hex')
+  const tokenName = `mcp-bound-token-${randomUUID()}`
+  tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] })
+  const sdk = await clientFor(tokenName)
+  let providerRequests = 0
+  setReplyDeliveryForTest(async (_payload, area, envelope) => {
+    providerRequests += 1
+    expect(area).toBe('leads')
+    expect(envelope).toMatchObject({ sender: 'team@example.test', recipient: lead.email, subject: 'SDK-bound subject', body: 'SDK-bound body' })
+    return { provider: 'smtp', messageID: `mcp-bound-${providerRequests}` }
+  })
+  const prepareAndConfirm = async () => {
+    const prepared = structuredJson(await sdk.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'team@example.test', subject: 'SDK-bound subject', body: 'SDK-bound body' } })) as { draft: { id: string; confirmationURL: string } }
+    const deepLink = new URL(prepared.draft.confirmationURL)
+    // This is the exact browser target which a signed-in human sees; it must not
+    // silently select the first lead when the requested lead is beyond a page.
+    expect(deepLink.pathname).toBe('/leads')
+    expect(deepLink.searchParams.get('lead')).toBe(lead.id)
+    expect(deepLink.searchParams.get('draft')).toBe(prepared.draft.id)
+    const grant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: confirmationToken }, prepared.draft.id, new Date(Date.now() + 60_000))
+    expect(grant).toMatchObject({ authorizedBy: expect.objectContaining({ id: owner.id }), humanConfirmationSessionID: confirmationSession.id, assistantClientIDHash: clientHash, assistantActor: expect.objectContaining({ id: owner.id }), assistantOAuthSessionID: originSession.id })
+    return { draftID: prepared.draft.id, grantID: grant.id }
+  }
+  const assertRejected = async (draftID: string, grantID: string) => {
+    let rejected: { error: string } | undefined
+    try { rejected = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID, grantID } })) as { error: string } } catch { /* Disabled canonical actors are rejected at MCP authentication before a tool result exists. */ }
+    if (rejected) expect(rejected.error).toMatch(/authorization_not_usable|mail_authorization_required|insufficient_scope/)
+    expect(providerRequests).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+  }
+  try {
+    const accepted = await prepareAndConfirm()
+    const pending = structuredJson(await sdk.client.callTool({ name: 'get_reply_status', arguments: { draftID: accepted.draftID } })) as { grantID: string | null }
+    expect(pending.grantID).toBe(accepted.grantID)
+    expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted }))).toMatchObject({ provider: 'smtp', messageID: 'mcp-bound-1' })
+    expect(providerRequests).toBe(1)
+
+    const cases: Array<[string, (draftID: string, grantID: string) => Promise<void>]> = [
+      ['wrong client', async () => { tokens.set(tokenName, { clientId: `wrong-client-${randomUUID()}`, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['wrong actor', async () => { tokens.set(tokenName, { clientId: clientID, userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['wrong OAuth origin session', async () => { tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: (await sessionFor(owner.id)).id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['edited draft', async (draftID) => { await payload.update({ collection: 'mail-drafts', id: draftID, data: { body: 'Edited after confirmation.' }, overrideAccess: true }) }],
+      ['canceled draft', async (draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'canceled' }, overrideAccess: true }) }],
+      ['expired grant', async (_draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { expiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true }) }],
+      ['revoked human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }) }],
+      ['stale human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) }],
+      ['demoted canonical actor', async () => { await payload.update({ collection: 'users', id: owner.id, data: { roles: ['editor'] }, overrideAccess: true }) }],
+    ]
+    for (const [name, invalidate] of cases) {
+      await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+      await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: null, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+      tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] })
+      const rejected = await prepareAndConfirm()
+      await invalidate(rejected.draftID, rejected.grantID)
+      await assertRejected(rejected.draftID, rejected.grantID)
+      expect(providerRequests, name).toBe(1)
+    }
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+    const disabledConfirmationToken = newOpaqueToken()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(disabledConfirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+    const disabledDraft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Disabled actor subject', body: 'Disabled actor body' }, { clientIDHash: clientHash, actorID: owner.id, oauthSessionID: originSession.id })
+    const disabledGrant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: disabledConfirmationToken }, disabledDraft.id, new Date(Date.now() + 60_000))
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: true }, overrideAccess: true })
+    const disabledResponse = await fetch(`${mcpOrigin}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${tokenName}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name: 'send_reply', arguments: { draftID: disabledDraft.id, grantID: disabledGrant.id } } }) })
+    expect(disabledResponse.status).toBe(401)
+    expect(providerRequests).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: disabledGrant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+    let replay: { error: string } | undefined
+    try { replay = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted })) as { error: string } } catch { /* A closed transport is also a refused replay. */ }
+    if (replay) expect(replay).toMatchObject({ error: 'authorization_not_usable' })
+    expect(providerRequests).toBe(1)
+  } finally {
+    setReplyDeliveryForTest()
+  }
 })
