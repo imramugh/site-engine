@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../src/integration-configuration'
+import { monitorIntegrationHealth } from '../src/integration-health-monitor'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-integration-access-'))
@@ -112,6 +113,19 @@ describe('ENG-023 integration configuration access', () => {
     await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-04T05:00:00.000Z') }, async () => ({ ok: false, code: 'rejected' }))
     alerts = await payload.find({ collection: 'notification-outbox', where: { sourceType: { equals: 'integration-configuration' } }, limit: 10, depth: 0, overrideAccess: true })
     expect(alerts.totalDocs).toBe(2)
+  })
+
+  it('runs a bounded configured-only monitor and creates the same durable outage intent', async () => {
+    const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/review', pricingAsOf: '2026-10-04T00:00:00.000Z' }
+    await configureIntegration(payload, { provider: 'google-gemini', model: 'monitor-model', credential: 'monitor-secret', fallbackProvider: null, pricing })
+    await testIntegrationConnection(payload, { provider: 'google-gemini', now: new Date('2026-10-04T00:00:00.000Z') }, async () => ({ ok: true, code: 'connected' }))
+    expect(await monitorIntegrationHealth(payload, new Date('2026-10-04T00:05:00.000Z'), async () => ({ ok: false, code: 'unavailable' }))).toBeGreaterThanOrEqual(1)
+    const alerts = await payload.find({ collection: 'notification-outbox', where: { sourceType: { equals: 'integration-configuration' } }, limit: 100, depth: 0, overrideAccess: true })
+    expect(alerts.docs.some(item => (item.payload as Record<string, unknown>)?.provider === 'google-gemini')).toBe(true)
+    await revokeIntegration(payload, { provider: 'google-gemini' })
+    const probed: string[] = []
+    await monitorIntegrationHealth(payload, new Date('2026-10-04T01:00:00.000Z'), async ({ provider }) => { probed.push(provider); return { ok: false, code: 'unavailable' } })
+    expect(probed).not.toContain('google-gemini')
   })
 
   it('fails closed when a configuration rotates or is revoked during the external check', async () => {
