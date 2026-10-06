@@ -280,7 +280,8 @@ export async function currentDraftReadiness(payload: Payload, req: PayloadReques
   } catch {
     // A stale or malformed capture must remain available for repair. The
     // contract/tree evaluator is the only write-aborting quality gate.
-    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: true, issues: [], blockers: [], warnings: [{ code: 'READINESS_CANDIDATE_UNAVAILABLE', severity: 'warning', path: '$', message: 'Readiness will be available after the captured draft can be assembled against its publication baseline.', remediation: 'Correct the draft or refresh the change set, then review readiness again.' }], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }
+    const unavailable = { code: 'READINESS_CANDIDATE_UNAVAILABLE', severity: 'blocker' as const, path: '$', message: 'Readiness cannot be evaluated until the captured draft can be assembled against its publication baseline.', remediation: 'Correct the draft or refresh the change set, then review readiness again.' }
+    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: false, issues: [unavailable], blockers: [unavailable], warnings: [], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }
   }
 }
 
