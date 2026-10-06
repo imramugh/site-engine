@@ -508,6 +508,35 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
     return
   }
+  // E2E-only external SQLite fault: the production direct-edit request still
+  // performs its normal page update and capture hook, while this trigger aborts
+  // the capture's change-set write. It proves transaction rollback without a
+  // product-only request header or code path.
+  if (request.method === 'POST' && request.url === '/__e2e/fail-change-capture') {
+    void (async () => {
+      const client = createClient({ url: `file:${databasePath}` })
+      try { await client.execute("CREATE TRIGGER e2e_fail_change_capture BEFORE UPDATE ON change_sets BEGIN SELECT RAISE(ABORT, 'e2e capture failure'); END") }
+      finally { client.close() }
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to install capture fault.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/fail-change-capture/release') {
+    void (async () => {
+      const client = createClient({ url: `file:${databasePath}` })
+      try { await client.execute('DROP TRIGGER IF EXISTS e2e_fail_change_capture') }
+      finally { client.close() }
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clear capture fault.') })
+    return
+  }
+  if (request.method === 'GET' && request.url === '/__e2e/direct-edit-state') {
+    void Promise.all([
+      payload.findByID({ collection: 'pages', id: directEditPageID, draft: true, depth: 0, overrideAccess: true }),
+      payload.count({ collection: 'audit-events', overrideAccess: true }),
+      payload.count({ collection: 'publish-outbox', overrideAccess: true }),
+    ]).then(([page, audit, outbox]) => json(response, { heading: (page.blocks as Array<{ id: string; heading?: string }>).find((block) => block.id === directEditBlockID)?.heading ?? null, audit: audit.totalDocs, outbox: outbox.totalDocs }))
+      .catch(() => { response.writeHead(500); response.end('Unable to read direct-edit state.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/sqlite-lock') {
     void (async () => {
       if (sqliteLock) throw new Error('SQLite lock is already held.')
