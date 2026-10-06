@@ -497,6 +497,8 @@ test('MCP returns a retryable HTTP response when its request audit is blocked by
     await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
     const client = new Client({ name: 'mcp-sdk-busy', version: '1.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(`${mcpOrigin}/mcp`), { requestInit: { headers: { authorization: 'Bearer mcp-busy-token' } } })
+    const raw = await fetch(`${mcpOrigin}/mcp`, { method: 'POST', headers: { authorization: 'Bearer mcp-busy-token', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'busy', version: '1' } } }) })
+    expect(raw.status).toBe(503); expect(raw.headers.get('Retry-After')).toBe('1'); expect(raw.headers.get('Cache-Control')).toBe('no-store'); await expect(raw.json()).resolves.toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
     await expect(client.connect(transport)).rejects.toThrow(/temporarily_unavailable/)
   } finally { await lock.rollback(); external.close() }
   const client = await clientFor('mcp-busy-token')
@@ -514,7 +516,7 @@ test('ENG-017 content-write tools require scope and preserve draft review bounda
     const created = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP draft' } })) as { id: string; revision: number; state: string }
     expect(created).toMatchObject({ state: 'open', revision: 0 })
     expect(resultJson(await writer.client.callTool({ name: 'get_change_set', arguments: { id: created.id } }))).toMatchObject({ id: created.id, state: 'open' })
-    expect(resultJson(await writer.client.callTool({ name: 'submit_change_set', arguments: { id: created.id, expectedRevision: 1 } }))).toMatchObject({ error: 'read_failed' })
+    expect(resultJson(await writer.client.callTool({ name: 'submit_change_set', arguments: { id: created.id, expectedRevision: 1 } }))).toMatchObject({ error: 'write_failed' })
     await withPayloadTransaction(payload, async (req) => { req.user = editor as never; req.headers.set('x-site-engine-change-set', created.id); const section = await payload.create({ collection: 'sections', data: { name: 'MCP write', summary: 'Synthetic section for a valid MCP change set submission test.', slug: `mcp-write-${created.id.slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false, req }); await payload.create({ collection: 'pages', data: { title: 'MCP draft page', summary: 'Synthetic page captured in the explicit MCP change set for submission.', slug: 'mcp-draft-page', sectionId: section.id, template: 'standard' }, user: editor, overrideAccess: false, req }) })
     const changed = await payload.findByID({ collection: 'change-sets', id: created.id, overrideAccess: true })
     expect(resultJson(await writer.client.callTool({ name: 'submit_change_set', arguments: { id: created.id, expectedRevision: changed.revision } }))).toMatchObject({ state: 'submitted' })
