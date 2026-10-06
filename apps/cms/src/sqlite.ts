@@ -18,6 +18,7 @@ export function ensureSQLiteDirectory(): void {
 }
 
 export function isRetryableSQLiteError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'SQLITE_BUSY') return true
   const message = error instanceof Error ? error.message : String(error)
   return /SQLITE_BUSY|database is locked|busy timeout/i.test(message)
 }
