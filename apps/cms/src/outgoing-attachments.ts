@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import type { Payload } from 'payload'
 import { readResume, validateResume } from './applications'
+import { isSafeOutgoingAttachmentFilename } from './attachment-filename'
 import { mediaFilePath } from './media'
 
 const maxCount = 5
@@ -12,7 +13,6 @@ const id = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
 export type OutgoingAttachment = { source: 'asset' | 'application-resume'; sourceID: string; filename: string; mimeType: string; size: number; sha256: string }
 export type VerifiedOutgoingAttachment = OutgoingAttachment & { bytes: Uint8Array }
 
-const safeName = (value: unknown) => typeof value === 'string' && /^[^\u0000-\u001f\\/]{1,240}$/.test(value) ? value : undefined
 const roleAllowed = (roles: unknown, target: 'lead' | 'application') => Array.isArray(roles) && (roles.includes('owner') || (target === 'lead' ? roles.includes('sales') : roles.includes('hiring')))
 
 /** Resolves only server-owned asset IDs or the current target application's resume.
@@ -34,9 +34,11 @@ export async function resolveVerifiedOutgoingAttachments(payload: Payload, input
       const file = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile)
         ? asset.currentFile as { filename?: unknown; originalFilename?: unknown; mimeType?: unknown; filesize?: unknown }
         : asset
-      const filename = safeName(file?.originalFilename) ?? safeName(file?.filename)
+      const filename = typeof file?.originalFilename === 'string'
+        ? (isSafeOutgoingAttachmentFilename(file.originalFilename) ? file.originalFilename : undefined)
+        : (isSafeOutgoingAttachmentFilename(file?.filename) ? file.filename : undefined)
       const mimeType = typeof file?.mimeType === 'string' ? file.mimeType : ''
-      if (asset.deletedAt || !filename || !allowed.has(mimeType) || !safeName(file?.filename)) throw new Error('attachment_not_available')
+      if (asset.deletedAt || !filename || !allowed.has(mimeType) || !isSafeOutgoingAttachmentFilename(file?.filename)) throw new Error('attachment_not_available')
       const path = mediaFilePath(String(file!.filename)); const size = statSync(path).size
       if (size < 1 || size > maxBytes) throw new Error('attachment_not_available')
       const bytes = readFileSync(path); if (size !== bytes.length) throw new Error('attachment_not_available')

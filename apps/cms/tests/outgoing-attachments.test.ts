@@ -21,3 +21,10 @@ test('rejects cross-target resumes, unsafe source IDs, unavailable files, and un
   await expect(resolveOutgoingAttachments(payload, { target: 'lead', targetID: uuid, actorID: uuid, attachments: [{ source: 'asset', id: 'nope' }] })).rejects.toThrow('invalid_reply_attachments')
   await expect(resolveOutgoingAttachments(payload, { target: 'lead', targetID: uuid, actorID: uuid, attachments: [{ source: 'asset', id: uuid }] })).rejects.toThrow('attachment_not_available')
 })
+
+test.each(['quoted"name.pdf', `deleted${String.fromCharCode(127)}name.pdf`, 'line\r\nname.pdf'])('rejects an unsafe descriptor filename before confirmation: %j', async (originalFilename) => {
+  const directory = mkdtempSync(join(tmpdir(), 'outgoing-attachment-')); directories.push(directory); process.env.MEDIA_STORAGE_DIR = directory
+  writeFileSync(join(directory, 'stored.pdf'), Buffer.from('%PDF-safe attachment'))
+  const payload = { findByID: async ({ collection }: { collection: string }) => collection === 'users' ? { roles: ['sales'] } : { currentFile: { filename: 'stored.pdf', originalFilename, mimeType: 'application/pdf' } } } as any
+  await expect(resolveOutgoingAttachments(payload, { target: 'lead', targetID: uuid, actorID: uuid, attachments: [{ source: 'asset', id: uuid }] })).rejects.toThrow('attachment_not_available')
+})

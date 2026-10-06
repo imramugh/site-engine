@@ -58,8 +58,9 @@ test('serializes Gmail attachment MIME with exact bytes and reply threading head
 
 test('rejects bad attachment envelope before a provider call', async () => {
   let calls = 0
-  const invalid = { ...attachment, filename: 'bad\r\nBcc: injected@example.test' }
-  await expect(gmailAdapter(async () => { calls += 1; return Response.json({}) }, envelope.sender).send('token', { ...envelope, attachments: [invalid] })).rejects.toThrow('invalid_attachments')
+  for (const filename of ['bad\r\nBcc: injected@example.test', 'quoted"name.pdf', `deleted${String.fromCharCode(127)}name.pdf`]) {
+    await expect(gmailAdapter(async () => { calls += 1; return Response.json({}) }, envelope.sender).send('token', { ...envelope, attachments: [{ ...attachment, filename }] })).rejects.toThrow('invalid_attachments')
+  }
   await expect(microsoftAdapter(async () => { calls += 1; return Response.json({}) }, envelope.sender).send('token', { ...envelope, attachments: [{ ...attachment, size: attachment.size + 1 }] })).rejects.toThrow('invalid_attachments')
   await expect(gmailAdapter(async () => { calls += 1; return Response.json({}) }, envelope.sender).send('token', { ...envelope, attachments: Array.from({ length: 6 }, () => attachment) })).rejects.toThrow('invalid_attachments')
   expect(calls).toBe(0)
