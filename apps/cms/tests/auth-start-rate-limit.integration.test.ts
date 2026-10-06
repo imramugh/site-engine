@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
+import { createClient } from '@libsql/client'
 import { hashOpaqueToken, OIDC_TRANSACTION_COOKIE, cookieName } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-auth-start-rate-limit-'))
@@ -97,4 +98,26 @@ describe('bounded OIDC sign-in starts (ENG-007)', () => {
     expect(response.headers.get('retry-after')).toBe('60')
     expect((await payload.count({ collection: 'auth-transactions', overrideAccess: true })).totalDocs).toBe(2)
   })
+
+  it('returns a sanitized retryable response while an external writer blocks state persistence, then starts after release', async () => {
+    const before = await payload.count({ collection: 'auth-transactions', overrideAccess: true })
+    const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute('UPDATE auth_transactions SET updated_at = updated_at WHERE 0')
+      const blocked = await invoke()
+      expect(blocked.status).toBe(503)
+      expect(blocked.headers.get('Retry-After')).toBe('1')
+      expect(blocked.headers.get('Cache-Control')).toBe('no-store')
+      expect(blocked.headers.get('set-cookie')).toBeNull()
+      await expect(blocked.text()).resolves.toBe('Sign-in is temporarily unavailable. Please try again.')
+      expect((await payload.count({ collection: 'auth-transactions', overrideAccess: true })).totalDocs).toBe(before.totalDocs)
+    } finally {
+      await lock.rollback()
+      await external.close()
+    }
+    const retried = await invoke()
+    expect(retried.status).toBe(307)
+    expect(retried.headers.get('set-cookie')).toContain(cookieName(OIDC_TRANSACTION_COOKIE))
+  }, 15_000)
 })
