@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ThemeManifestSchema } from '@site-engine/contract';
+import { ThemeManifestSchema, type Block } from '@site-engine/contract';
 import { neutralFixture } from '@site-engine/contract/fixtures';
-import { compatibilityReport, getInstalledTheme, installedThemes, parseThemeRegistry, verifyThemeSelection } from '../scripts/theme-registry.mjs';
+import { compatibilityReport, getInstalledTheme, installedThemes, manifestDigest, parseThemeRegistry, projectThemeMotion, verifyThemeSelection } from '../scripts/theme-registry.mjs';
 const manifest = ThemeManifestSchema.parse({ name: 'synthetic', version: '1.2.3', contract: '1.0.0', entry: './dist/renderer.js', standardBlocks: ['hero'], settingKeys: ['tone'], extensionBlocks: [], motion: { presets: [], intentFallbacks: {} } });
 describe('operator theme registry', () => {
   it('validates manifests without executing code and binds frozen selection to an exact digest', () => {
@@ -24,5 +24,41 @@ describe('operator theme registry', () => {
     const report = compatibilityReport(snapshot, manifest);
     expect(report.compatible).toBe(false);
     expect(report.actions).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'contract-version', reason: 'theme-contract-mismatch' })]));
+  });
+  it('projects foreign presets for the target renderer without changing frozen source content', () => {
+    const snapshot = structuredClone(neutralFixture); const block = snapshot.pages[0]!.blocks[0]!;
+    block.appearance = { ...block.appearance, motionIntent: 'signature', motionPreset: 'source-grid' };
+    const sourceHash = manifestDigest(snapshot);
+    const target = ThemeManifestSchema.parse({ ...manifest, name: 'target', motion: { presets: ['target-chapter', 'target-fade'], intentFallbacks: { signature: 'target-chapter', subtle: 'target-fade' } } });
+    const switched = projectThemeMotion(block, target);
+    expect(switched.block).not.toBe(block);
+    expect(switched.block.appearance.motionPreset).toBe('target-chapter');
+    expect(switched.motionPreset).toBe('target-chapter');
+    expect(switched.action).toBe('intent-fallback');
+    expect(block.appearance.motionPreset).toBe('source-grid');
+    expect(manifestDigest(snapshot)).toBe(sourceHash);
+    expect(projectThemeMotion({ ...block, appearance: { ...block.appearance, motionPreset: 'target-fade', motionIntent: 'subtle' } }, target).block.appearance.motionPreset).toBe('target-fade');
+    const report = compatibilityReport(snapshot, target);
+    expect(report.actions).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'intent-fallback', blockID: block.id, reason: 'unsupported-motion-preset' })]));
+  });
+  it('keeps standard still zones still even when their source preset is supported by the target', () => {
+    const source = structuredClone(neutralFixture).pages[0]!.blocks[0]!;
+    const contact = { ...source, type: 'contact' } as Block;
+    contact.appearance = { ...contact.appearance, motionIntent: 'subtle', motionPreset: 'foreign-grid' };
+    const target = ThemeManifestSchema.parse({ ...manifest, name: 'still-target', motion: { presets: ['fade'], intentFallbacks: { subtle: 'fade' } } });
+    const projection = projectThemeMotion(contact, target);
+    expect(projection.motionPreset).toBeUndefined();
+    expect(projection.block.appearance.motionPreset).toBeUndefined();
+    expect(projection.block.appearance.motionIntent).toBe('none');
+    expect(projection).toMatchObject({ action: 'still', reason: 'motion-still-zone' });
+  });
+  it('projects an unsupported preset without a declared fallback to an explicit still intent', () => {
+    const source = structuredClone(neutralFixture).pages[0]!.blocks[0]!;
+    source.appearance = { ...source.appearance, motionIntent: 'signature', motionPreset: 'foreign-grid' };
+    const target = ThemeManifestSchema.parse({ ...manifest, name: 'no-fallback-target', motion: { presets: ['fade'], intentFallbacks: {} } });
+    const projection = projectThemeMotion(source, target);
+    expect(projection.block.appearance).toMatchObject({ motionIntent: 'none' });
+    expect(projection.block.appearance.motionPreset).toBeUndefined();
+    expect(projection).toMatchObject({ action: 'still', reason: 'no-declared-motion-fallback' });
   });
 });

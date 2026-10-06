@@ -1,14 +1,23 @@
-import type { Block } from '@site-engine/contract';
-import { resolveMotionPreset } from '@site-engine/engine/motion';
+import { readFileSync } from 'node:fs';
+import { ThemeManifestSchema, type Block } from '@site-engine/contract';
+import { projectThemeMotion } from '@site-engine/engine/theme-registry';
 import { starterTheme } from '@site-engine/theme-starter';
 
-const supportedPresets = new Set(starterTheme.motion.supportedPresets);
-const intentFallbacks = new Map(Object.entries(starterTheme.motion.intentFallbacks));
+const starterMotion = { motion: { presets: [...starterTheme.motion.supportedPresets], intentFallbacks: { ...starterTheme.motion.intentFallbacks } } };
 
-/** Resolves app-owned motion props without coupling the starter theme to engine code. */
+function targetMotionManifest() {
+  const source = process.env.SITE_THEME_MOTION_PATH;
+  return source ? ThemeManifestSchema.parse(JSON.parse(readFileSync(source, 'utf8'))) : starterMotion;
+}
+
+/** Projects source content to the target theme without changing the frozen snapshot. */
+export function projectThemeBlock(block: Block): Block {
+  return projectThemeMotion(block, targetMotionManifest()).block;
+}
+
+/** Resolves host props from the same target projection passed to theme renderers. */
 export function resolveStarterMotion(block: Block): string | undefined {
-  if (block.hidden || block.type === 'contact' || block.type === 'incidentBar') return undefined;
-  return resolveMotionPreset(block.appearance.motionIntent, block.appearance.motionPreset, supportedPresets, intentFallbacks);
+  return projectThemeMotion(block, targetMotionManifest()).motionPreset;
 }
 
 export function pageHasEnabledMotion(blocks: readonly Block[]): boolean {
