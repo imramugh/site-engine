@@ -5,6 +5,7 @@ import { integrationProviders, publicIntegration, type IntegrationProvider } fro
 import { serverSessionStrategy, SENSITIVE_REAUTH_SECONDS } from '../../../src/identity'
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
 import { configuredProvider } from '../../../src/oidc'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -106,5 +107,5 @@ export async function POST(request: Request) {
     const monthlyCapMicroUsd = typeof body.monthlyCapMicroUsd === 'number' ? body.monthlyCapMicroUsd : null
     const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
     return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
-  } catch { return failure() }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? failure() }
 }

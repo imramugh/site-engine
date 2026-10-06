@@ -4,6 +4,7 @@ import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { moveAssetToBin, restoreAssetFromBin } from '../../../../src/media-lifecycle'
 import { retentionPolicy } from '../../../../src/retention'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,8 @@ export async function POST(request: Request): Promise<Response> {
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to update media lifecycle.' }, { status: 400 })
   }
 }

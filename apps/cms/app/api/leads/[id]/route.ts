@@ -5,6 +5,7 @@ import { canTransitionLead, LeadAssigneeError, leadStages, validateLeadAssignee,
 import { serverSessionStrategy } from '../../../../src/identity'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { classifyLeadAsSpam, deleteSpamLead, LeadSpamLifecycleError, restoreLeadFromSpam } from '../../../../src/lead-spam-lifecycle'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -59,6 +60,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     })
     return Response.json({ lead: { id: lead.id, stage: lead.stage, notes: lead.notes ?? '', nextAction: lead.nextAction ?? '', nextActionDueAt: lead.nextActionDueAt ?? null, assignee: typeof lead.assignee === 'string' ? lead.assignee : lead.assignee?.id ?? null, updatedAt: lead.updatedAt } }, { headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     if (error instanceof LeadSpamLifecycleError) return Response.json({ error: error.message }, { status: error.code === 'NOT_FOUND' ? 404 : 409, headers: noStore })
     if (error instanceof LeadAssigneeError) return Response.json({ error: error.message }, { status: 422, headers: noStore })
     if (error instanceof Error && error.message === 'INVALID_TRANSITION') return Response.json({ error: 'That lead-stage transition is not allowed.' }, { status: 422, headers: noStore })
@@ -80,6 +83,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     await deleteSpamLead(payload, id, actor.id)
     return new Response(null, { status: 204, headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     if (error instanceof LeadSpamLifecycleError) return Response.json({ error: error.message }, { status: error.code === 'NOT_FOUND' ? 404 : error.code === 'ACTIVE_SEND' ? 409 : 422, headers: noStore })
     return Response.json({ error: 'Spam record could not be deleted.' }, { status: 422, headers: noStore })
   }

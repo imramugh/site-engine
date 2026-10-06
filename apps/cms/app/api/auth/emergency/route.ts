@@ -4,6 +4,7 @@ import config from '../../../../payload.config'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE, SESSION_ABSOLUTE_SECONDS } from '../../../../src/identity'
 import { decryptSecret, recoveryMatches, acceptedTOTPCounter } from '../../../../src/totp'
 import { auditEmergencyDenial, auditIdentityDecision } from '../../../../src/identity-audit'
+import { isRetryableSQLiteError } from '../../../../src/sqlite'
 
 /** All credential consumption, rate limits, sessions and audit writes share one transaction. */
 export async function POST(request: Request) {
@@ -60,8 +61,8 @@ export async function POST(request: Request) {
     const response = NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } })
     response.cookies.set(cookieName(SESSION_COOKIE), token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: SESSION_ABSOLUTE_SECONDS })
     return response
-  } catch {
+  } catch (error) {
     await payload.db.rollbackTransaction(transactionID)
-    return new NextResponse('Authentication is temporarily unavailable.', { status: 503 })
+    return new NextResponse('Authentication is temporarily unavailable.', { status: 503, headers: isRetryableSQLiteError(error) ? { 'Retry-After': '1' } : undefined })
   }
 }

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { createClient } from '@libsql/client'
 import { ConnectionPool } from '@libsql/client/sqlite3'
-import { getPayload } from 'payload'
+import { getPayload, handleEndpoints } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { applyDirectEdit, directEditValueHash, executeDirectEdit } from '../src/direct-edit'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
@@ -141,6 +141,25 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect(body).toEqual({ error: 'Saving is temporarily busy. Please retry.' })
     expect(JSON.stringify(body)).not.toContain('SQLITE_BUSY')
     expect(JSON.stringify(body)).not.toContain('locked')
+  }, 20_000)
+
+  it('returns Retry-After from the native Payload REST error hook under a writer lock', async () => {
+    const editor = await actor(); const cookie = await session(editor)
+    const external = createClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    let blocked: Response | undefined
+    try {
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [editor.id] })
+      blocked = await handleEndpoints({ config, path: '/api/sections', request: new Request('http://cms.test/api/sections', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Blocked native section', slug: `blocked-${randomUUID()}`, allowedTemplates: ['standard'] }) }) })
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    expect(blocked?.status).toBe(503)
+    expect(blocked?.headers.get('Retry-After')).toBe('1')
+    const body = await blocked?.json() as { errors?: Array<{ message?: string }> }
+    expect(body.errors?.[0]?.message).toBe('Saving is temporarily busy. Please retry.')
+    expect(JSON.stringify(body)).not.toContain('SQLITE_BUSY')
   }, 20_000)
 
   it('replaces only a discarded failed-begin connection while serving its waiter', async () => {

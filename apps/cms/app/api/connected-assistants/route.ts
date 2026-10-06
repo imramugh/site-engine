@@ -3,6 +3,7 @@ import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { listAssistantGrants, revokeAssistantGrant } from '../../../src/connected-assistants'
 import { serverSessionStrategy } from '../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const roles = ['owner', 'editor', 'approver', 'sales', 'hiring'] as const
@@ -32,5 +33,5 @@ export async function POST(request: Request) {
     await revokeAssistantGrant(body.managementId, hasRole(user as never, ['owner']) ? undefined : user!.id)
     await payload.create({ collection: 'audit-events', data: { event: 'identity.assistant_revoked', actor: user!.id, detail: { managementId: body.managementId, scope: hasRole(user as never, ['owner']) ? 'owner' : 'own' } }, overrideAccess: true })
     return json({ revoked: true })
-  } catch (error) { return json({ error: error instanceof Error ? error.message : 'Connected assistant could not be revoked.' }, 400) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'private, no-store' }) ?? json({ error: error instanceof Error ? error.message : 'Connected assistant could not be revoked.' }, 400) }
 }

@@ -37,6 +37,8 @@ export function sqliteBackpressureResponse(error: unknown, body: unknown, header
 /** Payload REST errors are formatted after this hook; set its status and response headers here. */
 export function sqliteBackpressurePayloadError(error: unknown, req: Pick<PayloadRequest, 'responseHeaders'>) {
   if (!isRetryableSQLiteError(error)) return undefined
-  req.responseHeaders?.set('Retry-After', '1')
+  const responseHeaders = req.responseHeaders ?? new Headers()
+  responseHeaders.set('Retry-After', '1')
+  req.responseHeaders = responseHeaders
   return { status: 503, response: { errors: [{ message: sqliteBackpressureMessage }] } }
 }

@@ -3,6 +3,7 @@ import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { cookieName, readCookie, serverSessionStrategy, SESSION_COOKIE } from '../../../../src/identity'
 import { loadAccountSessions, revokeAccountSessions, UserManagementError } from '../../../../src/user-management'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
@@ -29,5 +30,5 @@ export async function POST(request: Request) {
     const response = json({ revoked: true, signedOut: currentRevoked })
     if (currentRevoked) response.cookies.delete(cookieName(SESSION_COOKIE))
     return response
-  } catch (error) { return json({ error: error instanceof UserManagementError ? error.message : 'The session request could not be completed.' }, error instanceof UserManagementError && error.code === 'not-found' ? 404 : 400) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? json({ error: error instanceof UserManagementError ? error.message : 'The session request could not be completed.' }, error instanceof UserManagementError && error.code === 'not-found' ? 404 : 400) }
 }

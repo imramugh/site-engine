@@ -3,6 +3,7 @@ import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { clearMailboxArea, mailboxAreas, mailboxWorkspace, configureSMTPMailbox, sendAuthorizedMailboxTest, setMailboxArea, testSMTPMailbox, type MailboxArea, type MailboxSecurity } from '../../../src/mailboxes'
 import { serverSessionStrategy } from '../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const MAX_BYTES = 32 * 1024
@@ -31,6 +32,8 @@ export async function POST(request: Request) {
     else throw new Error('invalid')
     return json(await mailboxWorkspace(payload))
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'private, no-store' })
+    if (backpressure) return backpressure
     if (error instanceof Error && error.message === 'too_large') return json({ error: 'Request is too large.' }, 413)
     return json({ error: error instanceof Error && /confirmation|request key|not configured|not been verified|must be tested|could not be delivered|unassign this mailbox sender/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
   }

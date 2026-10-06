@@ -4,6 +4,7 @@ import { withPayloadTransaction } from '../../../../../src/auth-transaction'
 import { loadInitialPreviewBaseline, prepareReviewPreview } from '../../../../../src/review-preview'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { changeSetHash } from '../../../../../src/publishing'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 import { SiteSnapshotSchema } from '@site-engine/contract'
 import { deriveRoutes } from '@site-engine/engine'
 
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
     if (!actor?.id) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
     const job = await withPayloadTransaction(payload, async req => { const set = await payload.findByID({ collection: 'change-sets', id: body.changeSetID!, depth: 0, overrideAccess: true, req }); const changes = Array.isArray(set.changes) ? set.changes : []; return prepareReviewPreview({ payload, req, actor: actor as { id: string; roles?: string[] }, id: body.changeSetID!, expectedRevision: Number(set.revision), expectedChangeHash: changeSetHash(changes), includedChangeKeys: changes.map((change: any) => `${change.collection}:${change.id}`), initialBaseline, draft: true }) })
     return Response.json({ job: { id: job.id, status: job.status } }, { headers: noStore })
-  } catch (error) { return Response.json({ error: 'The draft preview could not be prepared.' }, { status: error instanceof Error && error.message === 'BODY_TOO_LARGE' ? 413 : 400, headers: noStore }) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: 'The draft preview could not be prepared.' }, { status: error instanceof Error && error.message === 'BODY_TOO_LARGE' ? 413 : 400, headers: noStore }) }
 }
 
 export async function GET(request: Request) {

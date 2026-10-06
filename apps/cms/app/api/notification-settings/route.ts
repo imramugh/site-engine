@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { defaultNotificationPreferences, parseNotificationPreferences, readNotificationPreferences, saveNotificationPreferences } from '../../../src/notification-settings'
 import { serverSessionStrategy } from '../../../src/identity'
 
@@ -38,5 +39,5 @@ export async function POST(request: Request) {
     if (!events) return privateJSON({ error: 'Notification preferences are invalid.' }, 400)
     await withPayloadTransaction(payload, (req) => saveNotificationPreferences(payload, req, events, user.id!))
     return privateJSON({ events })
-  } catch (error) { return privateJSON({ error: error instanceof RangeError ? 'Notification settings request is too large.' : 'Notification preferences could not be saved.' }, error instanceof RangeError ? 413 : 400) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? privateJSON({ error: error instanceof RangeError ? 'Notification settings request is too large.' : 'Notification preferences could not be saved.' }, error instanceof RangeError ? 413 : 400) }
 }

@@ -1,6 +1,7 @@
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { hasRole } from '../../../src/access'
 import { buildContentTree, canonicalContentPath, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
 import { serverSessionStrategy } from '../../../src/identity'
@@ -205,5 +206,5 @@ export async function POST(request: Request) {
       } else throw new Error('Unsupported Site action.')
     })
     return Response.json(await context(payload, actor!), { headers: noStore })
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Site update failed.' }, { status: 400, headers: noStore }) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Site update failed.' }, { status: 400, headers: noStore }) }
 }

@@ -1,6 +1,7 @@
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { createNamedChangeSet } from '../../../src/editorial'
 import { serverSessionStrategy } from '../../../src/identity'
 import { compatibilityReport, getInstalledTheme, installedThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
@@ -165,6 +166,8 @@ export async function POST(request: Request): Promise<Response> {
     })
     return Response.json({ changeSet: { id: result.changeSet.id, name: result.changeSet.name, state: result.changeSet.state, includedChangeKeys: [`theme-settings:${result.doc.id}`] }, selection: publicSelection(selection), compatibility, reused: Boolean(reusable) }, { status: reusable ? 200 : 201, headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to draft a theme selection.' }, { status: 400 })
   }
 }

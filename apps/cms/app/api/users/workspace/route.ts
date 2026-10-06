@@ -4,6 +4,7 @@ import { freshStaff, hasRole, roles, type Role } from '../../../../src/access'
 import { serverSessionStrategy, type IdentityProvider } from '../../../../src/identity'
 import { configuredProvider } from '../../../../src/oidc'
 import { createUserInvitation, loadUsersWorkspace, updateManagedUser, UserManagementError } from '../../../../src/user-management'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
@@ -31,6 +32,8 @@ export async function POST(request: Request) {
     }
     return json({ error: 'Check the submitted user details.' }, 400)
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     if (error instanceof UserManagementError) return json({ error: error.message }, error.code === 'not-found' ? 404 : error.code === 'conflict' ? 409 : 400)
     return json({ error: 'The user request could not be completed.' }, 400)
   }

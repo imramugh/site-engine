@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { createPageDraft } from '../../../../../src/page-creator'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -53,6 +54,8 @@ export async function POST(request: Request) {
     const result = await createPageDraft({ payload, actor: authenticated.user as never, value })
     return Response.json(result, { status: result.replayed ? 200 : 201, headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const code = error instanceof Error ? error.message : ''
     const status = code === 'EDITOR_ROLE_REQUIRED' ? 403
       : code === 'REQUEST_KEY_REUSED' ? 409

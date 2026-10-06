@@ -3,6 +3,7 @@ import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -29,5 +30,5 @@ export async function PUT(request: Request) {
     const body = await boundedBody(request)
     await withPayloadTransaction(payload, async (req) => { const current = await setting(payload); if (current) await payload.update({ collection: 'mcp-privacy-settings', id: current.id, data: { hidePhone: body.hidePhone }, overrideAccess: true, req }); else await payload.create({ collection: 'mcp-privacy-settings', data: { key: 'active', hidePhone: body.hidePhone }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mcp_privacy.updated', user: user.id, actor: user.id, detail: { hidePhone: body.hidePhone } }, overrideAccess: true, req }) })
     return response(body)
-  } catch (error) { return response({ error: error instanceof RangeError ? 'MCP privacy request is too large.' : 'MCP privacy settings are invalid.' }, error instanceof RangeError ? 413 : 400) }
+  } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? response({ error: error instanceof RangeError ? 'MCP privacy request is too large.' : 'MCP privacy settings are invalid.' }, error instanceof RangeError ? 413 : 400) }
 }

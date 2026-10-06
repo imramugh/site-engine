@@ -4,6 +4,7 @@ import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { recipeBlocks } from '../../../../src/block-gallery'
 import { serverSessionStrategy } from '../../../../src/identity'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -73,6 +74,8 @@ export async function POST(request: Request): Promise<Response> {
     const current = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true }) as { revision?: unknown }
     return Response.json({ page: { id: updated.id, blocks: updated.blocks }, changeSetRevision: Number(current.revision ?? 0), message: 'Recipe blocks were captured in the selected draft change set.' }, { status: 201, headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     const message = error instanceof Error ? error.message : 'Unable to insert recipe blocks.'
     return Response.json({ error: message }, { status: message === 'Recipe request is too large.' ? 413 : 400, headers: { 'Cache-Control': 'no-store' } })
   }

@@ -6,6 +6,7 @@ import { serverSessionStrategy } from '../../../../src/identity'
 import { mediaFocalContractVersion } from '../../../../src/media-workspace'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
 import { mediaFileIdentity, validateRasterUpload } from '../../../../src/media'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const maxBytes = 15 * 1024 * 1024
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
       const updated = await payload.update({ collection: 'assets', id: assetID, data: { currentFileVersion: String(version.id), currentFile: mediaFileIdentity(version) }, overrideAccess: false, user, context: { mediaReplacement: true, mediaFocalContract: focalContract } })
       return json({ asset: { id: updated.id, ...mediaFileIdentity(version) }, replayed: !created })
     })
-  } catch {
-    return json({ error: 'Unable to replace this asset file.' }, 400)
+  } catch (error) {
+    return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? json({ error: 'Unable to replace this asset file.' }, 400)
   }
 }

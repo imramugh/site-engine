@@ -4,6 +4,7 @@ import { withPayloadTransaction } from '../../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { cancelScheduledPublication, reschedulePublication } from '../../../../../src/publishing'
 import { hasRole } from '../../../../../src/access'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -31,6 +32,8 @@ export async function POST(request: Request, context: { params: Promise<{ action
     })
     return Response.json(result, { headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const message = error instanceof Error ? error.message : 'Scheduled publication request failed.'
     return Response.json({ error: message }, { status: /Owner role|required|Fresh authentication/i.test(message) ? 403 : 400, headers: noStore })
   }
