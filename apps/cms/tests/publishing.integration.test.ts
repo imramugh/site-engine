@@ -108,6 +108,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(candidate.media).toEqual(expect.arrayContaining([expect.objectContaining(asset)]))
     expect(JSON.stringify(candidate.media)).not.toMatch(/caption|credit|tags/)
     expect(() => buildCandidate(base, [{ ...change, after: { ...captured, tags: ['tampered'] } }] as never, [`assets:${asset.id}`], versions)).toThrow('captured change is invalid')
+    expect(() => buildCandidate(base, [{ ...change, before: asset, beforeHash: '0'.repeat(64) }] as never, [`assets:${asset.id}`], versions)).toThrow('captured baseline is invalid')
   })
 
   it('freezes a future approved release without advancing or exposing the publish queue, and retries exactly once', async () => {
