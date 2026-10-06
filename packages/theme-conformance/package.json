@@ -1,0 +1,23 @@
+{
+  "name": "@site-engine/theme-conformance",
+  "version": "1.0.0",
+  "description": "Neutral, installable visual and accessibility conformance harness for Site Engine themes.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": { ".": "./src/index.mjs" },
+  "bin": { "site-engine-theme-conformance": "./scripts/theme-conformance.mjs" },
+  "files": ["src", "scripts", "harness", "baselines.json", "README.md"],
+  "scripts": {
+    "conformance": "node scripts/theme-conformance.mjs",
+    "typecheck": "node --check src/index.mjs && node --check harness/build-snapshot.mjs",
+    "lint": "node --check src/index.mjs && node --check harness/build-snapshot.mjs"
+  },
+  "dependencies": {
+    "@site-engine/contract": "workspace:^",
+    "@site-engine/engine": "workspace:^",
+    "@site-engine/theme-starter": "workspace:^",
+    "astro": "7.3.5",
+    "axe-core": "4.13.0",
+    "@playwright/test": "1.63.0"
+  }
+}
