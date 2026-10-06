@@ -12,6 +12,7 @@
     "generate:video": "node scripts/generate-synthetic-video.mjs"
   },
   "dependencies": {
+    "@site-engine/checks": "workspace:^",
     "@site-engine/contract": "workspace:^",
     "@site-engine/engine": "workspace:^",
     "@site-engine/theme-starter": "workspace:^",
