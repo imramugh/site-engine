@@ -77,4 +77,20 @@ describe('outgoing attachment resolution with Payload access', () => {
     await expect(sendReply(payload, hiring, grant.id)).resolves.toMatchObject({ provider: 'google', messageID: 'verified-send', threadID: 'verified-thread' })
     expect(calls).toBe(0); expect(delivered.attachments).toMatchObject([{ filename: 'resume.pdf', mimeType: 'application/pdf', bytes: Buffer.from('%PDF-1.4\nmatching resume') }])
   })
+
+  it('preflights Graph attachments at 3 MiB before consuming confirmation or calling a provider', async () => {
+    const owner = await actor('owner'); const inquiry = await lead(); const document = await asset(owner, 'graph-cap.png')
+    writeFileSync(mediaFilePath(String((document as any).currentFile?.filename ?? (document as any).filename)), Buffer.alloc(3 * 1024 * 1024, 7))
+    const mailbox = await payload.create({ collection: 'mailbox-configurations', data: { name: 'Graph attachment cap', provider: 'microsoft', primaryAddress: 'team@example.test', aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: 'team@example.test', encryptedCredential: 'opaque', credentialRevision: 'fixture', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+    await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'team@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const draft = await prepareReply(payload, 'lead', inquiry.id, owner.id, { sender: 'team@example.test', subject: 'Graph cap', body: 'Confirmed large attachment.', attachments: [{ source: 'asset', id: document.id }] })
+    const grant = await authorizeReply(payload, owner, draft.id)
+    let calls = 0; setReplyDeliveryForTest(async () => { calls += 1; return { provider: 'microsoft', messageID: 'must-not-send' } })
+    try {
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('reply_attachments_not_supported')
+      expect(calls).toBe(0)
+      expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+      expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'authorized' })
+    } finally { setReplyDeliveryForTest() }
+  })
 })

@@ -187,20 +187,21 @@ test('ENG-020 clears delayed reply state when switching records', async ({ brows
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   let optionLoads = 0
-  await page.route('**/api/mail-replies/lead/**', async route => {
-    if (route.request().method() === 'GET') {
-      optionLoads += 1
-      return route.fulfill({ json: { senders: [{ address: optionLoads === 1 ? 'first@example.test' : 'second@example.test', label: 'Scoped mailbox' }], threads: [], canAuthorize: true } })
-    }
-    const body = route.request().postDataJSON()
-    if (body.action === 'prepare') {
-      await new Promise(resolve => setTimeout(resolve, 300))
-      return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'first@example.test', recipient: 'notes-a.synthetic@example.test', subject: 'Old subject', body: 'Old body' } } })
-    }
-    return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
-  })
   try {
     await page.goto('/leads')
+    await expect(page.getByRole('button', { name: /First editable lead/ })).toBeVisible()
+    await page.route('**/api/mail-replies/lead/**', async route => {
+      if (route.request().method() === 'GET') {
+        optionLoads += 1
+        return route.fulfill({ json: { senders: [{ address: optionLoads === 1 ? 'first@example.test' : 'second@example.test', label: 'Scoped mailbox' }], threads: [], canAuthorize: true } })
+      }
+      const body = route.request().postDataJSON()
+      if (body.action === 'prepare') {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'first@example.test', recipient: 'notes-a.synthetic@example.test', subject: 'Old subject', body: 'Old body' } } })
+      }
+      return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
+    })
     await page.getByRole('button', { name: /First editable lead/ }).click()
     const firstReply = page.locator('[data-mail-reply-composer]')
     await expect(firstReply.getByLabel('Reply sender')).toHaveValue('first@example.test')
@@ -336,6 +337,37 @@ test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK del
     await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } }).catch(() => undefined)
     expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length + 1)
   } finally { await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }
+})
+
+test('ENG-033 refuses mutated, deleted, or role-revoked SDK attachments after browser confirmation without consuming a grant', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  const state = async (body: object) => (await page.request.post(`${origin}/__e2e/mail-reply-attachment-state`, { data: body })).json() as Promise<{ grant?: { consumedAt: string | null; revokedAt: string | null } }>
+  const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  let transport: StreamableHTTPClientTransport | undefined
+  try {
+    const identity = await (await page.request.post(`${origin}/__e2e/mcp-identity`)).json() as { bearer: string }
+    const client = new Client({ name: 'e2e-bound-mail-negative', version: '1.0.0' })
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
+    await client.connect(transport)
+    for (const action of ['mutate-asset', 'delete-asset', 'revoke-role'] as const) {
+      const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1&attachment=1`)).json() as { deepLead: string; attachment: { source: 'asset'; sourceID: string } }
+      const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: `SDK negative ${action}`, body: 'Confirmed before state changes.', attachments: [{ source: fixture.attachment.source, id: fixture.attachment.sourceID }] } })
+      const draft = mcpStructured<{ draft: { id: string; confirmationURL: string } }>(prepared).draft
+      await page.goto(new URL(draft.confirmationURL).pathname + new URL(draft.confirmationURL).search)
+      await page.locator('[data-mail-reply-composer]').getByRole('button', { name: 'Confirm exact reply' }).click()
+      const grantID = mcpStructured<{ grantID: string }>(await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })).grantID
+      const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+      await state(action === 'revoke-role' ? { action } : { action, assetID: fixture.attachment.sourceID })
+      const result = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } }).catch(() => undefined)
+      if (result) expect(result.isError).toBe(true)
+      expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length)
+      expect((await state({ action: 'grant-state', grantID })).grant).toMatchObject({ consumedAt: null, revokedAt: null })
+      if (action === 'revoke-role') await state({ action: 'restore-role' })
+    }
+  } finally { await state({ action: 'restore-role' }).catch(() => undefined); await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }
 })
 
 test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through the real handler', async ({ browser }) => {
