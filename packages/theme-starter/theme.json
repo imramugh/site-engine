@@ -4,7 +4,10 @@
   "contract": "1.7.0",
   "entry": "./dist/index.js",
   "standardBlocks": ["hero", "incidentBar", "pillarGrid", "featureGrid", "splitList", "chipList", "testimonials", "faq", "callout", "relatedServices", "cta", "richText", "contact", "media", "imageText", "gallery", "logoStrip", "video"],
-  "motion": { "presets": ["subtle", "ambient", "signature"], "intentFallbacks": {} },
+  "motion": {
+    "presets": ["subtle", "ambient", "signature"],
+    "intentFallbacks": { "subtle": "subtle", "ambient": "ambient", "signature": "signature" }
+  },
   "contractSurface": {
     "version": 1,
     "standardBlocks": ["hero", "incidentBar", "pillarGrid", "featureGrid", "splitList", "chipList", "testimonials", "faq", "callout", "relatedServices", "cta", "richText", "contact", "media", "imageText", "gallery", "logoStrip", "video"],

@@ -114,6 +114,7 @@ export {
   effectiveMotion,
   motionPreferenceKey,
   mountMotionRuntime,
+  resolveDeclaredMotionPreset,
   resolveMotionPreset,
   type EffectiveMotion,
   type MotionPreference,

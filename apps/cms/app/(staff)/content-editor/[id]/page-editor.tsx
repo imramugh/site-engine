@@ -882,6 +882,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const previewCanvas = useRef<HTMLDivElement>(null)
   const previewFrame = useRef<HTMLIFrameElement>(null)
   const previewBlockCleanup = useRef<() => void>(() => undefined)
+  const activeBlockIDRef = useRef<string | undefined>(undefined)
   const saved = data?.page.draft
   const selectedSet =
     data?.changeSets.find((item) => item.id === changeSetID) ??
@@ -905,8 +906,12 @@ export function PageEditor({ pageID }: { pageID: string }) {
     setPicker(false)
     window.setTimeout(() => pickerTrigger.current?.focus(), 0)
   }, [])
-  const selectBlock = useCallback((id: string, focusEditor = false) => {
+  const setActiveBlock = useCallback((id: string | undefined) => {
+    activeBlockIDRef.current = id
     setActiveBlockID(id)
+  }, [])
+  const selectBlock = useCallback((id: string, focusEditor = false) => {
+    setActiveBlock(id)
     if (!focusEditor) return
     window.requestAnimationFrame(() => {
       const block = document.querySelector<HTMLElement>(
@@ -921,7 +926,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
           : 'smooth',
       })
     })
-  }, [])
+  }, [setActiveBlock])
   useEffect(() => {
     if (!picker) return
     const dialog = pickerDialog.current
@@ -971,23 +976,25 @@ export function PageEditor({ pageID }: { pageID: string }) {
     return () => observer.disconnect()
   }, [data])
   const collapseBlock = useCallback((id: string) => {
-    setActiveBlockID((current) => (current === id ? undefined : current))
+    if (activeBlockIDRef.current !== id) return
+    setActiveBlock(undefined)
     window.requestAnimationFrame(() => {
       document
         .querySelector<HTMLElement>(`[data-page-editor-block-id="${id}"] summary`)
         ?.focus()
     })
-  }, [])
+  }, [setActiveBlock])
   useEffect(() => {
     if (picker) return
     const collapse = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || !activeBlockID) return
+      const id = activeBlockIDRef.current
+      if (event.key !== 'Escape' || !id) return
       event.preventDefault()
-      collapseBlock(activeBlockID)
+      collapseBlock(id)
     }
     window.addEventListener('keydown', collapse)
     return () => window.removeEventListener('keydown', collapse)
-  }, [activeBlockID, collapseBlock, picker])
+  }, [collapseBlock, picker])
   const wirePreviewBlocks = useCallback(() => {
     previewBlockCleanup.current()
     const document = previewFrame.current?.contentDocument
@@ -1095,9 +1102,10 @@ export function PageEditor({ pageID }: { pageID: string }) {
       throw new Error(next.error || 'Unable to load this page draft.')
     setData(next)
     setDraft(clone(next.page.draft))
-    setActiveBlockID((current) =>
-      next.page.draft.blocks.some((block) => block.id === current)
-        ? current
+    const active = activeBlockIDRef.current
+    setActiveBlock(
+      next.page.draft.blocks.some((block) => block.id === active)
+        ? active
         : next.page.draft.blocks[0]?.id,
     )
     setChangeSetID((current) =>
@@ -1106,7 +1114,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
         : (next.changeSets[0]?.id ?? ''),
     )
     return next
-  }, [pageID])
+  }, [pageID, setActiveBlock])
   useEffect(() => {
     void load()
       .then(() => setMessage(''))
@@ -1287,7 +1295,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       ...current,
       blocks: [...current.blocks, block as unknown as Block],
     }))
-    setActiveBlockID(String(block.id))
+    setActiveBlock(String(block.id))
     closePicker()
   }
   if (!data || !draft)
@@ -1500,7 +1508,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
                     const blocks = current.blocks.filter(
                       (_, itemIndex) => itemIndex !== index,
                     )
-                    setActiveBlockID(blocks[index]?.id ?? blocks[index - 1]?.id)
+                    setActiveBlock(blocks[index]?.id ?? blocks[index - 1]?.id)
                     return { ...current, blocks }
                   })
                 }
