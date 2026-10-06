@@ -8,6 +8,7 @@ import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revo
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
 import { prepareReply, sendReply, setReplyDeliveryForTest } from '../src/mail-replies'
+import { sendAreaMail } from '../src/mailboxes'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mail-authorizations-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -228,5 +229,65 @@ describe('local mail authorization transactions', () => {
     const persistedDraft = await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })
     expect(persistedGrant.consumedAt).toBeNull()
     expect(persistedDraft.state).toBe('authorized')
+  })
+  it('dispatches an approved Google reply only through its persisted provider thread', async () => {
+    Object.assign(process.env, { PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.reply.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 6).toString('base64url'), MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret' })
+    const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
+    const owner = await actor('owner')
+    const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, owner.sessionToken)).searchParams.get('state')!
+    const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, owner.sessionToken, async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'team@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'team@example.test', verificationStatus: 'accepted' }] }))
+    const lead = await payload.create({ collection: 'inquiries', data: { email: 'threaded@example.test', message: 'Threaded', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
+    const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'google', providerConversationID: 'google-thread' }, overrideAccess: true })
+    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'google-message', direction: 'inbound', sender: lead.email, recipient: 'team@example.test', subject: 'Original', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    await (payload as any).create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'team@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Reply', body: 'Approved body', threadID: 'google-thread' })
+    const grant = await authorizeMailDraft(payload, owner, draft.id, future())
+    let sent: any
+    setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
+      if (url.includes('/token')) return Response.json({ access_token: 'access' })
+      if (url.endsWith('/profile')) return Response.json({ emailAddress: 'team@example.test' })
+      if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'team@example.test', verificationStatus: 'accepted' }] })
+      if (url.endsWith('/messages/send')) { sent = JSON.parse(String(init.body)); return Response.json({ id: 'sent-id', threadId: 'google-thread' }) }
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'google', messageID: 'sent-id' })
+      expect(sent.threadId).toBe('google-thread')
+      expect(Buffer.from(sent.raw, 'base64url').toString()).toContain('To: threaded@example.test\r\nFrom: team@example.test\r\nSubject: Reply')
+      expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'sent' })
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+    } finally { setReplyDeliveryForTest() }
+  })
+  it('keeps an approval usable when its Google provider thread is not yet persisted', async () => {
+    Object.assign(process.env, { PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.reply.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString('base64url'), MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret' })
+    const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
+    const owner = await actor('owner')
+    const state = new URL(await startMailboxOAuth(payload, 'google', owner.id, owner.sessionToken)).searchParams.get('state')!
+    const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, owner.sessionToken, async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'retry@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'retry@example.test', verificationStatus: 'accepted' }] }))
+    const lead = await payload.create({ collection: 'inquiries', data: { email: 'retry-recipient@example.test', message: 'Retry', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
+    const existingMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'leads' } }, limit: 1, depth: 0, overrideAccess: true })
+    await payload.update({ collection: 'mailbox-area-mappings', id: existingMapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'retry@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'retry@example.test', subject: 'Retry', body: 'Approved', threadID: 'missing-thread' })
+    const grant = await authorizeMailDraft(payload, owner, draft.id, future())
+    await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('mailbox_thread_not_grounded')
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+    const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'google', providerConversationID: 'missing-thread' }, overrideAccess: true })
+    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'provider-message', direction: 'inbound', sender: lead.email, recipient: 'retry@example.test', subject: 'Original', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    let sent: { raw?: string; threadId?: string } | undefined
+    setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
+      if (url.includes('/token')) return Response.json({ access_token: 'access' })
+      if (url.endsWith('/profile')) return Response.json({ emailAddress: 'retry@example.test' })
+      if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'retry@example.test', verificationStatus: 'accepted' }] })
+      if (url.endsWith('/messages/send')) {
+        sent = JSON.parse(String(init.body))
+        return Response.json({ id: 'reused-sent', threadId: 'missing-thread' })
+      }
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'google', messageID: 'reused-sent' })
+      expect(sent?.threadId).toBe('missing-thread')
+      expect(Buffer.from(sent?.raw ?? '', 'base64url').toString()).toContain('To: retry-recipient@example.test')
+    } finally { setReplyDeliveryForTest() }
   })
 })

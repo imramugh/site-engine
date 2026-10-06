@@ -39,6 +39,8 @@ import * as migration_20261005_230000_mail_threads from './20261005_230000_mail_
 import * as migration_20261005_231000_notification_user_preferences from './20261005_231000_notification_user_preferences';
 import * as migration_20261005_234000_mcp_privacy from './20261005_234000_mcp_privacy';
 import * as migration_20261006_001000_followups from './20261006_001000_followups';
+import * as migration_20261006_002000_mailbox_oauth from './20261006_002000_mailbox_oauth';
+import * as migration_20261006_003000_mailbox_inbound_cursor from './20261006_003000_mailbox_inbound_cursor';
 import * as migration_20261005_164500_crawler_policy_1_7 from './20261005_164500_crawler_policy_1_7';
 import * as migration_20261005_170000_redirect_creator_attribution from './20261005_170000_redirect_creator_attribution';
 import * as migration_20261005_180000_inquiry_spam_lifecycle from './20261005_180000_inquiry_spam_lifecycle';
@@ -276,4 +278,6 @@ export const migrations = [
   { up: migration_20261005_231000_notification_user_preferences.up, down: migration_20261005_231000_notification_user_preferences.down, name: '20261005_231000_notification_user_preferences' },
   { up: migration_20261005_234000_mcp_privacy.up, down: migration_20261005_234000_mcp_privacy.down, name: '20261005_234000_mcp_privacy' },
   { up: migration_20261006_001000_followups.up, down: migration_20261006_001000_followups.down, name: '20261006_001000_followups' },
+  { up: migration_20261006_002000_mailbox_oauth.up, down: migration_20261006_002000_mailbox_oauth.down, name: '20261006_002000_mailbox_oauth' },
+  { up: migration_20261006_003000_mailbox_inbound_cursor.up, down: migration_20261006_003000_mailbox_inbound_cursor.down, name: '20261006_003000_mailbox_inbound_cursor' },
 ];

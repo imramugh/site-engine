@@ -84,6 +84,7 @@ export interface Config {
     'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
+    'mailbox-oauth-transactions': MailboxOauthTransaction;
     'mailbox-area-mappings': MailboxAreaMapping;
     'mailbox-test-sends': MailboxTestSend;
     inquiries: Inquiry;
@@ -131,6 +132,7 @@ export interface Config {
     'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
+    'mailbox-oauth-transactions': MailboxOauthTransactionsSelect<false> | MailboxOauthTransactionsSelect<true>;
     'mailbox-area-mappings': MailboxAreaMappingsSelect<false> | MailboxAreaMappingsSelect<true>;
     'mailbox-test-sends': MailboxTestSendsSelect<false> | MailboxTestSendsSelect<true>;
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
@@ -773,7 +775,7 @@ export interface ProviderUsageReservation {
 export interface MailboxConfiguration {
   id: string;
   name: string;
-  provider: 'smtp';
+  provider: 'smtp' | 'microsoft' | 'google';
   primaryAddress: string;
   aliases:
     | {
@@ -801,6 +803,24 @@ export interface MailboxConfiguration {
   credentialRevision: string;
   health: 'unknown' | 'connected' | 'rejected' | 'unavailable' | 'revoked';
   testedAt?: string | null;
+  inboundCursor?: string | null;
+  inboundCursorRevision?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-oauth-transactions".
+ */
+export interface MailboxOauthTransaction {
+  id: string;
+  provider: 'microsoft' | 'google';
+  stateHash: string;
+  sessionHash: string;
+  verifier: string;
+  owner: string | User;
+  expiresAt: string;
+  consumedAt?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1526,6 +1546,10 @@ export interface PayloadLockedDocument {
         value: string | MailboxConfiguration;
       } | null)
     | ({
+        relationTo: 'mailbox-oauth-transactions';
+        value: string | MailboxOauthTransaction;
+      } | null)
+    | ({
         relationTo: 'mailbox-area-mappings';
         value: string | MailboxAreaMapping;
       } | null)
@@ -2114,6 +2138,23 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   credentialRevision?: T;
   health?: T;
   testedAt?: T;
+  inboundCursor?: T;
+  inboundCursorRevision?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-oauth-transactions_select".
+ */
+export interface MailboxOauthTransactionsSelect<T extends boolean = true> {
+  provider?: T;
+  stateHash?: T;
+  sessionHash?: T;
+  verifier?: T;
+  owner?: T;
+  expiresAt?: T;
+  consumedAt?: T;
   updatedAt?: T;
   createdAt?: T;
 }

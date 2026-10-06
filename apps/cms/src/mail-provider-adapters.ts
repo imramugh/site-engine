@@ -365,6 +365,20 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         threadID: value.threadId,
       };
     },
+    async message(token: string, id: string) {
+      if (!opaque(id)) throw new Error("invalid_thread");
+      const response = await request(
+        fetcher,
+        `${gmail}/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`,
+        { headers: auth(token) },
+      );
+      if (!response.ok) fail(response.status);
+      const value = await json(response);
+      const output = gmailMessage(value, String(value.threadId ?? ""));
+      if (!output.messageId || !output.threadId)
+        throw new Error("provider_malformed_response");
+      return output;
+    },
     async poll(token: string, historyID: string, pageToken?: string) {
       if (!/^[0-9]{1,40}$/.test(historyID) || (pageToken && !opaque(pageToken)))
         throw new Error("invalid_cursor");
@@ -439,9 +453,11 @@ export function gmailIdentity(fetcher: Fetcher) {
           .map((alias) => String(alias.sendAsEmail).toLowerCase())
           .filter((alias) => email.test(alias))
       : [];
+    const historyID = String(profile.historyId ?? "");
     return {
       primaryAddress: primary,
       verifiedSenders: [...new Set([primary, ...verified])].sort(),
+      historyID: /^[0-9]{1,40}$/.test(historyID) ? historyID : undefined,
     };
   };
 }

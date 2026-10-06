@@ -23,9 +23,22 @@ export async function sendReply(payload: Payload, actor: { id: string; sessionTo
   const pending = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const pendingDraft = await payload.findByID({ collection: 'mail-drafts', id: typeof pending.draft === 'string' ? pending.draft : pending.draft.id, depth: 0, overrideAccess: true })
   if (Array.isArray(pendingDraft.attachmentHashes) && pendingDraft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
+  const pendingApplication = pendingDraft.application && (typeof pendingDraft.application === 'string' ? pendingDraft.application : pendingDraft.application.id)
+  const area = pendingApplication ? 'careers' : 'leads'
+  const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
+  const mailboxID = mapping.docs[0] && (typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id)
+  const mailbox = mailboxID ? await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) : undefined
+  let providerReply: { providerThreadID: string; providerMessageID: string } | undefined
+  if (mailbox && (mailbox.provider === 'microsoft' || mailbox.provider === 'google')) {
+    const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ [pendingApplication ? 'application' : 'lead']: { equals: pendingApplication || pendingDraft.lead } }, { mailbox: { equals: mailboxID } }, { provider: { equals: mailbox.provider } }, { providerConversationID: { equals: String(pendingDraft.threadID) } }] }, limit: 1, depth: 0, overrideAccess: true })
+    if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
+    const messages = await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.docs[0].id } }, sort: '-receivedAt', limit: 1, depth: 0, overrideAccess: true })
+    if (!messages.docs[0]?.providerMessageID) throw new Error('mailbox_thread_not_grounded')
+    providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID) }
+  }
   const grant = await consumeMailAuthorization(payload, actor, grantID)
   const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
   const draft = grant.envelope
   const application = draft.application
-  try { const delivered = await replyDelivery(payload, application ? 'careers' : 'leads', { sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), threadID: String(draft.threadID) }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true }); return delivered } catch (error) { await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID } }, overrideAccess: true }); throw error }
+  try { const delivered = await replyDelivery(payload, area, { sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), threadID: String(draft.threadID), ...providerReply }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true }); return delivered } catch (error) { await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true }); await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actor.id, actor: actor.id, detail: { draft: draftID, grant: grantID } }, overrideAccess: true }); throw error }
 }
