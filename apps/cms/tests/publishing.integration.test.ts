@@ -7,6 +7,7 @@ import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, cancelScheduledPublication, changeSetHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, recordPublishStage, renewPublishLease, reschedulePublication, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
+import { snapshot as capturedSnapshot } from '../src/editorial'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
@@ -374,6 +375,13 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
 
   it('records only whitelisted stages for the current lease and persists one safe completion result', async () => {
     const current = await fixture('webhook-stage-audit')
+    const persistedPage = await payload.findByID({ collection: 'pages', id: current.changes[0]!.id, draft: true, overrideAccess: true }) as unknown as Record<string, unknown>
+    const before = capturedSnapshot('pages', persistedPage)!; const after = { ...before, title: `Approved webhook-stage-audit` }
+    current.changes[0] = { ...current.changes[0]!, before, after, beforeHash: canonicalHash(before), afterHash: null }
+    current.candidate = buildCandidate(current.baseline, current.changes, current.included, versions)
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: current.changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const publishedBaseline = await installPublishedBaseline(current)
+    await bindPreview(current, current.baseline, publishedBaseline.snapshot.id, publishedBaseline.sequence)
     await approve(current)
     const started = new Date('2026-10-06T14:00:00.000Z')
     const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000))
@@ -384,7 +392,7 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect((await count('editorial.publish_stage')).totalDocs).toBe(0)
     await withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), String(job!.leaseToken), 'building', started))
     const stage = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'editorial.publish_stage' } }, { 'detail.publishJob': { equals: job!.id } }] }, limit: 1, overrideAccess: true })
-    expect(stage.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, sequence: 1, stage: 'building', attempt: 1, correlationID: job!.correlationID })
+    expect(stage.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, sequence: 2, stage: 'building', attempt: 1, correlationID: job!.correlationID })
     expect(JSON.stringify(stage.docs[0]!.detail)).not.toMatch(/leaseToken|authorization|secret/i)
     await expect(withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), String(job!.leaseToken), 'built', new Date(started.getTime() + 1_001)))).rejects.toThrow('lease is no longer current')
     expect((await count('editorial.publish_stage')).totalDocs).toBe(1)
@@ -393,13 +401,25 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     await expect(withPayloadTransaction(payload, req => completePublishJob(payload, req, String(job!.id), 'replayed-token', artifact(snapshot.contentHash), new Date(started.getTime() + 501)))).resolves.toMatchObject({ id: completed.id })
     const completion = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'publish.completed' } }, { 'detail.publishJob': { equals: job!.id } }] }, limit: 10, overrideAccess: true })
     expect(completion.docs).toHaveLength(1)
-    expect(completion.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, release: completed.id, sequence: 1, actor: current.editor.id, reviewer: current.reviewer.id, publishTime: new Date(started.getTime() + 500).toISOString(), result: 'deployed', correlationID: job!.correlationID })
+    expect(completion.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, release: completed.id, sequence: 2, actor: current.editor.id, reviewer: current.reviewer.id, publishTime: new Date(started.getTime() + 500).toISOString(), result: 'deployed', correlationID: job!.correlationID })
     expect(JSON.stringify(completion.docs[0]!.detail)).not.toMatch(/leaseToken|authorization|secret/i)
     const operations = await import('../app/api/operations/route.js')
     const owner = await ownerSession('build-log')
     const logURL = `http://cms.test/api/operations?publish=${job!.id}`
     expect((await operations.GET(new Request(logURL))).status).toBe(403)
-    expect((await operations.GET(new Request(logURL, { headers: current.headers }))).status).toBe(403)
+    const approverResponse = await operations.GET(new Request(logURL, { headers: current.headers }))
+    expect(approverResponse.status).toBe(200)
+    const approverProjection = await approverResponse.json()
+    expect(approverProjection).toMatchObject({
+      capabilities: { ownerOperations: false },
+      summary: { urgentOrNewLeads: 0 },
+      retention: null,
+      filterOptions: { actors: [] },
+      shortcuts: [{ label: 'Editorial review', href: '/editorial' }],
+    })
+    expect(approverProjection.releaseHistory.find((entry: { id: string }) => entry.id === job!.id)).toMatchObject({ actor: null, reviewer: null })
+    expect(approverProjection.audit.docs).toEqual(expect.arrayContaining([expect.objectContaining({ actorId: null })]))
+    expect(JSON.stringify(approverProjection)).not.toContain(current.reviewer.email)
     const response = await operations.GET(new Request(logURL, { headers: owner.headers }))
     expect(response.status).toBe(200)
     const projection = await response.json()
@@ -407,6 +427,17 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect(projection.releaseHistory.find((entry: { id: string }) => entry.id === job!.id)).toMatchObject({ state: 'Deployed', actor: 'Editor', reviewer: 'Reviewer', buildLogURL: `/operations?publish=${job!.id}` })
     expect(JSON.stringify(projection.buildLog)).not.toMatch(/leaseToken|authorization|secret/i)
     expect((await operations.GET(new Request('http://cms.test/api/operations?publish=not-a-job', { headers: owner.headers }))).status).toBe(400)
+
+    await payload.update({ collection: 'pages', id: current.changes[0]!.id, data: { title: String(current.changes[0]!.after?.title) }, overrideAccess: true, context: { editorialInternal: true, reviewedSnapshotImport: true } })
+    const rollback = await operations.POST(new Request('http://cms.test/api/operations', {
+      method: 'POST', headers: { ...Object.fromEntries(current.headers), origin: 'http://cms.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'prepare-rollback', releaseID: completed.id, mode: 'change', changeKeys: [current.included[0]] }),
+    }))
+    expect(rollback.status, await rollback.clone().text()).toBe(201)
+    const prepared = await rollback.json() as { changeSet: { id: string; state: string } }
+    expect(prepared.changeSet).toMatchObject({ state: 'open' })
+    expect(await payload.findByID({ collection: 'change-sets', id: prepared.changeSet.id, overrideAccess: true })).toMatchObject({ actor: expect.objectContaining({ id: current.reviewer.id }), state: 'open' })
+    await payload.delete({ collection: 'change-sets', id: prepared.changeSet.id, overrideAccess: true, context: { editorialInternal: true } })
   })
 
   it('refuses version pins that disagree with the reviewed candidate before creating publish work', async () => {

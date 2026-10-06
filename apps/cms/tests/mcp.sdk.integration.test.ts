@@ -872,17 +872,21 @@ test('MCP canonical review tools enforce ownership, revisions, and review-only b
   } finally { await Promise.all([writer.transport.close(), stranger.transport.close()]) }
 })
 
-test('MCP change log and rollback require a fresh canonical Owner session', async () => {
+test('MCP change log and rollback require a fresh canonical Owner or Approver session', async () => {
   await payload.update({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
   const originalSiteSettings = (await payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true })).docs[0] as unknown as Record<string, unknown> | undefined
   const owner = await payload.create({ collection: 'users', data: { email: `mcp-rollback-owner-${randomUUID()}@example.test`, name: 'MCP Rollback Owner', roles: ['owner'] }, overrideAccess: true })
+  const approver = await payload.create({ collection: 'users', data: { email: `mcp-rollback-approver-${randomUUID()}@example.test`, name: 'MCP Rollback Approver', roles: ['approver'] }, overrideAccess: true })
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-rollback-editor-${randomUUID()}@example.test`, name: 'MCP Rollback Editor', roles: ['editor'] }, overrideAccess: true })
-  const ownerSession = await sessionFor(owner.id); const editorSession = await sessionFor(editor.id)
+  const sales = await payload.create({ collection: 'users', data: { email: `mcp-rollback-sales-${randomUUID()}@example.test`, name: 'MCP Rollback Sales', roles: ['sales'] }, overrideAccess: true })
+  const ownerSession = await sessionFor(owner.id); const approverSession = await sessionFor(approver.id); const editorSession = await sessionFor(editor.id); const salesSession = await sessionFor(sales.id)
   const stale = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-stale-${randomUUID()}`, user: owner.id, authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
   const revoked = await sessionFor(owner.id)
   tokens.set('rollback-owner', { clientId: 'rollback-owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('rollback-owner-read', { clientId: 'rollback-owner-read-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
+  tokens.set('rollback-approver', { clientId: 'rollback-approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('rollback-editor', { clientId: 'rollback-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('rollback-sales', { clientId: 'rollback-sales-client', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('rollback-stale', { clientId: 'rollback-stale-client', userId: owner.id, sessionId: stale.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('rollback-revoked', { clientId: 'rollback-revoked-client', userId: owner.id, sessionId: revoked.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('rollback-wrong-session', { clientId: 'rollback-wrong-client', userId: owner.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
@@ -901,29 +905,45 @@ test('MCP change log and rollback require a fresh canonical Owner session', asyn
     await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', actor: owner.id, detail: { changeSet: set.id } }, overrideAccess: true })
     return published
   }
-  const oldRelease = await release(previous, 'previous', sequence); const currentRelease = await release(current, 'current', sequence + 1); let preparedID: string | undefined
-  const [ownerClient, ownerReadClient, editorClient, staleClient, revokedClient] = await Promise.all([clientFor('rollback-owner'), clientFor('rollback-owner-read'), clientFor('rollback-editor'), clientFor('rollback-stale'), clientFor('rollback-revoked')])
+  const privateAudit = await payload.create({ collection: 'audit-events', data: { event: 'lead.created', actor: sales.id, detail: { email: 'private-lead@example.test', message: 'private prospect detail' } }, overrideAccess: true })
+  const oldRelease = await release(previous, 'previous', sequence); const currentRelease = await release(current, 'current', sequence + 1); const preparedIDs: string[] = []
+  const [ownerClient, ownerReadClient, approverClient, editorClient, salesClient, staleClient, revokedClient] = await Promise.all([clientFor('rollback-owner'), clientFor('rollback-owner-read'), clientFor('rollback-approver'), clientFor('rollback-editor'), clientFor('rollback-sales'), clientFor('rollback-stale'), clientFor('rollback-revoked')])
   try {
-    expect((await ownerClient.client.listTools()).tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['list_changes', 'request_rollback']))
-    expect(resultJson(await ownerClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } }))).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ diff: expect.objectContaining({ entries: expect.arrayContaining([expect.objectContaining({ before: expect.any(String), after: expect.any(String) })]) }), rollback: expect.objectContaining({ releaseID: currentRelease.id, enabled: true, changes: [expect.objectContaining({ key: `pages:${rollbackPageID}`, label: expect.any(String) })] }) })]) })
+    const ownerTools = await ownerClient.client.listTools()
+    expect(ownerTools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['list_changes', 'request_rollback']))
+    for (const name of ['list_changes', 'request_rollback']) expect(ownerTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ authorization: { requiredRoles: ['owner', 'approver'] } })
+    const ownerChanges = resultJson(await ownerClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } })) as { items: Array<{ id: string; diff: unknown; rollback: unknown }> }
+    expect(ownerChanges).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ diff: expect.objectContaining({ entries: expect.arrayContaining([expect.objectContaining({ before: expect.any(String), after: expect.any(String) })]) }), rollback: expect.objectContaining({ releaseID: currentRelease.id, enabled: true, changes: [expect.objectContaining({ key: `pages:${rollbackPageID}`, label: expect.any(String) })] }) })]) })
+    expect(ownerChanges.items.map((item) => item.id)).toContain(privateAudit.id)
+    const approverChanges = resultJson(await approverClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } })) as { items: Array<{ id: string }> }
+    expect(approverChanges.items.map((item) => item.id)).not.toContain(privateAudit.id)
     await expect(ownerReadClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } })).rejects.toMatchObject({ code: 403 })
+    expect(resultJson(await editorClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } }))).toEqual({ error: 'owner_access_required' })
+    expect(resultJson(await salesClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } }))).toEqual({ error: 'owner_access_required' })
     expect(resultJson(await editorClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } }))).toEqual({ error: 'owner_access_required' })
+    expect(resultJson(await salesClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } }))).toEqual({ error: 'role_access_required' })
     expect(resultJson(await staleClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } }))).toEqual({ error: 'fresh_authentication_required' })
     await payload.update({ collection: 'auth-sessions', id: revoked.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
     await expect(revokedClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } })).rejects.toMatchObject({ code: 401 })
     await expect(clientFor('rollback-wrong-session')).rejects.toThrow(/HTTP error/i)
     expect(resultJson(await ownerClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: oldRelease.id } }))).toEqual({ error: 'rollback_unavailable' })
-    const prepared = resultJson(await ownerClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id, mode: 'change', changeKeys: [`pages:${rollbackPageID}`] } })) as { changeSet: { id: string; state: string } }; preparedID = prepared.changeSet.id
+    const prepared = resultJson(await ownerClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id, mode: 'change', changeKeys: [`pages:${rollbackPageID}`] } })) as { changeSet: { id: string; state: string } }; preparedIDs.push(prepared.changeSet.id)
     expect(prepared.changeSet).toMatchObject({ state: 'open' })
     expect(await payload.findByID({ collection: 'change-sets', id: prepared.changeSet.id, overrideAccess: true })).toMatchObject({ name: `Rollback change from release #${sequence + 1}`, state: 'open' })
+    await withPayloadTransaction(payload, async (req) => { req.user = owner as never; await transitionChangeSet({ payload, req, actor: owner, id: prepared.changeSet.id, action: 'discard' }) })
+    await payload.update({ collection: 'pages', id: rollbackPageID, data: { summary: current.pages[0]!.summary }, draft: true, overrideAccess: true, context: { editorialInternal: true, reviewedSnapshotImport: true } })
+    const approverPrepared = resultJson(await approverClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id, mode: 'change', changeKeys: [`pages:${rollbackPageID}`] } })) as { changeSet: { id: string; state: string } }; preparedIDs.push(approverPrepared.changeSet.id)
+    expect(approverPrepared.changeSet).toMatchObject({ state: 'open' })
+    expect(await payload.findByID({ collection: 'change-sets', id: approverPrepared.changeSet.id, overrideAccess: true })).toMatchObject({ actor: expect.objectContaining({ id: approver.id }), name: `Rollback change from release #${sequence + 1}`, state: 'open' })
   } finally {
-    await Promise.all([ownerClient.transport.close(), ownerReadClient.transport.close(), editorClient.transport.close(), staleClient.transport.close(), revokedClient.transport.close()])
+    await Promise.all([ownerClient.transport.close(), ownerReadClient.transport.close(), approverClient.transport.close(), editorClient.transport.close(), salesClient.transport.close(), staleClient.transport.close(), revokedClient.transport.close()])
     const releases = [oldRelease, currentRelease]; const snapshots = releases.map((release) => typeof release.snapshot === 'string' ? release.snapshot : release.snapshot.id); const outboxes = releases.map((release) => typeof release.outbox === 'string' ? release.outbox : release.outbox.id)
     await withPayloadTransaction(payload, async (req) => {
       await payload.delete({ collection: 'published-releases', where: { id: { in: releases.map((release) => release.id) } }, overrideAccess: true, req, context: { editorialInternal: true } })
       await payload.delete({ collection: 'publish-outbox', where: { id: { in: outboxes } }, overrideAccess: true, req, context: { editorialInternal: true } })
       await payload.delete({ collection: 'publish-snapshots', where: { id: { in: snapshots } }, overrideAccess: true, req, context: { editorialInternal: true } })
-      await payload.delete({ collection: 'change-sets', where: { or: [{ name: { equals: 'MCP rollback previous' } }, { name: { equals: 'MCP rollback current' } }, ...(preparedID ? [{ id: { equals: preparedID } }] : [])] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'change-sets', where: { or: [{ name: { equals: 'MCP rollback previous' } }, { name: { equals: 'MCP rollback current' } }, ...(preparedIDs.length ? [{ id: { in: preparedIDs } }] : [])] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'audit-events', id: privateAudit.id, overrideAccess: true, req, context: { editorialInternal: true } })
       // Requesting rollback reconciles the captured snapshot into ordinary draft
       // records. Restore the pre-existing settings before removing this test's
       // synthetic page and section, so later upload tests never inherit a
