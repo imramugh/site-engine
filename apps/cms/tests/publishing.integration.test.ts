@@ -6,15 +6,17 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { approveChangeSet, buildCandidate, canonicalHash, cancelScheduledPublication, changeSetHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, renewPublishLease, reschedulePublication, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
+import { approveChangeSet, buildCandidate, canonicalHash, cancelScheduledPublication, changeSetHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, recordPublishStage, renewPublishLease, reschedulePublication, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-publishing'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
+process.env.PUBLISH_WORKER_TOKEN = 'publish-worker-integration-token-that-is-long-enough'
 const { default: config } = await import('../payload.config.js')
 const scheduledPublicationRoute = await import('../app/api/editorial/schedules/[action]/route.js')
+const publishJobRoute = await import('../app/api/internal/publish-jobs/[action]/route.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
@@ -368,6 +370,43 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     const validLease = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date(started.getTime() + 2_000)))
     const snapshot = typeof validLease!.snapshot === 'object' ? validLease!.snapshot : await payload.findByID({ collection: 'publish-snapshots', id: String(validLease!.snapshot), overrideAccess: true })
     await expect(withPayloadTransaction(payload, req => completePublishJob(payload, req, String(validLease!.id), String(validLease!.leaseToken), { ...artifact(snapshot.contentHash), checks: [{ name: 'anything', status: 'passed' }] }, new Date(started.getTime() + 2_001)))).rejects.toThrow('Verified artifact')
+  })
+
+  it('records only whitelisted stages for the current lease and persists one safe completion result', async () => {
+    const current = await fixture('webhook-stage-audit')
+    await approve(current)
+    const started = new Date('2026-10-06T14:00:00.000Z')
+    const job = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, started, 1_000))
+    expect(job).toMatchObject({ status: 'processing' })
+    const count = async (event: string) => payload.count({ collection: 'audit-events', where: { and: [{ event: { equals: event } }, { 'detail.publishJob': { equals: job!.id } }] }, overrideAccess: true })
+    await expect(withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), String(job!.leaseToken), 'untrusted-stage', started))).rejects.toThrow('Unknown publish stage')
+    await expect(withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), 'wrong-lease', 'building', started))).rejects.toThrow('lease is no longer current')
+    expect((await count('editorial.publish_stage')).totalDocs).toBe(0)
+    await withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), String(job!.leaseToken), 'building', started))
+    const stage = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'editorial.publish_stage' } }, { 'detail.publishJob': { equals: job!.id } }] }, limit: 1, overrideAccess: true })
+    expect(stage.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, sequence: 1, stage: 'building', attempt: 1, correlationID: job!.correlationID })
+    expect(JSON.stringify(stage.docs[0]!.detail)).not.toMatch(/leaseToken|authorization|secret/i)
+    await expect(withPayloadTransaction(payload, req => recordPublishStage(payload, req, String(job!.id), String(job!.leaseToken), 'built', new Date(started.getTime() + 1_001)))).rejects.toThrow('lease is no longer current')
+    expect((await count('editorial.publish_stage')).totalDocs).toBe(1)
+    const snapshot = job!.snapshot as unknown as { contentHash: string }
+    const completed = await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(job!.id), String(job!.leaseToken), artifact(snapshot.contentHash), new Date(started.getTime() + 500)))
+    await expect(withPayloadTransaction(payload, req => completePublishJob(payload, req, String(job!.id), 'replayed-token', artifact(snapshot.contentHash), new Date(started.getTime() + 501)))).resolves.toMatchObject({ id: completed.id })
+    const completion = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'publish.completed' } }, { 'detail.publishJob': { equals: job!.id } }] }, limit: 10, overrideAccess: true })
+    expect(completion.docs).toHaveLength(1)
+    expect(completion.docs[0]!.detail).toMatchObject({ publishJob: job!.id, changeSet: current.set.id, release: completed.id, sequence: 1, actor: current.editor.id, reviewer: current.reviewer.id, publishTime: new Date(started.getTime() + 500).toISOString(), result: 'deployed', correlationID: job!.correlationID })
+    expect(JSON.stringify(completion.docs[0]!.detail)).not.toMatch(/leaseToken|authorization|secret/i)
+  })
+
+  it('returns a frozen immutable context when the private worker claims an approval', async () => {
+    const current = await fixture('webhook-claim-context')
+    const approved = await approve(current)
+    const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: approved.snapshotID!, overrideAccess: true })
+    const response = await publishJobRoute.POST(new Request('http://cms.test/api/internal/publish-jobs/claim', { method: 'POST', headers: { authorization: `Bearer ${process.env.PUBLISH_WORKER_TOKEN}`, 'content-type': 'application/json' }, body: '{}' }), { params: Promise.resolve({ action: 'claim' }) })
+    expect(response.status).toBe(200)
+    const body = await response.json() as { immutableContext: Record<string, unknown>; job: { id: string } }
+    expect(body.immutableContext).toEqual({ changeSetID: current.set.id, approvedRevision: 4, includedChangeKeys: current.included, snapshotID: snapshot.id, approvedBy: current.reviewer.id, approvedAt: snapshot.createdAt })
+    expect(JSON.stringify(body.immutableContext)).not.toMatch(/leaseToken|authorization|secret/i)
+    expect(body.job.id).toBeTruthy()
   })
 
   it('rolls back snapshots/outbox and keeps delivery outside a claim/retry transaction', async () => {
