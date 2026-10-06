@@ -167,7 +167,7 @@ describe('ENG-026 draft-only direct hero edits', () => {
       await client.execute('CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))')
       for (let cycle = 0; cycle < 2; cycle += 1) {
         const lock = await external.transaction('write')
-        await lock.execute('INSERT INTO parent (id) VALUES (?)', [100 + cycle])
+        await lock.execute({ sql: 'INSERT INTO parent (id) VALUES (?)', args: [100 + cycle] })
         const started = Date.now()
         await expect(client.transaction('write')).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
         expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
@@ -175,7 +175,7 @@ describe('ENG-026 draft-only direct hero edits', () => {
         expect((await client.execute('PRAGMA foreign_keys')).rows).toEqual([{ foreign_keys: 1 }])
         await expect(client.execute('INSERT INTO child (id, parent_id) VALUES (?, ?)', [cycle + 1, 9_999])).rejects.toThrow(/FOREIGN KEY/)
         const valid = await client.transaction('write')
-        await valid.execute('INSERT INTO parent (id) VALUES (?)', [cycle + 1])
+        await valid.execute({ sql: 'INSERT INTO parent (id) VALUES (?)', args: [cycle + 1] })
         await valid.commit()
       }
     } finally { client.close(); external.close() }
