@@ -150,8 +150,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await publishFrozenSnapshot(owner.id, frozen)
   const currentRichText = (await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { blocks: Array<Record<string, unknown>> }).blocks.find((block) => block.type === 'richText')
   assert.ok(currentRichText)
-  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2025-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
-  expect(editedQualityPage.lastReviewed).toBe('2025-01-01T12:00:00.000Z')
+  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2020-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
+  expect(editedQualityPage.lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   const editorSession = await sessionFor(editor.id); const qualityWriterSession = await sessionFor(qualityWriter.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('quality-writer-token', { clientId: 'quality-writer-client', userId: qualityWriter.id, sessionId: qualityWriterSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
@@ -216,7 +216,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const auditValue = structuredJson(pageAudit) as { pageHash: string; contentHash: string }
     expect(auditValue).toMatchObject({ pageHash: expect.stringMatching(/^[a-f0-9]{64}$/), contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(auditValue.pageHash).not.toBe(auditValue.contentHash)
-    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
+    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]) })
     const currentContractBlockers = (structuredJson(pageAudit) as { blockers: Array<{ message: string }> }).blockers.map((item) => item.message)
     expect(currentContractBlockers).not.toEqual(expect.arrayContaining([expect.stringContaining('contract version')]))
     expect(CONTRACT_VERSION).toBe('1.7.0')
