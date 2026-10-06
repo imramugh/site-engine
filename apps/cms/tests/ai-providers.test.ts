@@ -22,15 +22,23 @@ const job = (provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter', 
 
 describe('ENG-023 provider monetary accounting', () => {
   it('sends a bounded image payload only to the configured vision provider', async () => {
-    await configured('openai', 'vision-approved', 'vision-secret', { monthlyCapMicroUsd: 1_000_000 })
+    await configured('openai', 'gpt-test', 'vision-secret', { monthlyCapMicroUsd: 2_000_000 })
     let request: Request | undefined
     await expect(executeConfiguredAIJob(payload, { ...job('openai', 'Describe visible content.'), requiresImage: true, imageDataUrl: 'data:image/webp;base64,AAECAwQ=' }, { now, transport: async candidate => {
       request = candidate
       return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A neutral image description.' }] }], usage: { input_tokens: 2, output_tokens: 3 } })
     } })).resolves.toMatchObject({ provider: 'openai', output: 'A neutral image description.' })
     expect(request?.url).toBe('https://api.openai.com/v1/responses')
-    expect(await request?.json()).toMatchObject({ model: 'vision-approved', input: [{ role: 'user', content: [{ type: 'input_text', text: 'Describe visible content.' }, { type: 'input_image', image_url: 'data:image/webp;base64,AAECAwQ=' }] }] })
+    expect(await request?.json()).toMatchObject({ model: 'gpt-test', input: [{ role: 'user', content: [{ type: 'input_text', text: 'Describe visible content.' }, { type: 'input_image', image_url: 'data:image/webp;base64,AAECAwQ=' }] }] })
     expect(request?.headers.get('authorization')).toBe('Bearer vision-secret')
+  })
+
+  it('rejects a highly compressed 768px vision input at the cap before transport', async () => {
+    await configured('openai', 'gpt-test', 'vision-secret', { monthlyCapMicroUsd: 10, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    let contacted = false
+    const tinyFlat768 = 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAADQAQCdASoAAAMAAUAmJaQAA3AA/vuUAAA='
+    await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true, imageDataUrl: tinyFlat768 }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(contacted).toBe(false)
   })
 
   it('bounds output for every provider and settles normalized token usage in micro-USD', async () => {
