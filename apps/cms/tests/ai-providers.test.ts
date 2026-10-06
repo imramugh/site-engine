@@ -21,6 +21,18 @@ async function configured(provider: 'openai' | 'anthropic' | 'google-gemini' | '
 const job = (provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter', input = 'hello') => ({ provider, input, maxOutputTokens: 10 })
 
 describe('ENG-023 provider monetary accounting', () => {
+  it('sends a bounded image payload only to the configured vision provider', async () => {
+    await configured('openai', 'vision-approved', 'vision-secret', { monthlyCapMicroUsd: 1_000_000 })
+    let request: Request | undefined
+    await expect(executeConfiguredAIJob(payload, { ...job('openai', 'Describe visible content.'), requiresImage: true, imageDataUrl: 'data:image/webp;base64,AAECAwQ=' }, { now, transport: async candidate => {
+      request = candidate
+      return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A neutral image description.' }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+    } })).resolves.toMatchObject({ provider: 'openai', output: 'A neutral image description.' })
+    expect(request?.url).toBe('https://api.openai.com/v1/responses')
+    expect(await request?.json()).toMatchObject({ model: 'vision-approved', input: [{ role: 'user', content: [{ type: 'input_text', text: 'Describe visible content.' }, { type: 'input_image', image_url: 'data:image/webp;base64,AAECAwQ=' }] }] })
+    expect(request?.headers.get('authorization')).toBe('Bearer vision-secret')
+  })
+
   it('bounds output for every provider and settles normalized token usage in micro-USD', async () => {
     const records = [await configured('openai', 'gpt-test', 'openai-secret'), await configured('anthropic', 'claude-test', 'anthropic-secret'), await configured('google-gemini', 'gemini test/model', 'gemini-secret'), await configured('openrouter', 'provider/model', 'router-secret')]
     const observed: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
