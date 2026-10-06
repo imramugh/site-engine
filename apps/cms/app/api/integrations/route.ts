@@ -102,6 +102,10 @@ async function POSTHandler(request: Request) {
       const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true })
       const integration = configured.docs[0] as unknown as { model?: string; encryptedCredential?: string }
       if (!integration?.encryptedCredential || integration.model !== body.model.trim()) return privateJSON({ error: 'Select the reviewed model configured for this provider before routing jobs.' }, 400)
+      if (body.fallbackProvider) {
+        const fallback = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.fallbackProvider } }, limit: 1, depth: 0, overrideAccess: true })
+        if (!(fallback.docs[0] as unknown as { encryptedCredential?: string } | undefined)?.encryptedCredential) return privateJSON({ error: 'Configure and review the fallback provider before routing jobs.' }, 400)
+      }
       const existing = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: body.jobType } }, limit: 1, depth: 0, overrideAccess: true })
       const data = { jobType: body.jobType, provider: body.provider, model: body.model.trim(), fallbackProvider: body.fallbackProvider ?? null }
       const saved = existing.docs[0] ? await payload.update({ collection: 'ai-job-defaults', id: existing.docs[0].id, data: data as never, overrideAccess: true }) : await payload.create({ collection: 'ai-job-defaults', data: data as never, overrideAccess: true })
