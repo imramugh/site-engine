@@ -12,8 +12,13 @@ capacity or multi-instance needs require a separately tested migration.
 ### SQLite writer limits
 
 Run exactly one CMS process against a mounted database directory. WAL permits concurrent
-readers, but SQLite still permits one writer at a time. A competing writer waits for the
-configured five-second `busy_timeout`; when that deadline expires, application code must
+readers, but SQLite still permits one writer at a time. Payload transactions use a
+per-adapter FIFO queue with at most 100 pending writers and a five-second queue wait.
+An expired waiter is removed without interrupting the active transaction. This avoids
+blocking the Node event loop on a local writer that needs that same event loop to commit.
+An independent database writer can still contend after queue admission; each libSQL
+connection has a five-second `timeout`, including lazy and replacement connections.
+When either wait expires, application code must
 classify `SQLITE_BUSY` as retryable and return controlled backpressure instead of treating
 the write as successful. Keep external provider work outside database transactions, use
 the existing bounded internal worker batches, and do not add a second CMS, direct database
@@ -110,6 +115,11 @@ commit failure rolls back and is surfaced. Keep the exact Payload pin, override,
 patch together until an upstream release contains both fixes; do not remove either
 without running `tests/transaction-failure.integration.test.ts` and the identity
 transaction tests.
+
+The Drizzle patch also coordinates SQLite transaction starts until commit or rollback,
+releasing the queue lease on failed starts and failed commits. It applies only to the
+SQLite adapter. Regression coverage checks FIFO order, queue capacity, timed-out waiter
+removal, surviving transactions, and successful writes after each failure path.
 
 The workspace also pins a narrow `@libsql/client` 0.18.0 patch. It discards only the
 connection whose transaction `BEGIN` failed, then serves one queued borrower with a
