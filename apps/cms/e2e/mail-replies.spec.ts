@@ -302,17 +302,25 @@ test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK del
   let transport: StreamableHTTPClientTransport | undefined
   const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
   try {
-    const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1`)).json() as { deepLead: string }
+    const fixtureResponse = await page.request.post(`${origin}/__e2e/mail-reply-fixture?deep=1&attachment=1`)
+    expect(fixtureResponse.ok(), await fixtureResponse.text()).toBe(true)
+    const fixture = await fixtureResponse.json() as { deepLead: string; attachment: { source: 'asset'; sourceID: string; filename: string; mimeType: string; size: number; sha256: string; bytes: string } }
     const identity = await (await page.request.post(`${origin}/__e2e/mcp-identity`)).json() as { bearer: string }
     const client = new Client({ name: 'e2e-bound-mail', version: '1.0.0' })
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
     transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
     await client.connect(transport)
-    const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: 'SDK joined subject', body: 'SDK joined body' } }) as unknown as { structuredContent: { draft: { id: string; confirmationURL: string } } }
-    const draft = mcpStructured<{ draft: { id: string; confirmationURL: string } }>(prepared).draft
+    const prepared = await client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: fixture.deepLead, sender: 'fixture-reply@example.test', subject: 'SDK joined subject', body: 'SDK joined body', attachments: [{ source: fixture.attachment.source, id: fixture.attachment.sourceID }] } }) as unknown as { structuredContent: { draft: { id: string; confirmationURL: string } } }
+    const draft = mcpStructured<{ draft: { id: string; confirmationURL: string; attachments: Array<{ source: string; sourceID: string; filename: string; mimeType: string; size: number; sha256: string }> } }>(prepared).draft
+    expect(draft.attachments).toEqual([{ source: fixture.attachment.source, sourceID: fixture.attachment.sourceID, filename: fixture.attachment.filename, mimeType: fixture.attachment.mimeType, size: fixture.attachment.size, sha256: fixture.attachment.sha256 }])
     await page.goto(new URL(draft.confirmationURL).pathname + new URL(draft.confirmationURL).search)
     const reply = page.locator('[data-mail-reply-composer]')
-    await expect(reply.getByRole('region', { name: 'Exact reply review' })).toContainText('SDK joined body')
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('SDK joined body')
+    await expect(review).toContainText(fixture.attachment.filename)
+    await expect(review).toContainText(fixture.attachment.mimeType)
+    await expect(review).toContainText(`${fixture.attachment.size} bytes`)
+    await expect(review).toContainText(`SHA-256 ${fixture.attachment.sha256}`)
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
     const status = await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })
     const grantID = mcpStructured<{ grantID: string }>(status).grantID
@@ -320,8 +328,11 @@ test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK del
     const sent = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })
     expect(sent.isError).not.toBe(true)
     expect(mcpResult<{ messageID: string }>(sent).messageID).toEqual(expect.any(String))
-    const deliveries = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
+    const deliveries = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ mime: string }> }
     expect(deliveries.deliveries).toHaveLength(before.deliveries.length + 1)
+    const encoded = deliveries.deliveries.at(-1)!.mime.match(/Content-Disposition: attachment; filename="sdk-reply-attachment\.png"\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)\r\n--/)
+    expect(encoded?.[1]).toBeDefined()
+    expect(Buffer.from(encoded![1].replace(/\r\n/g, ''), 'base64')).toEqual(Buffer.from(fixture.attachment.bytes, 'base64'))
     await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } }).catch(() => undefined)
     expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length + 1)
   } finally { await transport?.close().catch(() => undefined); if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls; await context.close() }

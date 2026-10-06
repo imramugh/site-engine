@@ -530,11 +530,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const fixtureURL = new URL(`https://fixture.test${request.url}`)
       const prepared = fixtureURL.searchParams.get('prepared') === '1'
       const deep = fixtureURL.searchParams.get('deep') === '1'
+      const withAttachment = fixtureURL.searchParams.get('attachment') === '1'
       const deepLead = deep ? await payload.create({ collection: 'inquiries', data: { name: 'Deep linked assistant lead', email: `deep-link-${mailbox.id}@example.test`, message: 'A direct confirmation target that is outside the first lead page.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `deep-link-${mailbox.id}`, stage: 'new' }, overrideAccess: true }) : undefined
       if (deepLead) await payload.update({ collection: 'inquiries', id: deepLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
       const preparedTarget = deepLead?.id ?? firstEditableLeadID!
       const preparedDraft = prepared ? await prepareReply(payload, 'lead', preparedTarget, leadOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }, { clientIDHash: 'a'.repeat(64), actorID: leadOwnerID!, oauthSessionID: 'fixture-assistant-origin-session' }) : undefined
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(deepLead ? { deepLead: deepLead.id, deepLeadName: deepLead.name } : {}), ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
+      const attachmentBytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#2563eb' } }).png().toBuffer()
+      const attachmentOwner = withAttachment ? await payload.findByID({ collection: 'users', id: leadOwnerID!, depth: 0, overrideAccess: true }) : undefined
+      const attachment = withAttachment ? await payload.create({ collection: 'assets', data: { alt: 'Synthetic SDK reply attachment' }, file: { data: attachmentBytes, mimetype: 'image/png', name: 'sdk-reply-attachment.png', size: attachmentBytes.length }, user: attachmentOwner, overrideAccess: false }) : undefined
+      const attachmentDescriptor = attachment ? { source: 'asset' as const, sourceID: String(attachment.id), filename: 'sdk-reply-attachment.png', mimeType: 'image/png', size: attachmentBytes.length, sha256: createHash('sha256').update(attachmentBytes).digest('hex') } : undefined
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(deepLead ? { deepLead: deepLead.id, deepLeadName: deepLead.name } : {}), ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}), ...(attachmentDescriptor ? { attachment: { ...attachmentDescriptor, bytes: attachmentBytes.toString('base64') } } : {}) })
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
