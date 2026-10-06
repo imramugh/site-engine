@@ -11,10 +11,10 @@ import { createClient } from '@libsql/client'
 import sharp from 'sharp'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
-import { transitionChangeSet } from '../src/editorial'
+import { snapshot as capturedSnapshot, transitionChangeSet } from '../src/editorial'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
-import { canonicalHash } from '../src/publishing'
+import { canonicalHash, changeSetHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
@@ -590,6 +590,27 @@ test('MCP canonical review tools enforce ownership, revisions, and review-only b
     expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: 1 } }))).toEqual({ error: 'revision_conflict' })
     expect(resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: started.id, expectedRevision: started.revision } }))).toEqual({ error: 'write_failed' })
     expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: started.revision } }))).toMatchObject({ state: 'discarded', revision: 1 })
+
+    const section = await payload.create({ collection: 'sections', data: { name: 'Review SDK section', summary: 'A section for the canonical review SDK test.', slug: `review-sdk-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+    const page = await payload.create({ collection: 'pages', data: { title: 'Current review SDK page', summary: 'A page whose captured change can be submitted through the canonical review tool.', slug: `review-sdk-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Review SDK heading', body: 'A valid page body for review tool coverage.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+    const after = capturedSnapshot('pages', page)!; const before = { ...after, title: 'Previous review SDK page' }
+    const changes = [{ collection: 'pages' as const, id: String(page.id), before, after, beforeHash: canonicalHash(before), afterHash: canonicalHash(after) }]
+    const reviewSet = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'SDK review with a captured change' } })) as { id: string; revision: number }
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const submitted = resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: reviewSet.id, expectedRevision: reviewSet.revision } })) as { id: string; state: string; revision: number; privatePreviewURL: string | null }
+    expect(submitted).toMatchObject({ id: reviewSet.id, state: 'submitted', revision: 1, privatePreviewURL: null })
+
+    const manifest = structuredClone(neutralFixture)
+    manifest.settings.homepageId = String(page.id); manifest.settings.sections[0]!.id = String(section.id); manifest.settings.sections[0]!.pageIds = [String(page.id)]
+    manifest.pages[0]!.id = String(page.id); manifest.pages[0]!.sectionId = String(section.id); manifest.pages[0]!.slug = String(page.slug); manifest.pages[0]!.title = String(after.title)
+    const includedChangeKeys = [`pages:${page.id}`]; const changeHash = changeSetHash(changes); const digest = 'b'.repeat(64)
+    const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: reviewSet.id, reviewRevision: submitted.revision, changeHash, includedChangeKeys, baselineSequence: 0, liveSequence: 0, liveManifest: manifest, proposedManifest: manifest, liveManifestHash: canonicalHash(manifest), proposedManifestHash: canonicalHash(manifest), versionPins: { themeVersion: 'test', engineVersion: 'test', contractVersion: manifest.settings.contractVersion }, status: 'completed', attempts: 1, artifactDigest: digest }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { preview: { status: 'ready', jobID: job.id, revision: submitted.revision, changeHash, includedChangeKeys, baselineSequence: 0, liveManifestHash: canonicalHash(manifest), proposedManifestHash: canonicalHash(manifest) }, reviewComments: [{ id: 'review-comment', author: other.id, body: 'Please check the review preview.', createdAt: '2026-01-01T00:00:00.000Z' }, { unexpected: true }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const ready = resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: reviewSet.id } })) as { comments: Array<{ id: string; author: string; body: string; createdAt: string }>; privatePreviewURL: string | null }
+    expect(ready.comments).toEqual([{ id: 'review-comment', author: other.id, body: 'Please check the review preview.', createdAt: '2026-01-01T00:00:00.000Z' }])
+    expect(ready.privatePreviewURL).toBe(`${mcpOrigin}/review/${reviewSet.id}`)
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { revision: submitted.revision + 1 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: reviewSet.id } }))).toMatchObject({ privatePreviewURL: null })
   } finally { await Promise.all([writer.transport.close(), stranger.transport.close()]) }
 })
 
