@@ -1468,6 +1468,15 @@ export interface PreviewRenderJob {
   completedAt?: string | null;
   artifactDigest?: string | null;
   errorCode?: string | null;
+  renderDiagnostics?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2623,6 +2632,7 @@ export interface PreviewRenderJobsSelect<T extends boolean = true> {
   completedAt?: T;
   artifactDigest?: T;
   errorCode?: T;
+  renderDiagnostics?: T;
   updatedAt?: T;
   createdAt?: T;
 }
