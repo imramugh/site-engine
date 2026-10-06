@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { AssetFileVersions, Assets, Applications, AuditEvents, AuthSessions, AuthTransactions, ChangeSets, ConfiguredAIJobs, DeletionTombstones, Inquiries, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailAuthorizations, MailDrafts, MailThreads, MailThreadMessages, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, RetentionPurgeJobs, RetentionSettings, UrgentContacts, Invitations, Pages, PreviewRenderJobs, PublishedReleases, PublishOutbox, PublishSnapshots, Redirects, ScheduledPublications, Sections, SiteSettings, StyleGuides, ThemeSettings, Users } from './src/collections'
-import { databaseURI } from './src/sqlite'
+import { databaseURI, sqliteBackpressurePayloadError } from './src/sqlite'
 import { MailboxAreaMappings, MailboxConfigurations, MailboxOAuthTransactions, MailboxTestSends } from './src/mailbox-collections'
 
 const secret = process.env.PAYLOAD_SECRET
@@ -42,6 +42,11 @@ export default buildConfig({
   }),
   editor: undefined,
   graphQL: { disable: false },
+  hooks: {
+    // Payload catches native REST errors itself. Translate writer timeouts before
+    // its error formatter can surface a driver message.
+    afterError: [({ error, req }) => sqliteBackpressurePayloadError(error, req)],
+  },
   sharp,
   onInit: async (payload) => {
     // foreign_keys is connection-local. This is Payload's own adapter client.

@@ -10,6 +10,7 @@ import { runReviewQuality } from '../../../../src/review-quality'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
 import { freshStaff } from '../../../../src/access'
 import { routeForReviewPreview } from '../../../../src/review-mode'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -126,6 +127,8 @@ export async function POST(request: Request, context: { params: Promise<{ action
     })
     return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     const text = message(error)
     const status = /Authentication|required|role|required|Only the editor/i.test(text) ? 403 : 400
     return Response.json({ error: text }, { status })

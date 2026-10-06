@@ -20,6 +20,7 @@ process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = join(directory, 'bootstrap-token')
 writeFileSync(process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE, 'test-only-bootstrap-token')
 const { default: config } = await import('../payload.config.js')
 const directRoute = await import('../app/api/editorial/direct-edit/route.js')
+const editorialRoute = await import('../app/api/editorial/[action]/route.js')
 const { createClient: createCjsClient } = createRequire(import.meta.url)('@libsql/client/sqlite3') as typeof import('@libsql/client/sqlite3')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let releaseSequence = 10_000
@@ -120,6 +121,26 @@ describe('ENG-026 draft-only direct hero edits', () => {
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
     const retried = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
     expect(retried.status).toBe(200)
+  }, 20_000)
+
+  it('returns a safe retry response for a locked editorial workflow write', async () => {
+    const editor = await actor(); const cookie = await session(editor)
+    const external = createClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    let blocked: Response | undefined
+    try {
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [editor.id] })
+      blocked = await editorialRoute.POST(new Request('http://cms.test/api/editorial/create', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Blocked change set' }) }), { params: Promise.resolve({ action: 'create' }) })
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    expect(blocked?.status).toBe(503)
+    expect(blocked?.headers.get('Retry-After')).toBe('1')
+    const body = await blocked?.json()
+    expect(body).toEqual({ error: 'Saving is temporarily busy. Please retry.' })
+    expect(JSON.stringify(body)).not.toContain('SQLITE_BUSY')
+    expect(JSON.stringify(body)).not.toContain('locked')
   }, 20_000)
 
   it('replaces only a discarded failed-begin connection while serving its waiter', async () => {

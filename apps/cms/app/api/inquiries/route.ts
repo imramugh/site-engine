@@ -2,6 +2,7 @@ import { getPayload } from 'payload'
 import { REST_GET } from '@payloadcms/next/routes'
 import config from '../../../payload.config'
 import { createAcceptedInquiry, InquiryCapacityError, InquiryIdempotencyCollisionError, InquiryRateLimitedError, validateInquiry } from '../../../src/inquiries'
+import { sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,6 +42,8 @@ export async function POST(request: Request): Promise<Response> {
     if ('suppressed' in result) return Response.json({ accepted: true }, { status: 202 })
     return Response.json({ accepted: true, id: result.inquiry.id }, { status: result.duplicate ? 200 : 201 })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { errors: { form: 'The inquiry service is temporarily busy. Please retry.' } })
+    if (backpressure) return backpressure
     if (error instanceof InquiryRateLimitedError) return Response.json({ errors: { form: error.message } }, { status: 429, headers: { 'Retry-After': '60' } })
     if (error instanceof InquiryCapacityError) return Response.json({ errors: { form: error.message } }, { status: 503, headers: { 'Retry-After': '60' } })
     if (error instanceof InquiryIdempotencyCollisionError) return Response.json({ errors: { form: error.message } }, { status: 409 })
