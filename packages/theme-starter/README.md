@@ -55,6 +55,15 @@ corepack pnpm@12.8.1 --filter @site-engine/site build
 corepack pnpm@12.8.1 exec playwright test apps/site/e2e/site.spec.ts --grep ENG-038
 ```
 
+The gate checks each deterministic screenshot against
+`scripts/fixtures/theme-starter-conformance-baselines.json`. After reviewing
+an intentional visual change, regenerate the checksums and commit the updated
+baseline with:
+
+```sh
+UPDATE_THEME_CONFORMANCE_BASELINES=1 corepack pnpm@12.8.1 conformance:starter
+```
+
 The browser fixture covers every standard block and template at desktop and
 mobile sizes, retains screenshots as test artifacts, runs axe, and checks
 reduced-motion behavior.
