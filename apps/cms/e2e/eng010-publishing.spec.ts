@@ -18,7 +18,8 @@ test('ENG-010 retains the completed release when a later signed build fails and 
   const before = await session.page.request.get('/__e2e/publish-state').then(response => response.json()) as { releaseCount: number }
   const result = await session.page.request.post(`/__e2e/eng010-publish/fail?changeSet=${changeSetID}`)
   expect(result.status(), await result.text()).toBe(200)
-  const body = await result.json() as { claim: { changeSetID: string; id: string }; notification: { sourceID: string } }
+  const body = await result.json() as { claim: { changeSetID: string; id: string }; notification: { sourceID: string }; smtp: string | null }
   expect(body).toMatchObject({ claim: { changeSetID }, job: { status: 'failed' }, releases: before.releaseCount, served: expect.stringContaining('Original review heading'), notification: { sourceID: body.claim.id, state: 'queued' }, smtp: expect.stringContaining('Publish build failed') })
+  expect(body.smtp).toContain(`publish=${body.claim.id}`)
   await session.context.close()
 })
