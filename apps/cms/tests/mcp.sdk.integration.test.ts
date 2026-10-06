@@ -288,6 +288,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const applicationVersion = structuredJson(await hiringWriteClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })) as { updatedAt: string }
     await expect(hiringClient.client.callTool({ name: 'update_application', arguments: { id: application.id, expectedUpdatedAt: applicationVersion.updatedAt, status: 'reviewing' } })).rejects.toMatchObject({ code: 403 })
     expect(structuredJson(await hiringWriteClient.client.callTool({ name: 'update_application', arguments: { id: application.id, expectedUpdatedAt: applicationVersion.updatedAt, status: 'reviewing', notes: 'Screened.' } }))).toMatchObject({ id: application.id, status: 'reviewing' })
+    expect((await payload.findByID({ collection: 'applications', id: application.id, overrideAccess: true })).notes).toBe('Screened.')
+    expect(structuredJson(await hiringClient.client.callTool({ name: 'get_application', arguments: { id: application.id } }))).toMatchObject({ notes: 'Screened.' })
     await expect(hiringWriteClient.client.callTool({ name: 'update_application', arguments: { id: application.id, expectedUpdatedAt: applicationVersion.updatedAt, status: 'interview' } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'stale_record' }) })] })
     const replyRecord = { id: inquiry.id, expectedUpdatedAt: (structuredJson(await salesWriteClient.client.callTool({ name: 'get_inquiry', arguments: { id: inquiry.id } })) as { updatedAt: string }).updatedAt, sentAt: '2026-10-07T00:00:00.000Z', subject: 'Reply sent elsewhere', summary: 'A human sent the reply.' }
     expect(structuredJson(await salesWriteClient.client.callTool({ name: 'record_reply', arguments: replyRecord }))).toEqual({ id: inquiry.id, recorded: true })
@@ -301,6 +303,11 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(replyAudit).toMatchObject({ detail: { clientIdHash: createHash('sha256').update('sales-write-client').digest('hex'), leadId: inquiry.id, externalReplyId: externalReplies.docs[0]?.id, sentAt: replyRecord.sentAt } })
     expect(JSON.stringify(replyAudit)).not.toContain(replyRecord.subject)
     expect(JSON.stringify(replyAudit)).not.toContain(replyRecord.summary)
+    await expect(salesClient.client.callTool({ name: 'record_reply', arguments: replyRecord })).rejects.toMatchObject({ code: 403 })
+    const replyTimeline = structuredJson(await salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: inquiry.id } })) as { externalReplies: Array<Record<string, unknown>>; items: unknown[] }
+    expect(replyTimeline).toMatchObject({ externalReplies: [expect.objectContaining({ subject: replyRecord.subject, summary: replyRecord.summary, sentAt: replyRecord.sentAt })] })
+    expect(replyTimeline.items).toHaveLength(0)
+    await expect(salesClient.client.callTool({ name: 'get_lead_emails', arguments: { id: spamLead.id } })).resolves.toMatchObject({ isError: true, content: [expect.objectContaining({ text: JSON.stringify({ error: 'not_found' }) })] })
     expect(resultJson(await salesClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } }))).toMatchObject({ id: expect.any(String) }); await expect(salesClient.client.callTool({ name: 'get_application', arguments: { id: application.id } })).rejects.toMatchObject({ code: 403 })
     expect(resultJson(await hiringClient.client.callTool({ name: 'get_application', arguments: { id: application.id } }))).toMatchObject({ id: application.id }); await expect(hiringClient.client.callTool({ name: 'get_lead', arguments: { id: (leads[0] as { id: string }).id } })).rejects.toMatchObject({ code: 403 })
     expect(JSON.stringify(planned)).toContain('untrusted data')
