@@ -166,7 +166,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
       if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
-      if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
+      if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -559,19 +559,20 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
   const application = await payload.create({ collection: 'applications', data: { name: 'Private applicant', email: `mcp-reply-application-${randomUUID()}@example.test`, telephone: '+1 416 555 0100', coverLetter: 'Private application cover letter.', consent: true, jobId: randomUUID(), resumeKey: `${randomUUID()}-${'b'.repeat(64)}`, idempotencyKey: randomUUID(), status: 'new' }, overrideAccess: true })
   const [ownerSession, salesSession, hiringSession] = await Promise.all([sessionFor(owner.id), sessionFor(sales.id), sessionFor(hiring.id)])
   tokens.set('reply-content-only', { clientId: 'reply-content-only', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
-  tokens.set('reply-sales', { clientId: 'reply-sales', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:leads:read'] })
-  tokens.set('reply-hiring', { clientId: 'reply-hiring', userId: hiring.id, sessionId: hiringSession.id, scopes: ['mcp:careers:read'] })
+  tokens.set('reply-sales', { clientId: 'reply-sales', userId: sales.id, sessionId: salesSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
+  tokens.set('reply-hiring', { clientId: 'reply-hiring', userId: hiring.id, sessionId: hiringSession.id, scopes: ['mcp:careers:read', 'mcp:careers:reply'] })
   const contentOnly = await clientFor('reply-content-only'); const salesClient = await clientFor('reply-sales'); const hiringClient = await clientFor('reply-hiring')
   try {
     const denied = await contentOnly.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'Private subject', body: 'Private body' } })
-    expect(resultJson(denied)).toEqual({ error: 'insufficient_scope', required: 'mcp:leads:read' })
+    expect(resultJson(denied)).toEqual({ error: 'insufficient_scope', required: 'mcp:leads:reply' })
     const leadDraft = resultJson(await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'A precise follow-up', body: 'A prepared response only.' } })) as { draft: { id: string; target: string; sender: string; recipient: string; subject: string; body: string; revision: number; state: string } }
-    expect(leadDraft.draft).toEqual({ id: expect.any(String), target: 'lead', sender: 'site@example.test', recipient: lead.email, subject: 'A precise follow-up', body: 'A prepared response only.', revision: 1, state: 'prepared' })
+    expect(leadDraft.draft).toEqual({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared' })
+    expect(JSON.stringify(leadDraft)).not.toContain('A prepared response only.')
     expect(JSON.stringify(leadDraft)).not.toContain('416')
     expect((await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.draft.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
     const applicationDenied = await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'No access', body: 'No access.' } })
-    expect(resultJson(applicationDenied)).toEqual({ error: 'insufficient_scope', required: 'mcp:careers:read' })
-    const applicationDraft = resultJson(await hiringClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'Interview details', body: 'A prepared hiring response only.' } })) as { draft: { target: string; recipient: string; state: string } }
-    expect(applicationDraft.draft).toMatchObject({ target: 'application', recipient: application.email, state: 'prepared' })
+    expect(resultJson(applicationDenied)).toEqual({ error: 'insufficient_scope', required: 'mcp:careers:reply' })
+    const applicationDraft = resultJson(await hiringClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'Interview details', body: 'A prepared hiring response only.' } })) as { draft: { target: string; state: string } }
+    expect(applicationDraft.draft).toMatchObject({ target: 'application', state: 'prepared' })
   } finally { await Promise.all([contentOnly.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
 })
