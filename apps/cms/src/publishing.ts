@@ -171,17 +171,24 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
   }
-  if (typeof siteSettings.logo === 'string') {
-    const logo = media.get(siteSettings.logo)
-    if (!logo) throw new Error('Site settings logo must reference an included asset.')
-    siteSettings.logo = logo
+  const canonicalSiteAsset = (value: unknown, label: string) => {
+    const assetID = idOf(value)
+    const asset = assetID ? media.get(assetID) : undefined
+    if (!asset) throw new Error(`Site settings ${label} must reference an included asset.`)
+    // A baseline may already hold a frozen MediaReference while editor captures
+    // hold relationship IDs. Always resolve both through candidate media so an
+    // old object cannot carry a stale digest or other metadata into a snapshot.
+    return asset
+  }
+  if (siteSettings.logo !== undefined && siteSettings.logo !== null) {
+    siteSettings.logo = canonicalSiteAsset(siteSettings.logo, 'logo')
   }
   if (siteSettings.logos && typeof siteSettings.logos === 'object') {
-    siteSettings.logos = Object.fromEntries(Object.entries(siteSettings.logos as Record<string, unknown>).map(([field, value]) => {
-      if (typeof value !== 'string') throw new Error(`Site settings semantic logo ${field} must reference an included asset.`)
-      const asset = media.get(value); if (!asset) throw new Error(`Site settings semantic logo ${field} must reference an included asset.`)
-      return [field, asset]
-    }))
+    const logos = Object.entries(siteSettings.logos as Record<string, unknown>).flatMap(([field, value]) => value === null
+      ? []
+      : [[field, canonicalSiteAsset(value, `semantic logo ${field}`)]])
+    if (logos.length) siteSettings.logos = Object.fromEntries(logos)
+    else delete siteSettings.logos
   }
   // Payload represents omitted optional singleton fields as null. The public
   // snapshot contract intentionally represents omission, not nullability.
