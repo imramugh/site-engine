@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Payload } from 'payload'
+import type { Payload, Where } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
 
 const opaque = /^[^\u0000-\u001f\u007f]{1,500}$/
@@ -41,7 +41,7 @@ async function appendMatchedInboundInner(payload: Payload, input: InboundMessage
       : target === 'application' ? await payload.find({ collection: 'applications', where: { email: { equals: sender } }, limit: 1, depth: 0, overrideAccess: true }) : undefined
     if (target && candidate?.docs[0]) {
       await withPayloadTransaction(payload, async (req) => {
-        const where = { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }
+        const where: Where = { and: [{ mailbox: { equals: mailbox } }, { provider: { equals: input.provider } }, { providerConversationID: { equals: conversationID } }, { target: { equals: target } }] }
         const prior = await payload.find({ collection: 'mail-conversation-suggestions', where, limit: 1, depth: 0, overrideAccess: true, req })
         if (!prior.docs[0]) await payload.create({ collection: 'mail-conversation-suggestions', data: { mailbox, provider: input.provider, providerConversationID: conversationID, addressHash: addressHash(sender), target }, overrideAccess: true, req })
       })
