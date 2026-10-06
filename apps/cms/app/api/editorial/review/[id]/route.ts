@@ -30,7 +30,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       if (typeof jobID !== 'string' || preview?.status === 'ready') throw error
       const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
       const diagnostics = Array.isArray(job.renderDiagnostics) ? job.renderDiagnostics : []
-      if (job.status !== 'failed' || Number(job.reviewRevision) !== Number(set.revision) || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])) throw error
+      const jobSet = typeof job.changeSet === 'string' ? job.changeSet : job.changeSet && typeof job.changeSet === 'object' ? (job.changeSet as { id?: unknown }).id : undefined
+      if (job.status !== 'failed' || jobSet !== id || Number(job.reviewRevision) !== Number(set.revision) || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : [])) throw error
       failedPreview = { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), diagnostics }
     }
     const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })

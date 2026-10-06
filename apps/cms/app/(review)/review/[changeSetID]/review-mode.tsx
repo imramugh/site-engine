@@ -97,7 +97,6 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
     return () => media.removeEventListener('change', update)
   }, [])
   const review = data?.review
-  if (data?.failedPreview) return <main><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}</section></main>
   const rememberAvailable = useCallback((pane: 'live' | 'proposed', found: Set<string>) => setAvailableByPane((current) => {
     const previous = current[pane]
     if (previous.size === found.size && [...found].every((id) => previous.has(id))) return current
@@ -118,6 +117,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
       await load()
     } catch { setMessage('Unable to complete this action. Your comment is still available to retry.') } finally { setActing(false) }
   }
+  if (data?.failedPreview) return <main className={styles.loading}><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}<a href="/editorial">Return to Reviews</a></section></main>
   if (loading) return <main className={styles.loading} aria-busy="true">Loading protected review…</main>
   if (!review) return <main className={styles.loading}><h1>Review unavailable</h1><p role="alert">{message}</p><a href="/editorial">Return to Reviews</a></main>
   const report = review.quality?.proof?.report
