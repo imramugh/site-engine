@@ -261,7 +261,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
