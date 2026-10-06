@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@libsql/client'
+import { ConnectionPool } from '@libsql/client/sqlite3'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { applyDirectEdit, directEditValueHash, executeDirectEdit } from '../src/direct-edit'
@@ -100,7 +101,7 @@ describe('ENG-026 draft-only direct hero edits', () => {
     let blocked: Response | undefined
     const started = Date.now()
     try {
-      await lock.execute('UPDATE pages SET updated_at = updated_at WHERE id = ?', [current.page.id])
+      await lock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
       blocked = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
     } finally {
       await lock.rollback()
@@ -118,6 +119,37 @@ describe('ENG-026 draft-only direct hero edits', () => {
     const retried = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
     expect(retried.status).toBe(200)
   }, 20_000)
+
+  it('replaces only a discarded failed-begin connection while serving its waiter', async () => {
+    const pool = new ConnectionPool(dbPath, {}, 2)
+    const survivor = await pool.acquire(true)
+    // The failed-BEGIN borrower is deliberately not marked as a surviving
+    // transaction: it models the connection after `transaction()` has given
+    // up ownership, while another transaction remains active.
+    const failedBegin = await pool.acquire()
+    const waiter = pool.acquire()
+    let survivorReleased = false
+    let replacement: typeof failedBegin | undefined
+    let replacementReleased = false
+    try {
+      survivor.prepare('BEGIN').run()
+      ;(pool as unknown as { discard(database: typeof failedBegin): void }).discard(failedBegin)
+      replacement = await waiter
+      expect(replacement).not.toBe(failedBegin)
+      expect(survivor.open).toBe(true)
+      expect(survivor.inTransaction).toBe(true)
+      survivor.prepare('ROLLBACK').run()
+      pool.release(survivor)
+      survivorReleased = true
+      pool.release(replacement)
+      replacementReleased = true
+    } finally {
+      if (survivor.open && survivor.inTransaction) survivor.prepare('ROLLBACK').run()
+      if (!survivorReleased) pool.release(survivor)
+      if (replacement && !replacementReleased) pool.release(replacement)
+      pool.close()
+    }
+  })
 
   it('returns a stale conflict for competing values from one baseline without changing another Hero field', async () => {
     const editor = await actor(); const current = await fixture(editor)

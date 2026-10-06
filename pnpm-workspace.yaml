@@ -6,6 +6,7 @@ overrides:
 allowBuilds:
   esbuild: true
 patchedDependencies:
+  '@libsql/client@0.18.0': patches/@libsql__client@0.18.0.patch
   '@payloadcms/drizzle@3.90.2': patches/@payloadcms__drizzle@3.90.2.patch
 minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.32.0'

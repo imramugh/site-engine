@@ -1,0 +1,90 @@
+diff --git a/lib-cjs/sqlite3.js b/lib-cjs/sqlite3.js
+index 21a13a83b6f8f8d5057fb9ea7edd97cc8881f955..261adc5adf1b9fd6330c9a7acadd38742e5fc2b0 100644
+--- a/lib-cjs/sqlite3.js
++++ b/lib-cjs/sqlite3.js
+@@ -194,6 +194,28 @@ class ConnectionPool {
+             this.#idle.push(db);
+         }
+     }
++    // Drops one borrowed connection that failed before its transaction could
++    // begin. Unlike `close` or `reopen`, this leaves every other borrowed
++    // connection alone. A queued borrower still needs a connection, so replace
++    // only this discarded slot and hand it directly to the next waiter.
++    discard(db) {
++        this.#borrowed.delete(db);
++        this.#heldByTransaction.delete(db);
++        closeQuietly(db);
++        if (this.#closed) {
++            return;
++        }
++        const waiter = this.#waiters.shift();
++        if (waiter === undefined) {
++            return;
++        }
++        try {
++            waiter.resolve(this.acquireSync());
++        }
++        catch (e) {
++            waiter.reject(e);
++        }
++    }
+     close() {
+         this.#closed = true;
+         for (const db of this.#idle) {
+@@ -351,7 +373,10 @@ class Sqlite3Client {
+             executeStmt(db, (0, util_1.transactionModeToBegin)(mode), this.#intMode);
+         }
+         catch (e) {
+-            this.#pool.release(db);
++            // A failed BEGIN can leave libsql's statement handle busy. It is
++            // safe to discard only this newly borrowed connection; returning
++            // it to the idle pool makes the next unrelated operation fail.
++            this.#pool.discard(db);
+             throw e;
+         }
+         // The transaction owns this connection until it settles, exactly as an
+diff --git a/lib-esm/sqlite3.js b/lib-esm/sqlite3.js
+index bfeed75499001ad72e43d4919465108d946bb165..029fb8f251660884054c05b86de5eb8ede6fddb5 100644
+--- a/lib-esm/sqlite3.js
++++ b/lib-esm/sqlite3.js
+@@ -172,6 +172,28 @@ export class ConnectionPool {
+             this.#idle.push(db);
+         }
+     }
++    // Drops one borrowed connection that failed before its transaction could
++    // begin. Unlike `close` or `reopen`, this leaves every other borrowed
++    // connection alone. A queued borrower still needs a connection, so replace
++    // only this discarded slot and hand it directly to the next waiter.
++    discard(db) {
++        this.#borrowed.delete(db);
++        this.#heldByTransaction.delete(db);
++        closeQuietly(db);
++        if (this.#closed) {
++            return;
++        }
++        const waiter = this.#waiters.shift();
++        if (waiter === undefined) {
++            return;
++        }
++        try {
++            waiter.resolve(this.acquireSync());
++        }
++        catch (e) {
++            waiter.reject(e);
++        }
++    }
+     close() {
+         this.#closed = true;
+         for (const db of this.#idle) {
+@@ -328,7 +350,10 @@ export class Sqlite3Client {
+             executeStmt(db, transactionModeToBegin(mode), this.#intMode);
+         }
+         catch (e) {
+-            this.#pool.release(db);
++            // A failed BEGIN can leave libsql's statement handle busy. It is
++            // safe to discard only this newly borrowed connection; returning
++            // it to the idle pool makes the next unrelated operation fail.
++            this.#pool.discard(db);
+             throw e;
+         }
+         // The transaction owns this connection until it settles, exactly as an
