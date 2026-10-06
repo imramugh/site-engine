@@ -99,6 +99,9 @@ async function POSTHandler(request: Request) {
     if (body.action === 'configure-ai-default') {
       const types = ['summary', 'meta', 'faq', 'alt', 'lead-reply']
       if (typeof body.jobType !== 'string' || !types.includes(body.jobType) || !isProvider(body.provider) || typeof body.model !== 'string' || !body.model.trim() || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && !isProvider(body.fallbackProvider))) return failure()
+      const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true })
+      const integration = configured.docs[0] as unknown as { model?: string; encryptedCredential?: string }
+      if (!integration?.encryptedCredential || integration.model !== body.model.trim()) return privateJSON({ error: 'Select the reviewed model configured for this provider before routing jobs.' }, 400)
       const existing = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: body.jobType } }, limit: 1, depth: 0, overrideAccess: true })
       const data = { jobType: body.jobType, provider: body.provider, model: body.model.trim(), fallbackProvider: body.fallbackProvider ?? null }
       const saved = existing.docs[0] ? await payload.update({ collection: 'ai-job-defaults', id: existing.docs[0].id, data: data as never, overrideAccess: true }) : await payload.create({ collection: 'ai-job-defaults', data: data as never, overrideAccess: true })
