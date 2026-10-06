@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
+import { CONTRACT_VERSION } from '@site-engine/contract'
+import { checkSiteSnapshot, type QualityReport } from '@site-engine/checks'
 import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
@@ -223,6 +225,9 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   } else changes.push(change)
   await req.payload.update({ collection: 'change-sets', id: String(changeSet.id), data: { changes, revision: Number(changeSet.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } })
   await req.payload.create({ collection: 'audit-events', data: { event: 'editorial.change_captured', user: actor.id, actor: actor.id, detail: { changeSet: changeSet.id, collection, id: doc.id } }, overrideAccess: true, req })
+  // Editorial diagnostics guide correction; only the collection's contract and
+  // tree hooks above may abort the write.
+  ;(doc as Record<string, unknown>).readiness = await currentDraftReadiness(req.payload, req)
 }
 
 function assertActor(actor: Actor | undefined): asserts actor is Actor {
@@ -264,7 +269,41 @@ export type ChangeSetQualityCheck = {
   errors: Array<{ collection: string; id: string; message: string }>
 }
 
-export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[] }> {
+/** Build the same portable working manifest used by the static gate.  This is
+ * deliberately draft-wide: a small edit can expose an existing broken link or
+ * stale page elsewhere in the review candidate. */
+export async function currentDraftReadiness(payload: Payload, req: PayloadRequest, options: { asOf?: Date | string } = {}): Promise<QualityReport> {
+  const [siteSettings, sections, pages, redirects, assets, guides] = await Promise.all([
+    payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+    payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
+    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
+    payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, overrideAccess: true, req }),
+    payload.find({ collection: 'assets', limit: 0, pagination: false, depth: 0, overrideAccess: true, req }),
+    payload.find({ collection: 'style-guides', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
+  ])
+  const captured = (collection: CapturedCollection, doc: unknown) => snapshot(collection, doc as Record<string, unknown>) ?? {}
+  const withoutNulls = (value: Record<string, unknown>, fields: string[]) => { const normalized = { ...value }; for (const field of fields) if (normalized[field] === null) delete normalized[field]; return normalized }
+  const settings = withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy'])
+  const currentPages = pages.docs.map((doc) => {
+    const raw = doc as unknown as Record<string, unknown>
+    const page = withoutNulls(captured('pages', raw), ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'])
+    return { id: String(raw.id), ...page, ...(typeof raw.lastReviewed === 'string' ? { lastReviewed: raw.lastReviewed } : {}), ...(typeof raw.updatedAt === 'string' ? { updatedAt: raw.updatedAt } : {}) }
+  })
+  const homepageID = idOf(settings.homepageId)
+  if (homepageID && !currentPages.some(page => page.id === homepageID && (page as Record<string, unknown>).template === 'landing')) delete settings.homepageId
+  const guide = guides.docs[0] ? captured('style-guides', guides.docs[0]) : undefined
+  const manifest = {
+    settings: { contractVersion: CONTRACT_VERSION, siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map(doc => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
+    pages: currentPages,
+    redirects: redirects.docs.map(doc => captured('redirects', doc)),
+    media: assets.docs.map(doc => ({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) })),
+    changeSets: [],
+    ...(guide ? { styleGuide: guide } : {}),
+  }
+  return checkSiteSnapshot(manifest, { asOf: options.asOf ?? new Date(), style: guide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style'] })
+}
+
+export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[], options: { asOf?: Date | string } = {}): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[]; readiness: QualityReport }> {
   const errors: { collection: string; id: string; message: string }[] = []
   for (const change of changes) {
     if (!change.after) continue
@@ -294,7 +333,8 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
       errors.push(...treeErrors.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.field}: ${issue.message}` })))
     }
   }
-  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: ['A private comparison can be prepared after review submission.'] }
+  const readiness = await currentDraftReadiness(payload, req, options)
+  return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: readiness.warnings.map(issue => `${issue.code}: ${issue.message}`), readiness }
 }
 
 export async function transitionChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; action: 'submit' | 'request-changes' | 'reject' | 'discard' | 'refresh' }): Promise<Record<string, unknown>> {

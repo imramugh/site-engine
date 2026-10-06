@@ -55,9 +55,9 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         const asset = await payload.update({ collection: 'assets', id, data: { alt, decorative, caption, credit, tags, ...(focalContract ? { focalX: canonicalFocalPoint(focalX), focalY: canonicalFocalPoint(focalY) } : {}) }, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focalContract } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
-        return { id: asset.id, revision: changed.revision, checks: quality.checks }
+        return { id: asset.id, revision: changed.revision, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness }
       })
-      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
+      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
 }
