@@ -239,7 +239,7 @@ let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
 let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
 let firstEditableApplicationID: string | undefined
-const mcpBearer = 'synthetic-e2e-mcp-bearer'
+let mcpBearer = 'synthetic-e2e-mcp-bearer'
 let mcpIdentity: { userId: string; sessionId: string; scopes: string[] } | undefined
 
 function createCertificates(): void {
@@ -565,7 +565,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     return
   }
   if (request.method === 'POST' && /^\/__e2e\/mcp-identity(?:\?[^/]*)?$/.test(request.url ?? '')) {
-    void (async () => { const content = new URL(request.url ?? '/', cmsOrigin).searchParams.get('content') === '1'; const user = content ? localOwnerID! : leadOwnerID!; const scopes = content ? ['mcp:content:read'] : ['mcp:leads:read', 'mcp:leads:reply']; const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpIdentity = { userId: user, sessionId: String(session.id), scopes }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
+    void (async () => { const content = new URL(request.url ?? '/', cmsOrigin).searchParams.get('content') === '1'; const user = content ? localOwnerID! : leadOwnerID!; const scopes = content ? ['mcp:content:read'] : ['mcp:leads:read', 'mcp:leads:reply']; const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true }); mcpBearer = `synthetic-e2e-mcp-bearer-${randomUUID()}`; mcpIdentity = { userId: user, sessionId: String(session.id), scopes }; json(response, { bearer: mcpBearer }) })().catch(() => { response.writeHead(500); response.end() }); return
   }
   const replyMatch = /^\/api\/(mail-replies|mail-suggestions)\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
   if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {
