@@ -170,6 +170,10 @@ process.env.PREVIEW_CONTRACT_VERSION = neutralFixture.settings.contractVersion
 process.env.PREVIEW_WORKER_TOKEN = 'synthetic-preview-worker-token-long-enough-for-browser-tests'
 const { GET: previewSession } = await import('../app/api/auth/preview/review-session/route.js')
 const { GET: pageReviewEntry } = await import('../app/api/editorial/page-review-entry/route.js')
+const replyRoute = await import('../app/api/mail-replies/[target]/[id]/route.js')
+const { setReplyDeliveryForTest } = await import('../src/mail-replies.js')
+const fixtureReplyDeliveries: unknown[] = []
+if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (_payload, _area, message) => { fixtureReplyDeliveries.push(message); return { provider: 'google', messageID: 'fixture-provider-send' } })
 
 type Identity = { email: string; name: string; subject: string }
 type Authorization = { challenge: string; nonce: string; redirectURI: string; identity: Identity }
@@ -443,6 +447,18 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  const replyMatch = /^\/api\/mail-replies\/(lead|application)\/([0-9a-f-]{36})$/i.exec((request.url ?? '').split('?')[0]!)
+  if (replyMatch && (request.method === 'GET' || request.method === 'POST')) {
+    void (async () => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const method = request.method!
+      const handler = method === 'GET' ? replyRoute.GET : replyRoute.POST
+      const result = await handler(new Request(`${cmsOrigin}${request.url}`, { method, headers: request.headers as HeadersInit, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }), { params: Promise.resolve({ target: replyMatch[1]!, id: replyMatch[2]! }) })
+      response.writeHead(result.status, Object.fromEntries(result.headers.entries()))
+      response.end(Buffer.from(await result.arrayBuffer()))
+    })().catch(() => { response.writeHead(500); response.end() })
+    return
+  }
   if (request.method === 'GET' && request.url === '/__e2e/axe.js') {
     response.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' })
     response.end(readFileSync(axeSourcePath))
