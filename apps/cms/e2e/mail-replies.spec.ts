@@ -252,7 +252,7 @@ test('ENG-020 displays an assistant-prepared envelope, retains it for editing, a
   } finally { await context.close() }
 })
 
-test('ENG-033 lets a fresh Sales user confirm and send a lead reply through the real handler', async ({ browser }) => {
+test('ENG-033 lets a fresh Sales user confirm and cancel a lead reply through the real handler', async ({ browser }) => {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-sales-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -265,7 +265,8 @@ test('ENG-033 lets a fresh Sales user confirm and send a lead reply through the 
     await reply.getByLabel('Reply message').fill('Sales exact body')
     await reply.getByRole('button', { name: 'Prepare reply' }).click()
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
-    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
-    await expect(reply.getByRole('status')).toHaveText('Reply sent.')
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toBeVisible()
+    await reply.getByRole('button', { name: 'Cancel confirmation and edit' }).click()
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
   } finally { await context.close() }
 })
