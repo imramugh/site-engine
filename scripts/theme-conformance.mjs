@@ -596,6 +596,8 @@ export async function runThemeConformance() {
             !state.optionalEmpty ||
             !state.backgrounds ||
             !state.logoTones ||
+            !state.inverseLogoStrip ||
+            !state.defaultLogoStrip ||
             !state.motionIntents
           )
             throw new Error(
