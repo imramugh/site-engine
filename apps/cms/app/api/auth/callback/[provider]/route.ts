@@ -83,7 +83,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     return response
   } catch (error) {
     if (error instanceof CallbackFailure) {
-      await withPayloadTransaction(payload, req => auditCallbackDenial(payload, { transactionID: String(transaction.id), provider, reason: error.reason, user: error.userID }, req))
+      await auditCallbackDenial(payload, { transactionID: String(transaction.id), provider, reason: error.reason, user: error.userID })
       return new NextResponse(error.message, { status: error.status })
     }
     return new NextResponse('Identity verification failed.', { status: 401 })

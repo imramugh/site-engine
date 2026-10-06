@@ -1,4 +1,5 @@
 import type { Payload, PayloadRequest } from 'payload'
+import { withPayloadTransaction } from './auth-transaction'
 
 /**
  * Identity audit entries intentionally contain only a stable decision and the
@@ -33,18 +34,14 @@ export async function auditIdentityDecision({ payload, req, event, user, provide
 }
 
 /** A rejected OIDC transaction may be retried until it expires. Record one decision per transaction. */
-export async function auditCallbackDenial(payload: Payload, input: { transactionID?: string; provider: 'google' | 'microsoft'; reason: CallbackReason; user?: string }, req?: PayloadRequest) {
-  if (input.transactionID) {
-    const existing = await payload.find({
-      collection: 'audit-events',
-      where: { and: [{ event: { equals: 'identity.sign_in_denied' } }, { 'detail.transactionID': { equals: String(input.transactionID) } }] },
-      limit: 1,
-      depth: 0,
-      overrideAccess: true, ...(req ? { req } : {}),
-    })
-    if (existing.docs.length) return
-  }
-  await auditIdentityDecision({ payload, req, event: 'identity.sign_in_denied', user: input.user, provider: input.provider, reason: input.reason, transactionID: input.transactionID })
+export async function auditCallbackDenial(payload: Payload, input: { transactionID?: string; provider: 'google' | 'microsoft'; reason: CallbackReason; user?: string }) {
+  await withPayloadTransaction(payload, async req => {
+    if (input.transactionID) {
+      const existing = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.sign_in_denied' } }, { 'detail.transactionID': { equals: String(input.transactionID) } }] }, limit: 1, depth: 0, overrideAccess: true, req })
+      if (existing.docs.length) return
+    }
+    await auditIdentityDecision({ payload, req, event: 'identity.sign_in_denied', user: input.user, provider: input.provider, reason: input.reason, transactionID: input.transactionID })
+  })
 }
 
 /** Emergency lockouts already stop credential verification after five failures. For account-state denials, keep one audit event per account and reason in the lockout window. */
