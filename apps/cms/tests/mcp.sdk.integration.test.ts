@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -175,7 +175,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_inquiries', 'get_inquiry', 'update_inquiry', 'update_lead', 'get_lead_emails', 'list_follow_ups', 'record_reply', 'list_applications', 'get_application', 'update_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'suggest_summary', 'suggest_meta', 'suggest_faq', 'suggest_alt', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -1250,4 +1250,35 @@ test('MCP sends a human-confirmed careers reply with only careers read and reply
     expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID: draft.draft.id, grantID: grant.id } }))).toMatchObject({ provider: 'smtp', messageID: 'careers-sdk-send' })
     expect(deliveries).toBe(1)
   } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
+})
+
+test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
+  process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+  const [{ encryptCredential }, executor] = await Promise.all([import('../src/integrations.js'), import('../src/configured-ai-job-execution.js')])
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-ai-editor-${randomUUID()}@example.test`, name: 'AI editor', roles: ['editor'] }, overrideAccess: true })
+  const stranger = await payload.create({ collection: 'users', data: { email: `mcp-ai-stranger-${randomUUID()}@example.test`, name: 'AI stranger', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `AI ${randomUUID()}`, slug: `ai-${randomUUID()}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const record = await payload.create({ collection: 'pages', data: { title: 'Neutral AI test', slug: `neutral-ai-${randomUUID()}`, summary: 'A neutral synthetic page.', sectionId: section.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+  const editorSession = await sessionFor(String(editor.id)); const strangerSession = await sessionFor(String(stranger.id))
+  const token = `mcp-ai-${randomUUID()}`; const strangerToken = `mcp-ai-stranger-${randomUUID()}`; const readOnlyToken = `mcp-ai-read-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-ai-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set(strangerToken, { clientId: `mcp-ai-stranger-client-${randomUUID()}`, userId: String(stranger.id), sessionId: String(strangerSession.id), scopes: ['mcp:content:read'] })
+  tokens.set(readOnlyToken, { clientId: `mcp-ai-read-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read'] })
+  const sdk = await clientFor(token); const foreign = await clientFor(strangerToken); const readonly = await clientFor(readOnlyToken)
+  try {
+    const hash = pageEditorHash(pageEditorProjection(record))
+    await expect(readonly.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    const unavailable = resultJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { error: string }
+    expect(unavailable).toEqual({ error: 'ai_provider_unavailable' })
+    const configuration = await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'test', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    const queued = structuredJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { jobId: string; status: string; notApplied: boolean }
+    expect(queued).toMatchObject({ status: 'queued', notApplied: true })
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:00.000Z'), transport: async () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'A neutral suggested summary.' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toMatchObject({ status: 'completed', notApplied: true, suggestion: { text: 'A neutral suggested summary.', untrusted: true } })
+    expect(resultJson(await foreign.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toEqual({ error: 'not_found' })
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { monthlyCapMicroUsd: 1 }, overrideAccess: true })
+    const overBudget = structuredJson(await sdk.client.callTool({ name: 'suggest_meta', arguments: { id: record.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })) as { jobId: string }
+    await expect(executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date('2026-10-06T00:00:01.000Z'), transport: async () => { throw new Error('budget should prevent transport') } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: overBudget.jobId } }))).toMatchObject({ status: 'manual-review', failureCode: 'DISPATCH_OUTCOME_UNKNOWN', suggestion: null })
+  } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
 })
