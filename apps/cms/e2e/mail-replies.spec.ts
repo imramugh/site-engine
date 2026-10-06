@@ -105,3 +105,28 @@ test('ENG-020 selects only a scoped provider conversation before explicit confir
     await expect(page.getByRole('option', { name: /unrelated/i })).toHaveCount(0)
   } finally { await context.close() }
 })
+
+test('ENG-020 real handler grounds the selected OAuth conversation before sending', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const reply = page.locator('[data-mail-reply-composer]')
+    await expect(reply.getByLabel('Existing conversation')).toHaveCount(1)
+    await expect(reply.getByLabel('Existing conversation').getByRole('option')).toHaveCount(3)
+    await reply.getByLabel('Existing conversation').selectOption('fixture-oauth-thread')
+    await reply.getByLabel('Reply message').fill('Approved fixture body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await expect(page.request.get(`${origin}/__e2e/mail-reply-deliveries`).then(response => response.json())).resolves.toEqual({ deliveries: [] })
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
+    const evidence = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: Array<{ threadID: string; mime: string }> }
+    expect(evidence.deliveries).toHaveLength(1)
+    expect(evidence.deliveries[0]).toMatchObject({ threadID: 'fixture-oauth-thread' })
+    expect(evidence.deliveries[0].mime).toContain('Subject: Fixture OAuth reply\r\n')
+    expect(evidence.deliveries[0].mime).toContain('Approved fixture body')
+  } finally { await context.close() }
+})
