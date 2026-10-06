@@ -1,7 +1,7 @@
 import { createServer as createHTTPServer, request as requestUpstream, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer } from 'node:https'
 import { once } from 'node:events'
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -178,7 +178,25 @@ const suggestionRoute = await import('../app/api/mail-suggestions/[target]/[id]/
 const { setReplyDeliveryForTest } = await import('../src/mail-replies.js')
 const { sendAreaMail } = await import('../src/mailboxes.js')
 const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
-const fixtureReplyDeliveries: Array<{ threadID: string | null; mime: string; messageID: string }> = []
+const standaloneReplyDeliveryLedger = join(temporaryDirectory, 'standalone-mail-reply-deliveries.ndjson')
+const standaloneProviderBridge = join(temporaryDirectory, 'standalone-mail-provider-bridge.cjs')
+writeFileSync(standaloneReplyDeliveryLedger, '')
+writeFileSync(standaloneProviderBridge, `
+const { appendFileSync } = require('node:fs')
+const originalFetch = globalThis.fetch
+globalThis.fetch = async (input, init = {}) => {
+  const url = String(input)
+  if (url.includes('oauth2.googleapis.com/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
+  if (url.endsWith('/gmail/v1/users/me/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
+  if (url.endsWith('/gmail/v1/users/me/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'fixture-reply@example.test', verificationStatus: 'accepted' }] })
+  if (url.endsWith('/gmail/v1/users/me/messages/send')) {
+    const body = JSON.parse(String(init.body || '{}'))
+    appendFileSync(process.env.CMS_E2E_MAIL_DELIVERY_LEDGER, JSON.stringify({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime: Buffer.from(String(body.raw || ''), 'base64url').toString('utf8'), messageID: 'fixture-provider-send' }) + '\\n')
+    return Response.json({ id: 'fixture-provider-send', threadId: body.threadId || 'fixture-new-thread' })
+  }
+  return originalFetch(input, init)
+}
+`)
 if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
   if (url.includes('/token')) return Response.json({ access_token: 'fixture-refreshed-access' })
   if (url.endsWith('/profile')) return Response.json({ emailAddress: 'fixture-reply@example.test' })
@@ -186,7 +204,7 @@ if (process.env.NODE_ENV === 'test') setReplyDeliveryForTest(async (service, are
   if (url.endsWith('/messages/send')) {
     const body = JSON.parse(String(init.body)) as { raw?: string; threadId?: string }
     const mime = Buffer.from(String(body.raw ?? ''), 'base64url').toString('utf8')
-    fixtureReplyDeliveries.push({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' })
+    appendFileSync(standaloneReplyDeliveryLedger, JSON.stringify({ threadID: typeof body.threadId === 'string' ? body.threadId : 'fixture-new-thread', mime, messageID: 'fixture-provider-send' }) + '\n')
     return Response.json({ id: 'fixture-provider-send', threadId: body.threadId ?? 'fixture-new-thread' })
   }
   throw new Error('unexpected_fixture_provider_request')
@@ -261,7 +279,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: ['mcp:leads:read', 'mcp:leads:reply'], userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
@@ -484,7 +502,10 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
-  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') { json(response, { deliveries: fixtureReplyDeliveries.map(item => ({ threadID: item.threadID, mime: item.mime, messageID: item.messageID })) }); return }
+  if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') {
+    const deliveries = readFileSync(standaloneReplyDeliveryLedger, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { threadID: string | null; mime: string; messageID: string })
+    json(response, { deliveries }); return
+  }
   if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/mail-reply-fixture') {
     void (async () => {
       const state = new URL(await startMailboxOAuth(payload, 'google', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
@@ -804,7 +825,7 @@ async function main(): Promise<void> {
   if (existsSync(join(appDirectory, 'public'))) cpSync(join(appDirectory, 'public'), join(standaloneDirectory, 'public'), { recursive: true })
   next = spawn(process.execPath, [join(standaloneDirectory, 'server.js')], {
     cwd: process.cwd(),
-    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, PORT: String(e2ePort + 2) },
+    env: { ...process.env, HOSTNAME: '127.0.0.1', NODE_EXTRA_CA_CERTS: caCertificate, NODE_OPTIONS: `--require=${standaloneProviderBridge}`, CMS_E2E_MAIL_DELIVERY_LEDGER: standaloneReplyDeliveryLedger, PORT: String(e2ePort + 2) },
     stdio: 'inherit',
   })
   next.once('exit', (status) => { if (!stopping) void stop(status ?? 1) })

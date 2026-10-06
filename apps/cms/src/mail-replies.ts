@@ -69,5 +69,11 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
     throw error
   }
 }
-export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID)) }
-export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) { return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID)) }
+async function rejectReplyAttachments(payload: Payload, grantID: string) {
+  const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
+  const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
+  const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true })
+  if (Array.isArray(draft.attachmentHashes) && draft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
+}
+export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { await rejectReplyAttachments(payload, grantID); return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID)) }
+export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) { await rejectReplyAttachments(payload, grantID); return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID)) }
