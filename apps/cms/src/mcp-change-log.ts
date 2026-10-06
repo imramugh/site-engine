@@ -3,6 +3,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { z } from 'zod'
 import { hasRole, type Role } from './access'
 import { withPayloadTransaction } from './auth-transaction'
+import { changeSetQuality } from './editorial'
 import { prepareReviewedRollbackCore, projectChangeLog } from './change-log'
 import { hasFreshAuthentication, sessionIsUsable } from './identity'
 import { isRetryableSQLiteError } from './sqlite'
@@ -39,15 +40,17 @@ export function registerChangeLogTools(input: { server: McpServer; payload: Payl
       return text({ items: rows.map((row) => ({ id: row.id, createdAt: row.createdAt, title: row.title, detail: row.detail, status: row.status, category: row.category, source: row.source, diff: row.diff, rollback: row.rollback })) })
     } catch (cause) { return failure(cause) }
   })
-  server.registerTool('request_rollback', { title: 'Prepare rollback for review', description: 'Prepare a rollback as a reviewable draft change set. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ releaseID: z.string().uuid(), mode: z.enum(['release', 'change']).optional(), changeKeys: z.array(z.string()).min(1).optional() }).strict(), outputSchema: z.object({ changeSet: z.object({ id: z.string().uuid(), name: z.string(), state: z.literal('open'), revision: z.number().int().nonnegative() }).strict() }).strict(), _meta: { securitySchemes: reviewWriteSecurity.securitySchemes as unknown[], authorization: reviewWriteSecurity } }, async ({ releaseID, mode, changeKeys }) => {
+  server.registerTool('request_rollback', { title: 'Prepare rollback for review', description: 'Prepare a rollback as a reviewable draft change set. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ releaseID: z.string().uuid(), mode: z.enum(['release', 'change']).optional(), changeKeys: z.array(z.string()).min(1).optional() }).strict(), outputSchema: z.object({ changeSet: z.object({ id: z.string().uuid(), name: z.string(), state: z.literal('open'), revision: z.number().int().nonnegative() }).strict(), checks: z.array(z.unknown()), warnings: z.array(z.string()), readiness: z.unknown() }).strict(), _meta: { securitySchemes: reviewWriteSecurity.securitySchemes as unknown[], authorization: reviewWriteSecurity } }, async ({ releaseID, mode, changeKeys }) => {
     if (!write) return error('role_access_required'); if (!reviewer()) return error('owner_access_required')
     try {
       const set = await withPayloadTransaction(payload, async (req) => {
         const actor = await canonicalReviewer(payload, current, sessionID, req)
         req.user = actor as never
-        return prepareReviewedRollbackCore(payload, req, actor, releaseID, { mode, changeKeys })
+        const set = await prepareReviewedRollbackCore(payload, req, actor, releaseID, { mode, changeKeys }) as unknown as { id: string; name: string; revision: number; changes?: unknown[] }
+        const quality = await changeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
+        return { set, quality }
       })
-      return text({ changeSet: { id: String(set.id), name: String(set.name), state: 'open', revision: Number(set.revision) } })
+      return text({ changeSet: { id: String(set.set.id), name: String(set.set.name), state: 'open', revision: Number(set.set.revision) }, checks: set.quality.checks, warnings: set.quality.warnings, readiness: set.quality.readiness })
     } catch (cause) { return failure(cause) }
   })
 }

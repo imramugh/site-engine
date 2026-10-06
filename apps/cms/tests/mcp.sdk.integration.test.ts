@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -1274,3 +1274,57 @@ test('MCP sends a human-confirmed careers reply with only careers read and reply
     expect(deliveries).toBe(1)
   } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
 })
+
+test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
+  process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString('base64url')
+  const [{ encryptCredential }, executor] = await Promise.all([import('../src/integrations.js'), import('../src/configured-ai-job-execution.js')])
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-ai-editor-${randomUUID()}@example.test`, name: 'AI editor', roles: ['editor'] }, overrideAccess: true })
+  const stranger = await payload.create({ collection: 'users', data: { email: `mcp-ai-stranger-${randomUUID()}@example.test`, name: 'AI stranger', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `AI ${randomUUID()}`, slug: `ai-${randomUUID()}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const page = await payload.create({ collection: 'pages', data: { title: 'Neutral AI test', slug: `neutral-ai-${randomUUID()}`, summary: 'A neutral synthetic page.', sectionId: section.id, template: 'standard', blocks: [] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+  const editorSession = await sessionFor(String(editor.id)); const strangerSession = await sessionFor(String(stranger.id))
+  const token = `mcp-ai-${randomUUID()}`; const strangerToken = `mcp-ai-stranger-${randomUUID()}`; const readOnlyToken = `mcp-ai-read-${randomUUID()}`
+  tokens.set(token, { clientId: `mcp-ai-client-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set(strangerToken, { clientId: `mcp-ai-stranger-${randomUUID()}`, userId: String(stranger.id), sessionId: String(strangerSession.id), scopes: ['mcp:content:read'] })
+  tokens.set(readOnlyToken, { clientId: `mcp-ai-read-${randomUUID()}`, userId: String(editor.id), sessionId: String(editorSession.id), scopes: ['mcp:content:read'] })
+  const sdk = await clientFor(token); const foreign = await clientFor(strangerToken); const readonly = await clientFor(readOnlyToken)
+  const output = (value: string) => async () => Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: value }] }], usage: { input_tokens: 2, output_tokens: 3 } })
+  try {
+    const hash = pageEditorHash(pageEditorProjection(page))
+    await expect(readonly.client.callTool({ name: 'suggest_summary', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    expect(resultJson(await sdk.client.callTool({ name: 'suggest_summary', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID() } }))).toEqual({ error: 'ai_job_default_unavailable' })
+    const configuration = await payload.create({ collection: 'integration-configurations', data: { provider: 'openai', model: 'gpt-test', encryptedCredential: encryptCredential('synthetic-secret', 'openai'), credentialFingerprint: 'test', health: 'unknown', inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test', pricingAsOf: '2026-10-06T00:00:00.000Z', monthlyCapMicroUsd: 1_000_000 }, overrideAccess: true })
+    for (const jobType of ['summary', 'meta', 'faq', 'alt'] as const) await payload.create({ collection: 'ai-job-defaults', data: { jobType, provider: 'openai', model: 'gpt-test' }, overrideAccess: true })
+    const invoke = async (name: 'suggest_summary' | 'suggest_meta' | 'suggest_faq', text: string) => {
+      const idempotencyKey = randomUUID(); const queued = structuredJson(await sdk.client.callTool({ name, arguments: { id: page.id, expectedPageHash: hash, idempotencyKey } })) as { jobId: string; status: string; notApplied: boolean; created: boolean }
+      expect(queued).toMatchObject({ status: 'queued', notApplied: true, created: true })
+      const replay = structuredJson(await sdk.client.callTool({ name, arguments: { id: page.id, expectedPageHash: hash, idempotencyKey } })) as { jobId: string; created: boolean }
+      expect(replay).toMatchObject({ jobId: queued.jobId, created: false })
+      await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date(), transport: output(text) })
+      expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queued.jobId } }))).toMatchObject({ status: 'completed', notApplied: true, suggestion: { text, untrusted: true } })
+      return queued
+    }
+    const summary = await invoke('suggest_summary', 'A neutral suggested summary.')
+    await invoke('suggest_meta', 'A neutral metadata description.')
+    await invoke('suggest_faq', 'Q: Is this synthetic? A: Yes.')
+    expect(resultJson(await foreign.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: summary.jobId } }))).toEqual({ error: 'not_found' })
+    await expect(sdk.client.callTool({ name: 'suggest_faq', arguments: { id: page.id, expectedPageHash: hash, idempotencyKey: randomUUID(), unexpected: true } })).resolves.toMatchObject({ isError: true })
+    const pixels = Buffer.alloc(512 * 512 * 3); let seed = 0x12345678
+    for (let i = 0; i < pixels.length; i += 1) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; pixels[i] = seed & 255 }
+    const image = await sharp(pixels, { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
+    const asset = await payload.create({ collection: 'assets', data: { alt: 'Original human alt text', decorative: false }, file: { data: image, mimetype: 'image/png', name: `ai-alt-${randomUUID()}.png`, size: image.length }, user: editor, overrideAccess: false })
+    const queuedAlt = structuredJson(await sdk.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })) as { jobId: string; notApplied: boolean }
+    const durable = await payload.findByID({ collection: 'configured-ai-jobs', id: queuedAlt.jobId, overrideAccess: true }) as unknown as { imageDataUrl: string }
+    expect(queuedAlt.notApplied).toBe(true); expect(durable.imageDataUrl.length).toBeGreaterThan(100_000); expect(durable.imageDataUrl.length).toBeLessThanOrEqual(500_000)
+    let request: Request | undefined
+    await executor.claimAndExecuteConfiguredAIJob(payload, { now: new Date(), transport: async candidate => { request = candidate; return output('A blue rectangular image.')() } })
+    expect(await request?.json()).toMatchObject({ model: 'gpt-test', input: [{ content: [{ type: 'input_text' }, { type: 'input_image', image_url: expect.stringMatching(/^data:image\/webp;base64,/) }] }] })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original human alt text' })
+    await payload.update({ collection: 'assets', id: asset.id, data: { alt: 'Changed after suggestion' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(structuredJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toMatchObject({ stale: true, notApplied: true, suggestion: { text: 'A blue rectangular image.', untrusted: true } })
+    await expect(foreign.client.callTool({ name: 'suggest_alt', arguments: { id: asset.id, idempotencyKey: randomUUID() } })).rejects.toMatchObject({ code: 403 })
+    await payload.update({ collection: 'assets', id: asset.id, data: { deletedAt: new Date().toISOString(), deleteAfter: new Date(Date.now() + 86_400_000).toISOString() }, overrideAccess: true, context: { mediaLifecycle: 'bin' } })
+    expect(resultJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toEqual({ error: 'not_found' })
+    expect(configuration.id).toBeTruthy()
+  } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
+}, 30_000)

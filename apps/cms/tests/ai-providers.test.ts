@@ -211,4 +211,16 @@ describe('ENG-023 provider monetary accounting', () => {
     await expect(executeConfiguredAIJob(payload, { ...job('google-gemini'), fallbackProvider: 'openrouter' }, { now, transport: async request => { requests.push(request); return new Response('{}', { status: 401 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE'); expect(requests).toHaveLength(1)
     const direct = await invokeProvider('openai', 'do-not-leak', 'model', 'prompt', 10, async () => new Response('{"error":"bad key"}', { status: 401 })); expect(direct).toEqual({ outcome: 'rejected' }); expect(JSON.stringify(direct)).not.toContain('do-not-leak')
   })
+
+  it('sends bounded real image input only to a reviewed vision model and reserves pixels conservatively', async () => {
+    await configured('openai', 'gpt-test', 'vision-secret', { monthlyCapMicroUsd: 2_000_000, monthlyUsageMicroUsd: 0, usageMonth: '2026-10' })
+    const imageDataUrl = `data:image/webp;base64,${Buffer.from('synthetic-image-pixels').toString('base64')}`
+    let received: Record<string, unknown> | undefined
+    await expect(executeConfiguredAIJob(payload, { ...job('openai', 'visible prompt'), requiresImage: true, imageDataUrl }, { now, transport: async (request) => { received = await request.json() as Record<string, unknown>; return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'visible description' }] }], usage: { input_tokens: 2, output_tokens: 3 } }) } })).resolves.toMatchObject({ output: 'visible description', reservedMicroUsd: expect.any(Number) })
+    expect(JSON.stringify(received)).toContain(imageDataUrl)
+    let contacted = false
+    await payload.update({ collection: 'integration-configurations', id: (await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'openai' } }, limit: 1, overrideAccess: true })).docs[0]!.id, data: { model: 'unreviewed-vision-model' } as never, overrideAccess: true })
+    await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true, imageDataUrl }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(contacted).toBe(false)
+  })
 })
