@@ -1,8 +1,43 @@
 diff --git a/dist/transactions/beginTransaction.js b/dist/transactions/beginTransaction.js
-index b997960d6443005979890c1fdeef9271810a407c..2e38d5ba5e6119649be629256e006d005fbe4106 100644
+index b997960d6443005979890c1fdeef9271810a407c..330768382824e5cfcd01aa748e13c7d04279f021 100644
 --- a/dist/transactions/beginTransaction.js
 +++ b/dist/transactions/beginTransaction.js
-@@ -17,6 +17,12 @@ export const beginTransaction = async function beginTransaction(options) {
+@@ -1,6 +1,26 @@
+ import { v4 as uuid } from 'uuid';
++const writeQueues = new WeakMap();
++const maxQueuedWriters = 100;
++const writerWaitMs = 5_000;
++function busyError() { const error = new Error('SQLITE_BUSY: local SQLite writer queue is busy'); error.code = 'SQLITE_BUSY'; return error; }
++async function acquireWrite(adapter) {
++    let queue = writeQueues.get(adapter);
++    if (!queue) { queue = { active: false, waiting: [] }; writeQueues.set(adapter, queue); }
++    if (queue.active) {
++        if (queue.waiting.length >= maxQueuedWriters) throw busyError();
++        await new Promise((resolve, reject) => {
++            const waiter = { resolve, reject, timer: undefined };
++            waiter.timer = setTimeout(() => { const index = queue.waiting.indexOf(waiter); if (index >= 0) queue.waiting.splice(index, 1); reject(busyError()); }, writerWaitMs);
++            queue.waiting.push(waiter);
++        });
++    }
++    queue.active = true;
++    let released = false;
++    return () => { if (released) return; released = true; const waiter = queue.waiting.shift(); if (waiter) { clearTimeout(waiter.timer); waiter.resolve(); } else { queue.active = false; if (!queue.waiting.length) writeQueues.delete(adapter); } };
++}
+ export const beginTransaction = async function beginTransaction(options) {
+     let id;
++    let releaseWrite;
+     try {
+         id = uuid();
+         let reject;
+@@ -8,6 +28,7 @@ export const beginTransaction = async function beginTransaction(options) {
+         let transaction;
+         let transactionReady;
+         let transactionFailed;
++        releaseWrite = this.name === 'sqlite' ? await acquireWrite(this) : undefined;
+         // Await initialization here
+         // Prevent race conditions where the adapter may be
+         // re-initializing, and `this.drizzle` is potentially undefined
+@@ -17,6 +38,12 @@ export const beginTransaction = async function beginTransaction(options) {
          // over many files and we don't want to pass the `tx` around like that,
          // so instead, we "lift" up the `resolve` and `reject` methods
          // and will call them in our respective transaction methods
@@ -15,7 +50,7 @@ index b997960d6443005979890c1fdeef9271810a407c..2e38d5ba5e6119649be629256e006d00
          const done = this.drizzle.transaction(async (tx)=>{
              transaction = tx;
              await new Promise((res, rej)=>{
-@@ -31,16 +37,15 @@ export const beginTransaction = async function beginTransaction(options) {
+@@ -31,22 +58,23 @@ export const beginTransaction = async function beginTransaction(options) {
                  };
                  transactionReady();
              });
@@ -37,11 +72,20 @@ index b997960d6443005979890c1fdeef9271810a407c..2e38d5ba5e6119649be629256e006d00
          this.sessions[id] = {
              db: transaction,
              reject,
+-            resolve
++            resolve,
++            releaseWrite
+         };
+     } catch (err) {
++        if (typeof releaseWrite === 'function') releaseWrite();
+         this.payload.logger.error({
+             err,
+             msg: `Error: cannot begin transaction: ${err.message}`
 diff --git a/dist/transactions/commitTransaction.js b/dist/transactions/commitTransaction.js
-index 50c8251dbd29fe3ca7296800ed4fe5d2bb814057..8265ac2e38b347ce6e5a9f9ce482d8e7448f05ef 100644
+index 50c8251dbd29fe3ca7296800ed4fe5d2bb814057..55e5d910242d0eb9f6773863229c8934525c7347 100644
 --- a/dist/transactions/commitTransaction.js
 +++ b/dist/transactions/commitTransaction.js
-@@ -10,8 +10,13 @@ export const commitTransaction = async function commitTransaction(incomingID = '
+@@ -10,8 +10,15 @@ export const commitTransaction = async function commitTransaction(incomingID = '
      delete this.sessions[transactionID];
      try {
          await session.resolve();
@@ -54,14 +98,16 @@ index 50c8251dbd29fe3ca7296800ed4fe5d2bb814057..8265ac2e38b347ce6e5a9f9ce482d8e7
 +            await session.reject();
 +        } catch (_) {}
 +        throw err;
++    } finally {
++        session.releaseWrite?.();
      }
  };
  
 diff --git a/dist/transactions/rollbackTransaction.js b/dist/transactions/rollbackTransaction.js
-index fab4c91c4565003876c56225256d96b0ff2048b8..d9e8cf129fff8f7e188416f507100fc57f9eb0bd 100644
+index fab4c91c4565003876c56225256d96b0ff2048b8..8ba61c0752ef9ca9c230923bfe7fa8be5ebba852 100644
 --- a/dist/transactions/rollbackTransaction.js
 +++ b/dist/transactions/rollbackTransaction.js
-@@ -9,8 +9,16 @@ export const rollbackTransaction = async function rollbackTransaction(incomingID
+@@ -9,8 +9,18 @@ export const rollbackTransaction = async function rollbackTransaction(incomingID
      // Delete from registry FIRST to prevent race conditions
      // This ensures other operations can't retrieve this session while we're ending it
      delete this.sessions[transactionID];
@@ -76,6 +122,8 @@ index fab4c91c4565003876c56225256d96b0ff2048b8..d9e8cf129fff8f7e188416f507100fc5
 +        if (err !== undefined) {
 +            throw err;
 +        }
++    } finally {
++        session.releaseWrite?.();
 +    }
  };
  

@@ -5,6 +5,8 @@ import ipaddr from 'ipaddr.js'
 import nodemailer from 'nodemailer'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
+import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, type Fetcher } from './mail-provider-adapters'
+import { mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 export const mailboxAreas = ['leads', 'careers', 'notifications'] as const
 export type MailboxArea = (typeof mailboxAreas)[number]
@@ -59,7 +61,11 @@ async function smtpTransport(mailbox: StoredMailbox): Promise<Transport> {
 }
 
 const internal = (req: PayloadRequest) => { req.context.mailboxInternal = true; return req }
-export function publicMailbox(doc: StoredMailbox) { return { id: doc.id, name: doc.name, provider: 'smtp', primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], host: doc.host, port: doc.port, security: doc.security, username: doc.username, health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null } }
+export function publicMailbox(doc: StoredMailbox) {
+  const provider = doc.provider === 'microsoft' || doc.provider === 'google' ? doc.provider : 'smtp'
+  const base = { id: doc.id, name: doc.name, provider, primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null }
+  return provider === 'smtp' ? { ...base, host: doc.host, port: doc.port, security: doc.security, username: doc.username } : base
+}
 
 export async function configureSMTPMailbox(payload: Payload, input: SMTPConfiguration, actor: string) {
   return withPayloadTransaction(payload, async (transaction) => {
@@ -108,14 +114,80 @@ export async function clearMailboxArea(payload: Payload, area: MailboxArea, acto
  * here with the same mailbox-scoped contract; SMTP remains the deterministic
  * fallback and is deliberately the only provider persisted until tenant OAuth
  * credentials are configured. */
-export async function sendAreaMail(payload: Payload, area: MailboxArea, message: { sender: string; recipient: string; subject: string; body: string; threadID?: string }) {
+export type AreaMailMessage = {
+  sender: string
+  recipient: string
+  subject: string
+  body: string
+  /** A local draft thread ID is only meaningful to SMTP. */
+  threadID?: string
+  /** Provider IDs are persisted by mailbox sync and required for replies. */
+  providerThreadID?: string
+  providerMessageID?: string
+  providerMailboxID?: string
+  provider?: 'microsoft' | 'google'
+  providerTarget?: { collection: 'inquiries' | 'applications'; id: string }
+  providerRFCMessageID?: string
+  providerRFCReferences?: string
+  providerSubject?: string
+}
+
+async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
   const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
   if (!mapping.docs[0]) throw new Error('mailbox_not_configured')
   const mailboxID = relationID(mapping.docs[0].mailbox)
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
-  if (mailbox.provider !== 'smtp' || mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(mapping.docs[0].senderAddress))) throw new Error('mailbox_not_ready')
-  const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, ...(message.threadID ? { headers: { 'In-Reply-To': message.threadID } } : {}) })
-  return { provider: 'smtp', messageID: result.messageId?.slice(0, 500) ?? null }
+  return { mapping: mapping.docs[0], mailboxID, mailbox }
+}
+
+async function groundedProviderThread(payload: Payload, message: AreaMailMessage, mailbox: StoredMailbox) {
+  if (!message.threadID) return
+  if (!message.providerThreadID || !message.providerMessageID || !message.providerMailboxID || !message.provider || !message.providerTarget || message.providerMailboxID !== mailbox.id || message.provider !== mailbox.provider) throw new Error('mailbox_thread_not_grounded')
+  const targetField = message.providerTarget.collection === 'inquiries' ? 'lead' : 'application'
+  const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: mailbox.id } }, { provider: { equals: message.provider } }, { providerConversationID: { equals: message.providerThreadID } }, { [targetField]: { equals: message.providerTarget.id } }] }, limit: 1, depth: 0, overrideAccess: true })
+  if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
+  const linked = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: thread.docs[0].id } }, { mailbox: { equals: mailbox.id } }, { providerMessageID: { equals: message.providerMessageID } }] }, limit: 1, depth: 0, overrideAccess: true })
+  if (!linked.docs[0] || (message.provider === 'google' && (message.subject !== message.providerSubject || message.providerSubject !== linked.docs[0].subject || !message.providerRFCMessageID || message.providerRFCMessageID !== linked.docs[0].rfcMessageID || (message.providerRFCReferences ?? undefined) !== (linked.docs[0].rfcReferences ?? undefined)))) throw new Error('mailbox_thread_not_grounded')
+}
+
+export async function sendAreaMail(
+  payload: Payload,
+  area: MailboxArea,
+  message: AreaMailMessage,
+  fetcher: Fetcher = fetch,
+) {
+  const initial = await currentAreaMailbox(payload, area)
+  const { mailboxID, mailbox } = initial
+  if (mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(initial.mapping.senderAddress))) throw new Error('mailbox_not_ready')
+
+  if (mailbox.provider === 'smtp') {
+    const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, headers: message.threadID ? { 'In-Reply-To': message.threadID } : undefined })
+    return { provider: 'smtp' as const, messageID: result.messageId?.slice(0, 500) ?? null }
+  }
+
+  if (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google') throw new Error('mailbox_not_ready')
+  await groundedProviderThread(payload, message, mailbox)
+
+  const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
+  const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(refreshed.accessToken)
+  if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
+  const final = await currentAreaMailbox(payload, area)
+  if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
+  await groundedProviderThread(payload, message, final.mailbox)
+
+  const envelope = {
+    sender: message.sender,
+    recipient: message.recipient,
+    subject: message.subject,
+    body: message.body,
+    ...(mailbox.provider === 'microsoft' && message.providerMessageID ? { replyMessageID: message.providerMessageID } : {}),
+    ...(mailbox.provider === 'google' && message.providerRFCMessageID ? { rfcMessageID: message.providerRFCMessageID, ...(message.providerRFCReferences ? { rfcReferences: message.providerRFCReferences } : {}) } : {}),
+    ...(mailbox.provider === 'google' && message.providerThreadID ? { threadID: message.providerThreadID } : {}),
+  }
+  const result = await (mailbox.provider === 'microsoft'
+    ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
+    : gmailAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope))
+  return { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
 }
 
 const sendLocks = new Map<string, Promise<void>>()
@@ -154,5 +226,6 @@ export async function sendAuthorizedMailboxTest(payload: Payload, input: { reque
 
 export async function mailboxWorkspace(payload: Payload) {
   const [mailboxes, mappings] = await Promise.all([payload.find({ collection: 'mailbox-configurations', limit: 100, sort: 'name', depth: 0, overrideAccess: true }), payload.find({ collection: 'mailbox-area-mappings', limit: 3, sort: 'area', depth: 0, overrideAccess: true })])
-  return { providers: { microsoft: { status: 'available' }, google: { status: 'available' }, smtp: { status: mailboxes.docs.some((item) => item.health === 'connected') ? 'connected' : mailboxes.totalDocs ? 'configured' : 'available' } }, mailboxes: mailboxes.docs.map((item) => publicMailbox(item as unknown as StoredMailbox)), mappings: mappings.docs.map((item) => ({ id: item.id, area: item.area, mailbox: relationID(item.mailbox), senderAddress: item.senderAddress })) }
+  const provider = (name: 'microsoft' | 'google') => { const configured = Boolean(mailboxOAuthSettings(name)); const connected = mailboxes.docs.some((item) => item.provider === name && item.health === 'connected'); return connected ? { status: 'connected' } : configured ? { status: 'available' } : { status: 'unconfigured', setupMessage: 'Configure the mailbox OAuth client ID and secret before connecting.' } }
+  return { providers: { microsoft: provider('microsoft'), google: provider('google'), smtp: { status: mailboxes.docs.some((item) => item.provider === 'smtp' && item.health === 'connected') ? 'connected' : mailboxes.docs.some((item) => item.provider === 'smtp') ? 'configured' : 'available' } }, mailboxes: mailboxes.docs.map((item) => publicMailbox(item as unknown as StoredMailbox)), mappings: mappings.docs.map((item) => ({ id: item.id, area: item.area, mailbox: relationID(item.mailbox), senderAddress: item.senderAddress })) }
 }

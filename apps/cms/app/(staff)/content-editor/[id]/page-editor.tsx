@@ -753,7 +753,11 @@ function BlockEditor({
       data-page-editor-block-id={block.id}
       data-page-editor-block-active={active ? 'true' : 'false'}
       open={active}
-      onFocus={onSelect}
+      onFocus={(event) => {
+        // Escape returns focus to the summary without reopening the panel.
+        // Enter/Space and pointer activation still use the summary click handler.
+        if (event.target !== event.currentTarget.querySelector('summary')) onSelect()
+      }}
     >
       <summary
         onClick={(event) => {
@@ -966,20 +970,24 @@ export function PageEditor({ pageID }: { pageID: string }) {
     observer.observe(canvas)
     return () => observer.disconnect()
   }, [data])
+  const collapseBlock = useCallback((id: string) => {
+    setActiveBlockID((current) => (current === id ? undefined : current))
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-page-editor-block-id="${id}"] summary`)
+        ?.focus()
+    })
+  }, [])
   useEffect(() => {
     if (picker) return
     const collapse = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || !activeBlockID) return
       event.preventDefault()
-      const summary = document.querySelector<HTMLElement>(
-        `[data-page-editor-block-id="${activeBlockID}"] summary`,
-      )
-      setActiveBlockID(undefined)
-      window.requestAnimationFrame(() => summary?.focus())
+      collapseBlock(activeBlockID)
     }
     window.addEventListener('keydown', collapse)
     return () => window.removeEventListener('keydown', collapse)
-  }, [activeBlockID, picker])
+  }, [activeBlockID, collapseBlock, picker])
   const wirePreviewBlocks = useCallback(() => {
     previewBlockCleanup.current()
     const document = previewFrame.current?.contentDocument
@@ -1036,7 +1044,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       const keydown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
           event.preventDefault()
-          setActiveBlockID(undefined)
+          collapseBlock(block.id)
         } else if (
           event.target === node &&
           (event.key === 'Enter' || event.key === ' ')
@@ -1072,7 +1080,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       cleanups.forEach((cleanup) => cleanup())
       style.remove()
     }
-  }, [activeBlockID, draft, selectBlock])
+  }, [activeBlockID, collapseBlock, draft, selectBlock])
   useEffect(() => {
     if (preview?.status === 'completed') wirePreviewBlocks()
     return () => previewBlockCleanup.current()

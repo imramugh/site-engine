@@ -75,9 +75,39 @@ test('real OAuth tokens can be safely listed and their full family revoked by ma
     const ownList = await manage({ operation: 'list', userId: user.id }); assert.equal(ownList.status, 200)
     const listed = await ownList.json() as { grants: Array<{ managementId: string; userId: string; clientName: string; scopes: string[]; sessionId?: string }> }
     assert.equal(listed.grants.length, 1); assert.equal(listed.grants[0]?.userId, user.id); assert.equal(listed.grants[0]?.clientName, 'Claude Desktop'); assert.deepEqual(listed.grants[0]?.scopes, ['mcp:content:read']); assert.equal(listed.grants[0]?.sessionId, undefined)
+    const secondSessionToken = newOpaqueToken()
+    const secondSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(secondSessionToken), user: user.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const secondRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Second Claude', redirect_uris: ['http://127.0.0.1/second-callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read offline_access' }) })
+    const secondClient = await secondRegistration.json() as { client_id: string }; assert.equal(secondRegistration.status, 201)
+    const secondVerifier = randomBytes(48).toString('base64url'); const secondChallenge = createHash('sha256').update(secondVerifier).digest('base64url')
+    const secondAuthorization = `${issuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: secondClient.client_id, redirect_uri: 'http://127.0.0.1/second-callback', scope: 'mcp:content:read offline_access', resource, code_challenge: secondChallenge, code_challenge_method: 'S256' })}`
+    const secondCookies = new Map<string, string>([[cookieName(SESSION_COOKIE), `${cookieName(SESSION_COOKIE)}=${secondSessionToken}`]])
+    let secondNext = new URL(secondAuthorization); let secondCallback: URL | undefined
+    for (let count = 0; count < 8; count++) {
+      const response = await fetch(secondNext, { redirect: 'manual', headers: { cookie: [...secondCookies.values()].join('; ') } })
+      for (const value of response.headers.getSetCookie()) { const pair = value.split(';', 1)[0]!; secondCookies.set(pair.split('=', 1)[0]!, pair) }
+      if (response.status === 200) {
+        const csrf = /name="csrf" value="([^"]+)"/.exec(await response.text())?.[1]; assert.ok(csrf)
+        const confirmed = await fetch(secondNext, { method: 'POST', redirect: 'manual', headers: { cookie: [...secondCookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, decision: 'allow' }) })
+        const location = confirmed.headers.get('location'); assert.ok(location); secondNext = new URL(location, issuer); continue
+      }
+      const location = response.headers.get('location'); assert.ok(location); secondNext = new URL(location, issuer)
+      if (secondNext.origin === 'http://127.0.0.1' && secondNext.pathname === '/second-callback') { secondCallback = secondNext; break }
+    }
+    const secondCode = secondCallback?.searchParams.get('code'); assert.ok(secondCode)
+    const secondToken = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: secondCode, redirect_uri: 'http://127.0.0.1/second-callback', client_id: secondClient.client_id, code_verifier: secondVerifier, resource }) })
+    assert.equal(secondToken.status, 200)
+    const twoConnections = await manage({ operation: 'list', userId: user.id }); assert.equal(twoConnections.status, 200)
+    const twoGrants = (await twoConnections.json() as { grants: Array<{ managementId: string; clientName: string; sessionId?: string }> }).grants
+    assert.deepEqual(twoGrants.map((grant) => grant.clientName).sort(), ['Claude Desktop', 'Second Claude'])
+    for (const grant of twoGrants) assert.equal(grant.sessionId, undefined)
     assert.deepEqual(await (await manage({ operation: 'list', userId: 'different-user' })).json(), { grants: [] })
     assert.equal((await manage({ operation: 'revoke', managementId: listed.grants[0]!.managementId, userId: 'different-user' })).status, 404)
     assert.equal((await manage({ operation: 'revoke', managementId: listed.grants[0]!.managementId, userId: user.id })).status, 200)
+    const afterFirstRevoke = (await (await manage({ operation: 'list', userId: user.id })).json() as { grants: Array<{ clientName: string }> }).grants
+    assert.equal(afterFirstRevoke.length, 1); assert.equal(afterFirstRevoke[0]?.clientName, 'Second Claude')
+    await payload.update({ collection: 'auth-sessions', id: secondSession.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    assert.deepEqual(await (await manage({ operation: 'list', userId: user.id })).json(), { grants: [] })
     assert.deepEqual(await (await introspect()).json(), { active: false })
     const revokedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) })
     assert.equal(revokedRefresh.status, 400)

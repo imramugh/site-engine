@@ -28,6 +28,7 @@ const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKe
 let currentUser = 'synthetic-user';
 let userEnabled = true;
 let currentScopes = ['mcp:content:read', 'mcp:leads:read'];
+let bridgeAvailable = true;
 const registrationFailures: string[] = [];
 const previousIntrospectionSecret = process.env.OAUTH_INTROSPECTION_SECRET;
 process.env.OAUTH_INTROSPECTION_SECRET = 'test-introspection-secret';
@@ -40,7 +41,7 @@ const service = createOAuthService({
   jwks: { keys: [{ ...signingKey, kid: 'test-key', use: 'sig', alg: 'RS256' }] },
   sessionBridge: {
     resolve: async () => ({ id: currentUser, sessionId: `${currentUser}-session`, enabled: userEnabled, scopes: currentScopes }),
-    find: async (id, sessionId) => ['synthetic-user', 'other-user'].includes(id) && (!sessionId || sessionId === `${id}-session`) ? { id, sessionId: `${id}-session`, enabled: userEnabled, scopes: currentScopes } : undefined,
+    find: async (id, sessionId) => { if (!bridgeAvailable) throw new Error('synthetic bridge outage'); return ['synthetic-user', 'other-user'].includes(id) && (!sessionId || sessionId === `${id}-session`) ? { id, sessionId: `${id}-session`, enabled: userEnabled, scopes: currentScopes } : undefined; },
   },
   onRegistrationFailure: (reason) => registrationFailures.push(reason),
 });
@@ -202,6 +203,11 @@ try {
   assert.equal(activeBody.userId, 'synthetic-user');
   assert.equal(activeBody.sessionId, 'synthetic-user-session');
   assert.equal(typeof activeBody.expiresAt, 'number');
+  const managed = async () => fetch(`${origin}/internal/grants`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'test-introspection-secret' }, body: JSON.stringify({ operation: 'list', userId: 'synthetic-user' }) });
+  assert.equal((await managed()).status, 200);
+  bridgeAvailable = false;
+  const unavailableManaged = await managed(); assert.equal(unavailableManaged.status, 503); assert.deepEqual(await unavailableManaged.json(), { error: 'session_bridge_unavailable' });
+  bridgeAvailable = true;
   assert.equal((await introspection(tokens.access_token, 'wrong-secret')).status, 401);
   const malformedIntrospection = await fetch(`${origin}/internal/introspect`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-introspection-secret': 'test-introspection-secret' }, body: JSON.stringify({ token: tokens.access_token, resource, unexpected: true }) });
   assert.deepEqual(await malformedIntrospection.json(), { active: false });

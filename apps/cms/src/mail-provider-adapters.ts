@@ -7,6 +7,8 @@ export type Envelope = {
   body: string;
   threadID?: string;
   replyMessageID?: string;
+  rfcMessageID?: string;
+  rfcReferences?: string;
 };
 const maximum = 262_144;
 const timeout = 10_000;
@@ -30,7 +32,17 @@ const opaque = (value: unknown) =>
   typeof value === "string" &&
   value.length > 0 &&
   value.length <= 500 &&
-  !controls.test(value);
+    !controls.test(value);
+const rfcMessageID = (value: unknown) => {
+  const id = String(value ?? "").trim();
+  return /^<[^<>\s]{1,480}>$/.test(id) ? id : undefined;
+};
+const rfcReferences = (value: unknown) => {
+  const references = String(value ?? "").match(/<[^<>\s]{1,480}>/g) ?? [];
+  return references.length && references.join(" ").length <= 4000
+    ? [...new Set(references)].join(" ")
+    : undefined;
+};
 function fail(status: number): never {
   if (status === 401) throw new Error("provider_unauthorized");
   if (status === 403) throw new Error("provider_forbidden");
@@ -223,23 +235,27 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
     },
     async poll(token: string, folderID: string, cursor?: string) {
       const response = await request(fetcher, graphDelta(folderID, cursor), {
-        headers: auth(token),
+        headers: { ...auth(token), Prefer: "odata.maxpagesize=100" },
       });
       if (!response.ok) fail(response.status);
       const value = await json(response);
       if (!Array.isArray(value.value))
         throw new Error("provider_malformed_response");
+      if (value.value.length > 500) throw new Error("provider_page_too_large");
       const next = value["@odata.nextLink"] ?? value["@odata.deltaLink"];
+      const messages = value.value.map((entry) => {
+        if (!entry || typeof entry !== "object")
+          throw new Error("provider_malformed_response");
+        const raw = entry as Record<string, unknown>;
+        if (raw["@removed"] !== undefined) return undefined;
+        const message = graphMessage(raw);
+        if (!message.messageId || !message.threadId)
+          throw new Error("provider_malformed_response");
+        return message;
+      });
       return {
         cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
-        messages: value.value
-          .slice(0, 500)
-          .filter(
-            (entry): entry is Record<string, unknown> =>
-              !!entry && typeof entry === "object",
-          )
-          .map(graphMessage)
-          .filter((entry) => entry.messageId && entry.threadId),
+        messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
       };
     },
   };
@@ -322,6 +338,8 @@ function gmailMessage(message: Record<string, unknown>, threadID: string) {
     date: Number.isFinite(date) ? new Date(date).toISOString() : "",
     sender: address(header("from")),
     recipient: address(header("to")),
+    rfcMessageID: rfcMessageID(header("message-id")),
+    rfcReferences: rfcReferences(header("references")),
     attachments,
   };
 }
@@ -330,14 +348,18 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
     async send(token: string, input: Envelope) {
       checkedEnvelope(input);
       checkedSender(verifiedSender, input);
+      const normalizedReferences = input.rfcReferences
+        ? rfcReferences(input.rfcReferences)
+        : undefined;
       if (
-        (input.threadID && !input.replyMessageID) ||
+        (input.threadID && !input.rfcMessageID) ||
         (input.threadID && !opaque(input.threadID)) ||
-        (input.replyMessageID && !opaque(input.replyMessageID))
+        (input.rfcMessageID && !rfcMessageID(input.rfcMessageID)) ||
+        (input.rfcReferences && normalizedReferences !== input.rfcReferences)
       )
         throw new Error("invalid_envelope");
-      const reply = input.replyMessageID
-        ? `In-Reply-To: ${input.replyMessageID}\r\nReferences: ${input.replyMessageID}\r\n`
+      const reply = input.rfcMessageID
+        ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[normalizedReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
         : "";
       const raw = Buffer.from(
         `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,
@@ -365,29 +387,44 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
         threadID: value.threadId,
       };
     },
+    async message(token: string, id: string) {
+      if (!opaque(id)) throw new Error("invalid_thread");
+      const response = await request(
+        fetcher,
+        `${gmail}/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`,
+        { headers: auth(token) },
+      );
+      if (!response.ok) fail(response.status);
+      const value = await json(response);
+      const output = gmailMessage(value, String(value.threadId ?? ""));
+      if (!output.messageId || !output.threadId)
+        throw new Error("provider_malformed_response");
+      return output;
+    },
     async poll(token: string, historyID: string, pageToken?: string) {
       if (!/^[0-9]{1,40}$/.test(historyID) || (pageToken && !opaque(pageToken)))
         throw new Error("invalid_cursor");
       const response = await request(
         fetcher,
-        `${gmail}/gmail/v1/users/me/history?startHistoryId=${encodeURIComponent(historyID)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+        `${gmail}/gmail/v1/users/me/history?startHistoryId=${encodeURIComponent(historyID)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}&maxResults=100`,
         { headers: auth(token) },
       );
       if (!response.ok) fail(response.status);
       const value = await json(response);
       if (
         typeof value.historyId !== "string" ||
+        !/^[0-9]{1,40}$/.test(value.historyId) ||
         (value.history !== undefined && !Array.isArray(value.history)) ||
         (value.nextPageToken !== undefined && !opaque(value.nextPageToken))
       )
         throw new Error("provider_malformed_response");
+      if (Array.isArray(value.history) && value.history.length > 500)
+        throw new Error("provider_page_too_large");
       return {
         historyID: value.historyId,
         nextPageToken:
           typeof value.nextPageToken === "string" ? value.nextPageToken : null,
-        entries: Array.isArray(value.history)
-          ? value.history.slice(0, 500)
-          : [],
+        entries: Array.isArray(value.history) ? value.history : [],
       };
     },
   };
@@ -439,9 +476,11 @@ export function gmailIdentity(fetcher: Fetcher) {
           .map((alias) => String(alias.sendAsEmail).toLowerCase())
           .filter((alias) => email.test(alias))
       : [];
+    const historyID = String(profile.historyId ?? "");
     return {
       primaryAddress: primary,
       verifiedSenders: [...new Set([primary, ...verified])].sort(),
+      historyID: /^[0-9]{1,40}$/.test(historyID) ? historyID : undefined,
     };
   };
 }

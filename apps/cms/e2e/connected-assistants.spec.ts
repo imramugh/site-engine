@@ -19,6 +19,16 @@ test('non-Owner account navigation opens only that person’s connected assistan
   const editor = await signedIn(browser, 'synthetic-shell-editor-session-token'); await editor.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(true) })); await editor.page.goto('/admin'); await editor.page.locator('[data-admin-account-button]').click(); const link = editor.page.getByRole('menuitem', { name: 'My connected assistants' }); await expect(link).toHaveAttribute('href', '/integrations?tab=assistants'); await link.click(); await expect(editor.page).toHaveURL(/\/integrations\?tab=assistants/); await expect(editor.page.getByRole('tab')).toHaveCount(1); await expect(editor.page.getByRole('tab', { name: 'Connected assistants' })).toBeVisible(); await expect(editor.page.getByRole('heading', { name: 'My connected assistants' })).toBeVisible(); await expect(editor.page.locator('[data-assistant-grant]').getByText('Synthetic Shell Editor')).toBeVisible(); await editor.context.close()
 })
 
+test('assistant panel reports an unavailable protected API without an empty-success state', async ({ browser }) => {
+  const owner = await signedIn(browser, 'synthetic-shell-owner-session-token')
+  await owner.page.route('**/api/connected-assistants', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Assistant service is unavailable.' }) }))
+  await owner.page.goto('/integrations?tab=assistants')
+  await expect(owner.page.locator('[data-assistant-status]')).toBeVisible()
+  await expect(owner.page.locator('[data-assistant-list] header [data-assistant-count]')).toHaveText('Unavailable')
+  await expect(owner.page.getByText('No assistants are connected to staff accounts.')).toHaveCount(0)
+  await owner.context.close()
+})
+
 test('ENG-017 Owner persists MCP phone privacy from Connected assistants and non-Owners cannot read it', async ({ browser }) => {
   const owner = await signedIn(browser, 'synthetic-shell-owner-session-token')
   await owner.page.route('**/api/connected-assistants', (route) => route.fulfill({ json: response(false) }))

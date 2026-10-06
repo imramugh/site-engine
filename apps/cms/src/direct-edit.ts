@@ -106,9 +106,11 @@ export async function applyDirectEdit(input: { payload: Payload; req: PayloadReq
   return { pageID: edit.pageID, changeSetID: edit.changeSetID, replayed: false, noOp: false }
 }
 
-/** SQLite can reject a simultaneously opened write transaction before the
- * value comparison runs. Retrying that narrow condition lets the loser observe
- * the committed field and return the normal stale conflict. */
+/**
+ * The in-process tail serializes edits to one page. A competing writer from
+ * another CMS process is left to SQLite's configured busy timeout, so the
+ * caller receives bounded retryable backpressure instead of repeated waits.
+ */
 export async function executeDirectEdit(input: { payload: Payload; actor: Actor; edit: DirectEditInput }): Promise<DirectEditResult> {
   let tails = localWriteTails.get(input.payload)
   if (!tails) { tails = new Map(); localWriteTails.set(input.payload, tails) }
@@ -118,13 +120,7 @@ export async function executeDirectEdit(input: { payload: Payload; actor: Actor;
   tails.set(input.edit.pageID, tail)
   await prior
   try {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try { return await withPayloadTransaction(input.payload, req => applyDirectEdit({ ...input, req })) } catch (error) {
-        if (!/SQLITE_BUSY|database is locked/i.test(error instanceof Error ? error.message : '') || attempt === 7) throw error
-        await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt))
-      }
-    }
-    throw new Error('DIRECT_EDIT_UNAVAILABLE')
+    return await withPayloadTransaction(input.payload, req => applyDirectEdit({ ...input, req }))
   } finally {
     release()
     if (tails.get(input.edit.pageID) === tail) tails.delete(input.edit.pageID)

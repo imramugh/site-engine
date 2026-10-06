@@ -9,6 +9,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import { createClient, type Client } from '@libsql/client'
 import sharp from 'sharp'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
@@ -38,6 +39,7 @@ const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
 const leadOwnerEmail = 'lead-owner.synthetic@example.test'
 const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
 const leadSessionTokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' } as const
@@ -189,6 +191,8 @@ let stopping = false
 let localOwnerID: string | undefined
 let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
+let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
+let sqliteLockClient: Client | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -304,7 +308,7 @@ async function seed(): Promise<void> {
       overrideAccess: true,
     })
   }
-  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
+  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode), recoveryHash(reviewOwnerReauthenticationCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   const leadOwner = await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })
@@ -502,6 +506,61 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const created = await payload.create({ collection: 'change-sets', data: { id: secondOnPageReviewSetID, name: 'Second pending page review', actor: source.actor, state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes: [{ ...sourceChange, after, afterHash: null }], quality: source.quality, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
       return { id: String(created.id) }
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
+    return
+  }
+  // E2E-only external SQLite fault: the production direct-edit request still
+  // performs its normal page update and capture hook, while this trigger aborts
+  // the capture's change-set write. It proves transaction rollback without a
+  // product-only request header or code path.
+  if (request.method === 'POST' && request.url === '/__e2e/fail-change-capture') {
+    void (async () => {
+      const client = createClient({ url: `file:${databasePath}` })
+      try { await client.execute("CREATE TRIGGER e2e_fail_change_capture BEFORE UPDATE ON change_sets BEGIN SELECT RAISE(ABORT, 'e2e capture failure'); END") }
+      finally { client.close() }
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to install capture fault.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/fail-change-capture/release') {
+    void (async () => {
+      const client = createClient({ url: `file:${databasePath}` })
+      try { await client.execute('DROP TRIGGER IF EXISTS e2e_fail_change_capture') }
+      finally { client.close() }
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clear capture fault.') })
+    return
+  }
+  if (request.method === 'GET' && request.url === '/__e2e/direct-edit-state') {
+    void Promise.all([
+      payload.findByID({ collection: 'pages', id: directEditPageID, draft: true, depth: 0, overrideAccess: true }),
+      payload.count({ collection: 'audit-events', overrideAccess: true }),
+      payload.count({ collection: 'publish-outbox', overrideAccess: true }),
+    ]).then(([page, audit, outbox]) => json(response, { heading: (page.blocks as Array<{ id: string; heading?: string }>).find((block) => block.id === directEditBlockID)?.heading ?? null, audit: audit.totalDocs, outbox: outbox.totalDocs }))
+      .catch(() => { response.writeHead(500); response.end('Unable to read direct-edit state.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/sqlite-lock') {
+    void (async () => {
+      if (sqliteLock) throw new Error('SQLite lock is already held.')
+      sqliteLockClient = createClient({ url: `file:${databasePath}` })
+      sqliteLock = await sqliteLockClient.transaction('write')
+      await sqliteLock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [directEditPageID] })
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to acquire SQLite lock.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/sqlite-lock/release') {
+    void (async () => {
+      if (!sqliteLock || !sqliteLockClient) throw new Error('SQLite lock is not held.')
+      await sqliteLock.rollback(); sqliteLock = undefined; sqliteLockClient.close(); sqliteLockClient = undefined
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to release SQLite lock.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/session/stale') {
+    const sessionCookie = request.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('site_engine_session=') || part.startsWith('__Host-site_engine_session='))
+    const token = sessionCookie?.slice(sessionCookie.indexOf('=') + 1)
+    if (!token) { response.writeHead(401); response.end('Session missing.'); return }
+    void payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? payload.update({ collection: 'auth-sessions', id: docs[0].id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) : Promise.reject(new Error('Session missing')))
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to age session.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {

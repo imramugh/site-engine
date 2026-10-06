@@ -612,7 +612,7 @@ export const MailThreadMessages: CollectionConfig = {
   fields: [
     { name: 'thread', type: 'relationship', relationTo: 'mail-threads', required: true }, { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true },
     { name: 'lead', type: 'relationship', relationTo: 'inquiries' }, { name: 'application', type: 'relationship', relationTo: 'applications' },
-    { name: 'providerMessageID', type: 'text', required: true, maxLength: 500 }, { name: 'direction', type: 'select', required: true, options: ['inbound', 'outbound'] },
+    { name: 'providerMessageID', type: 'text', required: true, maxLength: 500 }, { name: 'rfcMessageID', type: 'text', maxLength: 500 }, { name: 'rfcReferences', type: 'text', maxLength: 4_000 }, { name: 'direction', type: 'select', required: true, options: ['inbound', 'outbound'] },
     { name: 'sender', type: 'text', required: true, maxLength: 320 }, { name: 'recipient', type: 'text', required: true, maxLength: 320 }, { name: 'subject', type: 'text', required: true, maxLength: 500 },
     { name: 'body', type: 'textarea', required: true, maxLength: 20_000 }, { name: 'receivedAt', type: 'date', required: true }, { name: 'attachmentMetadata', type: 'json', defaultValue: [] },
   ],

@@ -3,19 +3,24 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { createClient } from '@libsql/client'
+import { ConnectionPool } from '@libsql/client/sqlite3'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { applyDirectEdit, directEditValueHash, executeDirectEdit } from '../src/direct-edit'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-direct-edit-'))
-process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+const dbPath = join(directory, 'cms.sqlite')
+process.env.DATABASE_URI = `file:${dbPath}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-direct-edit'
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = join(directory, 'bootstrap-token')
 writeFileSync(process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE, 'test-only-bootstrap-token')
 const { default: config } = await import('../payload.config.js')
 const directRoute = await import('../app/api/editorial/direct-edit/route.js')
+const { createClient: createCjsClient } = createRequire(import.meta.url)('@libsql/client/sqlite3') as typeof import('@libsql/client/sqlite3')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let releaseSequence = 10_000
 
@@ -88,6 +93,115 @@ describe('ENG-026 draft-only direct hero edits', () => {
     const page = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
     expect((page.blocks as { heading: string }[])[0]?.heading).toBe('Concurrent winner')
   })
+
+  it('reproduces retryable route backpressure under an independent SQLite writer lock', async () => {
+    const editor = await actor(); const current = await fixture(editor); const cookie = await session(editor)
+    const beforeAudit = await payload.count({ collection: 'audit-events', overrideAccess: true })
+    const beforeOutbox = await payload.count({ collection: 'publish-outbox', overrideAccess: true })
+    const external = createClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    let blocked: Response | undefined
+    const started = Date.now()
+    try {
+      await lock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
+      blocked = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    expect(blocked?.status).toBe(503)
+    expect(blocked?.headers.get('Retry-After')).toBe('1')
+    await expect(blocked?.json()).resolves.toEqual({ error: 'Saving is temporarily busy. Please retry.' })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
+    expect(Date.now() - started).toBeLessThan(12_000)
+    const unchanged = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    expect((unchanged.blocks as { heading: string }[])[0]?.heading).toBe('Original heading')
+    expect((await payload.count({ collection: 'audit-events', overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
+    const retried = await directRoute.POST(new Request('http://cms.test/api/editorial/direct-edit', { method: 'POST', headers: { origin: 'http://cms.test', cookie, 'content-type': 'application/json' }, body: JSON.stringify(edit(current.page.id, current.set.id, 'Retry after lock')) }))
+    expect(retried.status).toBe(200)
+  }, 20_000)
+
+  it('replaces only a discarded failed-begin connection while serving its waiter', async () => {
+    const pool = new ConnectionPool(dbPath, {}, 2)
+    const survivor = await pool.acquire(true)
+    // The failed-BEGIN borrower is deliberately not marked as a surviving
+    // transaction: it models the connection after `transaction()` has given
+    // up ownership, while another transaction remains active.
+    const failedBegin = await pool.acquire()
+    const waiter = pool.acquire()
+    let survivorReleased = false
+    let replacement: typeof failedBegin | undefined
+    let replacementReleased = false
+    try {
+      survivor.prepare('BEGIN').run()
+      ;(pool as unknown as { discard(database: typeof failedBegin): void }).discard(failedBegin)
+      replacement = await waiter
+      expect(replacement).not.toBe(failedBegin)
+      expect(survivor.open).toBe(true)
+      expect(survivor.inTransaction).toBe(true)
+      survivor.prepare('CREATE TABLE IF NOT EXISTS pool_survivor (id TEXT PRIMARY KEY)').run()
+      const survivorID = randomUUID()
+      survivor.prepare('INSERT INTO pool_survivor (id) VALUES (?)').run(survivorID)
+      survivor.prepare('COMMIT').run()
+      pool.release(survivor)
+      survivorReleased = true
+      expect(replacement.prepare('SELECT id FROM pool_survivor WHERE id = ?').get(survivorID)).toMatchObject({ id: survivorID })
+      pool.release(replacement)
+      replacementReleased = true
+    } finally {
+      if (survivor.open && survivor.inTransaction) survivor.prepare('ROLLBACK').run()
+      if (!survivorReleased) pool.release(survivor)
+      if (replacement && !replacementReleased) pool.release(replacement)
+      pool.close()
+    }
+  })
+
+  it('keeps timeout and foreign-key enforcement on replacement connections after repeated busy BEGINs', async () => {
+    const path = join(directory, `replacement-${randomUUID()}.sqlite`)
+    const client = createClient({ url: `file:${path}`, timeout: 5_000, concurrency: 2 })
+    const external = createClient({ url: `file:${path}` })
+    try {
+      await client.execute('PRAGMA foreign_keys = ON')
+      await client.execute('CREATE TABLE parent (id INTEGER PRIMARY KEY)')
+      await client.execute('CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))')
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        const lock = await external.transaction('write')
+        await lock.execute({ sql: 'INSERT INTO parent (id) VALUES (?)', args: [100 + cycle] })
+        const started = Date.now()
+        await expect(client.transaction('write')).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+        expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
+        await lock.rollback()
+        expect((await client.execute('PRAGMA foreign_keys')).rows).toEqual([{ foreign_keys: 1 }])
+        await expect(client.execute('INSERT INTO child (id, parent_id) VALUES (?, ?)', [cycle + 1, 9_999])).rejects.toThrow(/FOREIGN KEY/)
+        const valid = await client.transaction('write')
+        await valid.execute({ sql: 'INSERT INTO parent (id) VALUES (?)', args: [cycle + 1] })
+        await valid.commit()
+      }
+    } finally { client.close(); external.close() }
+  }, 20_000)
+
+  it('recovers the CJS libSQL transaction client after a busy BEGIN', async () => {
+    const editor = await actor(); const current = await fixture(editor)
+    const external = createClient({ url: `file:${dbPath}` })
+    const cjs = createCjsClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
+      await expect(cjs.transaction('write')).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    const retried = await cjs.transaction('write')
+    try {
+      await retried.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
+      await retried.commit()
+    } finally {
+      if (!retried.closed) await retried.rollback()
+      cjs.close()
+    }
+  }, 20_000)
 
   it('returns a stale conflict for competing values from one baseline without changing another Hero field', async () => {
     const editor = await actor(); const current = await fixture(editor)

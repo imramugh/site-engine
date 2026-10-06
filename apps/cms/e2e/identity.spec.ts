@@ -6,6 +6,7 @@ const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
 const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
 const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -206,7 +207,7 @@ async function selectCapturedSet(page: import('@playwright/test').Page, pageID: 
 
 
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
-  test.setTimeout(60_000)
+  test.setTimeout(120_000)
   await signIn(page, 'editor')
   const created = await page.evaluate(async () => {
     const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Workflow', summary: 'This synthetic section supports the editorial browser workflow acceptance test.', slug: 'workflow-browser', allowedTemplates: ['standard'] }) })
@@ -214,12 +215,17 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     const pageResponse = await fetch('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow original', summary: 'This synthetic draft is changed through the browser before review is requested.', slug: 'workflow-page', sectionId: sectionBody.doc.id, template: 'standard' }) })
     const pageBody = await pageResponse.json() as { doc: { id: string } }
     await fetch(`/api/pages/${pageBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Workflow revised' }) })
-    return pageBody.doc.id
+    return { pageID: pageBody.doc.id }
   })
   await page.goto('/admin/editorial')
   await expect(page.locator('[data-admin-page-title]')).toHaveText('Reviews')
 
-  const changeSetID = await selectCapturedSet(page, created)
+  const changeSetID = await selectCapturedSet(page, created.pageID)
+  const sections = await page.request.get('/api/sections').then(async (response) => { expect(response.ok(), await response.text()).toBeTruthy(); return response.json() as Promise<{ docs: Array<{ id: string; slug: string }> }> })
+  const existingSection = sections.docs.find((section) => section.slug === 'on-page-review')
+  expect(existingSection).toBeTruthy()
+  const secondCapturedChange = await page.request.patch(`/api/sections/${existingSection!.id}`, { headers: { origin: cmsOrigin, 'content-type': 'application/json', 'x-site-engine-change-set': changeSetID }, data: { summary: 'This independently captured section change remains pending after the page is approved.' } })
+  expect(secondCapturedChange.ok(), await secondCapturedChange.text()).toBeTruthy()
 
   await expect(page.getByText('Title', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Submit for review' }).click()
@@ -242,7 +248,6 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   // owner whose revocation cannot affect the other identity journeys.
   await signInLocalOwner(reviewer, reviewOwnerRecoveryCode, reviewOwnerEmail)
   await reviewer.goto('/admin/editorial')
-  await reviewer.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await expect(reviewer.getByRole('button', { name: /Pending/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(reviewer.locator('[data-editorial-schedules]')).toHaveCount(0)
   await expect(reviewer.getByText('Synthetic published application baseline')).toHaveCount(0)
@@ -259,6 +264,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await submittedQueueItem.click()
   await expect(reviewer.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toHaveText('submitted')
   await expect(reviewer.getByLabel(/Include Page Workflow revised/)).toBeChecked()
+  const excludedSection = reviewer.getByLabel(/Include Section On-page review browser section/)
+  await expect(excludedSection).toBeChecked()
+  await excludedSection.uncheck()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
   await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
   const workerHeaders = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
@@ -337,11 +345,27 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const staleProof = await reviewer.evaluate(async ({ id, proof }) => (await fetch('/api/editorial/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, proof: { ...proof, previewJobID: '00000000-0000-4000-8000-000000000000' } }) })).status, displayed)
   expect(staleProof).toBe(400)
   await expect(reviewer.request.get('/__e2e/publish-state').then(async (response) => response.json())).resolves.toEqual(beforeApproval)
+  const staleSession = await reviewer.request.post('/__e2e/session/stale')
+  expect(staleSession.status(), await staleSession.text()).toBe(204)
+  await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
+  await expect(reviewer.getByRole('status')).toContainText('Fresh reviewer authentication is required before approval.')
+  await signInLocalOwner(reviewer, reviewOwnerReauthenticationCode, reviewOwnerEmail)
+  await reviewer.goto(`/admin/editorial?changeSet=${changeSetID}`)
+  await reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`).click()
+  await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
   await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Approved snapshot queued' })).toContainText('publish worker')
   const queued = await reviewer.request.get('/__e2e/publish-state')
   expect(queued.ok(), await queued.text()).toBeTruthy()
   await expect(queued.json()).resolves.toMatchObject({ outbox: { status: 'pending' }, releaseCount: beforeApproval.releaseCount })
+  const approvalSplit = await reviewer.evaluate(async (id) => {
+    const body = await (await fetch('/api/editorial/list', { cache: 'no-store' })).json() as { sets: Array<{ id: string; state: string; name: string; changes?: unknown[] }> }
+    return { approved: body.sets.find((set) => set.id === id), remaining: body.sets.find((set) => set.name.endsWith('— remaining changes')) }
+  }, changeSetID)
+  expect(approvalSplit.approved).toMatchObject({ state: 'approved' })
+  expect(approvalSplit.approved?.changes).toEqual(expect.arrayContaining([expect.anything()]))
+  expect(approvalSplit.remaining).toMatchObject({ state: 'open' })
+  expect(approvalSplit.remaining?.changes).toEqual(expect.arrayContaining([expect.anything()]))
   expect(await reviewer.evaluate(async () => (await fetch('/api/editorial/publish', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'worker-only' }) })).status)).toBe(409)
   await reviewer.getByLabel('Add review comment').fill('Browser review comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click()

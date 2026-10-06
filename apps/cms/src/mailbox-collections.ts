@@ -8,7 +8,7 @@ export const MailboxConfigurations: CollectionConfig = {
   hooks: { beforeChange: [({ req }) => { if (!internal({ req: req as never })) throw new Error('Mailbox configurations use the audited workspace.'); }] },
   fields: [
     { name: 'name', type: 'text', required: true, maxLength: 120 },
-    { name: 'provider', type: 'select', required: true, options: ['smtp'] },
+    { name: 'provider', type: 'select', required: true, options: ['smtp', 'microsoft', 'google'] },
     { name: 'primaryAddress', type: 'email', required: true },
     { name: 'aliases', type: 'json', required: true, defaultValue: [] },
     { name: 'verifiedAliases', type: 'json', required: true, defaultValue: [] },
@@ -20,6 +20,23 @@ export const MailboxConfigurations: CollectionConfig = {
     { name: 'credentialRevision', type: 'text', required: true, maxLength: 32, admin: { readOnly: true } },
     { name: 'health', type: 'select', required: true, defaultValue: 'unknown', options: ['unknown', 'connected', 'rejected', 'unavailable', 'revoked'] },
     { name: 'testedAt', type: 'date' },
+    { name: 'inboundCursor', type: 'text', maxLength: 1000, admin: { hidden: true } },
+    { name: 'inboundCursorRevision', type: 'text', maxLength: 32, admin: { hidden: true } },
+    { name: 'inboundNextAttemptAt', type: 'date', admin: { hidden: true } },
+    { name: 'inboundFailureCount', type: 'number', defaultValue: 0, min: 0, admin: { hidden: true } },
+    { name: 'inboundLastError', type: 'text', maxLength: 80, admin: { hidden: true } },
+    { name: 'inboundLastSyncedAt', type: 'date', admin: { hidden: true } },
+  ],
+}
+
+export const MailboxOAuthTransactions: CollectionConfig = {
+  slug: 'mailbox-oauth-transactions', admin: { hidden: true },
+  access: { create: () => false, read: () => false, update: () => false, delete: () => false },
+  hooks: { beforeChange: [({ req }) => { if (!internal({ req: req as never })) throw new Error('Mailbox OAuth transactions are internal.'); }] },
+  fields: [
+    { name: 'provider', type: 'select', required: true, options: ['microsoft', 'google'] },
+    { name: 'stateHash', type: 'text', required: true, unique: true }, { name: 'sessionHash', type: 'text', required: true }, { name: 'verifier', type: 'text', required: true },
+    { name: 'owner', type: 'relationship', relationTo: 'users', required: true }, { name: 'expiresAt', type: 'date', required: true }, { name: 'consumedAt', type: 'date' },
   ],
 }
 

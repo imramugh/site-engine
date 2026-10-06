@@ -8,10 +8,11 @@ import { createLocalReq, getPayload } from 'payload'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { prepareReply, authorizeReply, sendReply } from '../src/mail-replies'
 import { dispatchOneNotification } from '../src/notification-dispatch'
+import { startMailboxOAuth, completeMailboxOAuth, decryptMailboxOAuthCredential } from '../src/mailbox-oauth'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-delivery-'))
-Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-delivery-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'http://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAIL_TEST_SMTP_LOOPBACK: '1' })
-const { default: config } = await import('../payload.config.js'); const service = await import('../src/mailboxes.js')
+Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-delivery-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.example.test', MAILBOX_MICROSOFT_CLIENT_ID: 'microsoft-client', MAILBOX_MICROSOFT_CLIENT_SECRET: 'microsoft-secret', MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAIL_TEST_SMTP_LOOPBACK: '1' })
+const { default: config } = await import('../payload.config.js'); const service = await import('../src/mailboxes.js'); const oauth = { startMailboxOAuth, completeMailboxOAuth, decryptMailboxOAuthCredential }
 let payload: Awaited<ReturnType<typeof getPayload>>; let smtp: Server; let port = 0; const messages: string[] = []
 
 beforeAll(async () => {
@@ -189,4 +190,170 @@ test('expired processing receipts become unknown and release the first-25 window
   expect(messages).toHaveLength(before + 1)
   expect(await payload.findByID({ collection: 'notification-outbox', id: later.id, overrideAccess: true })).toMatchObject({ state: 'delivered' })
   const unknown = await (payload as any).find({ collection: 'notification-deliveries', where: { failureCode: { equals: 'lease-expired-outcome-unknown' } }, limit: 0, pagination: false, overrideAccess: true }); expect(unknown.totalDocs).toBeGreaterThanOrEqual(25)
+})
+
+test('workspace summaries preserve OAuth providers without SMTP connection fields', async () => {
+  const oauth = await (payload as any).create({ collection: 'mailbox-configurations', data: { name: 'Google mailbox', provider: 'google', primaryAddress: 'google@example.test', aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: 'google@example.test', encryptedCredential: 'opaque', credentialRevision: 'oauth', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  const workspace = await service.mailboxWorkspace(payload)
+  const publicOAuth = workspace.mailboxes.find((item: { id: string }) => item.id === oauth.id) as Record<string, unknown>
+  expect(publicOAuth).toMatchObject({ provider: 'google', primaryAddress: 'google@example.test', credentialConfigured: true })
+  expect(publicOAuth).not.toHaveProperty('host')
+  expect(publicOAuth).not.toHaveProperty('username')
+  expect(workspace.providers.google).toMatchObject({ status: 'connected' })
+  expect(workspace.providers.microsoft).toMatchObject({ status: 'available' })
+  expect(JSON.stringify(workspace)).not.toContain('opaque')
+})
+
+test('OAuth delivery refreshes before a verified Graph send and refuses local draft thread IDs', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'provider-owner@example.test', name: 'Provider owner', roles: ['owner'] }, overrideAccess: true })
+  const authorization = new URL(await oauth.startMailboxOAuth(payload, 'microsoft', owner.id, 'provider-session'))
+  const state = authorization.searchParams.get('state')!
+  const mailbox = await oauth.completeMailboxOAuth(payload, 'microsoft', state, 'provider-code', owner.id, 'provider-session', async (url) => url.includes('/token')
+    ? Response.json({ access_token: 'initial-access', refresh_token: 'initial-refresh' })
+    : Response.json({ mail: 'provider@example.test' }))
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'provider@example.test' }, owner.id)
+
+  let calls = 0
+  let sent: Record<string, unknown> | undefined
+  const fetcher = async (url: string, init: RequestInit) => {
+    calls += 1
+    if (url.includes('/token')) {
+      expect(String(init.body)).toContain('grant_type=refresh_token')
+      expect(String(init.body)).toContain('refresh_token=initial-refresh')
+      return Response.json({ access_token: 'refreshed-access', refresh_token: 'rotated-refresh' })
+    }
+    if (url.includes('/v1.0/me?')) return Response.json({ mail: 'provider@example.test' })
+    if (url.endsWith('/v1.0/me/sendMail')) {
+      sent = JSON.parse(String(init.body))
+      return new Response(null, { status: 202 })
+    }
+    throw new Error(`unexpected provider request ${url}`)
+  }
+
+  await expect(service.sendAreaMail(payload, 'leads', { sender: 'provider@example.test', recipient: 'recipient@example.test', subject: 'Approved subject', body: 'Approved plain-text body', threadID: 'local-draft-thread' }, fetcher)).rejects.toThrow('mailbox_thread_not_grounded')
+  expect(calls).toBe(0)
+
+  await expect(service.sendAreaMail(payload, 'leads', { sender: 'provider@example.test', recipient: 'recipient@example.test', subject: 'Approved subject', body: 'Approved plain-text body' }, fetcher)).resolves.toEqual({ provider: 'microsoft', messageID: null })
+  expect(calls).toBe(3)
+  expect(sent).toEqual({ message: { subject: 'Approved subject', body: { contentType: 'Text', content: 'Approved plain-text body' }, toRecipients: [{ emailAddress: { address: 'recipient@example.test' } }], from: { emailAddress: { address: 'provider@example.test' } } } })
+  const rotated = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
+  expect(JSON.parse(oauth.decryptMailboxOAuthCredential(String(rotated.encryptedCredential), 'microsoft'))).toEqual({ refreshToken: 'rotated-refresh' })
+
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { aliases: ['alias@example.test'], verifiedAliases: ['alias@example.test'] }, overrideAccess: true, context: { mailboxInternal: true } })
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'alias@example.test' }, owner.id)
+  let aliasRequests = 0
+  await expect(service.sendAreaMail(payload, 'leads', { sender: 'alias@example.test', recipient: 'recipient@example.test', subject: 'Alias', body: 'Body' }, async (url, init) => {
+    aliasRequests += 1
+    if (url.includes('/token')) return Response.json({ access_token: 'second-access' })
+    if (url.includes('/v1.0/me?')) return Response.json({ mail: 'provider@example.test' })
+    throw new Error(`send must not run: ${init.method}`)
+  })).rejects.toThrow('mailbox_sender_not_verified')
+  expect(aliasRequests).toBe(2)
+})
+
+test('OAuth Gmail delivery refreshes, verifies the current sender, and does not retry malformed sends', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'gmail-owner@example.test', name: 'Gmail owner', roles: ['owner'] }, overrideAccess: true })
+  const authorization = new URL(await oauth.startMailboxOAuth(payload, 'google', owner.id, 'gmail-session'))
+  expect(authorization.searchParams.get('scope')).toContain('gmail.settings.basic')
+  const state = authorization.searchParams.get('state')!
+  const mailbox = await oauth.completeMailboxOAuth(payload, 'google', state, 'provider-code', owner.id, 'gmail-session', async (url) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-initial-access', refresh_token: 'gmail-initial-refresh' })
+    if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail@example.test' })
+    if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail@example.test', verificationStatus: 'accepted' }, { sendAsEmail: 'gmail-alias@example.test', verificationStatus: 'accepted' }, { sendAsEmail: 'unverified@example.test', verificationStatus: 'pending' }] })
+    throw new Error(`unexpected setup request ${url}`)
+  })
+  expect(mailbox).toMatchObject({ aliases: ['gmail-alias@example.test'], verifiedAliases: ['gmail-alias@example.test'] })
+  await service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'gmail@example.test' }, owner.id)
+  await expect(service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'unverified@example.test' }, owner.id)).rejects.toThrow('not been verified')
+
+  let sends = 0
+  let sent: Record<string, unknown> | undefined
+  const fetcher = async (url: string, init: RequestInit) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-refreshed-access', refresh_token: 'gmail-rotated-refresh' })
+    if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail@example.test' })
+    if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail@example.test', verificationStatus: 'accepted' }, { sendAsEmail: 'gmail-alias@example.test', verificationStatus: 'accepted' }] })
+    if (url.endsWith('/messages/send')) {
+      sends += 1
+      sent = JSON.parse(String(init.body))
+      return Response.json({ id: 'gmail-message-id', threadId: 'gmail-thread-id' })
+    }
+    throw new Error(`unexpected delivery request ${url}`)
+  }
+  await expect(service.sendAreaMail(payload, 'careers', { sender: 'gmail@example.test', recipient: 'recipient@example.test', subject: 'Gmail subject', body: 'Gmail plain-text body' }, fetcher)).resolves.toEqual({ provider: 'google', messageID: 'gmail-message-id' })
+  expect(sends).toBe(1)
+  expect(Buffer.from(String(sent?.raw), 'base64url').toString('utf8')).toBe('To: recipient@example.test\r\nFrom: gmail@example.test\r\nSubject: Gmail subject\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nGmail plain-text body')
+  const rotated = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
+  expect(JSON.parse(oauth.decryptMailboxOAuthCredential(String(rotated.encryptedCredential), 'google'))).toEqual({ refreshToken: 'gmail-rotated-refresh' })
+
+  await service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'gmail-alias@example.test' }, owner.id)
+  let aliasSent: Record<string, unknown> | undefined
+  await expect(service.sendAreaMail(payload, 'careers', { sender: 'gmail-alias@example.test', recipient: 'recipient@example.test', subject: 'Alias', body: 'Alias body' }, async (url, init) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-alias-access' })
+    if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail@example.test' })
+    if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail-alias@example.test', verificationStatus: 'accepted' }] })
+    if (url.endsWith('/messages/send')) { aliasSent = JSON.parse(String(init.body)); return Response.json({ id: 'gmail-alias-message', threadId: 'gmail-alias-thread' }) }
+    throw new Error(`unexpected alias request ${url}`)
+  })).resolves.toEqual({ provider: 'google', messageID: 'gmail-alias-message' })
+  expect(Buffer.from(String(aliasSent?.raw), 'base64url').toString('utf8')).toContain('From: gmail-alias@example.test')
+  await service.setMailboxArea(payload, { area: 'careers', mailbox: mailbox.id, senderAddress: 'gmail@example.test' }, owner.id)
+
+  let malformedSends = 0
+  await expect(service.sendAreaMail(payload, 'careers', { sender: 'gmail@example.test', recipient: 'recipient@example.test', subject: 'Malformed', body: 'No retry' }, async (url) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-next-access' })
+    if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail@example.test' })
+    if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail@example.test', verificationStatus: 'accepted' }] })
+    if (url.endsWith('/messages/send')) { malformedSends += 1; return Response.json({}) }
+    throw new Error(`unexpected malformed request ${url}`)
+  })).rejects.toThrow('provider_malformed_response')
+  expect(malformedSends).toBe(1)
+
+  let changedSenderRequests = 0
+  await expect(service.sendAreaMail(payload, 'careers', { sender: 'gmail@example.test', recipient: 'recipient@example.test', subject: 'Changed', body: 'Refuse' }, async (url) => {
+    changedSenderRequests += 1
+    if (url.includes('/token')) return Response.json({ access_token: 'gmail-changed-access' })
+    if (url.endsWith('/profile')) return Response.json({ emailAddress: 'changed@example.test' })
+    if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [] })
+    throw new Error(`provider send must not run: ${url}`)
+  })).rejects.toThrow('mailbox_sender_not_verified')
+  expect(changedSenderRequests).toBe(3)
+})
+
+test('OAuth delivery rechecks mapping, health, and credentials after identity before sending', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'outbound-boundary-owner@example.test', name: 'Outbound boundary', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await oauth.startMailboxOAuth(payload, 'microsoft', owner.id, 'outbound-boundary-session')).searchParams.get('state')!
+  const mailbox = await oauth.completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'outbound-boundary-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : Response.json({ mail: 'boundary@example.test' }))
+  const replacement = await (payload as any).create({ collection: 'mailbox-configurations', data: { name: 'Replacement', provider: 'smtp', primaryAddress: 'replacement@example.test', aliases: [], verifiedAliases: [], host: 'smtp.example.test', port: 587, security: 'starttls', username: 'replacement@example.test', encryptedCredential: 'opaque', credentialRevision: 'replacement', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'boundary@example.test' }, owner.id)
+  const mapping = (await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'leads' } }, limit: 1, overrideAccess: true })).docs[0]
+  for (const change of ['remap', 'revoke', 'credential'] as const) {
+    await (payload as any).update({ collection: 'mailbox-area-mappings', id: mapping.id, data: { mailbox: mailbox.id, senderAddress: 'boundary@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'connected', credentialRevision: `boundary-${change}` }, overrideAccess: true, context: { mailboxInternal: true } })
+    let sends = 0
+    await expect(service.sendAreaMail(payload, 'leads', { sender: 'boundary@example.test', recipient: 'recipient@example.test', subject: 'Boundary', body: 'Reviewed' }, async (url) => {
+      if (url.includes('/token')) return Response.json({ access_token: `${change}-access` })
+      if (url.includes('/v1.0/me?')) {
+        if (change === 'remap') await (payload as any).update({ collection: 'mailbox-area-mappings', id: mapping.id, data: { mailbox: replacement.id, senderAddress: 'replacement@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+        if (change === 'revoke') await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'unavailable' }, overrideAccess: true, context: { mailboxInternal: true } })
+        if (change === 'credential') await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { credentialRevision: 'replaced-during-identity' }, overrideAccess: true, context: { mailboxInternal: true } })
+        return Response.json({ mail: 'boundary@example.test' })
+      }
+      if (url.endsWith('/sendMail')) { sends += 1; return new Response(null, { status: 202 }) }
+      throw new Error(`unexpected request ${url}`)
+    })).rejects.toThrow('mailbox_not_ready')
+    expect(sends).toBe(0)
+  }
+})
+
+test('a provider reply thread cannot cross the mailbox or its target binding', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'thread-bound-owner@example.test', name: 'Thread boundary', roles: ['owner'] }, overrideAccess: true })
+  const createMailbox = (name: string, address: string) => (payload as any).create({ collection: 'mailbox-configurations', data: { name, provider: 'google', primaryAddress: address, aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: address, encryptedCredential: 'opaque', credentialRevision: name, health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  const first = await createMailbox('Thread first', 'thread-first@example.test')
+  const second = await createMailbox('Thread second', 'thread-second@example.test')
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: second.id, senderAddress: 'thread-second@example.test' }, owner.id)
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'thread-bound-lead@example.test', message: 'Thread binding', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: crypto.randomUUID(), stage: 'new' }, overrideAccess: true })
+  const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: first.id, provider: 'google', providerConversationID: 'provider-thread' }, overrideAccess: true })
+  await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: first.id, lead: lead.id, providerMessageID: 'provider-message', direction: 'inbound', sender: lead.email, recipient: 'thread-first@example.test', subject: 'Original', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+  let calls = 0
+  await expect(service.sendAreaMail(payload, 'leads', { sender: 'thread-second@example.test', recipient: lead.email, subject: 'Reviewed', body: 'Exact approved content', threadID: 'local-draft-thread', providerThreadID: 'provider-thread', providerMessageID: 'provider-message', providerMailboxID: first.id, provider: 'google', providerTarget: { collection: 'inquiries', id: lead.id } }, async () => { calls += 1; return Response.json({}) })).rejects.toThrow('mailbox_thread_not_grounded')
+  expect(calls).toBe(0)
 })

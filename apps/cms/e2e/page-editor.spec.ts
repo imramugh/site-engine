@@ -259,6 +259,16 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(
     editor.page.locator('[data-page-editor-block][open]'),
   ).toHaveCount(0)
+  const collapsedSummary = editor.page.locator('[data-page-editor-block]').nth(1).locator('summary')
+  await expect(collapsedSummary).toBeFocused()
+  await expect(editor.page.locator('[data-page-editor-block][open]')).toHaveCount(0)
+  await collapsedSummary.press('Enter')
+  await expect(editor.page.locator('[data-page-editor-block]').nth(1)).toHaveAttribute('open', '')
+  const headingAfterReopen = editor.page.locator('[data-page-editor-block]').nth(1).getByLabel('Heading', { exact: true })
+  await headingAfterReopen.focus()
+  await headingAfterReopen.press('Escape')
+  await expect(collapsedSummary).toBeFocused()
+  await expect(editor.page.locator('[data-page-editor-block][open]')).toHaveCount(0)
   const previewTypeAttribute = await renderedBlocks.first().evaluate((node) => {
     const name = node.hasAttribute('data-block-type')
       ? 'data-block-type'
