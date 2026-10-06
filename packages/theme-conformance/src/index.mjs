@@ -452,19 +452,26 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
               const style = getComputedStyle(element);
               if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return false;
             }
-            const host = image.closest('[data-logo-tone]');
             const rgba = (value) => {
               const channels = value.match(/\d+(?:\.\d+)?/g)?.map(Number);
               return channels?.length >= 3 ? [channels[0], channels[1], channels[2], channels[3] ?? 1] : [0, 0, 0, 0];
             };
             const layers = [];
-            for (let element = host; element instanceof HTMLElement; element = element.parentElement) layers.push(rgba(getComputedStyle(element).backgroundColor));
+            const filters = [];
+            // The tone marker may wrap a themed section rather than own its
+            // paint. Compose every ancestor from the image outward so nested
+            // section surfaces (as used by installed themes) are represented.
+            for (let element = image; element instanceof HTMLElement; element = element.parentElement) {
+              const style = getComputedStyle(element);
+              layers.push(rgba(style.backgroundColor));
+              if (style.filter !== "none") filters.push(style.filter);
+            }
             let background = [255, 255, 255];
             for (const [red, green, blue, alpha] of layers.reverse()) background = [red * alpha + background[0] * (1 - alpha), green * alpha + background[1] * (1 - alpha), blue * alpha + background[2] * (1 - alpha)];
             const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
             const context = canvas.getContext('2d'); if (!context) return false;
             context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; context.fillRect(0, 0, canvas.width, canvas.height);
-            context.filter = getComputedStyle(image).filter; context.drawImage(image, 0, 0);
+            context.filter = filters.join(" ") || "none"; context.drawImage(image, 0, 0);
             const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
             let visible = 0; let contrast = 0;
             for (let index = 0; index < pixels.length; index += 4) {
