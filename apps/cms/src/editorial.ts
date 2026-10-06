@@ -337,11 +337,15 @@ export async function createNamedChangeSet(payload: Payload, req: PayloadRequest
 export type ChangeConflict = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; proposed: Record<string, unknown> | null; current: Record<string, unknown> | null; currentHash: string | null; canReapply: boolean }
 type ConflictChoice = { collection: CapturedCollection; id: string; currentHash: string | null; choice: 'retain-current' | 'reapply-proposed' }
 
+function missingCapturedRecord(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status?: unknown }).status === 404)
+}
+
 async function conflictsFor(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<ChangeConflict[]> {
   const conflicts: ChangeConflict[] = []
   for (const change of changes) {
     let raw: Record<string, unknown> | undefined
-    try { raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch { raw = undefined }
+    try { raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown> } catch (error) { if (!missingCapturedRecord(error)) throw error; raw = undefined }
     const current = currentChange(change.collection, raw, change.after)
     const currentHash = hash(current)
     if (currentHash !== change.afterHash) conflicts.push({ collection: change.collection, id: change.id, before: change.before, proposed: change.after, current, currentHash, canReapply: Boolean(change.before && change.after && raw) })
@@ -402,9 +406,8 @@ export async function resolveChangeSetConflicts(input: { payload: Payload; req: 
     if (!conflict) { resolved.push(change); continue }
     const choice = byKey.get(key)!
     if (choice.choice === 'retain-current') { retained++; continue }
-    const raw = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
     const data = proposedDelta(change.collection, change.before!, change.after!)
-    await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
+    await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: false, user: input.actor as never, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
     const saved = await payload.findByID({ collection: change.collection, id: change.id, depth: 0, draft: true, overrideAccess: true, req }) as unknown as Record<string, unknown>
     const after = currentChange(change.collection, saved, change.after)
     resolved.push({ ...change, before: conflict.current, beforeHash: conflict.currentHash, after, afterHash: hash(after) })
