@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload } from 'payload'
 import { authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, consumeMcpMailAuthorization, revokeMailAuthorization, type McpMailIdentity } from './mail-authorizations'
-import { sendAreaMail } from './mailboxes'
+import { assertAreaAttachmentDelivery, sendAreaMail } from './mailboxes'
 import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
-import { resolveOutgoingAttachments } from './outgoing-attachments'
+import { resolveOutgoingAttachments, resolveVerifiedOutgoingAttachments, type VerifiedOutgoingAttachment } from './outgoing-attachments'
 
 let replyDelivery = sendAreaMail
 export function setReplyDeliveryForTest(sender?: typeof sendAreaMail) { if (process.env.NODE_ENV !== 'test') throw new Error('Test delivery override is disabled.'); replyDelivery = sender ?? sendAreaMail }
@@ -29,17 +29,17 @@ async function verifyDraftAttachments(payload: Payload, actorID: string, draftID
   const target = application ? 'application' as const : 'lead' as const
   const targetID = String(application ?? (typeof draft.lead === 'string' ? draft.lead : (draft.lead as { id?: string } | undefined)?.id ?? ''))
   const stored = Array.isArray(draft.attachments) ? draft.attachments : []
-  const resolved = await resolveOutgoingAttachments(payload, { target, targetID, actorID, attachments: stored.map((attachment) => ({ source: (attachment as { source?: unknown }).source, id: (attachment as { sourceID?: unknown }).sourceID })) })
-  if (JSON.stringify(resolved) !== JSON.stringify(stored) || JSON.stringify(resolved.map((attachment) => attachment.sha256).sort()) !== JSON.stringify((Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : []).sort())) throw new Error('attachment_not_available')
+  const resolved = await resolveVerifiedOutgoingAttachments(payload, { target, targetID, actorID, attachments: stored.map((attachment) => ({ source: (attachment as { source?: unknown }).source, id: (attachment as { sourceID?: unknown }).sourceID })) })
+  const descriptors = resolved.map(({ bytes: _bytes, ...attachment }) => attachment)
+  if (JSON.stringify(descriptors) !== JSON.stringify(stored) || JSON.stringify(descriptors.map((attachment) => attachment.sha256).sort()) !== JSON.stringify((Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : []).sort())) throw new Error('attachment_not_available')
   return resolved
 }
 export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { await verifyDraftAttachments(payload, actor.id, draftID); return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
 export async function cancelPreparedReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return cancelPreparedMailDraft(payload, actor, draftID) }
-async function deliverReply(payload: Payload, actorID: string, grantID: string, grant: any) {
+async function deliverReply(payload: Payload, actorID: string, grantID: string, grant: any, attachments: readonly VerifiedOutgoingAttachment[] = []) {
   const pending = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const pendingDraft = await payload.findByID({ collection: 'mail-drafts', id: typeof pending.draft === 'string' ? pending.draft : pending.draft.id, depth: 0, overrideAccess: true })
-  if (Array.isArray(pendingDraft.attachmentHashes) && pendingDraft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
   const pendingApplication = pendingDraft.application && (typeof pendingDraft.application === 'string' ? pendingDraft.application : pendingDraft.application.id)
   const target = { collection: pendingApplication ? 'applications' as const : 'inquiries' as const, id: String(pendingApplication || pendingDraft.lead) }
   const area = pendingApplication ? 'careers' : 'leads'
@@ -66,6 +66,7 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
       sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body),
       ...(providerReply ? { threadID: String(draft.threadID), ...providerReply } : {}),
       ...(initialProvider ? { initialOutbound: true, outboundRFCMessageID: initialProvider.rfcMessageID } : {}),
+      ...(attachments.length ? { attachments } : {}),
     })
     if (initialProvider) {
       if (delivered.provider !== initialProvider.provider || !('threadID' in delivered) || !delivered.threadID || !delivered.messageID) throw new Error('provider_malformed_response')
@@ -81,11 +82,21 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
     throw error
   }
 }
-async function rejectReplyAttachments(payload: Payload, grantID: string) {
+export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) {
+  const attachments = await verifiedGrantAttachments(payload, actor.id, grantID)
+  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area)
+  return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID), attachments.items)
+}
+export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) {
+  const attachments = await verifiedGrantAttachments(payload, identity.userID, grantID)
+  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area)
+  return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID), attachments.items)
+}
+async function verifiedGrantAttachments(payload: Payload, actorID: string, grantID: string) {
   const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
-  const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true })
-  if (Array.isArray(draft.attachmentHashes) && draft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
+  const draft = await payload.findByID({ collection: 'mail-drafts', id: draftID, depth: 0, overrideAccess: true }) as { application?: unknown; attachments?: unknown; attachmentHashes?: unknown }
+  if ((!Array.isArray(draft.attachments) || !draft.attachments.length) && Array.isArray(draft.attachmentHashes) && draft.attachmentHashes.length) throw new Error('reply_attachments_not_supported')
+  const items = await verifyDraftAttachments(payload, actorID, String(draftID))
+  return { items, area: draft.application ? 'careers' as const : 'leads' as const }
 }
-export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { await rejectReplyAttachments(payload, grantID); return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID)) }
-export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) { await rejectReplyAttachments(payload, grantID); return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID)) }

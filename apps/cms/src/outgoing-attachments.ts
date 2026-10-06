@@ -10,18 +10,19 @@ const allowed = new Set(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 
 const id = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export type OutgoingAttachment = { source: 'asset' | 'application-resume'; sourceID: string; filename: string; mimeType: string; size: number; sha256: string }
+export type VerifiedOutgoingAttachment = OutgoingAttachment & { bytes: Uint8Array }
 
 const safeName = (value: unknown) => typeof value === 'string' && /^[^\u0000-\u001f\\/]{1,240}$/.test(value) ? value : undefined
 const roleAllowed = (roles: unknown, target: 'lead' | 'application') => Array.isArray(roles) && (roles.includes('owner') || (target === 'lead' ? roles.includes('sales') : roles.includes('hiring')))
 
 /** Resolves only server-owned asset IDs or the current target application's resume.
  * The returned immutable metadata is what confirmation binds; delivery remains disabled. */
-export async function resolveOutgoingAttachments(payload: Payload, input: { target: 'lead' | 'application'; targetID: string; actorID: string; attachments?: unknown }): Promise<OutgoingAttachment[]> {
+export async function resolveVerifiedOutgoingAttachments(payload: Payload, input: { target: 'lead' | 'application'; targetID: string; actorID: string; attachments?: unknown }): Promise<VerifiedOutgoingAttachment[]> {
   if (input.attachments === undefined) return []
   if (!Array.isArray(input.attachments) || input.attachments.length > maxCount) throw new Error('invalid_reply_attachments')
   const actor = await payload.findByID({ collection: 'users', id: input.actorID, depth: 0, overrideAccess: true }) as { roles?: unknown; disabled?: unknown }
   if (actor.disabled || !roleAllowed(actor.roles, input.target)) throw new Error('mail_authorization_required')
-  const output: OutgoingAttachment[] = []
+  const output: VerifiedOutgoingAttachment[] = []
   let total = 0
   for (const item of input.attachments) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid_reply_attachments')
@@ -39,18 +40,23 @@ export async function resolveOutgoingAttachments(payload: Payload, input: { targ
       const path = mediaFilePath(String(file!.filename)); const size = statSync(path).size
       if (size < 1 || size > maxBytes) throw new Error('attachment_not_available')
       const bytes = readFileSync(path); if (size !== bytes.length) throw new Error('attachment_not_available')
-      output.push({ source: 'asset', sourceID, filename, mimeType, size, sha256: createHash('sha256').update(bytes).digest('hex') })
+      output.push({ source: 'asset', sourceID, filename, mimeType, size, sha256: createHash('sha256').update(bytes).digest('hex'), bytes })
     } else if (source === 'application-resume') {
       if (input.target !== 'application' || (item as { id?: unknown }).id !== input.targetID) throw new Error('attachment_not_available')
       const application = await payload.findByID({ collection: 'applications', id: input.targetID, depth: 0, overrideAccess: true }) as { resumeKey?: unknown }
       if (typeof application.resumeKey !== 'string') throw new Error('attachment_not_available')
       const bytes = await readResume(application.resumeKey); const mimeType = bytes.subarray(0, 5).equals(Buffer.from('%PDF-')) ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
       validateResume({ data: bytes, mimetype: mimeType, size: bytes.length, name: `resume.${mimeType === 'application/pdf' ? 'pdf' : 'docx'}` })
-      output.push({ source: 'application-resume', sourceID: input.targetID, filename: 'resume.' + (mimeType === 'application/pdf' ? 'pdf' : 'docx'), mimeType, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+      output.push({ source: 'application-resume', sourceID: input.targetID, filename: 'resume.' + (mimeType === 'application/pdf' ? 'pdf' : 'docx'), mimeType, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), bytes })
     } else throw new Error('invalid_reply_attachments')
     total += output.at(-1)!.size
     if (total > maxBytes || !allowed.has(output.at(-1)!.mimeType)) throw new Error('invalid_reply_attachments')
   }
   if (new Set(output.map((attachment) => `${attachment.source}:${attachment.sourceID}`)).size !== output.length) throw new Error('invalid_reply_attachments')
   return output
+}
+
+export async function resolveOutgoingAttachments(payload: Payload, input: { target: 'lead' | 'application'; targetID: string; actorID: string; attachments?: unknown }): Promise<OutgoingAttachment[]> {
+  const attachments = await resolveVerifiedOutgoingAttachments(payload, input)
+  return attachments.map(({ bytes: _bytes, ...attachment }) => attachment)
 }
