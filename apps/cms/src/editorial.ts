@@ -10,7 +10,7 @@ export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' |
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
-type CapturedChange = {
+export type CapturedChange = {
   collection: CapturedCollection
   id: string
   before: Record<string, unknown> | null
@@ -64,7 +64,7 @@ function normalizeSiteOptionalNulls(value: Record<string, unknown> | null, prior
 
 export function snapshot(collection: CapturedCollection, document: Record<string, unknown> | undefined, includeFocalPoint = false): Record<string, unknown> | null {
   if (!document) return null
-  if (collection === 'assets') return snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint)
+  if (collection === 'assets') return { ...snapshotMediaReference(document as Parameters<typeof snapshotMediaReference>[0], includeFocalPoint), caption: typeof document.caption === 'string' ? document.caption : null, credit: typeof document.credit === 'string' ? document.credit : null, tags: Array.isArray(document.tags) ? document.tags.filter((tag): tag is string => typeof tag === 'string') : [] }
   return Object.fromEntries(mutableFields[collection].flatMap((field): [string, unknown][] => {
     const value = document[field]
     if (field === 'blocks') return [[field, Array.isArray(value) ? value : []]]
@@ -140,8 +140,18 @@ function capturedAssetHasFocalPoint(value: Record<string, unknown> | null | unde
   return Boolean(value && (Object.prototype.hasOwnProperty.call(value, 'focalX') || Object.prototype.hasOwnProperty.call(value, 'focalY')))
 }
 
+function capturedAssetHasMetadata(value: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(value && ['caption', 'credit', 'tags'].some((field) => Object.prototype.hasOwnProperty.call(value, field)))
+}
+
+/** CMS-only media metadata is reviewable in captures but never part of a public snapshot. */
+export function publicAssetSnapshot(value: Record<string, unknown>): Record<string, unknown> {
+  const { caption: _caption, credit: _credit, tags: _tags, ...publicFields } = value
+  return publicFields
+}
+
 async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY'].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
+  const metadata = Object.fromEntries(['alt', 'decorative', 'focalX', 'focalY', ...(capturedAssetHasMetadata(before) ? ['caption', 'credit', 'tags'] : [])].flatMap((field) => before[field] === undefined ? [] : [[field, before[field]]]))
   if (before.filename === current.filename) return { ...metadata, currentFileVersion: null, currentFile: null }
   const versions = await payload.find({
     collection: 'asset-file-versions',
@@ -224,7 +234,8 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 }
 
 function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
-  const current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
+  let current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
+  if (collection === 'assets' && current && !capturedAssetHasMetadata(expected)) current = publicAssetSnapshot(current)
   if (collection === 'pages') return normalizePageOptionalNulls(current, expected)
   if (collection === 'site-settings') return normalizeSiteOptionalNulls(current, expected)
   return current
@@ -247,7 +258,13 @@ export async function markStaleIfNeeded(payload: Payload, set: Record<string, un
   return payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'stale', staleAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Promise<Record<string, unknown>>
 }
 
-async function quality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]) {
+export type ChangeSetQualityCheck = {
+  name: string
+  status: 'passed' | 'failed'
+  errors: Array<{ collection: string; id: string; message: string }>
+}
+
+export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[]): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[] }> {
   const errors: { collection: string; id: string; message: string }[] = []
   for (const change of changes) {
     if (!change.after) continue
@@ -256,7 +273,7 @@ async function quality(payload: Payload, req: PayloadRequest, changes: CapturedC
         case 'pages': return PageSchema.safeParse({ id: change.id, ...normalizePageOptionalNulls(change.after), status: 'draft' })
         case 'sections': return SectionSchema.safeParse({ id: change.id, ...change.after, pageIds: change.after.pageIds ?? [] })
         case 'redirects': return RedirectSchema.safeParse(change.after)
-        case 'assets': return MediaReferenceSchema.safeParse({ id: change.id, ...change.after })
+        case 'assets': return MediaReferenceSchema.safeParse({ id: change.id, ...publicAssetSnapshot(change.after) })
         case 'theme-settings': return ThemeSelectionSchema.safeParse(change.after.selection)
         case 'site-settings': return SiteSettingsDraftSchema.safeParse(change.after)
         case 'style-guides': return StyleGuideSchema.safeParse(change.after)
@@ -319,7 +336,7 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
     await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_refresh', user: input.actor.id, actor: input.actor.id, detail: { changeSet: id, rebased: rebased.length } }, overrideAccess: true, req })
     return set
   }
-  const details = action === 'submit' ? await quality(payload, req, changes) : undefined
+  const details = action === 'submit' ? await changeSetQuality(payload, req, changes) : undefined
   if (details?.checks.some((check) => check.status === 'failed')) throw new Error(`Change-set quality checks failed: ${details.checks.flatMap((check) => check.errors ?? []).map((error) => error.message).join('; ')}`)
   const state: ChangeSetState = action === 'submit' ? 'submitted' : action === 'request-changes' ? 'changes-requested' : action === 'reject' ? 'rejected' : action === 'discard' ? 'discarded' : 'open'
   set = await payload.update({ collection: 'change-sets', id, data: { state, revision: Number(set.revision ?? 0) + 1, quality: details, preview: action === 'submit' ? { status: 'pending' } : undefined, submittedAt: action === 'submit' ? new Date().toISOString() : typeof set.submittedAt === 'string' ? set.submittedAt : undefined, reviewedAt: ['request-changes', 'reject'].includes(action) ? new Date().toISOString() : typeof set.reviewedAt === 'string' ? set.reviewedAt : undefined }, overrideAccess: true, req, context: { editorialInternal: true } }) as unknown as Record<string, unknown>
