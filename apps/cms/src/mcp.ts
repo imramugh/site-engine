@@ -7,10 +7,11 @@ import { AppearanceOptions, BlockSchemas, BusinessCaseSchema, JobPostingSchema, 
 import { checkSiteSnapshot } from '@site-engine/checks'
 import { compatibilityReport, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
-import { createNamedChangeSet, transitionChangeSet } from './editorial'
+import { createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
 import { executePageEditorSave, pageEditorProjection } from './page-editor'
+import { canonicalHash } from './publishing'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -174,24 +175,57 @@ export async function handleMcp(request: Request): Promise<Response> {
     const report = checkSiteSnapshot(manifest, { style: manifest.styleGuide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style'] })
     return { source: 'frozen-published-snapshot', pageId: id, publishable: report.publishable, blockers: report.blockers.filter((issue) => issue.pageId === id), warnings: report.warnings.filter((issue) => issue.pageId === id), styleGuide: manifest.styleGuide ?? null }
   }
-  const publishedQuality = async () => {
-    const manifest = await publishedManifest() as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
-    if (!manifest) return undefined
+  const currentEditableManifest = async () => {
+    const [siteSettings, sections, pages, redirects, assets, guides] = await Promise.all([
+      payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, user: current, overrideAccess: false }),
+      payload.find({ collection: 'sections', limit: 500, pagination: false, depth: 0, user: current, overrideAccess: false }),
+      payload.find({ collection: 'pages', limit: 500, pagination: false, depth: 0, draft: true, user: current, overrideAccess: false }),
+      payload.find({ collection: 'redirects', limit: 500, pagination: false, depth: 0, user: current, overrideAccess: false }),
+      payload.find({ collection: 'assets', limit: 500, pagination: false, depth: 0, user: current, overrideAccess: false }),
+      payload.find({ collection: 'style-guides', limit: 1, depth: 0, draft: true, user: current, overrideAccess: false }),
+    ])
+    const captured = (collection: Parameters<typeof capturedSnapshot>[0], doc: unknown) => capturedSnapshot(collection, doc as Record<string, unknown>) ?? {}
+    const withoutNulls = (value: Record<string, unknown>, fields: string[]) => { const normalized = { ...value }; for (const field of fields) if (normalized[field] === null) delete normalized[field]; return normalized }
+    const settings = withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy'])
+    const guide = guides.docs[0] ? captured('style-guides', guides.docs[0]) : undefined
+    const currentPages: Array<Record<string, unknown>> = pages.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...withoutNulls(captured('pages', doc), ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase']) }))
+    const homepageID = relationID(settings.homepageId)
+    if (homepageID && !currentPages.some((page) => page.id === homepageID && page.template === 'landing')) delete settings.homepageId
+    return {
+      settings: { contractVersion: '1.5.0', siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
+      pages: currentPages,
+      redirects: redirects.docs.map((doc) => captured('redirects', doc)),
+      media: assets.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) })),
+      changeSets: [],
+      ...(guide ? { styleGuide: guide } : {}),
+    }
+  }
+  const currentQuality = async () => {
+    const manifest = await currentEditableManifest()
     const style = manifest.styleGuide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style']
     return { manifest, report: checkSiteSnapshot(manifest, { asOf: new Date(), style }) }
   }
   const auditPage = async (id: string) => {
-    const quality = await publishedQuality()
-    if (!quality || !quality.manifest.pages?.some((page) => page.id === id)) return { error: 'page_not_in_published_snapshot' }
+    const quality = await currentQuality()
+    const currentPage = quality.manifest.pages.find((page) => page.id === id)
+    if (!currentPage) return { error: 'not_found' }
     const stale = quality.report.stalePages.find((page) => page.id === id) ?? null
-    return { source: 'frozen-published-snapshot', pageId: id, asOf: quality.report.asOf, publishable: quality.report.blockers.filter((issue) => issue.pageId === id).length === 0, blockers: quality.report.blockers.filter((issue) => issue.pageId === id), warnings: quality.report.warnings.filter((issue) => issue.pageId === id), stalePage: stale, ai: quality.report.ai }
+    const applies = (issue: { pageId?: string }) => !issue.pageId || issue.pageId === id
+    return { source: 'current-editable-draft', pageId: id, pageHash: canonicalHash(currentPage), asOf: quality.report.asOf, publishable: quality.report.blockers.filter(applies).length === 0, blockers: quality.report.blockers.filter(applies), warnings: quality.report.warnings.filter(applies), stalePage: stale, ai: quality.report.ai }
   }
   const stalePages = async () => {
-    const quality = await publishedQuality()
-    if (!quality) return { error: 'published_snapshot_not_found' }
-    return { source: 'frozen-published-snapshot', asOf: quality.report.asOf, items: quality.report.stalePages.slice(0, 100) }
+    const quality = await currentQuality()
+    return { source: 'current-editable-draft', asOf: quality.report.asOf, items: quality.report.stalePages.slice(0, 100) }
   }
   const styleGuide = async () => {
+    try {
+      const manifest = await currentEditableManifest() as { styleGuide?: unknown }
+      if (!manifest?.styleGuide || typeof manifest.styleGuide !== 'object' || Array.isArray(manifest.styleGuide)) return { status: 'not-configured' }
+      const guide = manifest.styleGuide as Record<string, unknown>
+      return { source: 'current-editable-draft', bannedPhrases: Array.isArray(guide.bannedPhrases) ? guide.bannedPhrases : [], preferredTerms: Array.isArray(guide.preferredTerms) ? guide.preferredTerms.map((term) => ({ avoid: (term as { avoid?: unknown }).avoid, prefer: (term as { prefer?: unknown }).prefer })) : [], canadianSpelling: guide.canadianSpelling, maximumSentenceWords: guide.maximumSentenceWords, minimumReadingEase: guide.minimumReadingEase }
+    } catch { return { error: 'read_failed' } }
+  }
+  const frozenStyleGuide = async () => {
     try {
       const manifest = await publishedManifest() as { styleGuide?: unknown } | undefined
       if (!manifest?.styleGuide || typeof manifest.styleGuide !== 'object' || Array.isArray(manifest.styleGuide)) return { status: 'not-configured' }
@@ -210,7 +244,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   }
   const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
   const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, value))
-  server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await styleGuide()))
+  server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await frozenStyleGuide()))
   server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await glossary()))
   registerReadResource('block-library', 'site-engine://contract/block-library', 'Block library', blockLibrary)
   server.registerResource('site-settings', 'site-engine://site/settings', { title: 'Site settings', description: `Owner-only read-only site metadata. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await siteSettings().catch(() => ({ error: 'read_failed' }))))
@@ -266,9 +300,9 @@ export async function handleMcp(request: Request): Promise<Response> {
   const qualityIssueOutput = z.object({ code: z.string(), severity: z.enum(['blocker', 'warning']), path: z.string(), message: z.string(), remediation: z.string(), pageId: z.string().uuid().optional(), blockId: z.string().uuid().optional() }).strict()
   const stalePageOutput = z.object({ id: z.string().uuid(), title: z.string(), path: z.string(), reviewAgeDays: z.number().int().nonnegative() }).strict()
   const aiQualityOutput = z.object({ status: z.literal('unavailable'), code: z.literal('AI_PROVIDER_UNAVAILABLE'), message: z.string() }).strict()
-  const auditPageOutput = z.object({ source: z.literal('frozen-published-snapshot'), pageId: z.string().uuid(), asOf: z.string().datetime(), publishable: z.boolean(), blockers: z.array(qualityIssueOutput), warnings: z.array(qualityIssueOutput), stalePage: stalePageOutput.nullable(), ai: aiQualityOutput }).strict()
-  const stalePagesOutput = z.object({ source: z.literal('frozen-published-snapshot'), asOf: z.string().datetime(), items: z.array(stalePageOutput).max(100) }).strict()
-  const styleGuideOutput = z.object({ source: z.literal('frozen-published-snapshot'), bannedPhrases: z.array(z.string()), preferredTerms: z.array(z.object({ avoid: z.string(), prefer: z.string() }).strict()), canadianSpelling: z.enum(['off', 'warn']).optional(), maximumSentenceWords: z.number().int().positive().optional(), minimumReadingEase: z.number().optional() }).strict()
+  const auditPageOutput = z.object({ source: z.literal('current-editable-draft'), pageId: z.string().uuid(), pageHash: z.string().regex(/^[a-f0-9]{64}$/), asOf: z.string().datetime(), publishable: z.boolean(), blockers: z.array(qualityIssueOutput), warnings: z.array(qualityIssueOutput), stalePage: stalePageOutput.nullable(), ai: aiQualityOutput }).strict()
+  const stalePagesOutput = z.object({ source: z.literal('current-editable-draft'), asOf: z.string().datetime(), items: z.array(stalePageOutput).max(100) }).strict()
+  const styleGuideOutput = z.object({ source: z.literal('current-editable-draft'), bannedPhrases: z.array(z.string()), preferredTerms: z.array(z.object({ avoid: z.string(), prefer: z.string() }).strict()), canadianSpelling: z.enum(['off', 'warn']).optional(), maximumSentenceWords: z.number().int().positive().optional(), minimumReadingEase: z.number().optional() }).strict()
   server.registerTool('get_block_library', { title: 'Get block library', description: `Read supported block and template metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? text(blockLibrary) : denied(contentReadScope))
   server.registerTool('get_tree', { title: 'Get content tree', description: `Read the scoped section and draft-page tree. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: treeOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { return structured(await tree()) } catch { return unavailable() } })
   server.registerTool('list_block_types', { title: 'List block types', description: `Read block types, fields, limits, and allowed templates. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: z.object({ blockTypes: z.array(blockTypeOutput) }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => read ? structured({ blockTypes: blockLibrary.catalog }) : denied(contentReadScope))
@@ -279,9 +313,9 @@ export async function handleMcp(request: Request): Promise<Response> {
   server.registerTool('get_site_settings', { title: 'Get site settings', description: `Read Owner-only site metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await siteSettings()) } catch { return unavailable() } })
   server.registerTool('list_installed_themes', { title: 'List installed themes', description: `Read Owner-only installed theme compatibility metadata. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); if (!owner) return ownerDenied(); try { return text(await installedThemes()) } catch { return unavailable() } })
   server.registerTool('get_page_quality', { title: 'Get frozen page quality', description: `Read deterministic page quality from the frozen published snapshot. ${toolLimits}`, inputSchema: { id: z.string().uuid() }, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { return text(await frozenPageQuality(id)) } catch { return unavailable() } })
-  server.registerTool('audit_page', { title: 'Audit published page', description: `Read deterministic blockers, warnings, and freshness for one frozen published page. ${toolLimits}`, inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: auditPageOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { const result = await auditPage(id); return 'error' in result ? text(result) : structured(result) } catch { return unavailable() } })
-  server.registerTool('list_stale_pages', { title: 'List stale published pages', description: `List up to 100 frozen published pages past the deterministic review-freshness threshold. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: stalePagesOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { const result = await stalePages(); return 'error' in result ? text(result) : structured(result) } catch { return unavailable() } })
-  server.registerTool('get_style_guide', { title: 'Get published style guide', description: `Read the style policy frozen with the published snapshot. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: styleGuideOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { const result = await styleGuide(); return 'error' in result || 'status' in result ? text(result) : structured(result) } catch { return unavailable() } })
+  server.registerTool('audit_page', { title: 'Audit draft page', description: `Read deterministic blockers, warnings, freshness, and an identity hash for one current editable draft page. ${toolLimits}`, inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: auditPageOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { const result = await auditPage(id); return 'error' in result ? text(result) : structured(result) } catch { return unavailable() } })
+  server.registerTool('list_stale_pages', { title: 'List stale draft pages', description: `List up to 100 current editable draft pages past the deterministic review-freshness threshold. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: stalePagesOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { return structured(await stalePages()) } catch { return unavailable() } })
+  server.registerTool('get_style_guide', { title: 'Get draft style guide', description: `Read the current editable style policy. ${toolLimits}`, inputSchema: strictEmpty, outputSchema: styleGuideOutput, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { const result = await styleGuide(); return 'error' in result || 'status' in result ? text(result) : structured(result) } catch { return unavailable() } })
   server.registerTool('list_sections', { title: 'List sections', description: `List editable content sections. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async () => { if (!read) return denied(contentReadScope); try { return text((await payload.find({ collection: 'sections', limit: 100, depth: 0, user: current, overrideAccess: false })).docs.map((doc) => section(doc as unknown as Record<string, unknown>))) } catch { return unavailable() } })
   server.registerTool('list_redirects', { title: 'List redirects', description: `List redirects. ${toolLimits}`, annotations: { readOnlyHint: true }, _meta: { securitySchemes: redirectSecurity.securitySchemes, authorization: redirectSecurity } }, async () => { if (!redirects) return denied(redirectsReadScope); try { return text((await payload.find({ collection: 'redirects', limit: 100, depth: 0, user: current, overrideAccess: false })).docs.map((doc) => redirect(doc as unknown as Record<string, unknown>))) } catch { return unavailable() } })
   server.registerTool('get_page', { title: 'Get page', description: `Read one draft page by id. ${toolLimits}`, inputSchema: { id: z.string().uuid() }, annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ id }) => { if (!read) return denied(contentReadScope); try { return text(page(await payload.findByID({ collection: 'pages', id, depth: 0, draft: true, user: current, overrideAccess: false }) as unknown as Record<string, unknown>)) } catch { return unavailable() } })

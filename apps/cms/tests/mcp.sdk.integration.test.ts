@@ -126,8 +126,9 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   const sales = await payload.create({ collection: 'users', data: { email: 'mcp-sales@example.test', name: 'MCP Sales', roles: ['sales'] }, overrideAccess: true })
   const hiring = await payload.create({ collection: 'users', data: { email: 'mcp-hiring@example.test', name: 'MCP Hiring', roles: ['hiring'] }, overrideAccess: true })
   const mutableGuide = await payload.create({ collection: 'style-guides', data: { bannedPhrases: ['synthetic banned phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn', maximumSentenceWords: 24, minimumReadingEase: 40 }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
-  const section = await payload.create({ collection: 'sections', data: { name: 'MCP', summary: 'A synthetic section used to verify MCP returns bounded editorial content.', slug: 'mcp', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const section = await payload.create({ collection: 'sections', data: { name: 'MCP', summary: 'A synthetic section used to verify MCP returns bounded editorial content.', slug: 'mcp', allowedTemplates: ['standard', 'article'] }, user: editor, overrideAccess: false })
   const page = await payload.create({ collection: 'pages', data: { title: 'SDK page', summary: 'A synthetic page used to verify the real MCP SDK client receives blocks.', slug: 'sdk-page', sectionId: section.id, template: 'standard', blocks: [{ id: '11111111-1111-4111-8111-111111111111', type: 'hero', heading: 'MCP block', body: 'This block must be present in a bounded MCP response.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
+  const qualityPage = await payload.create({ collection: 'pages', data: { title: 'Quality SDK page', summary: 'A synthetic article page used to verify current deterministic MCP quality reports.', slug: 'quality-sdk-page', sectionId: section.id, template: 'article', blocks: [{ id: '99999999-9999-4999-8999-999999999999', type: 'richText', body: 'This block starts as valid published content before the current draft changes.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
   await payload.create({ collection: 'redirects', data: { from: '/sdk-page', to: '/mcp/sdk-page' }, user: editor, overrideAccess: false })
   const privateLead = await payload.create({ collection: 'inquiries', data: { email: '+14165550199@example.test', name: 'Call +1 (416) 555-0199', telephone: '+14165550199', message: 'Private inquiry content mentions 416.555.0199 2026 and must never appear in MCP output.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-private-inquiry-0001', stage: 'new' }, overrideAccess: true })
   const extensionLead = await payload.create({ collection: 'inquiries', data: { email: 'extension@example.test', telephone: '+1 416 555 0199 ext 2', message: 'Call +1 416 555 0199 ext 2 for the extension.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: 'synthetic-extension-inquiry-0001', stage: 'new' }, overrideAccess: true })
@@ -138,11 +139,16 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.update({ collection: 'users', id: editor.id, data: { emergencyTotpSecret: 'never-expose-this-secret' }, overrideAccess: true })
   const frozen = structuredClone(neutralFixture)
   frozen.styleGuide = { bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 }
-  frozen.pages[0]!.updatedAt = '2025-01-01T12:00:00.000Z'
-  const frozenHero = frozen.pages[0]!.blocks.find((block) => block.type === 'hero')
-  assert.ok(frozenHero)
-  frozenHero.body = '# Extra heading. This frozen phrase is a deterministic style warning.'
+  frozen.settings.homepageId = qualityPage.id
+  frozen.settings.sections[0]!.id = section.id
+  frozen.settings.sections[0]!.pageIds = [qualityPage.id]
+  frozen.pages[0]!.id = qualityPage.id
+  frozen.pages[0]!.sectionId = section.id
   await publishFrozenSnapshot(owner.id, frozen)
+  const currentRichText = (await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { blocks: Array<Record<string, unknown>> }).blocks.find((block) => block.type === 'richText')
+  assert.ok(currentRichText)
+  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2025-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
+  expect(editedQualityPage.lastReviewed).toBe('2025-01-01T12:00:00.000Z')
   const editorSession = await sessionFor(editor.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
@@ -189,22 +195,22 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       editorClient.client.callTool({ name: 'list_appearance_options', arguments: {} }),
       editorClient.client.callTool({ name: 'search_content', arguments: { query: 'synthetic' } }),
     ])
-    expect(structuredJson(tree)).toMatchObject({ sections: [expect.objectContaining({ id: section.id, slug: 'mcp' })], pages: [expect.objectContaining({ id: page.id, template: 'standard', status: expect.any(String) })] })
+    expect(structuredJson(tree)).toMatchObject({ sections: expect.arrayContaining([expect.objectContaining({ id: section.id, slug: 'mcp' })]), pages: expect.arrayContaining([expect.objectContaining({ id: page.id, template: 'standard', status: expect.any(String) })]) })
     expect(structuredJson(blockTypes)).toMatchObject({ blockTypes: expect.arrayContaining([expect.objectContaining({ type: 'hero', allowedTemplates: expect.arrayContaining(['standard']) })]) })
     expect(structuredJson(templateCatalog)).toEqual({ templates: TemplateSchema.options.map((template) => ({ template, allowedBlocks: [...TemplateAllowedBlocks[template]] })) })
     expect(structuredJson(presets)).toEqual({ presets: SectionPresets })
     expect(structuredJson(appearance)).toEqual({ appearance: AppearanceOptions })
-    expect(structuredJson(search)).toMatchObject({ items: [expect.objectContaining({ id: page.id, title: 'SDK page' })] })
+    expect(structuredJson(search)).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ id: page.id, title: 'SDK page' })]) })
     await expect(editorClient.client.callTool({ name: 'list_templates', arguments: { unknown: true } })).resolves.toMatchObject({ isError: true })
     const [pageAudit, stalePages, publishedStyle] = await Promise.all([
-      approverClient.client.callTool({ name: 'audit_page', arguments: { id: frozen.pages[0]!.id } }),
+      approverClient.client.callTool({ name: 'audit_page', arguments: { id: qualityPage.id } }),
       approverClient.client.callTool({ name: 'list_stale_pages', arguments: {} }),
       approverClient.client.callTool({ name: 'get_style_guide', arguments: {} }),
     ])
-    expect(structuredJson(pageAudit)).toMatchObject({ source: 'frozen-published-snapshot', pageId: frozen.pages[0]!.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
-    expect(structuredJson(stalePages)).toMatchObject({ source: 'frozen-published-snapshot', items: [expect.objectContaining({ id: frozen.pages[0]!.id, reviewAgeDays: expect.any(Number) })] })
-    expect(structuredJson(publishedStyle)).toEqual({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], preferredTerms: [{ avoid: 'behavior', prefer: 'behaviour' }], canadianSpelling: 'warn', maximumSentenceWords: 20, minimumReadingEase: 45 })
-    await expect(approverClient.client.callTool({ name: 'audit_page', arguments: { id: frozen.pages[0]!.id, unknown: true } })).resolves.toMatchObject({ isError: true })
+    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, pageHash: expect.stringMatching(/^[a-f0-9]{64}$/), publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
+    expect(structuredJson(stalePages)).toMatchObject({ source: 'current-editable-draft', items: [expect.objectContaining({ id: qualityPage.id, reviewAgeDays: expect.any(Number) })] })
+    expect(structuredJson(publishedStyle)).toEqual({ source: 'current-editable-draft', bannedPhrases: ['synthetic banned phrase'], preferredTerms: [{ avoid: 'color', prefer: 'colour' }], canadianSpelling: 'warn', maximumSentenceWords: 24, minimumReadingEase: 40 })
+    await expect(approverClient.client.callTool({ name: 'audit_page', arguments: { id: qualityPage.id, unknown: true } })).resolves.toMatchObject({ isError: true })
     await expect(salesClient.client.callTool({ name: 'list_stale_pages', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(ownerClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
     await expect(editorClient.client.callTool({ name: 'list_leads', arguments: {} })).rejects.toMatchObject({ code: 403 })
@@ -246,7 +252,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       editorClient.client.callTool({ name: 'list_redirects', arguments: {} }),
     ])
     expect(resultJson(sections)).toEqual([expect.objectContaining({ id: section.id, slug: 'mcp' })])
-    expect(resultJson(found)).toEqual([expect.objectContaining({ id: page.id, title: 'SDK page' })])
+    expect(resultJson(found)).toEqual(expect.arrayContaining([expect.objectContaining({ id: page.id, title: 'SDK page' })]))
     expect(resultJson(selected)).toEqual(expect.objectContaining({ id: page.id, blocks: [expect.objectContaining({ type: 'hero', heading: 'MCP block' })] }))
     expect(resultJson(redirects)).toEqual([expect.objectContaining({ from: '/sdk-page', to: '/mcp/sdk-page', status: 301 })])
     await expect(approverClient.client.callTool({ name: 'update_block', arguments: {} })).rejects.toMatchObject({ code: 403 })

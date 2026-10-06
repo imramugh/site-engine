@@ -14,7 +14,7 @@ configuration, or credentials.
   page-field updates; and item add, update, move, and remove for
   contract-defined item lists.
 - Scoped reads: redirects, site settings, installed themes, frozen page
-  quality, deterministic page audits, stale published pages, published style
+  quality, deterministic current-draft page audits, stale current-draft pages, current style
   policy, leads, and applications, subject to their declared scopes and roles.
 
 All draft writes require an explicit change set, write scope, a current
