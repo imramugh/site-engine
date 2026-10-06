@@ -14,7 +14,7 @@ const findInput = z.object({ q: z.string().max(80).optional(), tag: z.string().m
 const updateInput = z.object({ id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), alt: z.string().max(240), decorative: z.boolean(), caption: z.string().max(300).optional(), credit: z.string().max(240).optional(), tags: z.array(z.string().min(1).max(80)).max(12).optional(), focalX: z.number().finite().min(0).max(100), focalY: z.number().finite().min(0).max(100) }).strict()
 
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
-const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: code }) }] })
+const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(code === 'temporarily_unavailable' ? { error: code, retryAfterSeconds: 1 } : { error: code }) }] })
 const clean = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 export function registerMediaTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; writeSecurity: Record<string, unknown> }) {
@@ -31,7 +31,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
     return { first, assets: pages.flatMap((item) => item.assets) }
   }
 
-  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, outputSchema: z.object({ assets: z.array(z.object({}).passthrough()), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page = 1, pageSize = 24 }) => {
+  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, outputSchema: z.object({ assets: z.array(mediaItem), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page = 1, pageSize = 24 }) => {
     if (!mediaRead) return error('role_access_required')
     try {
       const found = await allMedia({ q, filter })
@@ -55,10 +55,10 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         if (set.revision !== expectedChangeSetRevision || actor !== current.id || !['open', 'changes-requested'].includes(String(set.state))) throw new Error('revision_conflict')
         const focalContract = await mediaFocalContractVersion(payload, await loadInitialPreviewBaseline(), req)
         const asset = await payload.update({ collection: 'assets', id, data: { alt, decorative, caption, credit, tags, ...(focalContract ? { focalX: canonicalFocalPoint(focalX), focalY: canonicalFocalPoint(focalY) } : {}) }, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focalContract } }) as unknown as { id: string }
-        const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number }
-        return { id: asset.id, revision: changed.revision }
+        const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; quality?: { checks?: unknown[] } }
+        return { id: asset.id, revision: changed.revision, checks: changed.quality?.checks ?? [] }
       })
-      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: [{ name: 'change-set-capture', status: 'passed', errors: [] }] })
+      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
 }
