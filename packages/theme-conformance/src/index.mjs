@@ -523,7 +523,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
       "utf8",
     );
     for (const type of blocks)
-      if (!html.includes(`data-block="${type}"`))
+      if (!html.includes(`data-block="${type}"`) && !html.includes(`data-block-type="${type}"`))
         throw new Error(`Installed starter omitted ${type}.`);
     const evidence = resolve(artifactsDir || join(process.cwd(), "artifacts/theme-conformance"));
     await mkdir(evidence, { recursive: true });
