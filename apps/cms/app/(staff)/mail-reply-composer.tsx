@@ -85,6 +85,7 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
         setStatus('Confirmed for this message only. Send within 10 minutes.')
       } else if (kind === 'edit') {
         if (grant) await call('cancel', grant)
+        else if (draft) await call('cancel-prepared', draft.id)
         if (!current()) return
         setSender(draft?.sender ?? sender)
         setSubject(draft?.subject ?? subject)

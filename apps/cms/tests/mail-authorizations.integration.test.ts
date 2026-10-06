@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload, type Payload } from 'payload'
-import { authorizationDigest, authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
+import { authorizationDigest, authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, revokeMailAuthorization } from '../src/mail-authorizations'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 import { classifyLeadAsSpam, restoreLeadFromSpam } from '../src/lead-spam-lifecycle'
 import { prepareReply, sendReply, setReplyDeliveryForTest } from '../src/mail-replies'
@@ -168,6 +168,15 @@ describe('local mail authorization transactions', () => {
       await expect(consumeMailAuthorization(payload, owner, grant.id, new Date('2099-01-01T00:00:00.000Z'))).rejects.toThrow('audit unavailable')
       expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'authorized' })
     } finally { payload.create = create }
+  })
+
+  it('durably cancels a prepared draft without creating a grant', async () => {
+    const sales = await actor('sales'); const prepared = await draft()
+    await expect(cancelPreparedMailDraft(payload, sales, prepared.id)).resolves.toBeUndefined()
+    expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'canceled' })
+    await expect(authorizeMailDraft(payload, sales, prepared.id, future())).rejects.toThrow('draft_not_prepared')
+    const audits = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mail.draft_cancelled' } }, limit: 0, pagination: false, depth: 0, overrideAccess: true })
+    expect(audits.docs.some(item => (item.detail as { draft?: string }).draft === prepared.id)).toBe(true)
   })
 
   it('allows only a fresh canonical role for the selected draft domain', async () => {

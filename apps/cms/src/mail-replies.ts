@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload } from 'payload'
-import { authorizeMailDraft, consumeMailAuthorization, revokeMailAuthorization } from './mail-authorizations'
+import { authorizeMailDraft, cancelPreparedMailDraft, consumeMailAuthorization, revokeMailAuthorization } from './mail-authorizations'
 import { sendAreaMail } from './mailboxes'
 import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
@@ -19,6 +19,7 @@ export async function prepareReply(payload: Payload, target: 'lead' | 'applicati
 }
 export async function authorizeReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return authorizeMailDraft(payload, actor, draftID, new Date(Date.now() + 10 * 60_000)) }
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
+export async function cancelPreparedReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return cancelPreparedMailDraft(payload, actor, draftID) }
 export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) {
   const pending = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const pendingDraft = await payload.findByID({ collection: 'mail-drafts', id: typeof pending.draft === 'string' ? pending.draft : pending.draft.id, depth: 0, overrideAccess: true })
