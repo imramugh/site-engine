@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getPayload } from 'payload'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { deriveRoutes, resolveSiteNavigation } from '@site-engine/engine'
-import { buildCandidate } from '../src/publishing'
+import { buildCandidate, canonicalHash } from '../src/publishing'
 import { snapshotMediaReference } from '../src/media'
 import sharp from 'sharp'
 
@@ -19,6 +19,32 @@ beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
 describe('reviewed site settings singleton', () => {
+  it('canonicalizes baseline semantic logo references across unrelated edits and rejects unknown assets without mutating the baseline', () => {
+    const base = structuredClone(neutralFixture)
+    base.settings.contractVersion = '1.5.0'
+    const assets = Array.from({ length: 5 }, (_, index) => ({ id: randomUUID(), filename: `semantic-${index}.svg`, mimeType: 'image/svg+xml' as const, width: 100, height: 20, alt: `Semantic logo ${index + 1}`, decorative: false }))
+    base.media = assets
+    base.settings.logos = {
+      primaryLight: { ...assets[0]!, sha256: '0'.repeat(64) }, primaryDark: assets[1]!,
+      fullLockupLight: assets[2]!, fullLockupDark: assets[3]!,
+      symbolLight: assets[4]!, symbolDark: assets[4]!,
+    }
+    const page = base.pages[0]!
+    const updatedPage = { ...page, blocks: page.blocks.map((block, index) => index === 0 ? { ...block, heading: 'An unrelated reviewed block edit' } : block) }
+    const pageCandidate = buildCandidate(base, [{ collection: 'pages', id: page.id, before: page, after: updatedPage, beforeHash: canonicalHash(page), afterHash: canonicalHash(updatedPage) }] as never, [`pages:${page.id}`], { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.5.0' })
+    expect(pageCandidate.settings.logos).toEqual({
+      primaryLight: assets[0], primaryDark: assets[1], fullLockupLight: assets[2], fullLockupDark: assets[3], symbolLight: assets[4], symbolDark: assets[4],
+    })
+
+    const capturedLogos = Object.fromEntries(Object.entries(base.settings.logos).map(([field, asset]) => [field, asset.id]))
+    const clearLogos = { collection: 'site-settings', id: 'active', before: { logos: capturedLogos }, after: {}, beforeHash: canonicalHash({ logos: capturedLogos }), afterHash: canonicalHash({}) }
+    expect(buildCandidate(base, [clearLogos] as never, ['site-settings:active'], { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.5.0' }).settings.logos).toBeUndefined()
+
+    const before = canonicalHash(base)
+    const unknownLogos = { collection: 'site-settings', id: 'active', before: { logos: capturedLogos }, after: { logos: { primaryLight: randomUUID() } }, beforeHash: canonicalHash({ logos: capturedLogos }), afterHash: null }
+    expect(() => buildCandidate(base, [unknownLogos] as never, ['site-settings:active'], { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.5.0' })).toThrow('semantic logo primaryLight must reference an included asset')
+    expect(canonicalHash(base)).toBe(before)
+  })
   it('replaces the homepage without redirecting the root away from the reviewed page', () => {
     const base = structuredClone(neutralFixture)
     const previous = base.pages[0]!
