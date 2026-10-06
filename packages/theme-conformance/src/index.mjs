@@ -576,6 +576,8 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
                 ".svg": "image/svg+xml",
                 ".woff2": "font/woff2",
                 ".ttf": "font/ttf",
+                ".webm": "video/webm",
+                ".vtt": "text/vtt",
               }[extname(relative)] || "application/octet-stream",
           })
           .end(bytes);
@@ -637,6 +639,30 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           if (path === "general/matrix") {
             await page.reload({ waitUntil: "networkidle" });
             await page.evaluate(() => document.fonts.ready);
+            await page.evaluate(async () => {
+              const videos = [...document.querySelectorAll("video")];
+              const waitFor = (video, event) => new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 10_000);
+                video.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+              });
+              for (const video of videos) {
+                if (video.readyState < HTMLMediaElement.HAVE_METADATA)
+                  await waitFor(video, "loadedmetadata");
+                if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA)
+                  await waitFor(video, "canplay");
+                video.muted = true;
+                await video.play();
+                await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                if (video.currentTime <= 0 || video.paused)
+                  throw new Error("Video did not play after canplay.");
+                video.pause();
+                video.currentTime = 0;
+                // Native controls include a transient Chromium loading spinner.
+                // Playback above verifies the control's media source; removing
+                // the controls only for the screenshot makes its pixels stable.
+                video.removeAttribute("controls");
+              }
+            });
           }
           await page.addStyleTag({
             content:
