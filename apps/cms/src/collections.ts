@@ -887,6 +887,8 @@ export const IntegrationConfigurations: CollectionConfig = {
   fields: [
     { name: 'provider', type: 'select', required: true, unique: true, options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
     { name: 'model', type: 'text', required: true, maxLength: 160 },
+    { name: 'azureResourceEndpoint', type: 'text', maxLength: 300 },
+    { name: 'azureApiVersion', type: 'text', maxLength: 40 },
     { name: 'fallbackProvider', type: 'select', options: ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] },
     { name: 'monthlyCapMicroUsd', type: 'number', min: 0, max: Number.MAX_SAFE_INTEGER },
     { name: 'monthlyUsageMicroUsd', type: 'number', min: 0, defaultValue: 0, admin: { readOnly: true } },

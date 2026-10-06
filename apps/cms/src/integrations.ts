@@ -1,9 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
-export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral'] as const
+export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'mistral', 'azure-openai'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
 export type ConnectionResult = { ok: boolean; code: 'connected' | 'unavailable' | 'rejected' }
-export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null }) => Promise<ConnectionResult>
+export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null; azureResourceEndpoint?: string | null; azureApiVersion?: string | null }) => Promise<ConnectionResult>
 export type ConnectionFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 const CONNECTION_TIMEOUT_MS = 5_000
@@ -36,7 +36,7 @@ export function decryptCredential(envelope: string, provider: IntegrationProvide
 export const credentialFingerprint = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12)
 
 /** No production provider is contacted by this foundation. Adapters inject this seam when approved. */
-export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
+export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null; azureResourceEndpoint?: string | null; azureApiVersion?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
   const credential = decryptCredential(input.encryptedCredential, input.provider)
   if (!transport) return { ok: false, code: 'unavailable' }
   try {
@@ -117,4 +117,9 @@ export function publicIntegration(doc: Record<string, unknown>) {
     credentialConfigured: typeof doc.encryptedCredential === 'string' && doc.encryptedCredential.length > 0,
     credentialHint: typeof doc.credentialFingerprint === 'string' ? `configured • ${doc.credentialFingerprint}` : null,
   }
+}
+
+export function azureResourceEndpoint(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 300) return undefined
+  try { const url = new URL(value); if (url.protocol !== 'https:' || !url.hostname.endsWith('.openai.azure.com') || url.username || url.password || url.search || url.hash || url.pathname !== '/') return undefined; return url.origin } catch { return undefined }
 }
