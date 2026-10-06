@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import sharp from 'sharp';
 import { createServer, type Server } from 'node:http';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -494,7 +495,6 @@ describe('static snapshot renderer', () => {
     const previousMediaDirectory = process.env.SITE_MEDIA_DIR;
     try {
       for (const filename of ['sample-image.svg', 'sample-poster.svg', 'sample-video.webm', 'sample-captions.vtt']) await copyFile(join(process.cwd(), 'apps/site/public/media', filename), join(source, filename));
-      const sharp = createRequire(new URL('../../cms/package.json', import.meta.url))('sharp');
       await writeFile(join(source, 'sample-image-hero.avif'), await sharp({ create: { width: 640, height: 360, channels: 3, background: '#155e75' } }).avif().toBuffer());
       await writeFile(join(source, 'unreferenced-private.txt'), 'must never enter artifact');
       process.env.SITE_MEDIA_DIR = source;
