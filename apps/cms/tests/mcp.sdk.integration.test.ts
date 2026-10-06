@@ -525,7 +525,9 @@ test('MCP mutation returns a retryable tool error when a writer locks SQLite aft
     return result
   }) as typeof payload.create
   try {
-    const blocked = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } }))
+    const response = await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })
+    expect(response).toMatchObject({ isError: true })
+    const blocked = resultJson(response)
     expect(blocked).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
     expect((await payload.count({ collection: 'change-sets', overrideAccess: true })).totalDocs).toBe(beforeSets.totalDocs)
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
