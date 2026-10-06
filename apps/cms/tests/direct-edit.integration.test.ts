@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { createClient } from '@libsql/client'
 import { ConnectionPool } from '@libsql/client/sqlite3'
 import { getPayload } from 'payload'
@@ -19,6 +20,7 @@ process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE = join(directory, 'bootstrap-token')
 writeFileSync(process.env.BOOTSTRAP_OPERATOR_TOKEN_FILE, 'test-only-bootstrap-token')
 const { default: config } = await import('../payload.config.js')
 const directRoute = await import('../app/api/editorial/direct-edit/route.js')
+const { createClient: createCjsClient } = createRequire(import.meta.url)('@libsql/client/sqlite3') as typeof import('@libsql/client/sqlite3')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let releaseSequence = 10_000
 
@@ -138,9 +140,13 @@ describe('ENG-026 draft-only direct hero edits', () => {
       expect(replacement).not.toBe(failedBegin)
       expect(survivor.open).toBe(true)
       expect(survivor.inTransaction).toBe(true)
-      survivor.prepare('ROLLBACK').run()
+      survivor.prepare('CREATE TABLE IF NOT EXISTS pool_survivor (id TEXT PRIMARY KEY)').run()
+      const survivorID = randomUUID()
+      survivor.prepare('INSERT INTO pool_survivor (id) VALUES (?)').run(survivorID)
+      survivor.prepare('COMMIT').run()
       pool.release(survivor)
       survivorReleased = true
+      expect(replacement.prepare('SELECT id FROM pool_survivor WHERE id = ?').get(survivorID)).toMatchObject({ id: survivorID })
       pool.release(replacement)
       replacementReleased = true
     } finally {
@@ -150,6 +156,28 @@ describe('ENG-026 draft-only direct hero edits', () => {
       pool.close()
     }
   })
+
+  it('recovers the CJS libSQL transaction client after a busy BEGIN', async () => {
+    const editor = await actor(); const current = await fixture(editor)
+    const external = createClient({ url: `file:${dbPath}` })
+    const cjs = createCjsClient({ url: `file:${dbPath}` })
+    const lock = await external.transaction('write')
+    try {
+      await lock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
+      await expect(cjs.transaction('write')).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+    } finally {
+      await lock.rollback()
+      external.close()
+    }
+    const retried = await cjs.transaction('write')
+    try {
+      await retried.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [current.page.id] })
+      await retried.commit()
+    } finally {
+      if (!retried.closed) await retried.rollback()
+      cjs.close()
+    }
+  }, 20_000)
 
   it('returns a stale conflict for competing values from one baseline without changing another Hero field', async () => {
     const editor = await actor(); const current = await fixture(editor)

@@ -111,6 +111,14 @@ patch together until an upstream release contains both fixes; do not remove eith
 without running `tests/transaction-failure.integration.test.ts` and the identity
 transaction tests.
 
+The workspace also pins a narrow `@libsql/client` 0.18.0 patch. It discards only the
+connection whose transaction `BEGIN` failed, then serves one queued borrower with a
+replacement connection. It never closes, reconnects, or rolls back the shared client.
+Remove this patch only after upgrading to a Payload-compatible libSQL release that
+contains equivalent failed-`BEGIN` disposal and waiter handling, and after the direct
+edit SQLite contention regression proves both ESM and CJS clients can commit a retry
+while an independent transaction remains usable.
+
 ### Local owner bootstrap
 
 Only before any user or live invitation exists, an operator may run `pnpm bootstrap:local-owner <email> <name>` with `ALLOW_LOCAL_OWNER_BOOTSTRAP=true`, `PAYLOAD_SECRET`, `EMERGENCY_TOTP_ENCRYPTION_KEY`, a protected `BOOTSTRAP_OPERATOR_TOKEN_FILE`, and a new `LOCAL_OWNER_CREDENTIALS_FILE`. The command writes the TOTP handoff material only to that exclusive 0600 file; it never prints credentials.
