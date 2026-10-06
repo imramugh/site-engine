@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createNotificationWorkerRunHandler, notificationWorkerAuthorized } from '../src/notification-worker'
-import { runNotificationCycle } from '../app/api/internal/notification-worker/run/route'
+import { runNotificationCycle } from '../src/notification-cycle'
 
 describe('notification worker boundary', () => {
   it('fails closed without a configured matching bearer token', async () => {
