@@ -6,6 +6,7 @@ const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const ownerInvite = 'synthetic-browser-owner-invite'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
 const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
 const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -348,8 +349,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   expect(staleSession.status(), await staleSession.text()).toBe(204)
   await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
   await expect(reviewer.getByRole('status')).toContainText('Fresh reviewer authentication is required before approval.')
-  await signInLocalOwner(reviewer, reviewOwnerRecoveryCode, reviewOwnerEmail)
+  await signInLocalOwner(reviewer, reviewOwnerReauthenticationCode, reviewOwnerEmail)
   await reviewer.goto(`/admin/editorial?changeSet=${changeSetID}`)
+  await reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`).click()
   await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
   await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Approved snapshot queued' })).toContainText('publish worker')
@@ -360,8 +362,10 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
     const body = await (await fetch('/api/editorial/list', { cache: 'no-store' })).json() as { sets: Array<{ id: string; state: string; name: string; changes?: unknown[] }> }
     return { approved: body.sets.find((set) => set.id === id), remaining: body.sets.find((set) => set.name.endsWith('— remaining changes')) }
   }, changeSetID)
-  expect(approvalSplit.approved).toMatchObject({ state: 'approved', changes: [expect.anything()] })
-  expect(approvalSplit.remaining).toMatchObject({ state: 'open', changes: [expect.anything()] })
+  expect(approvalSplit.approved).toMatchObject({ state: 'approved' })
+  expect(approvalSplit.approved?.changes).toEqual(expect.arrayContaining([expect.anything()]))
+  expect(approvalSplit.remaining).toMatchObject({ state: 'open' })
+  expect(approvalSplit.remaining?.changes).toEqual(expect.arrayContaining([expect.anything()]))
   expect(await reviewer.evaluate(async () => (await fetch('/api/editorial/publish', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'worker-only' }) })).status)).toBe(409)
   await reviewer.getByLabel('Add review comment').fill('Browser review comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click()

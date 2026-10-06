@@ -39,6 +39,7 @@ const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
+const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
 const leadOwnerEmail = 'lead-owner.synthetic@example.test'
 const leadOwnerRecoveryCode = 'synthetic-lead-owner-code-07'
 const leadSessionTokens = { owner: 'synthetic-lead-owner-session-token', editor: 'synthetic-lead-editor-session-token' } as const
@@ -307,7 +308,7 @@ async function seed(): Promise<void> {
       overrideAccess: true,
     })
   }
-  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode)] }, overrideAccess: true })
+  const reviewOwner = await payload.create({ collection: 'users', data: { email: reviewOwnerEmail, name: 'Synthetic Review Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(reviewOwnerRecoveryCode), recoveryHash(reviewOwnerReauthenticationCode)] }, overrideAccess: true })
   reviewOwnerID = String(reviewOwner.id)
   await payload.create({ collection: 'users', data: { email: 'content-owner.synthetic@example.test', name: 'Synthetic Content Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash('synthetic-content-owner-code-05'), recoveryHash('synthetic-intake-owner-code-06')] }, overrideAccess: true })
   const leadOwner = await payload.create({ collection: 'users', data: { email: leadOwnerEmail, name: 'Synthetic Lead Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(leadOwnerRecoveryCode)] }, overrideAccess: true })

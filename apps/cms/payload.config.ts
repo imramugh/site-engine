@@ -27,7 +27,9 @@ export default buildConfig({
   },
   collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, McpPrivacySettings, ProviderUsageReservations, MailboxConfigurations, MailboxOAuthTransactions, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailDrafts, MailThreads, MailThreadMessages, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
-    client: { url: databaseURI() },
+    // libSQL opens additional pooled connections lazily; its timeout applies to each
+    // connection, unlike the one-time PRAGMA below.
+    client: { url: databaseURI(), timeout: 5000 },
     // The Payload CLI otherwise resolves migrations from the caller's cwd. Keep
     // this absolute so `pnpm migrate` and the standalone deployment agree.
     migrationDir,
