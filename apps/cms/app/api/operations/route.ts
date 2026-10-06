@@ -88,9 +88,10 @@ async function GETHandler(request: Request) {
   const stageByOutbox = new Map<string, Record<string, unknown>>()
   for (const event of stageEvents.docs) { const detail = safeDetail(String(event.event), event.detail); const id = relationID(detail?.publishJob); if (id && !stageByOutbox.has(id)) stageByOutbox.set(id, { ...detail, createdAt: event.createdAt }) }
   const selectedPublish = publish ? await payload.find({ collection: 'publish-outbox', where: { id: { equals: publish } }, limit: 1, depth: 0, overrideAccess: true }) : undefined
-  const buildEvents = publish ? await payload.find({ collection: 'audit-events', where: { 'detail.publishJob': { equals: publish } }, sort: 'createdAt', limit: 200, depth: 0, overrideAccess: true }) : undefined
+  const buildEvents = publish ? await payload.find({ collection: 'audit-events', where: { and: [{ 'detail.publishJob': { equals: publish } }, { or: [{ event: { like: 'editorial.%' } }, { event: { like: 'publish.%' } }] }] }, sort: 'createdAt', limit: 200, depth: 0, overrideAccess: true }) : undefined
   const releaseLabel = (status: unknown) => status === 'pending' ? 'Queued' : status === 'processing' ? 'Building' : status === 'completed' ? 'Deployed' : status === 'failed' ? 'Failed' : 'Queued'
   return Response.json({
+    capabilities: { ownerOperations: owner },
     summary: {
       pendingReviews: reviews.totalDocs,
       urgentOrNewLeads: leads.totalDocs,

@@ -48,6 +48,7 @@ type ReleaseHistory = {
 };
 type BuildLog = null | { id: string; sequence: number; status: string; attempts: number; events: Array<{ id: string; event: string; createdAt: string; stage: string | null; result: string | null; errorCode: string | null; attempt: number | null; correlationID: string | null }> };
 type Data = {
+  capabilities: { ownerOperations: boolean };
   audit: { docs: Row[]; page: number; totalPages: number };
   releaseHistory: ReleaseHistory[];
   buildLog: BuildLog;
@@ -231,7 +232,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
           >
             All changes
           </button>
-          <label>
+          {data?.capabilities.ownerOperations && <label>
             <span>Person</span>
             <select
               aria-label="Person"
@@ -239,13 +240,13 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
               onChange={update("actor")}
             >
               <option value="">Any person</option>
-              {data?.filterOptions.actors.map((option) => (
+              {data.filterOptions.actors.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
                 </option>
               ))}
             </select>
-          </label>
+          </label>}
           <label>
             <span>Source</span>
             <select
@@ -274,7 +275,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
               ))}
             </select>
           </label>
-          <label>
+          {data?.capabilities.ownerOperations && <label>
             <span>Type</span>
             <select
               aria-label="Type"
@@ -291,7 +292,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
               <option value="lead">Leads</option>
               <option value="career">Careers</option>
             </select>
-          </label>
+          </label>}
           <label>
             <span>Period</span>
             <select
