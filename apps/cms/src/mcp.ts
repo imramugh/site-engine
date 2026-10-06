@@ -12,7 +12,7 @@ import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog, deterministicRecipeBlockID, recipeBlocks } from './block-gallery'
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
 import { canonicalHash } from './publishing'
-import { prepareReply } from './mail-replies'
+import { prepareReply, sendMcpReply } from './mail-replies'
 import { isRetryableSQLiteError } from './sqlite'
 
 const limit = new Map<string, { count: number; reset: number }>()
@@ -22,7 +22,7 @@ const knownMethods = new Set([
   'resources/list', 'resources/templates/list', 'resources/read',
   'prompts/list', 'prompts/get',
 ])
-const knownTools = new Set(['create_section', 'update_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply'])
+const knownTools = new Set(['create_section', 'update_section', 'list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_tree', 'search_content', 'list_block_types', 'list_templates', 'list_section_presets', 'list_appearance_options', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'audit_page', 'list_stale_pages', 'get_style_guide', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'])
 const protectedReadMethods = new Set(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'])
 const contentReadScope = 'mcp:content:read'
 const contentWriteScope = 'mcp:content:write'
@@ -379,6 +379,16 @@ export async function handleMcp(request: Request): Promise<Response> {
       const path = target === 'lead' ? '/leads' : '/applications'
       return structured({ draft: { id: String(draft.id), target, revision: Number(draft.revision), state: 'prepared' as const, confirmationURL: `${origin.origin}${path}?draft=${encodeURIComponent(String(draft.id))}` } })
     } catch (error) { return mutationFailure(error, 'reply_preparation_failed') }
+  })
+  server.registerTool('send_reply', { title: 'Send human-confirmed reply', description: 'Deliver exactly one prepared reply only after the same authenticated human has confirmed its immutable envelope in the CMS. This is an external side effect.', inputSchema: z.object({ draftID: z.string().uuid(), grantID: z.string().uuid() }).strict(), outputSchema: z.object({ provider: z.string(), messageID: z.string() }).passthrough(), annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, _meta: { securitySchemes: [{ type: 'oauth2', scopes: [leadsReadScope, leadsReplyScope] }, { type: 'oauth2', scopes: [careersReadScope, careersReplyScope] }], authorization: { requiredScopes: ['mcp:leads:read + mcp:leads:reply OR mcp:careers:read + mcp:careers:reply'], effectiveUserRequired: true } } }, async ({ draftID, grantID }) => {
+    if (!((leads && identity.scopes.includes(leadsReplyScope) && roles.some((role) => role === 'owner' || role === 'sales')) || (careers && identity.scopes.includes(careersReplyScope) && roles.some((role) => role === 'owner' || role === 'hiring')))) return denied('mcp:leads:reply or mcp:careers:reply')
+    try {
+      const grant = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true }) as { draft?: string | { id?: string } }
+      const boundDraft = typeof grant.draft === 'string' ? grant.draft : grant.draft?.id
+      if (boundDraft !== draftID) return { isError: true, ...text({ error: 'authorization_not_usable' }) }
+      const delivery = await sendMcpReply(payload, { userID: identity.userId, clientIDHash: auditClient(identity.clientId), oauthSessionID: identity.sessionId }, grantID)
+      return structured({ provider: delivery.provider, messageID: delivery.messageID })
+    } catch (error) { return mutationFailure(error, 'reply_send_failed', ['authorization_not_usable', 'mail_authorization_required', 'reply_attachments_not_supported']) }
   })
   const writeSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentWriteScope] }], requiredScopes: [contentWriteScope], effectiveUserRequired: true }
   server.registerTool('create_change_set', { title: 'Create change set', description: `Create an explicit draft change set. ${toolLimits}`, inputSchema: { name: z.string().min(1).max(120) }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ name }) => { if (!write) return denied(contentWriteScope); try { const result = await withPayloadTransaction(payload, (req) => { req.user = current as never; return createNamedChangeSet(payload, req, current as never, name) }); return text({ id: result.id, name: result.name, state: result.state, revision: result.revision }) } catch (error) { return mutationFailure(error, 'write_failed') } })
