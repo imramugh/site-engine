@@ -94,6 +94,7 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
       const parsed = parseEnvelope(job.input)
       if (actor !== current.id || !parsed) return error('not_found')
       const target = await payload.findByID({ collection: parsed.target.collection, id: parsed.target.id, depth: 0, draft: true, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
+      if (parsed.target.collection === 'assets' && target.deletedAt) return error('not_found')
       const stale = revision(parsed.target.collection, target) !== parsed.target.revision
       let result: { output?: unknown } | undefined
       if (job.result && typeof job.result === 'object') result = job.result as { output?: unknown }
