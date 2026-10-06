@@ -170,7 +170,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section'])
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
+      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, or bypass CMS permissions')
       if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
@@ -612,7 +612,7 @@ test('MCP reply grants bind the SDK origin to a separate fresh human confirmatio
   const clientID = `mcp-bound-client-${randomUUID()}`
   const clientHash = createHash('sha256').update(clientID).digest('hex')
   const tokenName = `mcp-bound-token-${randomUUID()}`
-  tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] })
+  tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
   const sdk = await clientFor(tokenName)
   let providerRequests = 0
   setReplyDeliveryForTest(async (_payload, area, envelope) => {
@@ -648,7 +648,7 @@ test('MCP reply grants bind the SDK origin to a separate fresh human confirmatio
     expect(providerRequests).toBe(1)
 
     const cases: Array<[string, (draftID: string, grantID: string) => Promise<void>]> = [
-      ['wrong client', async () => { tokens.set(tokenName, { clientId: `wrong-client-${randomUUID()}`, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['wrong client', async () => { tokens.set(tokenName, { clientId: `wrong-client-${randomUUID()}`, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] }) }],
       ['wrong actor', async () => { tokens.set(tokenName, { clientId: clientID, userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
       ['wrong OAuth origin session', async () => { tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: (await sessionFor(owner.id)).id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
       ['edited draft', async (draftID) => { await payload.update({ collection: 'mail-drafts', id: draftID, data: { body: 'Edited after confirmation.' }, overrideAccess: true }) }],
@@ -661,7 +661,7 @@ test('MCP reply grants bind the SDK origin to a separate fresh human confirmatio
     for (const [name, invalidate] of cases) {
       await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
       await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: null, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
-      tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] })
+      tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
       const rejected = await prepareAndConfirm()
       await invalidate(rejected.draftID, rejected.grantID)
       await assertRejected(rejected.draftID, rejected.grantID)
