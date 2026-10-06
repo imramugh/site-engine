@@ -77,7 +77,8 @@ export async function completeMailboxOAuth(payload: Payload, provider: MailboxOA
   const token = await tokenJSON(response)
   if (!response.ok || typeof token.access_token !== 'string' || token.access_token.length > 16_384 || typeof token.refresh_token !== 'string' || token.refresh_token.length > 16_384) throw new Error('provider_rejected')
   const identity = await (provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(token.access_token)
-  return (payload as any).create({ collection: 'mailbox-configurations', data: { name: `${provider} ${identity.primaryAddress}`, provider, primaryAddress: identity.primaryAddress, aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: identity.primaryAddress, encryptedCredential: encrypt(JSON.stringify({ refreshToken: token.refresh_token }), provider), credentialRevision: randomBytes(8).toString('hex'), health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  const verifiedAliases = identity.verifiedSenders.filter((sender) => sender !== identity.primaryAddress)
+  return (payload as any).create({ collection: 'mailbox-configurations', data: { name: `${provider} ${identity.primaryAddress}`, provider, primaryAddress: identity.primaryAddress, aliases: verifiedAliases, verifiedAliases, host: 'oauth', port: 1, security: 'tls', username: identity.primaryAddress, encryptedCredential: encrypt(JSON.stringify({ refreshToken: token.refresh_token }), provider), credentialRevision: randomBytes(8).toString('hex'), health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
 }
 
 export async function refreshMailboxOAuth(mailbox: any, fetcher: Fetcher = fetch) {

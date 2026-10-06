@@ -124,6 +124,27 @@ export type AreaMailMessage = {
   /** Provider IDs are persisted by mailbox sync and required for replies. */
   providerThreadID?: string
   providerMessageID?: string
+  providerMailboxID?: string
+  provider?: 'microsoft' | 'google'
+  providerTarget?: { collection: 'inquiries' | 'applications'; id: string }
+}
+
+async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
+  const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
+  if (!mapping.docs[0]) throw new Error('mailbox_not_configured')
+  const mailboxID = relationID(mapping.docs[0].mailbox)
+  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
+  return { mapping: mapping.docs[0], mailboxID, mailbox }
+}
+
+async function groundedProviderThread(payload: Payload, message: AreaMailMessage, mailbox: StoredMailbox) {
+  if (!message.threadID) return
+  if (!message.providerThreadID || !message.providerMessageID || !message.providerMailboxID || !message.provider || !message.providerTarget || message.providerMailboxID !== mailbox.id || message.provider !== mailbox.provider) throw new Error('mailbox_thread_not_grounded')
+  const targetField = message.providerTarget.collection === 'inquiries' ? 'lead' : 'application'
+  const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: mailbox.id } }, { provider: { equals: message.provider } }, { providerConversationID: { equals: message.providerThreadID } }, { [targetField]: { equals: message.providerTarget.id } }] }, limit: 1, depth: 0, overrideAccess: true })
+  if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
+  const linked = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: thread.docs[0].id } }, { mailbox: { equals: mailbox.id } }, { providerMessageID: { equals: message.providerMessageID } }] }, limit: 1, depth: 0, overrideAccess: true })
+  if (!linked.docs[0]) throw new Error('mailbox_thread_not_grounded')
 }
 
 export async function sendAreaMail(
@@ -132,11 +153,9 @@ export async function sendAreaMail(
   message: AreaMailMessage,
   fetcher: Fetcher = fetch,
 ) {
-  const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
-  if (!mapping.docs[0]) throw new Error('mailbox_not_configured')
-  const mailboxID = relationID(mapping.docs[0].mailbox)
-  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
-  if (mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(mapping.docs[0].senderAddress))) throw new Error('mailbox_not_ready')
+  const initial = await currentAreaMailbox(payload, area)
+  const { mailboxID, mailbox } = initial
+  if (mailbox.health !== 'connected' || normalizedEmail(message.sender) !== normalizedEmail(String(initial.mapping.senderAddress))) throw new Error('mailbox_not_ready')
 
   if (mailbox.provider === 'smtp') {
     const result = await (await smtpTransport(mailbox)).sendMail({ from: message.sender, to: message.recipient, subject: message.subject, text: message.body, headers: message.threadID ? { 'In-Reply-To': message.threadID } : undefined })
@@ -144,11 +163,14 @@ export async function sendAreaMail(
   }
 
   if (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google') throw new Error('mailbox_not_ready')
-  if (message.threadID && (!message.providerThreadID || !message.providerMessageID)) throw new Error('mailbox_thread_not_grounded')
+  await groundedProviderThread(payload, message, mailbox)
 
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
   const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(refreshed.accessToken)
   if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
+  const final = await currentAreaMailbox(payload, area)
+  if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
+  await groundedProviderThread(payload, message, final.mailbox)
 
   const envelope = {
     sender: message.sender,
@@ -159,8 +181,8 @@ export async function sendAreaMail(
     ...(mailbox.provider === 'google' && message.providerThreadID ? { threadID: message.providerThreadID } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
-    ? microsoftAdapter(fetcher, identity.primaryAddress).send(refreshed.accessToken, envelope)
-    : gmailAdapter(fetcher, identity.primaryAddress).send(refreshed.accessToken, envelope))
+    ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
+    : gmailAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope))
   return { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
 }
 
