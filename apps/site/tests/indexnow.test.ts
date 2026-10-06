@@ -28,6 +28,14 @@ describe('ENG-012 IndexNow hook', () => {
     const { publishIndexNowAfterActivation } = await import('../scripts/indexnow.mjs');
     await expect(publishIndexNowAfterActivation({ urls: ['https://public.example.test/guide'], publicOrigin: 'https://public.example.test', basePath: '/' })).resolves.toEqual({ sent: true, batches: 1 });
     expect(fetch).toHaveBeenCalledOnce();
-    await expect(publishIndexNowAfterActivation({ urls: ['https://other.example.test/'], publicOrigin: 'https://public.example.test', basePath: '/' })).rejects.toThrow('configured HTTPS public origin');
+    await expect(publishIndexNowAfterActivation({ urls: ['https://other.example.test/'], publicOrigin: 'https://public.example.test', basePath: '/' })).resolves.toMatchObject({ sent: false, reason: 'invalid-urls' });
+  });
+
+  it('records an unknown transport result without retrying it', async () => {
+    process.env.NODE_ENV = 'production'; process.env.SITE_INDEXNOW_ENABLED = 'true'; process.env.SITE_INDEXNOW_KEY = 'abcdefghi'; process.env.SITE_INDEXNOW_ENDPOINT = 'https://api.indexnow.example/indexnow'; process.env.SITE_INDEXNOW_ALLOWED_HOSTS = 'api.indexnow.example';
+    const fetch = vi.fn().mockRejectedValue(new Error('socket closed')); vi.stubGlobal('fetch', fetch);
+    const { publishIndexNowAfterActivation } = await import('../scripts/indexnow.mjs');
+    await expect(publishIndexNowAfterActivation({ urls: ['https://public.example.test/'], publicOrigin: 'https://public.example.test', basePath: '/' })).resolves.toMatchObject({ sent: false, reason: 'outcome-unknown' });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

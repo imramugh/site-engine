@@ -7,6 +7,7 @@ import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
 import { activatePublicRelease, verifyPublicArtifact } from './public-release.mjs';
+import { publishActivatedReleaseIndexNow } from './indexnow.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
 const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a, b], [c, d]) => a.localeCompare(c)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
@@ -55,7 +56,8 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
     await activatePublicRelease({ releasesRoot, artifact, jobID: identity.id, sequence: input.job.sequence, pins: input.pins, health: () => probe(expectedProof), assertLease: async () => {
       const renewed = await api('renew', identity, signal); if (!validLease(renewed?.job, identity, signal)) throw new WorkerError('LEASE_LOST'); return true;
     } });
-    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] };
+    const indexNow = await publishActivatedReleaseIndexNow({ releasesRoot, jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, publicOrigin });
+    const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }], indexNow };
     await api('complete', { ...identity, artifact: evidence }, signal); return true;
   } catch (error) {
     if (error?.code !== 'LEASE_LOST') { try { await api('fail', { ...identity, errorCode: error?.code ?? 'BUILD_FAILED' }, signal); } catch {} }
