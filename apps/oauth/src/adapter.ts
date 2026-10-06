@@ -165,19 +165,23 @@ export function createHashedAdapter(db: DatabaseSync) {
   return (model: string) => new HashedSQLiteAdapter(model, db);
 }
 
-function managed(row: { user_id: string; session_id: string; client_id: string; client_name: string | null; resource: string; scopes: string; expires_at: number; management_id: string; created_at: number; last_used_at: number | null }): ManagedGrant | undefined {
+function legacyClientName(db: DatabaseSync, clientID: string): string {
+  const row = db.prepare("SELECT payload FROM oidc_records WHERE model = 'Client' AND id_hash = ?").get(hash(clientID)) as { payload?: string } | undefined
+  try { const payload = row?.payload ? JSON.parse(row.payload) as Record<string, unknown> : undefined; const name = payload?.client_name ?? payload?.clientName; return typeof name === 'string' && name.trim() ? name.trim().slice(0, 160) : 'Unknown legacy assistant' } catch { return 'Unknown legacy assistant' }
+}
+function managed(db: DatabaseSync, row: { user_id: string; session_id: string; client_id: string; client_name: string | null; resource: string; scopes: string; expires_at: number; management_id: string; created_at: number; last_used_at: number | null }): ManagedGrant | undefined {
   try {
     const parsed = JSON.parse(row.scopes) as unknown
     if (!managementID.test(row.management_id) || !Array.isArray(parsed) || !parsed.every((scope) => typeof scope === 'string')) return undefined
-    return { managementId: row.management_id, userId: row.user_id, sessionId: row.session_id, clientId: row.client_id, clientName: row.client_name ?? 'Connected assistant', resource: row.resource, scopes: parsed, expiresAt: row.expires_at, createdAt: row.created_at, ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}) }
+    return { managementId: row.management_id, userId: row.user_id, sessionId: row.session_id, clientId: row.client_id, clientName: row.client_name ?? legacyClientName(db, row.client_id), resource: row.resource, scopes: parsed, expiresAt: row.expires_at, createdAt: row.created_at, ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}) }
   } catch { return undefined }
 }
 
 export function listManagedGrants(db: DatabaseSync, userId?: string, now = Date.now()): ManagedGrant[] {
   const rows = (userId
     ? db.prepare("SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND r.model IN ('Grant','AccessToken','RefreshToken') AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500").all(userId, now, now)
-    : db.prepare("SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND r.model IN ('Grant','AccessToken','RefreshToken') AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500").all(now, now)) as Parameters<typeof managed>[0][]
-  return rows.map(managed).filter((item): item is ManagedGrant => Boolean(item))
+    : db.prepare("SELECT user_id, session_id, client_id, client_name, resource, scopes, expires_at, management_id, created_at, last_used_at FROM oauth_grant_bindings b WHERE revoked_at IS NULL AND expires_at > ? AND EXISTS (SELECT 1 FROM oidc_records r WHERE r.grant_hash = b.grant_hash AND r.model IN ('Grant','AccessToken','RefreshToken') AND (r.expires_at IS NULL OR r.expires_at > ?)) ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 500").all(now, now)) as Parameters<typeof managed>[1][]
+  return rows.map((row) => managed(db, row)).filter((item): item is ManagedGrant => Boolean(item))
 }
 
 export function touchManagedGrant(db: DatabaseSync, grantId: string, now = Date.now()): void {
