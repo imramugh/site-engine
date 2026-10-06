@@ -96,4 +96,47 @@ describe('patched Payload SQLite transaction failures', () => {
     const client = (payload.db as unknown as SQLiteAdapter).client
     expect((await client.execute('SELECT id, parent_id FROM transaction_failure_child')).rows).toEqual([{ id: 2, parent_id: 2 }])
   })
+
+  it('removes a timed-out queued writer without aborting its active predecessor or blocking the next writer', async () => {
+    const active = await payload.db.beginTransaction()
+    const started = Date.now()
+    try {
+      await expect(payload.db.beginTransaction()).rejects.toThrow(/SQLITE_BUSY/)
+      expect(Date.now() - started).toBeGreaterThanOrEqual(4_500)
+      expect(Date.now() - started).toBeLessThan(8_000)
+      await transaction(active!).run(sql.raw('INSERT INTO transaction_failure_parent (id) VALUES (8001)'))
+      await payload.db.commitTransaction(active!)
+      const next = await payload.db.beginTransaction()
+      try {
+        await transaction(next!).run(sql.raw('INSERT INTO transaction_failure_child (id, parent_id) VALUES (8001, 8001)'))
+        await payload.db.commitTransaction(next!)
+      } finally { await payload.db.rollbackTransaction(next!) }
+      const client = (payload.db as unknown as SQLiteAdapter).client
+      expect((await client.execute('SELECT parent_id FROM transaction_failure_child WHERE id = 8001')).rows).toEqual([{ parent_id: 8001 }])
+    } finally { await payload.db.rollbackTransaction(active!) }
+  }, 12_000)
+
+  it('bounds pending writers and serves accepted transactions in FIFO order while preserving the active writer', async () => {
+    const active = await payload.db.beginTransaction()
+    const order: number[] = []
+    const queued = Array.from({ length: 100 }, (_, index) => payload.db.beginTransaction().then(async id => {
+      try { order.push(index); await payload.db.commitTransaction(id!) }
+      finally { await payload.db.rollbackTransaction(id!) }
+    }))
+    // Observe every queued promise immediately, including failures during cleanup.
+    const drained = Promise.allSettled(queued)
+    try {
+      const started = Date.now()
+      await expect(payload.db.beginTransaction()).rejects.toThrow(/SQLITE_BUSY/)
+      expect(Date.now() - started).toBeLessThan(1_000)
+      expect(order).toEqual([])
+      await transaction(active!).run(sql.raw('INSERT INTO transaction_failure_parent (id) VALUES (8002)'))
+      await payload.db.commitTransaction(active!)
+      const outcomes = await drained
+      expect(outcomes.every(outcome => outcome.status === 'fulfilled')).toBe(true)
+      expect(order).toEqual(Array.from({ length: 100 }, (_, index) => index))
+      const client = (payload.db as unknown as SQLiteAdapter).client
+      expect((await client.execute('SELECT id FROM transaction_failure_parent WHERE id = 8002')).rows).toEqual([{ id: 8002 }])
+    } finally { await payload.db.rollbackTransaction(active!); await drained }
+  }, 12_000)
 })
