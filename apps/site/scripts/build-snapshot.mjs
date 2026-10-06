@@ -27,7 +27,8 @@ function referencedMedia(snapshot) {
     }
   };
   deriveRoutes(snapshot, snapshot.settings.homepageId).routes.forEach(({ page }) => collect(page.blocks.filter((block) => !block.hidden)));
-  if (snapshot.settings.logo) ids.add(snapshot.settings.logo.id);
+  const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
+  if (symbol) ids.add(symbol.id);
   return ids;
 }
 async function copyReferencedMedia(snapshot, output) {
@@ -38,7 +39,8 @@ async function copyReferencedMedia(snapshot, output) {
   const destination = join(output, 'media'); await rm(destination, { recursive: true, force: true }); await mkdir(destination, { recursive: true });
   const copied = new Map();
   const referenced = snapshot.media.filter((item) => references.has(item.id));
-  if (snapshot.settings.logo) referenced.push(snapshot.settings.logo);
+  const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
+  if (symbol) referenced.push(symbol);
   for (const id of references) if (!referenced.some(media => media.id === id)) throw new Error(`Referenced media is absent from snapshot: ${id}`);
   for (const media of referenced) {
     const selections = [{ filename: media.filename, sha256: media.sha256 }, ...Object.values(media.variants ?? {})];
@@ -193,6 +195,12 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
   try {
     await runAstro({ frozen, publicOrigin: normalizedOrigin, basePath: normalizedBase, staged, timeoutMs, signal, themeComponentsRoot, analytics });
     await copyReferencedMedia(snapshot, staged);
+    const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
+    if (symbol) {
+      const prefix = normalizedBase === '/' ? '' : normalizedBase;
+      const href = `${prefix}/media/${symbol.filename}`;
+      await writeFile(join(staged, 'site.webmanifest'), JSON.stringify({ name: snapshot.settings.siteName, short_name: snapshot.settings.siteName, icons: [{ src: href, type: symbol.mimeType, sizes: `${symbol.width}x${symbol.height}` }] }));
+    }
     await writeIndexNowVerificationFile({ output: staged });
     // This is consumed by the edge deployment adapter only after approval. It
     // contains no draft CMS data and is deterministic for a snapshot hash.
