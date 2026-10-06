@@ -36,6 +36,9 @@ import { createPublicServer } from '../../site/scripts/public-server.mjs'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+const eng016AIRoutingModel = 'gpt-4.1-mini'
+const eng016AIRoutingPricingSource = 'https://prices.example.test/vision-review'
+const eng016AIRoutingJobTypes = new Set(['summary', 'meta', 'faq', 'alt'])
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
 const clientSecret = 'synthetic-browser-secret'
@@ -526,6 +529,21 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/eng016-ai-routing-cleanup') {
+    void (async () => {
+      const configurations = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'openai' } }, limit: 1, depth: 0, overrideAccess: true })
+      const configuration = configurations.docs[0] as unknown as { id?: unknown; model?: unknown; pricingSource?: unknown; encryptedCredential?: unknown; health?: unknown } | undefined
+      if (configuration?.model !== eng016AIRoutingModel || configuration.pricingSource !== eng016AIRoutingPricingSource || typeof configuration.id !== 'string') return { cleaned: false }
+      if (configuration.encryptedCredential || configuration.health !== 'revoked') throw new Error('Revoke the fixture credential before cleanup.')
+      const defaults = await payload.find({ collection: 'ai-job-defaults', limit: 10, depth: 0, overrideAccess: true })
+      for (const candidate of defaults.docs as Array<{ id?: unknown; jobType?: unknown; provider?: unknown; model?: unknown; fallbackProvider?: unknown }>) {
+        if (typeof candidate.id === 'string' && typeof candidate.jobType === 'string' && eng016AIRoutingJobTypes.has(candidate.jobType) && candidate.provider === 'openai' && candidate.model === eng016AIRoutingModel && (candidate.fallbackProvider === null || candidate.fallbackProvider === undefined)) await payload.delete({ collection: 'ai-job-defaults', id: candidate.id, overrideAccess: true })
+      }
+      await payload.delete({ collection: 'integration-configurations', id: configuration.id, overrideAccess: true })
+      return { cleaned: true }
+    })().then((value) => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clean ENG-016 AI routing fixture.') })
+    return
+  }
   if (request.method === 'GET' && request.url === '/__e2e/mail-reply-deliveries') {
     const deliveries = readFileSync(standaloneReplyDeliveryLedger, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { threadID: string | null; mime: string; messageID: string })
     json(response, { deliveries }); return

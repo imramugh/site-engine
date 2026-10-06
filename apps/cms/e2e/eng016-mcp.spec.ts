@@ -41,6 +41,7 @@ test('ENG-016 Editor assistant discovers, drafts, and submits a revisioned block
   const client = new Client({ name: 'eng016-browser-proof', version: '1.0.0' })
   const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED
   let transport: StreamableHTTPClientTransport | undefined
+  let ownedChangeSetID: string | undefined
   try {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
     transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), { requestInit: { headers: { authorization: `Bearer ${identity.bearer}` } } })
@@ -58,6 +59,7 @@ test('ENG-016 Editor assistant discovers, drafts, and submits a revisioned block
     const originalBlock = original.blocks.find((block) => block.id === blockID)
     expect(originalBlock).toMatchObject({ type: 'hero', heading: 'Browser original heading' })
     const changeSet = result<ChangeSet>(await client.callTool({ name: 'create_change_set', arguments: { name: 'ENG-016 assistant review draft' } }))
+    ownedChangeSetID = changeSet.id
     expect(changeSet).toMatchObject({ state: 'open', revision: 0 })
 
     const rejected = await client.callTool({ name: 'update_block', arguments: { pageId: pageID, blockId: blockID, changeSetId: changeSet.id, expectedChangeSetRevision: changeSet.revision, expectedPageHash: original.pageHash, block: { ...originalBlock, heading: 'This unknown parameter must not save.' }, unexpectedParameter: true } })
@@ -85,9 +87,28 @@ test('ENG-016 Editor assistant discovers, drafts, and submits a revisioned block
     await browserSession.page.addScriptTag({ path: axeSource })
     expect(await browserSession.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   } finally {
-    await transport?.close().catch(() => undefined)
-    if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
-    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls
-    await browserSession.context.close()
+    try {
+      if (ownedChangeSetID) {
+        let current = result<ChangeSet>(await client.callTool({ name: 'get_change_set', arguments: { id: ownedChangeSetID } }))
+        if (current.state === 'submitted') {
+          const owner = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+          try {
+            await owner.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-theme-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+            const returned = await owner.request.post('/api/editorial/request-changes', { headers: { origin }, data: { id: ownedChangeSetID } })
+            expect(returned.status()).toBe(200)
+            current = await returned.json() as ChangeSet
+          } finally { await owner.close() }
+        }
+        if (['open', 'changes-requested'].includes(current.state)) {
+          const discarded = result<ChangeSet>(await client.callTool({ name: 'discard_change_set', arguments: { id: ownedChangeSetID, expectedRevision: current.revision } }))
+          expect(discarded.state).toBe('discarded')
+        }
+      }
+    } finally {
+      await transport?.close().catch(() => undefined)
+      if (previousTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls
+      await browserSession.context.close()
+    }
   }
 })

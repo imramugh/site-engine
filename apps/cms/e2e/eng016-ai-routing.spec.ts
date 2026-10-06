@@ -1,4 +1,4 @@
-import { expect, test, type Browser } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
 import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
@@ -10,9 +10,28 @@ async function signedIn(browser: Browser) {
   return { context, page: await context.newPage() }
 }
 
+async function cleanupAIRoutingFixture(page: Page) {
+  const current = await page.request.get('/api/integrations')
+  expect(current.status()).toBe(200)
+  const data = await current.json() as { integrations: Array<{ provider: string; credentialConfigured: boolean }> }
+  if (data.integrations.find((integration) => integration.provider === 'openai')?.credentialConfigured) {
+    const revoked = await page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'revoke', provider: 'openai' } })
+    expect(revoked.status()).toBe(200)
+  }
+  const cleaned = await page.request.post('/__e2e/eng016-ai-routing-cleanup')
+  expect(cleaned.status()).toBe(200)
+}
+
 test('ENG-016 Owner configures visible AI draft routes with a reviewed vision model', async ({ browser }) => {
   const owner = await signedIn(browser)
+  let ownsFixture = false
   try {
+    const initial = await owner.page.request.get('/api/integrations')
+    expect(initial.status()).toBe(200)
+    const initialData = await initial.json() as { integrations: Array<{ provider: string }>; aiJobDefaults: Array<{ jobType: string }> }
+    expect(initialData.integrations.find((integration) => integration.provider === 'openai')).toBeUndefined()
+    expect(initialData.aiJobDefaults.filter((item) => ['summary', 'meta', 'faq', 'alt'].includes(item.jobType))).toEqual([])
+    ownsFixture = true
     await owner.page.goto('/integrations?tab=ai')
     const provider = owner.page.locator('[data-provider="openai"]')
     await provider.getByRole('button', { name: /Add key|Replace key/ }).click()
@@ -43,5 +62,8 @@ test('ENG-016 Owner configures visible AI draft routes with a reviewed vision mo
       await owner.page.addScriptTag({ path: axeSource })
       expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     }
-  } finally { await owner.context.close() }
+  } finally {
+    try { if (ownsFixture) await cleanupAIRoutingFixture(owner.page) }
+    finally { await owner.context.close() }
+  }
 })
