@@ -29,13 +29,16 @@ export async function mediaFocalContractVersion(payload: Payload, initialBaselin
 export async function mediaWorkspace(
   payload: Payload,
   user: Actor,
-  query: { q?: string; filter?: string; page?: number; pageSize?: number } = {},
+  query: { id?: string; q?: string; tag?: string; usage?: 'any' | 'used' | 'unused'; filter?: string; page?: number; pageSize?: number } = {},
 ) {
   const q = query.q?.trim() ?? ''
   const pageSize = query.pageSize ?? 24
   const page = query.page ?? 1
   if (
     q.length > 80 ||
+    (query.id !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query.id)) ||
+    (query.tag !== undefined && query.tag.length > 80) ||
+    (query.usage !== undefined && !['any', 'used', 'unused'].includes(query.usage)) ||
     !Number.isSafeInteger(page) || page < 1 ||
     !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100 ||
     (query.filter !== undefined && !['all', 'missing-alt', 'unused', 'large', 'bin'].includes(query.filter))
@@ -44,7 +47,7 @@ export async function mediaWorkspace(
   // Filter over the complete authorized set before paging. A single page scan
   // indexes references for all matching assets, avoiding one scan per asset.
   const assets = await payload.find({
-    collection: 'assets', limit: 0, pagination: false, sort: '-createdAt',
+    collection: 'assets', ...(query.id ? { where: { id: { equals: query.id } } } : {}), limit: 0, pagination: false, sort: '-createdAt',
     depth: 0, overrideAccess: false, user,
   })
   const usage = new Map<string, MediaAsset['usages']>(assets.docs.map(asset => [asset.id, []]))
@@ -103,9 +106,11 @@ export async function mediaWorkspace(
     if (query.filter === 'large') return (asset.filesize ?? 0) > 3 * 1024 * 1024
     return true
   })
-  const total = filtered.length
+  const tagged = query.tag ? filtered.filter(asset => asset.tags?.includes(query.tag!)) : filtered
+  const matched = query.usage === 'used' ? tagged.filter(asset => asset.usages.length > 0) : query.usage === 'unused' ? tagged.filter(asset => asset.usages.length === 0) : tagged
+  const total = matched.length
   return {
-    assets: filtered.slice((page - 1) * pageSize, page * pageSize),
+    assets: matched.slice((page - 1) * pageSize, page * pageSize),
     total, counts, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)), truncated: false,
   }
 }
