@@ -49,6 +49,10 @@ test('Sales and Hiring read only their own mail target type, and duplicate arriv
   const hiringThreads = await payload.find({ collection: 'mail-threads', user: hiring, depth: 0, overrideAccess: false })
   expect(salesThreads.docs.some((thread) => thread.application)).toBe(false)
   expect(hiringThreads.docs.some((thread) => thread.lead)).toBe(false)
+  const union = await payload.create({ collection: 'users', data: { email: 'inbound-union@example.test', name: 'Union', roles: ['sales', 'hiring'] }, overrideAccess: true })
+  const unionThreads = await payload.find({ collection: 'mail-threads', user: union, depth: 0, overrideAccess: false })
+  expect(unionThreads.docs.some((thread) => thread.lead)).toBe(true)
+  expect(unionThreads.docs.some((thread) => thread.application)).toBe(true)
 })
 
 test('unmatched suggestions follow the mapped area and concurrent conversation arrivals coalesce', async () => {
