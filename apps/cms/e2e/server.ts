@@ -9,6 +9,7 @@ import { randomUUID, randomBytes, createHash } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { getPayload } from 'payload'
+import { createClient, type Client } from '@libsql/client'
 import sharp from 'sharp'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
@@ -189,6 +190,8 @@ let stopping = false
 let localOwnerID: string | undefined
 let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
+let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
+let sqliteLockClient: Client | undefined
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -502,6 +505,22 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const created = await payload.create({ collection: 'change-sets', data: { id: secondOnPageReviewSetID, name: 'Second pending page review', actor: source.actor, state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes: [{ ...sourceChange, after, afterHash: null }], quality: source.quality, preview: { status: 'pending' } }, overrideAccess: true, context: { editorialInternal: true } })
       return { id: String(created.id) }
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/sqlite-lock') {
+    void (async () => {
+      if (sqliteLock) throw new Error('SQLite lock is already held.')
+      sqliteLockClient = createClient({ url: `file:${databasePath}` })
+      sqliteLock = await sqliteLockClient.transaction('write')
+      await sqliteLock.execute({ sql: 'UPDATE pages SET updated_at = updated_at WHERE id = ?', args: [directEditPageID] })
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to acquire SQLite lock.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/sqlite-lock/release') {
+    void (async () => {
+      if (!sqliteLock || !sqliteLockClient) throw new Error('SQLite lock is not held.')
+      await sqliteLock.rollback(); sqliteLock = undefined; sqliteLockClient.close(); sqliteLockClient = undefined
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to release SQLite lock.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/session/stale') {
