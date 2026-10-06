@@ -10,11 +10,19 @@ const retryDelay = 5 * 60_000
 const maxPreSendAttempts = 5
 const dispatchLocks = new Map<string, Promise<void>>()
 
-function message(kind: string, id: string) {
+function message(kind: string, id: string, sourceType?: string, sourceID?: string) {
   const label: Record<string, string> = { 'new-lead': 'New lead', 'active-incident-lead': 'Active incident lead', 'new-job-application': 'New job application', 'change-set-submitted': 'Change set submitted', 'publish-or-integration-failed': 'Publish or integration failure' }
   const configured = new URL(process.env.PAYLOAD_PUBLIC_SERVER_URL ?? '')
   if (!['http:', 'https:'].includes(configured.protocol) || configured.username || configured.password || configured.origin === 'null') throw new Error('notification_public_origin_invalid')
-  return { subject: `${label[kind] ?? 'Operations notification'} (${id})`, body: `An operations event requires review.\n\nEvent: ${kind}\nReference: ${id}\nOpen: ${new URL('/operations', configured.origin).toString()}\n` }
+  const publishFailure = kind === 'publish-or-integration-failed' && sourceType === 'publish-job'
+  const operationsPath = publishFailure && sourceID ? `/operations?publish=${encodeURIComponent(sourceID)}` : '/operations'
+  return {
+    subject: `${publishFailure ? 'Publish build failed' : label[kind] ?? 'Operations notification'} (${id})`,
+    // A lost completion acknowledgement can leave activation uncertain. Give
+    // Owners only the job record to inspect; never put worker error text or
+    // source content into an email.
+    body: `${publishFailure ? 'A publication could not be completed or confirmed. Review its build log before retrying.' : 'An operations event requires review.'}\n\nEvent: ${kind}\nReference: ${id}\nOpen: ${new URL(operationsPath, configured.origin).toString()}\n`,
+  }
 }
 function key(outbox: string, recipient: Recipient, channel: string) { return `${outbox}:${recipient.type}:${recipient.id}:${channel}` }
 async function exclusively<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
@@ -125,7 +133,7 @@ async function dispatchOneNotificationLocked(payload: Payload, now: Date): Promi
           return current?.state === 'processing' && current.leaseToken === token && Boolean(outbox)
         })
         if (!stillPresent) continue
-        const sent = await sendAreaMail(payload, 'notifications', { sender, recipient: recipient.email, ...message(raw.kind, raw.id) })
+        const sent = await sendAreaMail(payload, 'notifications', { sender, recipient: recipient.email, ...message(raw.kind, raw.id, raw.sourceType, raw.sourceID) })
         await store.update({ collection: 'notification-deliveries', id: delivery.id, data: { state: 'delivered', leaseToken: null, leaseExpiresAt: null, providerMessageID: sent.messageID, completedAt: new Date().toISOString(), failureCode: null }, overrideAccess: true })
         await updateOutboxState(store, raw)
         return { id: delivery.id, state: 'delivered' }
