@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
 import { canonical, createPreviewAPI, hash, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
@@ -190,6 +191,21 @@ describe('durable preview rendering worker', () => {
     expect(String(diagnostics[0]!.message)).toHaveLength(500);
     expect(diagnostics.every((item) => item.blockId === undefined && (item.pageId === undefined || item.pageId === validID))).toBe(true);
   });
+
+  it('forwards page-level malformed JSON-LD from a real Astro render without a block ID', async () => {
+    const components = join(root, 'malformed-components');
+    await cp(fileURLToPath(new URL('../../../packages/theme-starter/src/components/', import.meta.url)), components, { recursive: true });
+    const layout = join(components, 'Layout.astro');
+    const source = await readFile(layout, 'utf8');
+    await writeFile(layout, source.replace("set:html={JSON.stringify(schema).replaceAll('<', '\\\\u003c')}", "set:html={'{'}"));
+    const requests: Record<string, unknown>[] = [];
+    const api = async (action: string, body: Record<string, unknown> = {}) => { requests.push(body); return action === 'claim' ? claim() : { ok: true }; };
+    const render = (input: Record<string, unknown>) => buildSnapshot({ ...input, themeComponentsRoot: components } as Parameters<typeof buildSnapshot>[0]);
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('BUILD_FAILED');
+    const diagnostic = (requests.find((body) => body.errorCode === 'BUILD_FAILED')!.diagnostics as Array<Record<string, unknown>>).find((item) => item.code === 'STRUCTURED_DATA_INVALID')!;
+    expect(diagnostic).toMatchObject({ path: `structuredData.${claim().live.pages[0]!.id}`, pageId: claim().live.pages[0]!.id });
+    expect(diagnostic.blockId).toBeUndefined();
+  }, 60_000);
 });
 
 describe('private worker API boundary', () => {
