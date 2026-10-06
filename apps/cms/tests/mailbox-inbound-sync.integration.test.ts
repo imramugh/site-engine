@@ -55,6 +55,21 @@ test('a disconnected or revised mailbox cannot append a polled message or advanc
   expect((await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'race-message' } }, overrideAccess: true })).docs).toHaveLength(0)
 })
 
+test('an aborted provider poll stops before it appends or advances a cursor', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'sync-abort@example.test', name: 'Sync abort', roles: ['owner'] }, overrideAccess: true })
+  const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, 'sync-abort-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'sync-abort-session', async (url) => url.includes('/token') ? Response.json({ access_token: 'setup-access', refresh_token: 'refresh' }) : Response.json({ mail: 'sync-abort@example.test' }))
+  const controller = new AbortController()
+  await expect(syncMailboxInbound(payload, mailbox.id, async (url) => {
+    if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
+    if (url.includes('/delta')) { controller.abort(); return Response.json({ value: [{ id: 'aborted-message', conversationId: 'aborted-thread', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync-abort@example.test' } }], subject: 'Abort', body: { content: 'Abort' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=aborted' }) }
+    throw new Error(`unexpected ${url}`)
+  }, controller.signal)).rejects.toThrow('sync_aborted')
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(stored.inboundCursor).toBeNull()
+  expect((await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'aborted-message' } }, overrideAccess: true })).docs).toHaveLength(0)
+})
+
 test('provider conversations and duplicate message IDs remain isolated by mailbox', async () => {
   const owner = await payload.create({ collection: 'users', data: { email: 'sync-isolation@example.test', name: 'Sync isolation', roles: ['owner'] }, overrideAccess: true })
   const connect = async (session: string, address: string) => {

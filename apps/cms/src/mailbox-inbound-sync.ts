@@ -11,6 +11,13 @@ const internal = { mailboxInternal: true }
 const activeSyncs = new Map<string, Promise<unknown>>()
 const opaque = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500 && !/[\u0000-\u001f\u007f]/.test(value)
 const googleBatchSize = 10
+const aborted = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error('sync_aborted') }
+const withSignal = (fetcher: Fetcher, signal?: AbortSignal): Fetcher => async (url, init) => {
+  aborted(signal)
+  const requestSignal = init?.signal
+  const combined = signal && requestSignal ? AbortSignal.any([signal, requestSignal]) : signal ?? requestSignal
+  return fetcher(url, { ...init, ...(combined ? { signal: combined } : {}) })
+}
 
 function googleCursor(value: unknown): GoogleCursor | undefined {
   if (typeof value !== 'string' || value.length > 1000) return undefined
@@ -50,20 +57,22 @@ async function carryCursorAcrossCredentialRotation(payload: Payload, before: Mai
 
 /** Polls one configured delegated mailbox. Cursors advance only after the full
  * bounded page has been appended, so a restart safely replays idempotent IDs. */
-export function syncMailboxInbound(payload: Payload, mailboxID: string, fetcher: Fetcher = fetch): Promise<SyncResult> {
+export function syncMailboxInbound(payload: Payload, mailboxID: string, fetcher: Fetcher = fetch, signal?: AbortSignal): Promise<SyncResult> {
   const active = activeSyncs.get(mailboxID)
-  if (active) return active.then(() => syncMailboxInbound(payload, mailboxID, fetcher))
-  const operation = syncMailboxInboundInner(payload, mailboxID, fetcher).finally(() => {
+  if (active) return active.then(() => syncMailboxInbound(payload, mailboxID, fetcher, signal))
+  const operation = syncMailboxInboundInner(payload, mailboxID, fetcher, signal).finally(() => {
     if (activeSyncs.get(mailboxID) === operation) activeSyncs.delete(mailboxID)
   })
   activeSyncs.set(mailboxID, operation)
   return operation
 }
 
-async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetcher: Fetcher = fetch): Promise<SyncResult> {
+async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetcher: Fetcher = fetch, signal?: AbortSignal): Promise<SyncResult> {
+  aborted(signal)
+  const providerFetch = withSignal(fetcher, signal)
   const mailbox = await currentMailbox(payload, mailboxID)
   if ((mailbox.provider !== 'microsoft' && mailbox.provider !== 'google') || mailbox.health !== 'connected') return { skipped: true as const, processed: 0 }
-  const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
+  const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, providerFetch)
   if (refreshed.credentialRevision !== mailbox.credentialRevision) await carryCursorAcrossCredentialRotation(payload, mailbox, refreshed.credentialRevision)
   const active = await currentMailbox(payload, mailboxID)
   if (active.provider !== mailbox.provider || active.health !== 'connected' || active.credentialRevision !== refreshed.credentialRevision) throw new Error('mailbox_configuration_changed')
@@ -72,8 +81,9 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   let processed = 0
 
   if (active.provider === 'microsoft') {
-    const page = await microsoftAdapter(fetcher, 'sync@example.invalid').poll(refreshed.accessToken, 'inbox', cursor ?? undefined)
+    const page = await microsoftAdapter(providerFetch, 'sync@example.invalid').poll(refreshed.accessToken, 'inbox', cursor ?? undefined)
     for (const message of page.messages) {
+      aborted(signal)
       await unchanged(payload, active)
       await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
       processed += 1
@@ -82,11 +92,11 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   } else {
     let position = googleCursor(cursor)
     if (!position) {
-      const identity = await gmailIdentity(fetcher)(refreshed.accessToken)
+      const identity = await gmailIdentity(providerFetch)(refreshed.accessToken)
       if (!identity.historyID) throw new Error('provider_malformed_response')
       nextCursor = JSON.stringify({ historyID: identity.historyID })
     } else {
-      const adapter = gmailAdapter(fetcher, 'sync@example.invalid')
+      const adapter = gmailAdapter(providerFetch, 'sync@example.invalid')
       const page = await adapter.poll(refreshed.accessToken, position.historyID, position.pageToken)
       const ids: string[] = []
       for (const entry of page.entries) {
@@ -106,6 +116,7 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
       if (offset > uniqueIDs.length) throw new Error('provider_malformed_response')
       const pendingIDs = uniqueIDs.slice(offset, offset + googleBatchSize)
       for (const id of pendingIDs) {
+        aborted(signal)
         const message = await adapter.message(refreshed.accessToken, id)
         await unchanged(payload, active)
         await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, rfcMessageID: message.rfcMessageID, rfcReferences: message.rfcReferences, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
@@ -119,6 +130,7 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
           : { historyID: page.historyID })
     }
   }
+  aborted(signal)
   const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: active.id } }, { credentialRevision: { equals: active.credentialRevision } }, { health: { equals: 'connected' } }, { inboundCursor: { equals: active.inboundCursor ?? null } }, { inboundCursorRevision: { equals: active.inboundCursorRevision ?? null } }] }, data: { inboundCursor: nextCursor, inboundCursorRevision: active.credentialRevision }, overrideAccess: true, context: internal })
   if (saved.docs.length !== 1) throw new Error('mailbox_configuration_changed')
   return { skipped: false as const, processed }
