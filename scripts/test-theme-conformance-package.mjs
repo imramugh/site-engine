@@ -45,12 +45,25 @@ try {
   // the paper logo slot.
   await writeFile(checkerLogo, '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120"><path d="M48 24h144v72H48z" fill="#fff"/></svg>');
   await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", join(temp, "invisible-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted an invisible inverse logo glyph."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
+  // A full-surface rectangle is paint, not a logo glyph.
+  await writeFile(checkerLogo, '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120"><rect width="240" height="120" fill="#14212b"/></svg>');
+  await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", join(temp, "solid-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a solid rectangle as a logo glyph."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
   await writeFile(checkerLogo, validLogo);
   const hidden = join(temp, "hidden-logo-theme");
   await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), hidden, { recursive: true });
   const hiddenLayout = join(hidden, "src/components/Layout.astro");
   await writeFile(hiddenLayout, `${await readFile(hiddenLayout, "utf8")}\n<style is:global>.logo-media > .media { opacity: 0 !important; }</style>\n`);
   await execFile(process.execPath, [cli, hidden, "--artifacts-dir", join(temp, "hidden-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a hidden logo glyph."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
+  const blackedOut = join(temp, "blacked-out-logo-theme");
+  await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), blackedOut, { recursive: true });
+  const blackedOutLayout = join(blackedOut, "src/components/Layout.astro");
+  await writeFile(blackedOutLayout, `${await readFile(blackedOutLayout, "utf8")}\n<style is:global>section[data-block="logoStrip"] { filter: brightness(0) !important; }</style>\n`);
+  await execFile(process.execPath, [cli, blackedOut, "--artifacts-dir", join(temp, "blacked-out-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a logo blacked out with its parent surface."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
+  const nearlyTransparent = join(temp, "nearly-transparent-logo-theme");
+  await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), nearlyTransparent, { recursive: true });
+  const nearlyTransparentLayout = join(nearlyTransparent, "src/components/Layout.astro");
+  await writeFile(nearlyTransparentLayout, `${await readFile(nearlyTransparentLayout, "utf8")}\n<style is:global>section[data-block="logoStrip"] .logo-media { opacity: .001 !important; }</style>\n`);
+  await execFile(process.execPath, [cli, nearlyTransparent, "--artifacts-dir", join(temp, "nearly-transparent-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a nearly transparent nested logo wrapper."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
   const nested = join(temp, "nested-logo-surface-theme");
   await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), nested, { recursive: true });
   const nestedRenderer = join(nested, "src/components/BlockRenderer.astro");
@@ -61,6 +74,11 @@ try {
   if (wrapped === nestedSource) throw new Error("Nested logo surface fixture did not modify the starter renderer.");
   await writeFile(nestedRenderer, wrapped);
   await execFile(process.execPath, [cli, nested, "--artifacts-dir", join(temp, "nested-logo-surface"), "--baseline-file", join(temp, "nested-logo-surface.json"), "--record-baselines"], { cwd: consumer });
+  const filtered = join(temp, "filtered-logo-surface-theme");
+  await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), filtered, { recursive: true });
+  const filteredLayout = join(filtered, "src/components/Layout.astro");
+  await writeFile(filteredLayout, `${await readFile(filteredLayout, "utf8")}\n<style is:global>section[data-block="logoStrip"] { filter: brightness(.9) !important; }</style>\n`);
+  await execFile(process.execPath, [cli, filtered, "--artifacts-dir", join(temp, "filtered-logo-surface"), "--baseline-file", join(temp, "filtered-logo-surface.json"), "--record-baselines"], { cwd: consumer });
   const bad = join(temp, "bad-theme"); await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), bad, { recursive: true });
   const manifest = JSON.parse(await readFile(join(bad, "theme.json"), "utf8")); delete manifest.contractSurface.components.blockRenderer; await writeFile(join(bad, "theme.json"), JSON.stringify(manifest));
   await execFile(process.execPath, [cli, bad, "--artifacts-dir", join(temp, "bad-evidence")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a missing blockRenderer."); }, error => { if (!String(error.stderr).includes("blockRenderer")) throw error; });

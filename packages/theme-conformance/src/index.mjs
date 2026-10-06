@@ -395,6 +395,119 @@ async function requireActionableRequiredFieldRejection() {
   throw new Error("Contract accepted an empty required hero heading.");
 }
 
+const glyphSelector = (tone) =>
+  `:is([data-logo-tone="${tone}"][data-block-type="logoStrip"], [data-logo-tone="${tone}"][data-block="logoStrip"], [data-logo-tone="${tone}"] [data-block-type="logoStrip"], [data-logo-tone="${tone}"] [data-block="logoStrip"]) img`;
+
+async function renderedGlyphVisibility(page) {
+  const glyphs = await page.evaluate(async () => {
+    const selector = (tone) =>
+      `:is([data-logo-tone="${tone}"][data-block-type="logoStrip"], [data-logo-tone="${tone}"][data-block="logoStrip"], [data-logo-tone="${tone}"] [data-block-type="logoStrip"], [data-logo-tone="${tone}"] [data-block="logoStrip"]) img`;
+    const result = [];
+    for (const tone of ["default", "inverse"]) {
+      const image = document.querySelector(selector(tone));
+      if (!(image instanceof HTMLImageElement)) return [];
+      try {
+        await image.decode();
+      } catch {
+        return [];
+      }
+      const rectangle = image.getBoundingClientRect();
+      if (!rectangle.width || !rectangle.height || !image.getClientRects().length)
+        return [];
+      result.push({ tone });
+    }
+    return result;
+  });
+  if (glyphs.length !== 2) return false;
+
+  const pixels = async (visible, reference) =>
+    page.evaluate(async ({ visible, reference }) => {
+      const decode = (bytes) =>
+        new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = `data:image/png;base64,${bytes}`;
+        });
+      const [painted, background] = await Promise.all([
+        decode(visible),
+        decode(reference),
+      ]);
+      if (painted.width !== background.width || painted.height !== background.height)
+        return false;
+      const canvas = document.createElement("canvas");
+      canvas.width = painted.width;
+      canvas.height = painted.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return false;
+      context.drawImage(painted, 0, 0);
+      const paintedPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(background, 0, 0);
+      const backgroundPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let visiblePixels = 0;
+      let contrastPixels = 0;
+      for (let index = 0; index < paintedPixels.length; index += 4) {
+        const difference = Math.max(
+          Math.abs(paintedPixels[index] - backgroundPixels[index]),
+          Math.abs(paintedPixels[index + 1] - backgroundPixels[index + 1]),
+          Math.abs(paintedPixels[index + 2] - backgroundPixels[index + 2]),
+        );
+        if (difference > 24) {
+          visiblePixels += 1;
+          if (difference > 80) contrastPixels += 1;
+        }
+      }
+      const coverage = visiblePixels / (canvas.width * canvas.height);
+      return coverage > 0.01 && coverage < 0.7 && contrastPixels > 24;
+    },
+    { visible: visible.toString("base64"), reference: reference.toString("base64") },
+  );
+
+  for (const { tone } of glyphs) {
+    const selector = glyphSelector(tone);
+    const clip = await page.evaluate(async ({ selector }) => {
+      const image = document.querySelector(selector);
+      if (!(image instanceof HTMLImageElement)) return null;
+      image.scrollIntoView({ block: "center", inline: "center" });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const rectangle = image.getBoundingClientRect();
+      return {
+        x: rectangle.x,
+        y: rectangle.y,
+        width: rectangle.width,
+        height: rectangle.height,
+      };
+    }, { selector });
+    if (!clip || !clip.width || !clip.height) return false;
+    // Capture the rendered page before changing the image. This includes every
+    // ancestor's compositing, filters, opacity, and surface paint.
+    const visible = await page.screenshot({ clip, animations: "disabled" });
+    const previous = await page.evaluate((selector) => {
+      const image = document.querySelector(selector);
+      if (!(image instanceof HTMLImageElement)) return null;
+      return { value: image.style.getPropertyValue("visibility"), priority: image.style.getPropertyPriority("visibility") };
+    }, selector);
+    if (!previous) return false;
+    await page.evaluate((selector) => {
+      const image = document.querySelector(selector);
+      if (image instanceof HTMLImageElement)
+        image.style.setProperty("visibility", "hidden", "important");
+    }, selector);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const reference = await page.screenshot({ clip, animations: "disabled" });
+    await page.evaluate(({ selector, previous }) => {
+      const image = document.querySelector(selector);
+      if (image instanceof HTMLImageElement) {
+        if (previous.value) image.style.setProperty("visibility", previous.value, previous.priority);
+        else image.style.removeProperty("visibility");
+      }
+    }, { selector, previous });
+    if (!(await pixels(visible, reference))) return false;
+  }
+  return true;
+}
+
 async function browserState(page, requireFormError, requireTokenCoverage) {
   if (requireFormError) {
     await page.locator("[data-inquiry-form]").dispatchEvent("submit");
@@ -407,7 +520,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
       .locator('[data-inquiry-form] [name="name"]')
       .evaluate((element) => element.blur());
   }
-  return page.evaluate(
+  const state = await page.evaluate(
     async ({ requireFormError, requireTokenCoverage }) => {
       await document.fonts.ready;
       return {
@@ -441,48 +554,6 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
               (element) => element.dataset.logoTone,
             ),
           ).size === 2,
-        logoVisibility: !requireTokenCoverage || await (async () => {
-          const visibleGlyph = async (tone) => {
-            const image = document.querySelector(`:is([data-logo-tone="${tone}"][data-block-type="logoStrip"], [data-logo-tone="${tone}"][data-block="logoStrip"], [data-logo-tone="${tone}"] [data-block-type="logoStrip"], [data-logo-tone="${tone}"] [data-block="logoStrip"]) img`);
-            if (!(image instanceof HTMLImageElement)) return false;
-            await image.decode();
-            const rectangle = image.getBoundingClientRect();
-            if (!rectangle.width || !rectangle.height || !image.getClientRects().length) return false;
-            for (let element = image; element instanceof HTMLElement; element = element.parentElement) {
-              const style = getComputedStyle(element);
-              if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return false;
-            }
-            const rgba = (value) => {
-              const channels = value.match(/\d+(?:\.\d+)?/g)?.map(Number);
-              return channels?.length >= 3 ? [channels[0], channels[1], channels[2], channels[3] ?? 1] : [0, 0, 0, 0];
-            };
-            const layers = [];
-            const filters = [];
-            // The tone marker may wrap a themed section rather than own its
-            // paint. Compose every ancestor from the image outward so nested
-            // section surfaces (as used by installed themes) are represented.
-            for (let element = image; element instanceof HTMLElement; element = element.parentElement) {
-              const style = getComputedStyle(element);
-              layers.push(rgba(style.backgroundColor));
-              if (style.filter !== "none") filters.push(style.filter);
-            }
-            let background = [255, 255, 255];
-            for (const [red, green, blue, alpha] of layers.reverse()) background = [red * alpha + background[0] * (1 - alpha), green * alpha + background[1] * (1 - alpha), blue * alpha + background[2] * (1 - alpha)];
-            const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
-            const context = canvas.getContext('2d'); if (!context) return false;
-            context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; context.fillRect(0, 0, canvas.width, canvas.height);
-            context.filter = filters.join(" ") || "none"; context.drawImage(image, 0, 0);
-            const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-            let visible = 0; let contrast = 0;
-            for (let index = 0; index < pixels.length; index += 4) {
-              const difference = Math.max(Math.abs(pixels[index] - background[0]), Math.abs(pixels[index + 1] - background[1]), Math.abs(pixels[index + 2] - background[2]));
-              if (difference > 24) { visible += 1; if (difference > 80) contrast += 1; }
-            }
-            const coverage = visible / (canvas.width * canvas.height);
-            return coverage > 0.01 && coverage < 0.7 && contrast > 24;
-          };
-          return (await visibleGlyph('default')) && (await visibleGlyph('inverse'));
-        })(),
         motionIntents:
           !requireTokenCoverage ||
           new Set([...document.querySelectorAll("[data-motion-intent], [class*='motion-']")].flatMap((element) => [element.dataset.motionIntent, ...[...element.classList].filter((name) => /^motion-(none|subtle|ambient|signature)$/.test(name)).map((name) => name.slice(7))]).filter(Boolean)).size === 4,
@@ -491,6 +562,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
     },
     { requireFormError, requireTokenCoverage },
   );
+  return state;
 }
 
 /**
@@ -627,6 +699,21 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             path === "general/matrix",
             path === "general/matrix",
           );
+          if (path === "general/matrix") {
+            const glyphPage = await context.newPage();
+            try {
+              await glyphPage.goto(`http://127.0.0.1:${port}/${path}`, {
+                waitUntil: "networkidle",
+              });
+              await glyphPage.addStyleTag({
+                content:
+                  "*,*::before,*::after { animation: none !important; transition: none !important; }",
+              });
+              state.logoVisibility = await renderedGlyphVisibility(glyphPage);
+            } finally {
+              await glyphPage.close();
+            }
+          } else state.logoVisibility = true;
           if (
             violations.length ||
             !state.motion ||
