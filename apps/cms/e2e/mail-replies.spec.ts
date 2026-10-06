@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const mcpStructured = <T>(result: unknown) => ((result as { structuredContent?: T; toolResult?: { structuredContent?: T } }).structuredContent ?? (result as { toolResult?: { structuredContent?: T } }).toolResult?.structuredContent) as T
+const mcpResult = <T>(result: unknown) => mcpStructured<T>(result) ?? JSON.parse(((result as { content?: Array<{ text?: string }>; toolResult?: { content?: Array<{ text?: string }> } }).content ?? (result as { toolResult?: { content?: Array<{ text?: string }> } }).toolResult?.content)?.find(item => item.text)?.text ?? '{}') as T
 
 async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -298,7 +299,7 @@ test('ENG-033 joins SDK preparation, browser confirmation, and one bound SDK del
     const status = await client.callTool({ name: 'get_reply_status', arguments: { draftID: draft.id } })
     const grantID = mcpStructured<{ grantID: string }>(status).grantID
     const sent = await client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })
-    expect(mcpStructured<{ messageID: string }>(sent).messageID).toEqual(expect.any(String))
+    expect(mcpResult<{ messageID: string }>(sent).messageID).toEqual(expect.any(String))
     const deliveries = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
     expect(deliveries.deliveries).toHaveLength(1)
     await expect(client.callTool({ name: 'send_reply', arguments: { draftID: draft.id, grantID } })).rejects.toThrow()
