@@ -56,7 +56,9 @@ export async function runPublishOnce({ api, buildRoot, releasesRoot, publicOrigi
     await activatePublicRelease({ releasesRoot, artifact, jobID: identity.id, sequence: input.job.sequence, pins: input.pins, health: () => probe(expectedProof), assertLease: async () => {
       const renewed = await api('renew', identity, signal); if (!validLease(renewed?.job, identity, signal)) throw new WorkerError('LEASE_LOST'); return true;
     } });
-    const indexNow = await publishActivatedReleaseIndexNow({ releasesRoot, jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, publicOrigin });
+    let indexNow;
+    try { indexNow = await publishActivatedReleaseIndexNow({ releasesRoot, jobID: identity.id, sequence: input.job.sequence, contentHash: input.pins.contentHash, publicOrigin }); }
+    catch { indexNow = { sent: false, reason: 'ancillary-failure' }; }
     const evidence = { digest: hash(manifest), sourceContentHash: input.pins.contentHash, ...input.versionPins, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }], indexNow };
     await api('complete', { ...identity, artifact: evidence }, signal); return true;
   } catch (error) {
