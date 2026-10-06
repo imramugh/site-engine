@@ -4,14 +4,15 @@ import { withPayloadTransaction } from './auth-transaction'
 import { hasFreshAuthentication, hashOpaqueToken, sessionIsUsable } from './identity'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
 
-export type MailGrant = { recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; lead: string; application?: string; threadID?: string; revision: number }
+export type MailGrant = { recipient: string; sender: string; subject: string; body: string; attachmentHashes: string[]; attachments?: unknown[]; lead: string; application?: string; threadID?: string; revision: number }
 export const normalizeBody = (body: string) => body.replace(/\r\n/g, '\n').trim()
 export const authorizationDigest = (draft: MailGrant) => {
   const assistant = draft as DraftDocument
   const source = assistant.assistantClientIDHash && assistant.assistantActor && assistant.assistantOAuthSessionID
     ? { assistantClientIDHash: assistant.assistantClientIDHash, assistantActor: assistant.assistantActor, assistantOAuthSessionID: assistant.assistantOAuthSessionID }
     : {}
-  return createHash('sha256').update(JSON.stringify({ recipient: draft.recipient.trim().toLowerCase(), sender: draft.sender.trim().toLowerCase(), subject: draft.subject.trim(), body: normalizeBody(draft.body), attachmentHashes: [...draft.attachmentHashes].sort(), lead: draft.lead, targetKind: draft.application ? 'application' : 'lead', threadID: draft.threadID ?? '', revision: draft.revision, ...source })).digest('hex')
+  const attachments = Array.isArray(draft.attachments) && draft.attachments.length ? { attachments: draft.attachments.map((attachment) => JSON.stringify(attachment)).sort() } : {}
+  return createHash('sha256').update(JSON.stringify({ recipient: draft.recipient.trim().toLowerCase(), sender: draft.sender.trim().toLowerCase(), subject: draft.subject.trim(), body: normalizeBody(draft.body), attachmentHashes: [...draft.attachmentHashes].sort(), lead: draft.lead, targetKind: draft.application ? 'application' : 'lead', threadID: draft.threadID ?? '', revision: draft.revision, ...attachments, ...source })).digest('hex')
 }
 export const authorizationUsable = (grant: { digest: string; expiresAt: string; revokedAt?: string | null; consumedAt?: string | null; draftRevision: number }, draft: MailGrant, now = new Date()) => !grant.revokedAt && !grant.consumedAt && new Date(grant.expiresAt) > now && grant.draftRevision === draft.revision && grant.digest === authorizationDigest(draft)
 
@@ -21,7 +22,7 @@ const relationID = (value: unknown) => typeof value === 'string' ? value : Strin
 const grantActorID = (grant: Record<string, unknown>) => relationID(grant.authorizedBy)
 const draftGrant = (draft: Record<string, unknown>): DraftDocument => {
   const lead = relationID(draft.lead); const application = relationID(draft.application)
-  return { id: String(draft.id), threadID: String(draft.threadID), recipient: String(draft.recipient), sender: String(draft.sender), subject: String(draft.subject), body: String(draft.body), attachmentHashes: Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : [], lead: lead || application, application: application || undefined, revision: Number(draft.revision), state: String(draft.state), ...(typeof draft.assistantClientIDHash === 'string' ? { assistantClientIDHash: draft.assistantClientIDHash } : {}), ...(relationID(draft.assistantActor) ? { assistantActor: relationID(draft.assistantActor) } : {}), ...(typeof draft.assistantOAuthSessionID === 'string' ? { assistantOAuthSessionID: draft.assistantOAuthSessionID } : {}) }
+  return { id: String(draft.id), threadID: String(draft.threadID), recipient: String(draft.recipient), sender: String(draft.sender), subject: String(draft.subject), body: String(draft.body), attachmentHashes: Array.isArray(draft.attachmentHashes) ? draft.attachmentHashes.map(String) : [], ...(Array.isArray(draft.attachments) ? { attachments: draft.attachments } : {}), lead: lead || application, application: application || undefined, revision: Number(draft.revision), state: String(draft.state), ...(typeof draft.assistantClientIDHash === 'string' ? { assistantClientIDHash: draft.assistantClientIDHash } : {}), ...(relationID(draft.assistantActor) ? { assistantActor: relationID(draft.assistantActor) } : {}), ...(typeof draft.assistantOAuthSessionID === 'string' ? { assistantOAuthSessionID: draft.assistantOAuthSessionID } : {}) }
 }
 const consumptionLocks = new Map<string, Promise<void>>()
 

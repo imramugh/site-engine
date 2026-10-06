@@ -141,5 +141,12 @@ function trustedMedia(filename: string): { path: string; sha256: string } {
   if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Asset file ${filename} is unavailable.`)
   return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
 }
-export const mediaFilePath = (filename: string) => trustedMedia(filename).path
+export const mediaFilePath = (filename: string) => {
+  if (!safeFilename(filename)) throw new Error('Asset filename is unsafe.')
+  const path = resolve(mediaStorageDirectory(), filename)
+  if (!path.startsWith(`${mediaStorageDirectory()}/`)) throw new Error('Asset filename is unsafe.')
+  const info = lstatSync(path)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Asset file ${filename} is unavailable.`)
+  return path
+}
 export const mediaParentPath = () => dirname(mediaStorageDirectory())
