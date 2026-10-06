@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 const privateKeys = /(?:email|message|note|resume|coverletter|telephone|token|secret|password)/i
 const privateEvents = /(?:application|inquiry|lead)/i
 const noStore = { 'Cache-Control': 'no-store' }
+const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 
 function safeDetail(event: string, detail: unknown): Record<string, unknown> | undefined {
   if (privateEvents.test(event) || !detail || typeof detail !== 'object' || Array.isArray(detail)) return undefined
@@ -53,7 +54,7 @@ async function GETHandler(request: Request) {
   if (since && !Number.isNaN(Date.parse(since))) clauses.push({ createdAt: { greater_than_equal: since } })
   clauses.push(...await changeLogFilters(payload, { type, source, target }))
 
-  const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages, retention, retentionFailures] = await Promise.all([
+  const [reviews, leads, releases, pending, processing, failed, latestFailure, audit, users, pages, retention, retentionFailures, publishHistory, releaseHistory] = await Promise.all([
     payload.count({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, overrideAccess: true }),
     payload.count({ collection: 'inquiries', where: { or: [{ urgent: { equals: true } }, { stage: { equals: 'new' } }] }, overrideAccess: true }),
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, overrideAccess: true }),
@@ -66,9 +67,12 @@ async function GETHandler(request: Request) {
     payload.find({ collection: 'pages', sort: 'title', limit: 200, depth: 0, draft: true, overrideAccess: true }),
     retentionPolicy(payload),
     payload.count({ collection: 'retention-purge-jobs', where: { state: { equals: 'failed' } }, overrideAccess: true }),
+    payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 100, depth: 0, overrideAccess: true }),
+    payload.find({ collection: 'published-releases', sort: '-sequence', limit: 100, depth: 0, overrideAccess: true }),
   ])
 
   const projected = await projectChangeLog(payload, audit.docs as unknown as Array<Record<string, unknown>>)
+  const releasesByOutbox = new Map(releaseHistory.docs.map((release) => [relationID(release.outbox), release]))
   return Response.json({
     summary: {
       pendingReviews: reviews.totalDocs,
@@ -82,6 +86,19 @@ async function GETHandler(request: Request) {
       },
     },
     retention: { ...retention, failedJobs: retentionFailures.totalDocs, backupNotice: 'Deletion markers are replayed before a restored backup serves traffic. Immutable backups age out on their configured schedule.' },
+    releaseHistory: publishHistory.docs.map((job) => {
+      const release = releasesByOutbox.get(String(job.id))
+      return {
+        id: String(job.id),
+        sequence: Number(job.sequence),
+        status: String(job.status),
+        attempts: Number(job.attempts ?? 0),
+        retryReason: typeof job.errorCode === 'string' ? job.errorCode : null,
+        correlationID: String(job.correlationID),
+        nextAttemptAt: typeof job.nextAttemptAt === 'string' ? job.nextAttemptAt : null,
+        activatedAt: typeof release?.activatedAt === 'string' ? release.activatedAt : null,
+      }
+    }),
     audit: {
       docs: projected.map((item, index) => ({ ...item, actorId: typeof audit.docs[index]?.actor === 'object' ? audit.docs[index]?.actor?.id : audit.docs[index]?.actor, metadata: safeDetail(audit.docs[index]!.event, audit.docs[index]!.detail) })),
       page: audit.page,

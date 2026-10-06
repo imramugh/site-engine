@@ -15,7 +15,7 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob } from '../src/review-preview.js'
-import { buildCandidate, canonicalHash } from '../src/publishing.js'
+import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
 import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
@@ -897,6 +897,31 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       payload.count({ collection: 'published-releases', overrideAccess: true }),
     ]).then(([outbox, releases]) => json(response, { outbox: outbox.docs[0] ? { id: outbox.docs[0].id, status: outbox.docs[0].status } : null, releaseCount: releases.totalDocs }))
       .catch(() => { response.writeHead(500); response.end('Unable to read publish state.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/publish-callback-history') {
+    void (async () => {
+      const baseline = await payload.find({ collection: 'publish-outbox', where: { sequence: { equals: 1 } }, limit: 1, depth: 0, overrideAccess: true })
+      const prior = baseline.docs[0]
+      if (!prior) throw new Error('Duplicate callback baseline is missing.')
+      const releaseRows = await payload.find({ collection: 'published-releases', where: { outbox: { equals: prior.id } }, limit: 1, depth: 0, overrideAccess: true })
+      const release = releaseRows.docs[0]
+      if (!release || !release.artifact || typeof release.artifact !== 'object') throw new Error('Duplicate callback release is missing.')
+      const duplicate = await withPayloadTransaction(payload, req => completePublishJob(payload, req, String(prior.id), 'duplicate-callback-token', release.artifact as VerifiedArtifact))
+      const claimed = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date()))
+      if (!claimed || Number(claimed.sequence) !== 2) throw new Error('Older callback fixture is not the publish queue head.')
+      const snapshotID = typeof claimed.snapshot === 'string' ? claimed.snapshot : String(claimed.snapshot.id)
+      const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: snapshotID, depth: 0, overrideAccess: true })
+      const artifact: VerifiedArtifact = { digest: 'c'.repeat(64), sourceContentHash: String(snapshot.contentHash), themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String(snapshot.contractVersion), checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }
+      let outOfOrder = ''
+      const retried = await withPayloadTransaction(payload, async req => {
+        try { await completePublishJob(payload, req, String(claimed.id), String(claimed.leaseToken), artifact) }
+        catch (error) { outOfOrder = error instanceof Error ? error.message : 'Publish callback failed.' }
+        if (outOfOrder !== 'An out-of-order publish job cannot activate an older release.') throw new Error(outOfOrder)
+        return retryPublishJob(payload, req, String(claimed.id), String(claimed.leaseToken), 'STALE_CALLBACK')
+      })
+      return { duplicateReleaseID: duplicate.id, outOfOrder, retry: { id: retried.id, status: retried.status, attempts: retried.attempts, retryReason: retried.errorCode, correlationID: retried.correlationID } }
+    })().then(value => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to exercise publish callback history.') })
     return
   }
   const upstream = requestUpstream({
