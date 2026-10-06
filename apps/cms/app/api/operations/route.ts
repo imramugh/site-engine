@@ -5,6 +5,7 @@ import { changeLogFilters } from '../../../src/change-log-query'
 import { hasRole } from '../../../src/access'
 import { serverSessionStrategy } from '../../../src/identity'
 import { prepareReviewedRollback, projectChangeLog } from '../../../src/change-log'
+import { requestPublishRetry } from '../../../src/publish-recovery'
 import { retentionPolicy } from '../../../src/retention'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
@@ -91,7 +92,7 @@ async function GETHandler(request: Request) {
   const buildEvents = publish ? await payload.find({ collection: 'audit-events', where: { and: [{ 'detail.publishJob': { equals: publish } }, { or: [{ event: { like: 'editorial.%' } }, { event: { like: 'publish.%' } }] }] }, sort: 'createdAt', limit: 200, depth: 0, overrideAccess: true }) : undefined
   const releaseLabel = (status: unknown) => status === 'pending' ? 'Queued' : status === 'processing' ? 'Building' : status === 'completed' ? 'Deployed' : status === 'failed' ? 'Failed' : 'Queued'
   return Response.json({
-    capabilities: { ownerOperations: owner },
+    capabilities: { ownerOperations: owner, retryPublish: true },
     summary: {
       pendingReviews: reviews.totalDocs,
       urgentOrNewLeads: leads.totalDocs,
@@ -115,6 +116,8 @@ async function GETHandler(request: Request) {
       const stageActor = usersByID.get(relationID(stage?.actor) ?? '')
       return {
         id: String(job.id),
+        changeSetID: relationID(job.changeSet) ?? null,
+        snapshotID: relationID(job.snapshot) ?? null,
         sequence: Number(job.sequence),
         status: String(job.status),
         state: releaseLabel(job.status),
@@ -163,7 +166,17 @@ async function POSTHandler(request: Request) {
     const text = await request.text()
     if (Buffer.byteLength(text) > 4096) return Response.json({ error: 'The rollback request is too large.' }, { status: 413, headers: noStore })
     const body: unknown = JSON.parse(text)
-    if (!body || typeof body !== 'object' || Array.isArray(body) || (body as { action?: unknown }).action !== 'prepare-rollback' || typeof (body as { releaseID?: unknown }).releaseID !== 'string') return Response.json({ error: 'Choose a release to prepare for rollback.' }, { status: 400, headers: noStore })
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof (body as { action?: unknown }).action !== 'string') return Response.json({ error: 'Choose a supported Operations action.' }, { status: 400, headers: noStore })
+    const action = (body as { action: string }).action
+    if (action === 'retry-publish') {
+      if (Object.keys(body).length !== 2 || typeof (body as { publishJobID?: unknown }).publishJobID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test((body as { publishJobID: string }).publishJobID)) return Response.json({ error: 'Choose a valid failed publish job.' }, { status: 400, headers: noStore })
+      const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
+      const actor = auth.user as { id: string; roles?: ('owner' | 'approver')[]; disabled?: boolean } | null
+      if (!actor || !hasRole(actor, ['owner', 'approver'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
+      const job = await requestPublishRetry(payload, actor, request.headers, (body as { publishJobID: string }).publishJobID)
+      return Response.json({ job: { id: job.id, status: job.status, sequence: job.sequence } }, { status: 200, headers: noStore })
+    }
+    if (action !== 'prepare-rollback' || typeof (body as { releaseID?: unknown }).releaseID !== 'string') return Response.json({ error: 'Choose a release to prepare for rollback.' }, { status: 400, headers: noStore })
     const rollback = body as { releaseID: string; mode?: unknown; changeKeys?: unknown }
     if (rollback.mode !== undefined && rollback.mode !== 'release' && rollback.mode !== 'change') return Response.json({ error: 'Choose a supported rollback scope.' }, { status: 400, headers: noStore })
     if (rollback.changeKeys !== undefined && (!Array.isArray(rollback.changeKeys) || rollback.changeKeys.length > 1 || rollback.changeKeys.some(key => typeof key !== 'string' || key.length > 200))) return Response.json({ error: 'Choose one approved change to roll back.' }, { status: 400, headers: noStore })

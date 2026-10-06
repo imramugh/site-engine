@@ -32,6 +32,8 @@ type Row = {
 };
 type ReleaseHistory = {
   id: string;
+  changeSetID: string | null;
+  snapshotID: string | null;
   sequence: number;
   status: string;
   state: string;
@@ -48,7 +50,7 @@ type ReleaseHistory = {
 };
 type BuildLog = null | { id: string; sequence: number; status: string; attempts: number; events: Array<{ id: string; event: string; createdAt: string; stage: string | null; result: string | null; errorCode: string | null; attempt: number | null; correlationID: string | null }> };
 type Data = {
-  capabilities: { ownerOperations: boolean };
+  capabilities: { ownerOperations: boolean; retryPublish: boolean };
   audit: { docs: Row[]; page: number; totalPages: number };
   releaseHistory: ReleaseHistory[];
   buildLog: BuildLog;
@@ -189,6 +191,23 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
       setError(
         cause instanceof Error ? cause.message : "Rollback preparation failed.",
       );
+    } finally {
+      setBusy("");
+    }
+  };
+  const retryPublish = async (job: ReleaseHistory) => {
+    if (job.status !== "failed" || !data?.capabilities.retryPublish || !window.confirm(`Retry failed publish job #${job.sequence}? It will reuse the exact approved snapshot.`)) return;
+    setBusy(`retry:${job.id}`);
+    setError("");
+    setStatus("");
+    try {
+      const response = await fetch("/api/operations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "retry-publish", publishJobID: job.id }) });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error);
+      setStatus(`Publish job #${job.sequence} is queued to retry with its approved snapshot.`);
+      await load(page);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Publish retry failed.");
     } finally {
       setBusy("");
     }
@@ -531,6 +550,10 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
                       <dt>Build log</dt>
                       <dd><a href={`/operations?publish=${item.id}`}>Open build log</a></dd>
                     </div>
+                    {item.status === "failed" && item.id === data.releaseHistory[0]?.id && data.capabilities.retryPublish && <div>
+                      <dt>Recovery</dt>
+                      <dd><button type="button" disabled={busy === `retry:${item.id}`} onClick={() => void retryPublish(item)}>{busy === `retry:${item.id}` ? "Queueing retry…" : "Retry approved publish"}</button></dd>
+                    </div>}
                     <div>
                       <dt>Correlation ID</dt>
                       <dd>{item.correlationID}</dd>
