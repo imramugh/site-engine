@@ -348,15 +348,18 @@ export function gmailAdapter(fetcher: Fetcher, verifiedSender: string) {
     async send(token: string, input: Envelope) {
       checkedEnvelope(input);
       checkedSender(verifiedSender, input);
+      const normalizedReferences = input.rfcReferences
+        ? rfcReferences(input.rfcReferences)
+        : undefined;
       if (
         (input.threadID && !input.rfcMessageID) ||
         (input.threadID && !opaque(input.threadID)) ||
         (input.rfcMessageID && !rfcMessageID(input.rfcMessageID)) ||
-        (input.rfcReferences && !rfcReferences(input.rfcReferences))
+        (input.rfcReferences && normalizedReferences !== input.rfcReferences)
       )
         throw new Error("invalid_envelope");
       const reply = input.rfcMessageID
-        ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[input.rfcReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
+        ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[normalizedReferences, input.rfcMessageID].filter(Boolean).join(" ")}\r\n`
         : "";
       const raw = Buffer.from(
         `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${reply}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`,

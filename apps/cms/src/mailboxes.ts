@@ -147,7 +147,7 @@ async function groundedProviderThread(payload: Payload, message: AreaMailMessage
   const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ mailbox: { equals: mailbox.id } }, { provider: { equals: message.provider } }, { providerConversationID: { equals: message.providerThreadID } }, { [targetField]: { equals: message.providerTarget.id } }] }, limit: 1, depth: 0, overrideAccess: true })
   if (!thread.docs[0]) throw new Error('mailbox_thread_not_grounded')
   const linked = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: thread.docs[0].id } }, { mailbox: { equals: mailbox.id } }, { providerMessageID: { equals: message.providerMessageID } }] }, limit: 1, depth: 0, overrideAccess: true })
-  if (!linked.docs[0] || message.subject !== message.providerSubject || message.providerSubject !== linked.docs[0].subject || (message.provider === 'google' && (!message.providerRFCMessageID || message.providerRFCMessageID !== linked.docs[0].rfcMessageID))) throw new Error('mailbox_thread_not_grounded')
+  if (!linked.docs[0] || (message.provider === 'google' && (message.subject !== message.providerSubject || message.providerSubject !== linked.docs[0].subject || !message.providerRFCMessageID || message.providerRFCMessageID !== linked.docs[0].rfcMessageID || (message.providerRFCReferences ?? undefined) !== (linked.docs[0].rfcReferences ?? undefined)))) throw new Error('mailbox_thread_not_grounded')
 }
 
 export async function sendAreaMail(
