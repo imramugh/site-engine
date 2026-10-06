@@ -18,6 +18,7 @@ async function lead(email: string, assignee: string, values: Record<string, unkn
 test('due assigned active leads enqueue once after 08:00 local time and exclude inactive records', async () => {
   const user = await payload.create({ collection: 'users', data: { email: 'follow-ups@example.test', name: 'Follow ups', roles: ['sales'] }, overrideAccess: true })
   const due = await lead('due@example.test', user.id)
+  for (let index = 0; index < 25; index += 1) await lead(`queued-${index}@example.test`, user.id)
   await lead('won@example.test', user.id, { stage: 'won' })
   await lead('empty@example.test', user.id, { nextAction: '' })
   await lead('unassigned@example.test', user.id, { assignee: null })
@@ -27,7 +28,7 @@ test('due assigned active leads enqueue once after 08:00 local time and exclude 
   expect(outbox.totalDocs).toBe(1)
   expect(outbox.docs[0]).toMatchObject({ kind: 'follow-ups-due', idempotencyKey: `follow-ups-due:${due.id}:2026-10-05`, payload: { day: '2026-10-05' } })
   const all = await payload.find({ collection: 'notification-outbox', where: { kind: { equals: 'follow-ups-due' } }, limit: 10, depth: 0, overrideAccess: true })
-  expect(all.totalDocs).toBe(1)
+  expect(all.totalDocs).toBe(26)
 })
 test('DST fallback uses the local calendar day as the durable idempotency boundary', async () => {
   const user = await payload.create({ collection: 'users', data: { email: 'dst-follow-ups@example.test', name: 'DST Follow ups', roles: ['sales'] }, overrideAccess: true })

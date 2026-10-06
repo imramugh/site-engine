@@ -15,7 +15,7 @@ export function followUpTimezone(): string {
 }
 
 /** Creates at most `limit` daily durable intents. It is safe to rerun after 08:00 local time. */
-export async function enqueueDueFollowUps(payload: Payload, now = new Date(), limit = 25): Promise<number> {
+export async function enqueueDueFollowUps(payload: Payload, now = new Date(), limit = 100): Promise<number> {
   if (currentRun) return currentRun
   const run = enqueueDueFollowUpsLocked(payload, now, limit)
   currentRun = run
@@ -24,14 +24,20 @@ export async function enqueueDueFollowUps(payload: Payload, now = new Date(), li
 async function enqueueDueFollowUpsLocked(payload: Payload, now: Date, limit: number): Promise<number> {
   const local = parts(now, followUpTimezone())
   if (local.hour < 8) return 0
-  const result = await payload.find({ collection: 'inquiries', where: { and: [
-    { nextActionDueAt: { less_than_equal: now.toISOString() } }, { nextAction: { exists: true } }, { nextAction: { not_equals: '' } }, { assignee: { exists: true } },
-    { spam: { not_equals: true } }, { stage: { not_in: ['won', 'lost'] } },
-  ] }, sort: 'nextActionDueAt', limit, pagination: false, depth: 0, overrideAccess: true })
   let queued = 0
-  for (const lead of result.docs as Array<{ id: string; assignee?: string }>) {
-    const intent = await enqueueNotification(payload, undefined, { kind: 'follow-ups-due', idempotencyKey: `follow-ups-due:${lead.id}:${local.day}`, inquiry: lead.id, sourceType: 'inquiry', sourceID: lead.id, leadOwnerID: lead.assignee, payload: { day: local.day } })
-    if (intent) queued += 1
+  let page = 1; let scanned = 0
+  while (scanned < limit) {
+    const result = await payload.find({ collection: 'inquiries', where: { and: [
+      { nextActionDueAt: { less_than_equal: now.toISOString() } }, { nextAction: { exists: true } }, { nextAction: { not_equals: '' } }, { assignee: { exists: true } },
+      { spam: { not_equals: true } }, { stage: { not_in: ['won', 'lost'] } },
+    ] }, sort: 'nextActionDueAt', limit: Math.min(25, limit - scanned), page, depth: 0, overrideAccess: true })
+    for (const lead of result.docs as Array<{ id: string; assignee?: string }>) {
+      const intent = await enqueueNotification(payload, undefined, { kind: 'follow-ups-due', idempotencyKey: `follow-ups-due:${lead.id}:${local.day}`, inquiry: lead.id, sourceType: 'inquiry', sourceID: lead.id, leadOwnerID: lead.assignee, payload: { day: local.day } })
+      if (intent) queued += 1
+    }
+    scanned += result.docs.length
+    if (!result.hasNextPage || result.docs.length === 0) break
+    page += 1
   }
   return queued
 }
