@@ -110,6 +110,18 @@ describe('ENG-010 reviewed rollback', () => {
     const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
     expect(await payload.findByID({ collection: 'pages', id: target.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'draft' }); expect(candidate(after, set).pages).toEqual(expect.arrayContaining([expect.objectContaining({ id: target.id, status: before.pages[1].status })])); expect(set.changes).toEqual(expect.arrayContaining([expect.objectContaining({ collection: 'redirects', before: expect.objectContaining({ from: oldPath }), after: null })]))
   })
+  it('discards an archive inverse back to the archived draft without changing the public release', async () => {
+    const before = fixture(), after = structuredClone(before), target = { ...after.pages[0], id: randomUUID(), slug: `discard-archived-${randomUUID().slice(0, 8)}`, title: 'Discard archive inverse target', status: 'published' }
+    before.pages.push(structuredClone(target)); after.pages.push(target); before.settings.sections[0].pageIds.push(target.id); after.settings.sections[0].pageIds.push(target.id); after.pages[1].status = 'archived'
+    const oldPath = pathFor(before, target.id); after.redirects.push({ from: oldPath, to: '/', status: 301 })
+    await seed(after); await payload.create({ collection: 'redirects', data: after.redirects[0], draft: true, overrideAccess: true, context: { editorialInternal: true, reviewedSnapshotImport: true } }); await release(before, []); const current: any = await release(after, [capture(before.pages[1], after.pages[1])])
+    const publicBefore = await payload.findByID({ collection: 'published-releases', id: current.id, depth: 1, overrideAccess: true })
+    const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(current.id), { mode: 'release' })
+    expect(await payload.findByID({ collection: 'pages', id: target.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'draft' })
+    await withPayloadTransaction(payload, req => transitionChangeSet({ payload, req, actor: owner, id: set.id, action: 'discard' }))
+    expect(await payload.findByID({ collection: 'pages', id: target.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'archived' })
+    expect(await payload.findByID({ collection: 'published-releases', id: current.id, depth: 1, overrideAccess: true })).toMatchObject({ id: publicBefore.id, snapshot: publicBefore.snapshot })
+  })
   it('reverses an approved unarchive back to an archived draft', async () => {
     const before = fixture(), after = structuredClone(before), target = { ...after.pages[0], id: randomUUID(), parentId: after.pages[0].id, slug: `unarchived-${randomUUID().slice(0, 8)}`, title: 'Unarchive rollback target', status: 'archived' }
     before.pages.push(structuredClone(target)); after.pages.push(target); before.settings.sections[0].pageIds.push(target.id); after.settings.sections[0].pageIds.push(target.id); after.pages[1].status = 'published'

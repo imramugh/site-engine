@@ -349,7 +349,9 @@ export async function transitionChangeSet(input: { payload: Payload; req: Payloa
         const data = change.collection === 'assets' && current
           ? await assetRestoration(payload, req, current, change.before)
           : restoration(change.collection, change.before)
-        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
+        const archivedPage = change.collection === 'pages' && change.before.status === 'archived'
+        if (archivedPage) data.status = 'archived'
+        await payload.update({ collection: change.collection, id: change.id, data, draft: true, overrideAccess: true, req, context: { editorialInternal: true, ...(archivedPage ? { archiveInternal: true } : {}), ...(change.collection === 'assets' ? { mediaReplacement: true } : {}) } })
       }
     }
   }
