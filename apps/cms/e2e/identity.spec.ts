@@ -115,7 +115,7 @@ test('ENG-008 makes an editor select an explicit stale-draft resolution in the b
   })
   const other = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
   const otherPage = await other.newPage()
-  await signInLocalOwner(otherPage, 'synthetic-content-owner-code-05', 'content-owner.synthetic@example.test')
+  await signInLocalOwner(otherPage, 'synthetic-identity-owner-code-07', 'content-owner.synthetic@example.test')
   expect(await otherPage.evaluate(async (id) => (await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Owner current title', summary: 'Owner current summary survives the editor reapplying its title.' }) })).status, created.pageID)).toBe(200)
   await other.close()
   await page.goto(`/editorial?changeSet=${created.changeSetID}`)
