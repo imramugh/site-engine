@@ -65,16 +65,17 @@ const block = (value, type, data) => ({
   ...data,
 });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-let updateBaselines = process.env.UPDATE_THEME_CONFORMANCE_BASELINES === "1";
-
-async function assertVisualBaselines(actual) {
-  if (updateBaselines) {
-    await mkdir(dirname(baselinePath), { recursive: true });
-    await writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`);
+async function assertVisualBaselines(actual, { file, record, identity }) {
+  if (!file) throw new Error(`No visual baseline is configured for ${identity.name}@${identity.themeVersion}. Pass baselineFile, or use recordBaselines with a caller-owned baselineFile.`);
+  if (record) {
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, `${JSON.stringify({ identity, screenshots: actual }, null, 2)}\n`);
     return;
   }
-  const expected = JSON.parse(await readFile(baselinePath, "utf8"));
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  const expected = JSON.parse(await readFile(file, "utf8"));
+  const screenshots = expected.screenshots || expected;
+  if (expected.identity && JSON.stringify(expected.identity) !== JSON.stringify(identity)) throw new Error(`Visual baseline identity does not match ${identity.name}@${identity.themeVersion}.`);
+  if (JSON.stringify(actual) !== JSON.stringify(screenshots)) {
     throw new Error(
       `Visual baseline changed. Review artifacts/theme-starter-conformance and run UPDATE_THEME_CONFORMANCE_BASELINES=1 pnpm conformance:starter to accept an intentional change.`,
     );
@@ -464,8 +465,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
  * Render a theme against the neutral publishing contract fixture.
  * @param {{ themePackage: string, artifactsDir?: string, updateBaselines?: boolean }} options
  */
-export async function runThemeConformance({ themePackage = "@site-engine/theme-starter", artifactsDir, updateBaselines: shouldUpdate = false } = {}) {
-  updateBaselines = shouldUpdate || process.env.UPDATE_THEME_CONFORMANCE_BASELINES === "1";
+export async function runThemeConformance({ themePackage = "@site-engine/theme-starter", artifactsDir, baselineFile, recordBaselines = false } = {}) {
   const temp = await mkdtemp(
     join(tmpdir(), "site-engine-starter-conformance-"),
   );
@@ -484,6 +484,9 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
     };
     await execFile(process.execPath, [validator, starter]);
     const manifest = JSON.parse(await readFile(themeManifest, "utf8"));
+    const identity = { name: manifest.name, themeVersion: versionPins.themeVersion, engineVersion: versionPins.engineVersion };
+    const isBundledStarter = themePackage === "@site-engine/theme-starter";
+    const selectedBaseline = baselineFile ? resolve(baselineFile) : isBundledStarter ? baselinePath : undefined;
     delete manifest.contractSurface.components.blockRenderer;
     const invalid = join(temp, "invalid-theme");
     await (
@@ -632,7 +635,8 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           ([filename]) => !filename.startsWith("general_matrix-"),
         ),
       );
-      await assertVisualBaselines(staticScreenshots);
+      await assertVisualBaselines(staticScreenshots, { file: selectedBaseline, record: recordBaselines, identity });
+      await writeFile(join(evidence, "conformance-report.json"), `${JSON.stringify({ identity, blocks: blocks.length, cases: paths.length * 2, baselineFile: selectedBaseline }, null, 2)}\n`);
     } finally {
       await browser.close();
       await new Promise((done) => server.close(done));
