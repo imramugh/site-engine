@@ -1,18 +1,539 @@
-'use client'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import styles from './operations-dashboard.module.css'
-type Row={id:string;createdAt:string;who:string;via:string;title:string;detail:string;status:string;source:string;category:string;diff:null|{label:string;entries:Array<{record:string;field:string;before:string;after:string}>;truncated:boolean;pages:number};rollback:null|{releaseID:string;sequence:number;enabled:boolean;note:string;changes:Array<{key:string;label:string}>}}
-type ReleaseHistory={id:string;sequence:number;status:string;state:string;attempts:number;retryReason:string|null;correlationID:string;nextAttemptAt:string|null;activatedAt:string|null;publishedAt:string|null;reviewer:string|null;actor:string|null;resultAt:string|null;buildLogURL:string|null}
-type Data={audit:{docs:Row[];page:number;totalPages:number};releaseHistory:ReleaseHistory[];filterOptions:{actors:Array<{id:string;label:string}>;pages:Array<{id:string;label:string}>}}
-type Filters={actor:string;source:string;target:string;type:string;period:string}
-const defaults:Filters={actor:'',source:'',target:'',type:'',period:'30'}
-const date=(value:string)=>new Intl.DateTimeFormat('en-CA',{dateStyle:'medium',timeStyle:'short',timeZone:'America/Toronto'}).format(new Date(value))
-function initials(value:string){return value.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'S'}
-function failureMessage(response:Response){return response.status===403?'Owner access is required to view the change log.':'Unable to load the change log. Check your connection and try again.'}
-export function OperationsDashboard({children}:{children?:ReactNode}){const[data,setData]=useState<Data>(),[error,setError]=useState(''),[status,setStatus]=useState(''),[filters,setFilters]=useState<Filters>(defaults),[page,setPage]=useState(1),[expanded,setExpanded]=useState<string>(),[busy,setBusy]=useState(''),[rollbackChoice,setRollbackChoice]=useState<Record<string,string>>({});const requestID=useRef(0)
-async function load(next=1,nextFilters=filters){const current=++requestID.current;const query=new URLSearchParams({page:String(next)});for(const[key,value]of Object.entries(nextFilters))if(value)query.set(key,value);const publish=new URLSearchParams(window.location.search).get('publish');if(publish)query.set('publish',publish);try{const response=await fetch(`/api/operations?${query}`,{cache:'no-store'});if(current!==requestID.current)return;if(!response.ok){setError(failureMessage(response));if(response.status===403)setData(undefined);return}const value=await response.json()as Data;if(current!==requestID.current)return;setData(value);setPage(next);setError('');window.history.replaceState(null,'',`/operations?${query}`)}catch{if(current===requestID.current)setError('Unable to load the change log. Check your connection and try again.')}}
-useEffect(()=>{const query=new URLSearchParams(window.location.search);const initial={...defaults,...Object.fromEntries((Object.keys(defaults)as Array<keyof Filters>).map(key=>[key,query.get(key)??defaults[key]]))};setFilters(initial);void load(Number(query.get('page')??1),initial)},[])
-const update=(key:keyof Filters)=>(event:React.ChangeEvent<HTMLSelectElement>)=>setFilters(current=>({...current,[key]:event.target.value}))
-const reset=()=>{setFilters(defaults);setExpanded(undefined);void load(1,defaults)}
-const rollback=async(row:Row)=>{const choice=rollbackChoice[row.id]??'release';const selected=choice==='release'?undefined:choice;if(!row.rollback?.enabled||!window.confirm(`Prepare ${selected?'the selected change from':'all approved changes in'} release #${row.rollback.sequence} for review? Nothing will publish automatically.`))return;setBusy(row.id);setError('');setStatus('');try{const response=await fetch('/api/operations',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'prepare-rollback',releaseID:row.rollback.releaseID,mode:selected?'change':'release',...(selected?{changeKeys:[selected]}:{})})});const value=await response.json();if(!response.ok)throw new Error(value.error);setStatus(`${value.changeSet.name} is ready for editorial review.`)}catch(cause){setError(cause instanceof Error?cause.message:'Rollback preparation failed.')}finally{setBusy('')}}
-return <main className={styles.main} data-change-log aria-busy={!data&&!error}><h1 className={styles.sr}>Change log</h1>{error&&<div className={styles.error} role="alert">{error} <button type="button" onClick={()=>void load(page)}>Try again</button></div>}{status&&<div className={styles.success} role="status">{status} <a href="/editorial">Open editorial review</a></div>}<section className={styles.card} aria-label="Change log"><form className={styles.filters} data-change-log-filters onSubmit={event=>{event.preventDefault();void load(1)}}><button type="button" className={Object.values(filters).every((value,index)=>value===(Object.values(defaults)[index]??''))?styles.active:''} onClick={reset}>All changes</button><label><span>Person</span><select aria-label="Person" value={filters.actor} onChange={update('actor')}><option value="">Any person</option>{data?.filterOptions.actors.map(option=><option key={option.id} value={option.id}>{option.label}</option>)}</select></label><label><span>Source</span><select aria-label="Assistant or source" value={filters.source} onChange={update('source')}><option value="">Any source</option><option value="assistant">Assistant</option><option value="person">Person</option><option value="system">Automated</option></select></label><label><span>Page</span><select aria-label="Page" value={filters.target} onChange={update('target')}><option value="">Any page</option>{data?.filterOptions.pages.map(option=><option key={option.id} value={option.id}>{option.label}</option>)}</select></label><label><span>Type</span><select aria-label="Type" value={filters.type} onChange={update('type')}><option value="">Any type</option><option value="editorial">Content and review</option><option value="media">Media</option><option value="site">Site and theme</option><option value="integration">Integrations</option><option value="identity">Users and sign-in</option><option value="assistant">Assistants</option><option value="lead">Leads</option><option value="career">Careers</option></select></label><label><span>Period</span><select aria-label="Period" value={filters.period} onChange={update('period')}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option></select></label><button type="submit">Apply</button></form>{data&&<><div className={styles.head} aria-hidden="true"><span>When</span><span>Who</span><span>Change</span><span>Status</span><span /></div><div className={styles.rows}>{data.audit.docs.length?data.audit.docs.map(row=><article key={row.id} data-change-log-row><div className={styles.row}><time dateTime={row.createdAt}>{date(row.createdAt)}</time><span className={styles.who}><i aria-hidden="true">{initials(row.who)}</i><span><strong>{row.who}</strong><small>{row.via}</small></span></span><span className={styles.change}><strong>{row.title}</strong><small>{row.detail}</small></span><span className={styles.badge} data-status={row.status.toLowerCase().replaceAll(' ','-')}>{row.status}</span><button type="button" aria-expanded={expanded===row.id} aria-controls={`change-${row.id}`} onClick={()=>setExpanded(current=>current===row.id?undefined:row.id)}>{expanded===row.id?'Hide':'View'}</button></div>{expanded===row.id&&<div className={styles.detail} id={`change-${row.id}`}><div>{row.diff?<><strong>{row.diff.label}</strong><div className={styles.diffs}>{row.diff.entries.map((entry,index)=><div key={index} className={styles.diffEntry}><strong>{entry.record} · {entry.field}</strong><code><del aria-label="Before">{entry.before}</del><ins aria-label="After">{entry.after}</ins></code></div>)}</div>{row.diff.truncated&&<p>Showing the first 200 field changes. Open editorial review for the complete change set.</p>}<small>Pages affected: {row.diff.pages}</small></>:<><strong>Recorded activity</strong><p>{row.detail}</p></>}</div><aside>{row.rollback&&<><label><span className={styles.sr}>Rollback scope</span><select aria-label="Rollback scope" value={rollbackChoice[row.id]??'release'} disabled={!row.rollback.enabled||busy===row.id} onChange={event=>setRollbackChoice(current=>({...current,[row.id]:event.target.value}))}><option value="release">All approved changes</option>{row.rollback.changes.map(change=><option key={change.key} value={change.key}>Only {change.label}</option>)}</select></label><button type="button" disabled={!row.rollback.enabled||busy===row.id} onClick={()=>void rollback(row)}>Prepare rollback for review</button><small>{row.rollback.note}</small></>}</aside></div>}</article>):<p className={styles.empty}>No changes match these filters.</p>}</div><footer><span>Page {data.audit.page} of {Math.max(1,data.audit.totalPages)}</span><button type="button" disabled={page<=1} onClick={()=>void load(page-1)}>Previous</button><button type="button" disabled={page>=data.audit.totalPages} onClick={()=>void load(page+1)}>Next</button></footer></>}</section>{data&&<section className={styles.releaseHistory} aria-label="Release history"><header><div><h2>Release history</h2><p>Approved releases and their verified worker results.</p></div></header>{data.releaseHistory.length?<ol>{data.releaseHistory.map(item=><li key={item.id} data-release-history-row><strong>Release #{item.sequence}</strong><span data-release-status={item.status}>{item.state}</span><dl><div><dt>Author</dt><dd>{item.actor??'—'}</dd></div><div><dt>Reviewer</dt><dd>{item.reviewer??'—'}</dd></div>{item.publishedAt&&<div><dt>Approved</dt><dd><time dateTime={item.publishedAt}>{date(item.publishedAt)}</time></dd></div>}<div><dt>Attempts</dt><dd>{item.attempts}</dd></div><div><dt>Result</dt><dd>{item.resultAt?<time dateTime={item.resultAt}>{date(item.resultAt)}</time>:'—'}</dd></div>{item.buildLogURL&&<div><dt>Build log</dt><dd><a href={item.buildLogURL}>Open build log</a></dd></div>}<div><dt>Correlation ID</dt><dd>{item.correlationID}</dd></div></dl></li>)}</ol>:<p className={styles.empty}>No publish work has been recorded.</p>}</section>}</main>}
+"use client";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import styles from "./operations-dashboard.module.css";
+type Row = {
+  id: string;
+  createdAt: string;
+  who: string;
+  via: string;
+  title: string;
+  detail: string;
+  status: string;
+  source: string;
+  category: string;
+  diff: null | {
+    label: string;
+    entries: Array<{
+      record: string;
+      field: string;
+      before: string;
+      after: string;
+    }>;
+    truncated: boolean;
+    pages: number;
+  };
+  rollback: null | {
+    releaseID: string;
+    sequence: number;
+    enabled: boolean;
+    note: string;
+    changes: Array<{ key: string; label: string }>;
+  };
+};
+type ReleaseHistory = {
+  id: string;
+  sequence: number;
+  status: string;
+  state: string;
+  attempts: number;
+  retryReason: string | null;
+  correlationID: string;
+  nextAttemptAt: string | null;
+  activatedAt: string | null;
+  publishedAt: string | null;
+  reviewer: string | null;
+  actor: string | null;
+  resultAt: string | null;
+  buildLogURL: string | null;
+};
+type BuildLog = null | { id: string; sequence: number; status: string; attempts: number; events: Array<{ id: string; event: string; createdAt: string; stage: string | null; result: string | null; attempt: number | null; correlationID: string | null }> };
+type Data = {
+  audit: { docs: Row[]; page: number; totalPages: number };
+  releaseHistory: ReleaseHistory[];
+  buildLog: BuildLog;
+  filterOptions: {
+    actors: Array<{ id: string; label: string }>;
+    pages: Array<{ id: string; label: string }>;
+  };
+};
+type Filters = {
+  actor: string;
+  source: string;
+  target: string;
+  type: string;
+  period: string;
+};
+const defaults: Filters = {
+  actor: "",
+  source: "",
+  target: "",
+  type: "",
+  period: "30",
+};
+const date = (value: string) =>
+  new Intl.DateTimeFormat("en-CA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Toronto",
+  }).format(new Date(value));
+function initials(value: string) {
+  return (
+    value
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase() || "S"
+  );
+}
+function failureMessage(response: Response) {
+  return response.status === 403
+    ? "Owner access is required to view the change log."
+    : "Unable to load the change log. Check your connection and try again.";
+}
+function BuildLogPanel({ log }: { log: BuildLog }) {
+  if (!log) return null;
+  return <section className={styles.releaseHistory} aria-label="Build log"><header><div><h2>Build log · release #{log.sequence}</h2><p>{log.events.length ? 'Persisted publish stages and results.' : 'No retained build events.'}</p></div></header>{log.events.length > 0 && <ol>{log.events.map(event => <li key={event.id}><strong>{event.stage ?? event.result ?? event.event}</strong><dl><div><dt>When</dt><dd><time dateTime={event.createdAt}>{date(event.createdAt)}</time></dd></div>{event.attempt !== null && <div><dt>Attempt</dt><dd>{event.attempt}</dd></div>}{event.correlationID && <div><dt>Correlation ID</dt><dd>{event.correlationID}</dd></div>}</dl></li>)}</ol>}</section>
+}
+export function OperationsDashboard({ children }: { children?: ReactNode }) {
+  const [data, setData] = useState<Data>(),
+    [error, setError] = useState(""),
+    [status, setStatus] = useState(""),
+    [filters, setFilters] = useState<Filters>(defaults),
+    [page, setPage] = useState(1),
+    [expanded, setExpanded] = useState<string>(),
+    [busy, setBusy] = useState(""),
+    [rollbackChoice, setRollbackChoice] = useState<Record<string, string>>({});
+  const requestID = useRef(0);
+  async function load(next = 1, nextFilters = filters) {
+    const current = ++requestID.current;
+    const query = new URLSearchParams({ page: String(next) });
+    for (const [key, value] of Object.entries(nextFilters))
+      if (value) query.set(key, value);
+    const publish = new URLSearchParams(window.location.search).get("publish");
+    if (publish) query.set("publish", publish);
+    try {
+      const response = await fetch(`/api/operations?${query}`, {
+        cache: "no-store",
+      });
+      if (current !== requestID.current) return;
+      if (!response.ok) {
+        setError(failureMessage(response));
+        if (response.status === 403) setData(undefined);
+        return;
+      }
+      const value = (await response.json()) as Data;
+      if (current !== requestID.current) return;
+      setData(value);
+      setPage(next);
+      setError("");
+      window.history.replaceState(null, "", `/operations?${query}`);
+    } catch {
+      if (current === requestID.current)
+        setError(
+          "Unable to load the change log. Check your connection and try again.",
+        );
+    }
+  }
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const initial = {
+      ...defaults,
+      ...Object.fromEntries(
+        (Object.keys(defaults) as Array<keyof Filters>).map((key) => [
+          key,
+          query.get(key) ?? defaults[key],
+        ]),
+      ),
+    };
+    setFilters(initial);
+    void load(Number(query.get("page") ?? 1), initial);
+  }, []);
+  const update =
+    (key: keyof Filters) => (event: React.ChangeEvent<HTMLSelectElement>) =>
+      setFilters((current) => ({ ...current, [key]: event.target.value }));
+  const reset = () => {
+    setFilters(defaults);
+    setExpanded(undefined);
+    void load(1, defaults);
+  };
+  const rollback = async (row: Row) => {
+    const choice = rollbackChoice[row.id] ?? "release";
+    const selected = choice === "release" ? undefined : choice;
+    if (
+      !row.rollback?.enabled ||
+      !window.confirm(
+        `Prepare ${selected ? "the selected change from" : "all approved changes in"} release #${row.rollback.sequence} for review? Nothing will publish automatically.`,
+      )
+    )
+      return;
+    setBusy(row.id);
+    setError("");
+    setStatus("");
+    try {
+      const response = await fetch("/api/operations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "prepare-rollback",
+          releaseID: row.rollback.releaseID,
+          mode: selected ? "change" : "release",
+          ...(selected ? { changeKeys: [selected] } : {}),
+        }),
+      });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error);
+      setStatus(`${value.changeSet.name} is ready for editorial review.`);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Rollback preparation failed.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <main className={styles.main} data-change-log aria-busy={!data && !error}>
+      <h1 className={styles.sr}>Change log</h1>
+      {error && (
+        <div className={styles.error} role="alert">
+          {error}{" "}
+          <button type="button" onClick={() => void load(page)}>
+            Try again
+          </button>
+        </div>
+      )}
+      {status && (
+        <div className={styles.success} role="status">
+          {status} <a href="/editorial">Open editorial review</a>
+        </div>
+      )}
+      <section className={styles.card} aria-label="Change log">
+        <form
+          className={styles.filters}
+          data-change-log-filters
+          onSubmit={(event) => {
+            event.preventDefault();
+            void load(1);
+          }}
+        >
+          <button
+            type="button"
+            className={
+              Object.values(filters).every(
+                (value, index) =>
+                  value === (Object.values(defaults)[index] ?? ""),
+              )
+                ? styles.active
+                : ""
+            }
+            onClick={reset}
+          >
+            All changes
+          </button>
+          <label>
+            <span>Person</span>
+            <select
+              aria-label="Person"
+              value={filters.actor}
+              onChange={update("actor")}
+            >
+              <option value="">Any person</option>
+              {data?.filterOptions.actors.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Source</span>
+            <select
+              aria-label="Assistant or source"
+              value={filters.source}
+              onChange={update("source")}
+            >
+              <option value="">Any source</option>
+              <option value="assistant">Assistant</option>
+              <option value="person">Person</option>
+              <option value="system">Automated</option>
+            </select>
+          </label>
+          <label>
+            <span>Page</span>
+            <select
+              aria-label="Page"
+              value={filters.target}
+              onChange={update("target")}
+            >
+              <option value="">Any page</option>
+              {data?.filterOptions.pages.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Type</span>
+            <select
+              aria-label="Type"
+              value={filters.type}
+              onChange={update("type")}
+            >
+              <option value="">Any type</option>
+              <option value="editorial">Content and review</option>
+              <option value="media">Media</option>
+              <option value="site">Site and theme</option>
+              <option value="integration">Integrations</option>
+              <option value="identity">Users and sign-in</option>
+              <option value="assistant">Assistants</option>
+              <option value="lead">Leads</option>
+              <option value="career">Careers</option>
+            </select>
+          </label>
+          <label>
+            <span>Period</span>
+            <select
+              aria-label="Period"
+              value={filters.period}
+              onChange={update("period")}
+            >
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="all">All time</option>
+            </select>
+          </label>
+          <button type="submit">Apply</button>
+        </form>
+        {data && (
+          <>
+            <div className={styles.head} aria-hidden="true">
+              <span>When</span>
+              <span>Who</span>
+              <span>Change</span>
+              <span>Status</span>
+              <span />
+            </div>
+            <div className={styles.rows}>
+              {data.audit.docs.length ? (
+                data.audit.docs.map((row) => (
+                  <article key={row.id} data-change-log-row>
+                    <div className={styles.row}>
+                      <time dateTime={row.createdAt}>
+                        {date(row.createdAt)}
+                      </time>
+                      <span className={styles.who}>
+                        <i aria-hidden="true">{initials(row.who)}</i>
+                        <span>
+                          <strong>{row.who}</strong>
+                          <small>{row.via}</small>
+                        </span>
+                      </span>
+                      <span className={styles.change}>
+                        <strong>{row.title}</strong>
+                        <small>{row.detail}</small>
+                      </span>
+                      <span
+                        className={styles.badge}
+                        data-status={row.status
+                          .toLowerCase()
+                          .replaceAll(" ", "-")}
+                      >
+                        {row.status}
+                      </span>
+                      <button
+                        type="button"
+                        aria-expanded={expanded === row.id}
+                        aria-controls={`change-${row.id}`}
+                        onClick={() =>
+                          setExpanded((current) =>
+                            current === row.id ? undefined : row.id,
+                          )
+                        }
+                      >
+                        {expanded === row.id ? "Hide" : "View"}
+                      </button>
+                    </div>
+                    {expanded === row.id && (
+                      <div className={styles.detail} id={`change-${row.id}`}>
+                        <div>
+                          {row.diff ? (
+                            <>
+                              <strong>{row.diff.label}</strong>
+                              <div className={styles.diffs}>
+                                {row.diff.entries.map((entry, index) => (
+                                  <div key={index} className={styles.diffEntry}>
+                                    <strong>
+                                      {entry.record} · {entry.field}
+                                    </strong>
+                                    <code>
+                                      <del aria-label="Before">
+                                        {entry.before}
+                                      </del>
+                                      <ins aria-label="After">
+                                        {entry.after}
+                                      </ins>
+                                    </code>
+                                  </div>
+                                ))}
+                              </div>
+                              {row.diff.truncated && (
+                                <p>
+                                  Showing the first 200 field changes. Open
+                                  editorial review for the complete change set.
+                                </p>
+                              )}
+                              <small>Pages affected: {row.diff.pages}</small>
+                            </>
+                          ) : (
+                            <>
+                              <strong>Recorded activity</strong>
+                              <p>{row.detail}</p>
+                            </>
+                          )}
+                        </div>
+                        <aside>
+                          {row.rollback && (
+                            <>
+                              <label>
+                                <span className={styles.sr}>
+                                  Rollback scope
+                                </span>
+                                <select
+                                  aria-label="Rollback scope"
+                                  value={rollbackChoice[row.id] ?? "release"}
+                                  disabled={
+                                    !row.rollback.enabled || busy === row.id
+                                  }
+                                  onChange={(event) =>
+                                    setRollbackChoice((current) => ({
+                                      ...current,
+                                      [row.id]: event.target.value,
+                                    }))
+                                  }
+                                >
+                                  <option value="release">
+                                    All approved changes
+                                  </option>
+                                  {row.rollback.changes.map((change) => (
+                                    <option key={change.key} value={change.key}>
+                                      Only {change.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                disabled={
+                                  !row.rollback.enabled || busy === row.id
+                                }
+                                onClick={() => void rollback(row)}
+                              >
+                                Prepare rollback for review
+                              </button>
+                              <small>{row.rollback.note}</small>
+                            </>
+                          )}
+                        </aside>
+                      </div>
+                    )}
+                  </article>
+                ))
+              ) : (
+                <p className={styles.empty}>No changes match these filters.</p>
+              )}
+            </div>
+            <footer>
+              <span>
+                Page {data.audit.page} of {Math.max(1, data.audit.totalPages)}
+              </span>
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => void load(page - 1)}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={page >= data.audit.totalPages}
+                onClick={() => void load(page + 1)}
+              >
+                Next
+              </button>
+            </footer>
+          </>
+        )}
+      </section>
+      {data && (
+        <section className={styles.releaseHistory} aria-label="Release history">
+          <header>
+            <div>
+              <h2>Release history</h2>
+              <p>Approved releases and their verified worker results.</p>
+            </div>
+          </header>
+          {data.releaseHistory.length ? (
+            <ol>
+              {data.releaseHistory.map((item) => (
+                <li key={item.id} data-release-history-row>
+                  <strong>Release #{item.sequence}</strong>
+                  <span data-release-status={item.status}>{item.state}</span>
+                  <dl>
+                    <div>
+                      <dt>Author</dt>
+                      <dd>{item.actor ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Reviewer</dt>
+                      <dd>{item.reviewer ?? "—"}</dd>
+                    </div>
+                    {item.publishedAt && (
+                      <div>
+                        <dt>Approved</dt>
+                        <dd>
+                          <time dateTime={item.publishedAt}>
+                            {date(item.publishedAt)}
+                          </time>
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Attempts</dt>
+                      <dd>{item.attempts}</dd>
+                    </div>
+                    <div>
+                      <dt>Result</dt>
+                      <dd>
+                        {item.resultAt ? (
+                          <time dateTime={item.resultAt}>
+                            {date(item.resultAt)}
+                          </time>
+                        ) : (
+                          "—"
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Build log</dt>
+                      <dd><a href={`/operations?publish=${item.id}`}>Open build log</a></dd>
+                    </div>
+                    <div>
+                      <dt>Correlation ID</dt>
+                      <dd>{item.correlationID}</dd>
+                    </div>
+                  </dl>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className={styles.empty}>No publish work has been recorded.</p>
+          )}
+        </section>
+      )}
+      <BuildLogPanel log={data?.buildLog ?? null} />
+    </main>
+  );
+}
