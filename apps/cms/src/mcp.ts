@@ -14,6 +14,7 @@ import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './p
 import { canonicalHash } from './publishing'
 import { prepareReply } from './mail-replies'
 import { isRetryableSQLiteError } from './sqlite'
+import { mcpCatalogMeta } from './mcp-catalog'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -53,10 +54,10 @@ const contentSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentRe
 const redirectSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [redirectsReadScope] }], requiredScopes: [redirectsReadScope], effectiveUserRequired: true }
 const leadsSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [leadsReadScope] }], requiredScopes: [leadsReadScope], effectiveUserRequired: true }
 const careersSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [careersReadScope] }], requiredScopes: [careersReadScope], effectiveUserRequired: true }
-const toolLimits = 'Draft edits require explicit write scope and CMS editing permission. This server cannot publish, approve, manage users, send email, or bypass CMS permissions.'
+const toolLimits = 'Draft edits require explicit write scope and CMS editing permission. This server cannot publish, approve, manage users, permanently delete content, or bypass CMS permissions. Email delivery requires a separately scoped, exact human confirmation.'
 
 export const blockLibrary = {
-  contractVersion: '1.0.0',
+  contractVersion: CONTRACT_VERSION,
   blockTypes: Object.keys(BlockSchemas),
   templates: Object.fromEntries(TemplateSchema.options.map((template) => [template, TemplateAllowedBlocks[template]])),
   appearance: AppearanceOptions,
@@ -261,13 +262,14 @@ export async function handleMcp(request: Request): Promise<Response> {
     } catch { return { error: 'read_failed' } }
   }
   const server = new McpServer({ name: 'site-engine', version: '0.1.0' }, { maxToolInputElements: 30 })
-  const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, value))
-  server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await frozenStyleGuide()))
-  server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await glossary()))
+  const catalogMeta = (roles?: string[]) => ({ _meta: mcpCatalogMeta(contentReadScope, roles) })
+  const registerReadResource = (name: string, uri: string, title: string, value: unknown) => server.registerResource(name, uri, { title, description: `Read-only ${title}. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => resource(resourceUri, value))
+  server.registerResource('style-guide', 'site-engine://contract/style-guide', { title: 'Style guide', description: `Read-only scoped style settings. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => resource(resourceUri, await frozenStyleGuide()))
+  server.registerResource('glossary', 'site-engine://contract/glossary', { title: 'Glossary', description: `Read-only scoped preferred terms. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => resource(resourceUri, await glossary()))
   registerReadResource('block-library', 'site-engine://contract/block-library', 'Block library', blockLibrary)
-  server.registerResource('site-settings', 'site-engine://site/settings', { title: 'Site settings', description: `Owner-only read-only site metadata. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await siteSettings().catch(() => ({ error: 'read_failed' }))))
-  server.registerResource('installed-themes', 'site-engine://site/installed-themes', { title: 'Installed themes', description: `Owner-only installed theme compatibility metadata. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => resource(resourceUri, await installedThemes().catch(() => ({ error: 'read_failed' }))))
-  server.registerResource('site-summary', 'site-engine://site/summary', { title: 'Site summary', description: `Read-only scoped content totals. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => {
+  server.registerResource('site-settings', 'site-engine://site/settings', { title: 'Site settings', description: `Owner-only read-only site metadata. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta(['owner']) }, async (resourceUri) => resource(resourceUri, await siteSettings().catch(() => ({ error: 'read_failed' }))))
+  server.registerResource('installed-themes', 'site-engine://site/installed-themes', { title: 'Installed themes', description: `Owner-only installed theme compatibility metadata. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta(['owner']) }, async (resourceUri) => resource(resourceUri, await installedThemes().catch(() => ({ error: 'read_failed' }))))
+  server.registerResource('site-summary', 'site-engine://site/summary', { title: 'Site summary', description: `Read-only scoped content totals. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => {
     try {
       const [sections, pages] = await Promise.all([
         payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, user: current, overrideAccess: false }),
@@ -276,7 +278,7 @@ export async function handleMcp(request: Request): Promise<Response> {
       return resource(resourceUri, { source: 'scoped-cms-content', sections: sections.totalDocs, pages: pages.totalDocs, unavailableCapabilities })
     } catch { return resource(resourceUri, { error: 'read_failed' }) }
   })
-  server.registerResource('page-tree', 'site-engine://site/page-tree', { title: 'Page tree', description: `Read-only scoped page and section structure. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri) => {
+  server.registerResource('page-tree', 'site-engine://site/page-tree', { title: 'Page tree', description: `Read-only scoped page and section structure. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri) => {
     try {
       const [sections, pages] = await Promise.all([
         payload.find({ collection: 'sections', limit: 100, depth: 0, user: current, overrideAccess: false }),
@@ -291,7 +293,7 @@ export async function handleMcp(request: Request): Promise<Response> {
       return { resources: pages.docs.map((doc) => ({ uri: `site-engine://page/${String((doc as { id: unknown }).id)}`, name: `page-${String((doc as { id: unknown }).id)}` })) }
     } catch { return { resources: [] } }
   } })
-  server.registerResource('page', pageTemplate, { title: 'Draft page', description: `Read one scoped draft page. ${toolLimits}`, mimeType: 'application/json' }, async (resourceUri, variables) => {
+  server.registerResource('page', pageTemplate, { title: 'Draft page', description: `Read one scoped draft page. ${toolLimits}`, mimeType: 'application/json', ...catalogMeta() }, async (resourceUri, variables) => {
     const id = variables.id
     if (Array.isArray(id) || !validIdentifier(id)) return resource(resourceUri, { error: 'invalid_resource' })
     try { return resource(resourceUri, page(await payload.findByID({ collection: 'pages', id, depth: 0, draft: true, user: current, overrideAccess: false }) as unknown as Record<string, unknown>)) } catch { return resource(resourceUri, { error: 'read_failed' }) }
