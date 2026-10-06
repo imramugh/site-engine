@@ -3,20 +3,26 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createClient } from '@libsql/client'
+import sharp from 'sharp'
 import { getPayload } from 'payload'
 import { withPayloadTransaction } from '../src/auth-transaction'
+import { snapshot as capturedSnapshot, transitionChangeSet } from '../src/editorial'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
-import { canonicalHash } from '../src/publishing'
+import { canonicalHash, changeSetHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
+import { authorizeMailDraft } from '../src/mail-authorizations'
+import { prepareReply, setReplyDeliveryForTest } from '../src/mail-replies'
+import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
+process.env.MEDIA_STORAGE_DIR = join(directory, 'media')
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-payload'
 const { default: config } = await import('../payload.config.js')
 const { handleMcp } = await import('../src/mcp.js')
@@ -150,9 +156,11 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await publishFrozenSnapshot(owner.id, frozen)
   const currentRichText = (await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { blocks: Array<Record<string, unknown>> }).blocks.find((block) => block.type === 'richText')
   assert.ok(currentRichText)
-  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2025-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
-  expect(editedQualityPage.lastReviewed).toBe('2025-01-01T12:00:00.000Z')
+  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2020-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
+  expect(editedQualityPage.lastReviewed).toBe('2020-01-01T12:00:00.000Z')
+  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   const editorSession = await sessionFor(editor.id); const qualityWriterSession = await sessionFor(qualityWriter.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
+  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, user: approver, overrideAccess: false }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('quality-writer-token', { clientId: 'quality-writer-client', userId: qualityWriter.id, sessionId: qualityWriterSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
@@ -162,12 +170,12 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }, navigation: { header: [{ kind: 'page', id: page.id, label: 'SDK page', style: 'link' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable navigation reference.', style: 'link' }], footer: { columns: [{ kind: 'links', heading: 'Resources', links: [{ kind: 'page', id: page.id, label: 'SDK page' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable footer reference.' }] }], copyright: '© {year} MCP' } } }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, permanently delete content')
-      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
-      if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
+      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
+      if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -225,7 +233,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const auditValue = structuredJson(pageAudit) as { pageHash: string; contentHash: string }
     expect(auditValue).toMatchObject({ pageHash: expect.stringMatching(/^[a-f0-9]{64}$/), contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(auditValue.pageHash).not.toBe(auditValue.contentHash)
-    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
+    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]) })
     const currentContractBlockers = (structuredJson(pageAudit) as { blockers: Array<{ message: string }> }).blockers.map((item) => item.message)
     expect(currentContractBlockers).not.toEqual(expect.arrayContaining([expect.stringContaining('contract version')]))
     expect(CONTRACT_VERSION).toBe('1.7.0')
@@ -568,6 +576,122 @@ test('ENG-017 content-write tools require scope and preserve draft review bounda
   } finally { await Promise.all([readonly.transport.close(), writer.transport.close()]) }
 })
 
+test('MCP canonical review tools enforce ownership, revisions, and review-only boundaries', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-review-editor-${randomUUID()}@example.test`, name: 'MCP Review Editor', roles: ['editor'] }, overrideAccess: true })
+  const other = await payload.create({ collection: 'users', data: { email: `mcp-review-other-${randomUUID()}@example.test`, name: 'MCP Review Other', roles: ['editor'] }, overrideAccess: true })
+  const [editorSession, otherSession] = await Promise.all([sessionFor(editor.id), sessionFor(other.id)])
+  tokens.set('mcp-review-editor', { clientId: 'mcp-review-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('mcp-review-other', { clientId: 'mcp-review-other-client', userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [writer, stranger] = await Promise.all([clientFor('mcp-review-editor'), clientFor('mcp-review-other')])
+  try {
+    const tools = await writer.client.listTools()
+    expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['start_change_set', 'submit_for_review', 'get_review_status', 'list_change_sets', 'discard_change_set']))
+    expect(tools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
+    const started = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'SDK canonical review' } })) as { id: string; revision: number; checks: Array<{ name: string }> }
+    expect(started).toMatchObject({ revision: 0, checks: [] })
+    const status = resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: started.id } })) as { id: string; checks: Array<{ name: string }>; comments: unknown[]; privatePreviewURL: string | null }
+    expect(status).toMatchObject({ id: started.id, checks: [expect.objectContaining({ name: 'contract-and-tree', status: 'passed', errors: [] })], comments: [], privatePreviewURL: null })
+    expect(resultJson(await writer.client.callTool({ name: 'list_change_sets', arguments: {} }))).toMatchObject({ items: [expect.objectContaining({ id: started.id })] })
+    const missingSectionID = randomUUID(); const retainedPageID = randomUUID()
+    const missingSectionChange = [{ collection: 'pages', id: retainedPageID, before: null, after: { sectionId: missingSectionID }, beforeHash: null, afterHash: null }]
+    const retainedDiagnostic = { collection: 'pages', id: retainedPageID, message: 'sectionId: Select an existing content section.' }
+    const discarded = await payload.create({ collection: 'change-sets', data: { name: 'Retained discarded history', actor: editor.id, state: 'discarded', revision: 1, changes: missingSectionChange, quality: { checks: [{ name: 'contract-and-tree', status: 'failed', errors: [retainedDiagnostic] }] } }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: discarded.id } }))).toMatchObject({ id: discarded.id, state: 'discarded', checks: [{ name: 'contract-and-tree', status: 'failed', errors: [retainedDiagnostic] }] })
+    expect((resultJson(await writer.client.callTool({ name: 'list_change_sets', arguments: {} })) as { items: unknown[] }).items).toEqual(expect.arrayContaining([expect.objectContaining({ id: discarded.id, checks: [expect.objectContaining({ errors: [retainedDiagnostic] })] })]))
+    const editable = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'Editable missing section' } })) as { id: string }
+    await payload.update({ collection: 'change-sets', id: editable.id, data: { changes: missingSectionChange }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: editable.id } }))).toMatchObject({ id: editable.id, state: 'open', checks: [expect.objectContaining({ name: 'contract-and-tree', status: 'failed', errors: expect.arrayContaining([retainedDiagnostic]) })] })
+    expect(resultJson(await stranger.client.callTool({ name: 'get_review_status', arguments: { id: started.id } }))).toEqual({ error: 'not_found' })
+    expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: 1 } }))).toEqual({ error: 'revision_conflict' })
+    expect(resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: started.id, expectedRevision: started.revision } }))).toEqual({ error: 'write_failed' })
+    expect(resultJson(await writer.client.callTool({ name: 'discard_change_set', arguments: { id: started.id, expectedRevision: started.revision } }))).toMatchObject({ state: 'discarded', revision: 1 })
+
+    const section = await payload.create({ collection: 'sections', data: { name: 'Review SDK section', summary: 'A section for the canonical review SDK test.', slug: `review-sdk-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+    const page = await payload.create({ collection: 'pages', data: { title: 'Current review SDK page', summary: 'A page whose captured change can be submitted through the canonical review tool.', slug: `review-sdk-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Review SDK heading', body: 'A valid page body for review tool coverage.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false }) as unknown as Record<string, unknown>
+    const after = capturedSnapshot('pages', page)!; const before = { ...after, title: 'Previous review SDK page' }
+    const changes = [{ collection: 'pages' as const, id: String(page.id), before, after, beforeHash: canonicalHash(before), afterHash: canonicalHash(after) }]
+    const reviewSet = resultJson(await writer.client.callTool({ name: 'start_change_set', arguments: { name: 'SDK review with a captured change' } })) as { id: string; revision: number }
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const submitted = resultJson(await writer.client.callTool({ name: 'submit_for_review', arguments: { id: reviewSet.id, expectedRevision: reviewSet.revision } })) as { id: string; state: string; revision: number; privatePreviewURL: string | null }
+    expect(submitted).toMatchObject({ id: reviewSet.id, state: 'submitted', revision: 1, privatePreviewURL: null })
+
+    const manifest = structuredClone(neutralFixture)
+    manifest.settings.homepageId = String(page.id); manifest.settings.sections[0]!.id = String(section.id); manifest.settings.sections[0]!.pageIds = [String(page.id)]
+    manifest.pages[0]!.id = String(page.id); manifest.pages[0]!.sectionId = String(section.id); manifest.pages[0]!.slug = String(page.slug); manifest.pages[0]!.title = String(after.title)
+    const includedChangeKeys = [`pages:${page.id}`]; const changeHash = changeSetHash(changes); const digest = 'b'.repeat(64)
+    const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: reviewSet.id, reviewRevision: submitted.revision, changeHash, includedChangeKeys, baselineSequence: 0, liveSequence: 0, liveManifest: manifest, proposedManifest: manifest, liveManifestHash: canonicalHash(manifest), proposedManifestHash: canonicalHash(manifest), versionPins: { themeVersion: 'test', engineVersion: 'test', contractVersion: manifest.settings.contractVersion }, status: 'completed', attempts: 1, artifactDigest: digest }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { preview: { status: 'ready', jobID: job.id, revision: submitted.revision, changeHash, includedChangeKeys, baselineSequence: 0, liveManifestHash: canonicalHash(manifest), proposedManifestHash: canonicalHash(manifest) }, reviewComments: [{ id: 'review-comment', author: other.id, body: 'Please check the review preview.', createdAt: '2026-01-01T00:00:00.000Z' }, { unexpected: true }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const ready = resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: reviewSet.id } })) as { comments: Array<{ id: string; author: string; body: string; createdAt: string }>; privatePreviewURL: string | null }
+    expect(ready.comments).toEqual([{ id: 'review-comment', author: other.id, body: 'Please check the review preview.', createdAt: '2026-01-01T00:00:00.000Z' }])
+    expect(ready.privatePreviewURL).toBe(`${mcpOrigin}/review/${reviewSet.id}`)
+    await payload.update({ collection: 'change-sets', id: reviewSet.id, data: { revision: submitted.revision + 1 }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await writer.client.callTool({ name: 'get_review_status', arguments: { id: reviewSet.id } }))).toMatchObject({ privatePreviewURL: null })
+  } finally { await Promise.all([writer.transport.close(), stranger.transport.close()]) }
+})
+
+test('MCP change log and rollback require a fresh canonical Owner session', async () => {
+  await payload.update({ collection: 'change-sets', where: { state: { in: ['open', 'submitted', 'changes-requested', 'approved'] } }, data: { state: 'discarded' }, overrideAccess: true, context: { editorialInternal: true } })
+  const originalSiteSettings = (await payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true })).docs[0] as unknown as Record<string, unknown> | undefined
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-rollback-owner-${randomUUID()}@example.test`, name: 'MCP Rollback Owner', roles: ['owner'] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-rollback-editor-${randomUUID()}@example.test`, name: 'MCP Rollback Editor', roles: ['editor'] }, overrideAccess: true })
+  const ownerSession = await sessionFor(owner.id); const editorSession = await sessionFor(editor.id)
+  const stale = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-stale-${randomUUID()}`, user: owner.id, authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+  const revoked = await sessionFor(owner.id)
+  tokens.set('rollback-owner', { clientId: 'rollback-owner-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('rollback-owner-read', { clientId: 'rollback-owner-read-client', userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:read'] })
+  tokens.set('rollback-editor', { clientId: 'rollback-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('rollback-stale', { clientId: 'rollback-stale-client', userId: owner.id, sessionId: stale.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('rollback-revoked', { clientId: 'rollback-revoked-client', userId: owner.id, sessionId: revoked.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('rollback-wrong-session', { clientId: 'rollback-wrong-client', userId: owner.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sequence = (await payload.find({ collection: 'published-releases', limit: 0, overrideAccess: true })).totalDocs + 10
+  const previous = structuredClone(neutralFixture); const rollbackSectionID = randomUUID(); const rollbackPageID = randomUUID(); previous.settings.homepageId = rollbackPageID; previous.settings.sections[0]!.id = rollbackSectionID; previous.settings.sections[0]!.pageIds = [rollbackPageID]; previous.pages[0]!.id = rollbackPageID; previous.pages[0]!.sectionId = rollbackSectionID; const current = structuredClone(previous); current.pages[0]!.summary = 'Rollback target current summary'
+  const release = async (manifest: typeof neutralFixture, value: string, releaseSequence: number) => {
+    const before = { ...manifest.pages[0]!, summary: value === 'current' ? previous.pages[0]!.summary : manifest.pages[0]!.summary }
+    const changes = [{ collection: 'pages', id: manifest.pages[0]!.id, before, after: manifest.pages[0]!, beforeHash: canonicalHash(before), afterHash: canonicalHash(manifest.pages[0]!) }]
+    const set = await payload.create({ collection: 'change-sets', data: { name: `MCP rollback ${value}`, actor: owner.id, state: 'published', revision: 1, changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: set.id, reviewRevision: 1, changeHash: changeSetHash(changes), manifest, themeVersion: 'test', engineVersion: 'test', contractVersion: manifest.settings.contractVersion, approvedBy: owner.id, baselineSequence: releaseSequence - 1 }, overrideAccess: true, context: { editorialInternal: true } })
+    const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: randomUUID(), sequence: releaseSequence, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 1, changeHash: changeSetHash(changes), includedChangeKeys: [`pages:${manifest.pages[0]!.id}`], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+    const published = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: releaseSequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { checks: [] }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: 'test', engineVersion: 'test', contractVersion: manifest.settings.contractVersion, checks: [] } }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', actor: owner.id, detail: { changeSet: set.id } }, overrideAccess: true })
+    return published
+  }
+  const oldRelease = await release(previous, 'previous', sequence); const currentRelease = await release(current, 'current', sequence + 1); let preparedID: string | undefined
+  const [ownerClient, ownerReadClient, editorClient, staleClient, revokedClient] = await Promise.all([clientFor('rollback-owner'), clientFor('rollback-owner-read'), clientFor('rollback-editor'), clientFor('rollback-stale'), clientFor('rollback-revoked')])
+  try {
+    expect((await ownerClient.client.listTools()).tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['list_changes', 'request_rollback']))
+    expect(resultJson(await ownerClient.client.callTool({ name: 'list_changes', arguments: { limit: 100 } }))).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ diff: expect.objectContaining({ entries: expect.arrayContaining([expect.objectContaining({ before: expect.any(String), after: expect.any(String) })]) }), rollback: expect.objectContaining({ releaseID: currentRelease.id, enabled: true }) })]) })
+    await expect(ownerReadClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } })).rejects.toMatchObject({ code: 403 })
+    expect(resultJson(await editorClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } }))).toEqual({ error: 'owner_access_required' })
+    expect(resultJson(await staleClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } }))).toEqual({ error: 'fresh_authentication_required' })
+    await payload.update({ collection: 'auth-sessions', id: revoked.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    await expect(revokedClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } })).rejects.toMatchObject({ code: 401 })
+    await expect(clientFor('rollback-wrong-session')).rejects.toThrow(/HTTP error/i)
+    expect(resultJson(await ownerClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: oldRelease.id } }))).toEqual({ error: 'rollback_unavailable' })
+    const prepared = resultJson(await ownerClient.client.callTool({ name: 'request_rollback', arguments: { releaseID: currentRelease.id } })) as { changeSet: { id: string; state: string } }; preparedID = prepared.changeSet.id
+    expect(prepared.changeSet).toMatchObject({ state: 'open' })
+    expect(await payload.findByID({ collection: 'change-sets', id: prepared.changeSet.id, overrideAccess: true })).toMatchObject({ name: `Rollback release #${sequence + 1}`, state: 'open' })
+  } finally {
+    await Promise.all([ownerClient.transport.close(), ownerReadClient.transport.close(), editorClient.transport.close(), staleClient.transport.close(), revokedClient.transport.close()])
+    const releases = [oldRelease, currentRelease]; const snapshots = releases.map((release) => typeof release.snapshot === 'string' ? release.snapshot : release.snapshot.id); const outboxes = releases.map((release) => typeof release.outbox === 'string' ? release.outbox : release.outbox.id)
+    await withPayloadTransaction(payload, async (req) => {
+      await payload.delete({ collection: 'published-releases', where: { id: { in: releases.map((release) => release.id) } }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'publish-outbox', where: { id: { in: outboxes } }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'publish-snapshots', where: { id: { in: snapshots } }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'change-sets', where: { or: [{ name: { equals: 'MCP rollback previous' } }, { name: { equals: 'MCP rollback current' } }, ...(preparedID ? [{ id: { equals: preparedID } }] : [])] }, overrideAccess: true, req, context: { editorialInternal: true } })
+      // Requesting rollback reconciles the captured snapshot into ordinary draft
+      // records. Restore the pre-existing settings before removing this test's
+      // synthetic page and section, so later upload tests never inherit a
+      // dangling homepage relationship.
+      if (originalSiteSettings) {
+        const { id, createdAt, updatedAt, ...data } = originalSiteSettings
+        await payload.update({ collection: 'site-settings', id: String(id), data: data as never, draft: true, overrideAccess: true, req, context: { editorialInternal: true } })
+      }
+      await payload.delete({ collection: 'pages', where: { id: { equals: rollbackPageID } }, overrideAccess: true, req, context: { editorialInternal: true } })
+      await payload.delete({ collection: 'sections', where: { id: { equals: rollbackSectionID } }, overrideAccess: true, req, context: { editorialInternal: true } })
+    })
+  }
+})
+
 test('ENG-017 creates and updates draft pages only through an explicit revisioned change set', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-page@example.test', name: 'MCP Page Editor', roles: ['editor'] }, overrideAccess: true })
   const section = await payload.create({ collection: 'sections', data: { name: 'MCP pages', summary: 'Synthetic section that accepts standard pages for MCP mutation testing.', slug: 'mcp-pages', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
@@ -612,6 +736,101 @@ test('an Approver grant updates existing pages but cannot create pages or approv
   }
 })
 
+test('MCP media search retains tagged used assets past the first 100 results', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-pagination-${randomUUID()}@example.test`, name: 'MCP Media Pagination', roles: ['editor'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: `MCP media pagination ${randomUUID()}`, summary: 'Synthetic section for MCP media pagination coverage.', slug: `mcp-media-pagination-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
+  const tag = `mcp-pagination-${randomUUID()}`
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const assets: Array<{ id: string }> = []
+  for (let index = 0; index < 101; index++) assets.push(await payload.create({
+    collection: 'assets', data: { alt: `MCP pagination asset ${index}`, decorative: false, tags: [tag] },
+    file: { data: bytes, mimetype: 'image/png', name: `mcp-pagination-${index}.png`, size: bytes.length }, user: editor, overrideAccess: false,
+  }) as { id: string })
+  const lateAsset = assets[100]!
+  const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } as const
+  await payload.create({
+    collection: 'pages',
+    data: {
+      title: 'MCP media pagination references', summary: 'Synthetic page that references every paginated media fixture asset.', slug: `mcp-media-references-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard',
+      blocks: Array.from({ length: Math.ceil(assets.length / 12) }, (_, group) => ({ id: randomUUID(), type: 'gallery', mediaIds: assets.slice(group * 12, group * 12 + 12).map((asset) => asset.id), hidden: false, appearance })),
+    }, user: editor, overrideAccess: false,
+  })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-media-pagination', { clientId: 'mcp-media-pagination-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read'] })
+  const sdk = await clientFor('mcp-media-pagination')
+  try {
+    const first = resultJson(await sdk.client.callTool({ name: 'find_media', arguments: { tag, usage: 'used', page: 1, pageSize: 25 } })) as { assets: Array<{ id: string }>; total: number; page: number; pageSize: number; totalPages: number }
+    expect(first).toMatchObject({ total: 101, page: 1, pageSize: 25, totalPages: 5 })
+    const pages = [first]
+    for (let page = 2; page <= first.totalPages; page++) pages.push(resultJson(await sdk.client.callTool({ name: 'find_media', arguments: { tag, usage: 'used', page, pageSize: 25 } })) as typeof first)
+    const foundIDs = pages.flatMap((found) => found.assets.map((asset) => asset.id))
+    expect(foundIDs).toHaveLength(101)
+    expect(new Set(foundIDs)).toEqual(new Set(assets.map((asset) => asset.id)))
+    expect(foundIDs).toContain(lateAsset.id)
+    expect(resultJson(await sdk.client.callTool({ name: 'get_media_usage', arguments: { id: lateAsset.id } }))).toMatchObject({ id: lateAsset.id, usages: [expect.objectContaining({ locations: expect.arrayContaining([expect.stringContaining('mediaIds')]) })] })
+  } finally { await sdk.transport.close() }
+}, 180_000)
+
+test('MCP update_media reports a retryable SQLite writer lock without a partial mutation', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-busy-${randomUUID()}@example.test`, name: 'MCP Media Busy', roles: ['editor'] }, overrideAccess: true })
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const asset = await payload.create({ collection: 'assets', data: { alt: 'Original locked media metadata', decorative: false, tags: ['before-lock'] }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media-busy.png', size: bytes.length }, user: editor, overrideAccess: false })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-media-busy', { clientId: 'mcp-media-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sdk = await clientFor('mcp-media-busy')
+  const set = resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP media busy mutation' } })) as { id: string; revision: number }
+  const originalCreate = payload.create.bind(payload)
+  const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+  let lock: Awaited<ReturnType<typeof external.transaction>> | undefined
+  let armed = true
+  ;(payload as unknown as { create: typeof payload.create }).create = (async (args: Parameters<typeof payload.create>[0]) => {
+    const result = await originalCreate(args)
+    if (armed && args.collection === 'audit-events' && (args.data as { event?: unknown }).event === 'mcp.request') {
+      armed = false; lock = await external.transaction('write')
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
+    }
+    return result
+  }) as typeof payload.create
+  try {
+    const blocked = await sdk.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Locked metadata must not persist', decorative: false, tags: ['after-lock'], focalX: 25, focalY: 75 } })
+    expect(blocked).toMatchObject({ isError: true })
+    expect(resultJson(blocked)).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    await lock?.rollback(); lock = undefined
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original locked media metadata', tags: ['before-lock'] })
+    expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ revision: set.revision })
+  } finally {
+    ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
+    await lock?.rollback(); external.close()
+    await sdk.transport.close()
+  }
+}, 15_000)
+
+test('MCP media tools use scoped effective users and revisioned metadata writes', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-editor-${randomUUID()}@example.test`, name: 'MCP Media Editor', roles: ['editor'] }, overrideAccess: true })
+  const approver = await payload.create({ collection: 'users', data: { email: `mcp-media-approver-${randomUUID()}@example.test`, name: 'MCP Media Approver', roles: ['approver'] }, overrideAccess: true })
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#124' } }).png().toBuffer()
+  const asset = await payload.create({ collection: 'assets', data: { alt: 'Original media metadata', decorative: false }, file: { data: bytes, mimetype: 'image/png', name: 'mcp-media.png', size: bytes.length }, user: editor, overrideAccess: false })
+  const [editorSession, approverSession] = await Promise.all([sessionFor(editor.id), sessionFor(approver.id)])
+  tokens.set('mcp-media-editor', { clientId: 'mcp-media-editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  tokens.set('mcp-media-approver', { clientId: 'mcp-media-approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const [writer, reader] = await Promise.all([clientFor('mcp-media-editor'), clientFor('mcp-media-approver')])
+  try {
+    const found = resultJson(await writer.client.callTool({ name: 'find_media', arguments: { q: 'Original media' } })) as { assets: Array<{ id: string }> }
+    expect(found.assets).toEqual(expect.arrayContaining([expect.objectContaining({ id: asset.id })]))
+    expect(resultJson(await writer.client.callTool({ name: 'get_media_usage', arguments: { id: asset.id } }))).toEqual({ id: asset.id, usages: [] })
+    const set = resultJson(await writer.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP media metadata' } })) as { id: string; revision: number }
+    const saved = resultJson(await writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'Original media metadata', decorative: false, caption: 'Captured media caption', credit: 'Captured media credit', focalX: 50, focalY: 50, tags: ['mcp'] } })) as { draft: { assetId: string; changeSetRevision: number }; checks: unknown[] }
+    expect(saved).toMatchObject({ draft: { assetId: asset.id, changeSetRevision: set.revision + 1 }, checks: [{ name: 'contract-and-tree', status: 'passed', errors: [] }] })
+    expect(await payload.findByID({ collection: 'change-sets', id: set.id, overrideAccess: true })).toMatchObject({ changes: [expect.objectContaining({ collection: 'assets', id: asset.id, after: expect.objectContaining({ caption: 'Captured media caption', credit: 'Captured media credit', tags: ['mcp'] }) })] })
+    await expect(writer.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'invalid', decorative: false, focalX: 50, focalY: 50, unknown: true } })).resolves.toMatchObject({ isError: true })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original media metadata', caption: 'Captured media caption', credit: 'Captured media credit', tags: ['mcp'] })
+    await withPayloadTransaction(payload, async (req) => { req.user = editor as never; await transitionChangeSet({ payload, req, actor: editor, id: set.id, action: 'discard' }) })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original media metadata', caption: null, credit: null, tags: [] })
+    expect(resultJson(await reader.client.callTool({ name: 'update_media', arguments: { id: asset.id, changeSetId: set.id, expectedChangeSetRevision: saved.draft.changeSetRevision, alt: 'Denied metadata update', decorative: false, focalX: 50, focalY: 50 } }))).toEqual({ error: 'role_access_required' })
+    expect(await payload.findByID({ collection: 'assets', id: asset.id, overrideAccess: true })).toMatchObject({ alt: 'Original media metadata', tags: [] })
+  } finally { await Promise.all([writer.transport.close(), reader.transport.close()]) }
+})
+
 
 test('MCP prepare_reply is scoped, draft-only, and returns only the exact review envelope', async () => {
   const owner = await payload.create({ collection: 'users', data: { email: `mcp-reply-owner-${randomUUID()}@example.test`, name: 'Reply Owner', roles: ['owner'] }, overrideAccess: true })
@@ -628,7 +847,7 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const denied = await contentOnly.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'Private subject', body: 'Private body' } })
     expect(resultJson(denied)).toEqual({ error: 'insufficient_scope', required: 'mcp:leads:reply' })
     const leadDraft = resultJson(await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'A precise follow-up', body: 'A prepared response only.' } })) as { draft: { id: string; target: string; sender: string; recipient: string; subject: string; body: string; revision: number; state: string } }
-    expect(leadDraft.draft).toEqual({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared' })
+    expect(leadDraft.draft).toMatchObject({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared', confirmationURL: expect.stringMatching(/\/leads\?lead=.*&draft=/) })
     expect(JSON.stringify(leadDraft)).not.toContain('A prepared response only.')
     expect(JSON.stringify(leadDraft)).not.toContain('416')
     expect((await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.draft.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
@@ -637,4 +856,109 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const applicationDraft = resultJson(await hiringClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'Interview details', body: 'A prepared hiring response only.' } })) as { draft: { target: string; state: string } }
     expect(applicationDraft.draft).toMatchObject({ target: 'application', state: 'prepared' })
   } finally { await Promise.all([contentOnly.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
+})
+
+test('MCP reply grants bind the SDK origin to a separate fresh human confirmation and refuse every invalidated send before delivery', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-bound-owner-${randomUUID()}@example.test`, name: 'Bound reply owner', roles: ['owner'] }, overrideAccess: true })
+  const other = await payload.create({ collection: 'users', data: { email: `mcp-bound-other-${randomUUID()}@example.test`, name: 'Other reply owner', roles: ['owner'] }, overrideAccess: true })
+  const lead = await payload.create({ collection: 'inquiries', data: { email: `mcp-bound-lead-${randomUUID()}@example.test`, name: 'Bound lead', message: 'Please reply through the confirmed channel.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
+  const originSession = await sessionFor(owner.id)
+  const confirmationToken = newOpaqueToken()
+  const confirmationSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(confirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+  const otherSession = await sessionFor(other.id)
+  const clientID = `mcp-bound-client-${randomUUID()}`
+  const clientHash = createHash('sha256').update(clientID).digest('hex')
+  const tokenName = `mcp-bound-token-${randomUUID()}`
+  tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
+  const sdk = await clientFor(tokenName)
+  let providerRequests = 0
+  setReplyDeliveryForTest(async (_payload, area, envelope) => {
+    providerRequests += 1
+    expect(area).toBe('leads')
+    expect(envelope).toMatchObject({ sender: 'team@example.test', recipient: lead.email, subject: 'SDK-bound subject', body: 'SDK-bound body' })
+    return { provider: 'smtp', messageID: `mcp-bound-${providerRequests}` }
+  })
+  const prepareAndConfirm = async () => {
+    const prepared = structuredJson(await sdk.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'team@example.test', subject: 'SDK-bound subject', body: 'SDK-bound body' } })) as { draft: { id: string; confirmationURL: string } }
+    const deepLink = new URL(prepared.draft.confirmationURL)
+    // This is the exact browser target which a signed-in human sees; it must not
+    // silently select the first lead when the requested lead is beyond a page.
+    expect(deepLink.pathname).toBe('/leads')
+    expect(deepLink.searchParams.get('lead')).toBe(lead.id)
+    expect(deepLink.searchParams.get('draft')).toBe(prepared.draft.id)
+    const grant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: confirmationToken }, prepared.draft.id, new Date(Date.now() + 60_000))
+    expect(grant).toMatchObject({ authorizedBy: expect.objectContaining({ id: owner.id }), humanConfirmationSessionID: confirmationSession.id, assistantClientIDHash: clientHash, assistantActor: expect.objectContaining({ id: owner.id }), assistantOAuthSessionID: originSession.id })
+    return { draftID: prepared.draft.id, grantID: grant.id }
+  }
+  const assertRejected = async (draftID: string, grantID: string) => {
+    let rejected: { error: string } | undefined
+    try { rejected = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID, grantID } })) as { error: string } } catch { /* Disabled canonical actors are rejected at MCP authentication before a tool result exists. */ }
+    if (rejected) expect(rejected.error).toMatch(/authorization_not_usable|mail_authorization_required|insufficient_scope/)
+    expect(providerRequests).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+  }
+  try {
+    const accepted = await prepareAndConfirm()
+    const pending = structuredJson(await sdk.client.callTool({ name: 'get_reply_status', arguments: { draftID: accepted.draftID } })) as { grantID: string | null }
+    expect(pending.grantID).toBe(accepted.grantID)
+    expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted }))).toMatchObject({ provider: 'smtp', messageID: 'mcp-bound-1' })
+    expect(providerRequests).toBe(1)
+
+    const cases: Array<[string, (draftID: string, grantID: string) => Promise<void>]> = [
+      ['wrong client', async () => { tokens.set(tokenName, { clientId: `wrong-client-${randomUUID()}`, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['wrong actor', async () => { tokens.set(tokenName, { clientId: clientID, userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['wrong OAuth origin session', async () => { tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: (await sessionFor(owner.id)).id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
+      ['edited draft', async (draftID) => { await payload.update({ collection: 'mail-drafts', id: draftID, data: { body: 'Edited after confirmation.' }, overrideAccess: true }) }],
+      ['canceled draft', async (draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'canceled' }, overrideAccess: true }) }],
+      ['expired grant', async (_draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { expiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true }) }],
+      ['revoked human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }) }],
+      ['stale human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) }],
+      ['demoted canonical actor', async () => { await payload.update({ collection: 'users', id: owner.id, data: { roles: ['editor'] }, overrideAccess: true }) }],
+    ]
+    for (const [name, invalidate] of cases) {
+      await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+      await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: null, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+      tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
+      const rejected = await prepareAndConfirm()
+      await invalidate(rejected.draftID, rejected.grantID)
+      await assertRejected(rejected.draftID, rejected.grantID)
+      expect(providerRequests, name).toBe(1)
+    }
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+    const disabledConfirmationToken = newOpaqueToken()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(disabledConfirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+    const disabledDraft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Disabled actor subject', body: 'Disabled actor body' }, { clientIDHash: clientHash, actorID: owner.id, oauthSessionID: originSession.id })
+    const disabledGrant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: disabledConfirmationToken }, disabledDraft.id, new Date(Date.now() + 60_000))
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: true }, overrideAccess: true })
+    const disabledResponse = await fetch(`${mcpOrigin}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${tokenName}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name: 'send_reply', arguments: { draftID: disabledDraft.id, grantID: disabledGrant.id } } }) })
+    expect(disabledResponse.status).toBe(401)
+    expect(providerRequests).toBe(1)
+    expect(await payload.findByID({ collection: 'mail-authorizations', id: disabledGrant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
+    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
+    let replay: { error: string } | undefined
+    try { replay = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted })) as { error: string } } catch { /* A closed transport is also a refused replay. */ }
+    if (replay) expect(replay).toMatchObject({ error: 'authorization_not_usable' })
+    expect(providerRequests).toBe(1)
+  } finally {
+    setReplyDeliveryForTest()
+  }
+})
+
+test('MCP sends a human-confirmed careers reply with only careers read and reply scopes', async () => {
+  const hiring = await payload.create({ collection: 'users', data: { email: `mcp-careers-send-${randomUUID()}@example.test`, name: 'Hiring sender', roles: ['hiring'] }, overrideAccess: true })
+  const application = await payload.create({ collection: 'applications', data: { name: 'Careers applicant', email: `mcp-careers-applicant-${randomUUID()}@example.test`, coverLetter: 'Application.', consent: true, jobId: randomUUID(), resumeKey: `${randomUUID()}-${'c'.repeat(64)}`, idempotencyKey: randomUUID(), status: 'new' }, overrideAccess: true })
+  const originSession = await sessionFor(hiring.id)
+  const confirmationToken = newOpaqueToken()
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(confirmationToken), user: hiring.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+  const tokenName = `mcp-careers-send-token-${randomUUID()}`
+  tokens.set(tokenName, { clientId: `mcp-careers-send-client-${randomUUID()}`, userId: hiring.id, sessionId: originSession.id, scopes: ['mcp:careers:read', 'mcp:careers:reply'] })
+  const sdk = await clientFor(tokenName)
+  let deliveries = 0
+  setReplyDeliveryForTest(async (_payload, area, envelope) => { deliveries += 1; expect(area).toBe('careers'); expect(envelope).toMatchObject({ recipient: application.email, subject: 'Interview details', body: 'Please choose a time.' }); return { provider: 'smtp', messageID: 'careers-sdk-send' } })
+  try {
+    const draft = structuredJson(await sdk.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'team@example.test', subject: 'Interview details', body: 'Please choose a time.' } })) as { draft: { id: string } }
+    const grant = await authorizeMailDraft(payload, { id: hiring.id, sessionToken: confirmationToken }, draft.draft.id, new Date(Date.now() + 60_000))
+    expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID: draft.draft.id, grantID: grant.id } }))).toMatchObject({ provider: 'smtp', messageID: 'careers-sdk-send' })
+    expect(deliveries).toBe(1)
+  } finally { setReplyDeliveryForTest(); await sdk.transport.close() }
 })

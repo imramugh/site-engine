@@ -204,7 +204,8 @@ function fixture() {
         mediaId: id(201),
       }),
       block(16, "gallery", { mediaIds: [id(201)] }),
-      block(17, "logoStrip", { mediaIds: [id(202)] }),
+      { ...block(17, "logoStrip", { mediaIds: [id(202)] }), appearance: { ...appearance, background: "inverse", logoTone: "inverse" } },
+      block(19, "logoStrip", { mediaIds: [id(202)] }),
       block(18, "video", {
         mediaId: id(203),
         posterMediaId: id(204),
@@ -440,6 +441,28 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
               (element) => element.dataset.logoTone,
             ),
           ).size === 2,
+        logoVisibility: !requireTokenCoverage || await (async () => {
+          const visibleGlyph = async (tone) => {
+            const image = document.querySelector(`:is([data-logo-tone="${tone}"][data-block-type="logoStrip"], [data-logo-tone="${tone}"][data-block="logoStrip"], [data-logo-tone="${tone}"] [data-block-type="logoStrip"], [data-logo-tone="${tone}"] [data-block="logoStrip"]) img`);
+            if (!(image instanceof HTMLImageElement)) return false;
+            await image.decode();
+            const host = image.closest('[data-logo-tone]');
+            const background = getComputedStyle(host).backgroundColor.match(/\d+(?:\.\d+)?/g)?.map(Number) || [255, 255, 255];
+            const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+            const context = canvas.getContext('2d'); if (!context) return false;
+            context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; context.fillRect(0, 0, canvas.width, canvas.height);
+            context.filter = getComputedStyle(image).filter; context.drawImage(image, 0, 0);
+            const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+            let visible = 0; let contrast = 0;
+            for (let index = 0; index < pixels.length; index += 4) {
+              const difference = Math.max(Math.abs(pixels[index] - background[0]), Math.abs(pixels[index + 1] - background[1]), Math.abs(pixels[index + 2] - background[2]));
+              if (difference > 24) { visible += 1; if (difference > 80) contrast += 1; }
+            }
+            const coverage = visible / (canvas.width * canvas.height);
+            return coverage > 0.01 && coverage < 0.7 && contrast > 24;
+          };
+          return (await visibleGlyph('default')) && (await visibleGlyph('inverse'));
+        })(),
         motionIntents:
           !requireTokenCoverage ||
           new Set([...document.querySelectorAll("[data-motion-intent], [class*='motion-']")].flatMap((element) => [element.dataset.motionIntent, ...[...element.classList].filter((name) => /^motion-(none|subtle|ambient|signature)$/.test(name)).map((name) => name.slice(7))]).filter(Boolean)).size === 4,
@@ -592,6 +615,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             !state.optionalEmpty ||
             !state.backgrounds ||
             !state.logoTones ||
+            !state.logoVisibility ||
             !state.motionIntents
           )
             throw new Error(
@@ -605,6 +629,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             content:
               "*,*::before,*::after { animation: none !important; caret-color: transparent !important; transition: none !important; } [data-inquiry-form] { display: none !important; }",
           });
+          await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
           const filename = `${path.replaceAll("/", "_") || "home"}-${width}.png`;
           const screenshot = join(evidence, filename);
           await page.screenshot({ path: screenshot, fullPage: true });
@@ -618,15 +643,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           );
           await context.close();
         }
-      // The matrix route exercises the host-owned inquiry error state. Its
-      // form runtime deliberately changes focus and control state, so retain
-      // that screenshot as evidence while comparing only static theme views.
-      const staticScreenshots = Object.fromEntries(
-        Object.entries(screenshots).filter(
-          ([filename]) => !filename.startsWith("general_matrix-"),
-        ),
-      );
-      await assertVisualBaselines(staticScreenshots, { file: selectedBaseline, record: recordBaselines, identity });
+      await assertVisualBaselines(screenshots, { file: selectedBaseline, record: recordBaselines, identity });
       await writeFile(join(evidence, "conformance-report.json"), `${JSON.stringify({ identity, blocks: blocks.length, cases: paths.length * 2, baselineFile: selectedBaseline }, null, 2)}\n`);
     } finally {
       await browser.close();

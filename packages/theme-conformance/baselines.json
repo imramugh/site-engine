@@ -1,14 +1,23 @@
 {
-  "home-1440.png": "c7286f59a55cacf82d7516d7735db8b5b2d3851beb46b00ba5ff87e9c48f6bf6",
-  "home-390.png": "674a54848e77122493b60cd2f9ab168e1be114f3d5a1ab4dc0d0cff4bd75467a",
-  "general_neutral-listing-1440.png": "99ae947b799fd17afc33d89745eaf6722facb8c254986af1c5e0b2cca25cc637",
-  "general_neutral-listing-390.png": "dd1e666b1732009774d041be7fd3eefbd6d5c357c6d76b6d93617d88698d516c",
-  "general_neutral-pillar-1440.png": "1ee94624eb6233c8f0b0a22ba1426613aac3c5cfa4e5b458c617c76e623b73f8",
-  "general_neutral-pillar-390.png": "d1c8df302f1559dc549f70b457f6f68e24e7c2370971ec6eaf89b0721ab33b50",
-  "general_neutral-pillar_neutral-service-1440.png": "2644525101fa28b3c2b163140f167efcc4a66990c341a6978ea525fe1c94e0ad",
-  "general_neutral-pillar_neutral-service-390.png": "791844d9103320cdd8c9d0800d48e2dc845100ea2e2e792d6752698a33d6fa69",
-  "general_neutral-article-1440.png": "999da7bf1938611cde9de8db9d40dc861037b9eeecb401224dc916e87cd005d2",
-  "general_neutral-article-390.png": "20847b27d49b3c4445e8fc800fcea64a3f657a7650d59e07211152f916b76f57",
-  "general_neutral-job-1440.png": "f6a117a65cea015562f0cae1760e0a143046844ee9c1f773b80d8b3dcbc66b30",
-  "general_neutral-job-390.png": "63479c1e681701d647e72760982273a2f90045a3bf8b12c37b8b25528ec0a0e0"
+  "identity": {
+    "name": "starter",
+    "themeVersion": "1.7.0",
+    "engineVersion": "1.0.0"
+  },
+  "screenshots": {
+    "home-1440.png": "c7286f59a55cacf82d7516d7735db8b5b2d3851beb46b00ba5ff87e9c48f6bf6",
+    "home-390.png": "674a54848e77122493b60cd2f9ab168e1be114f3d5a1ab4dc0d0cff4bd75467a",
+    "general_matrix-1440.png": "bbb3635c3ba80c2655f9e310a0c83b95cc63f89ca49d8e25da7dd021438e2bde",
+    "general_matrix-390.png": "c9fca1aca5dfd8866a3ad9ebbc3271c90538e41bd2141eb2c0155429e68b65b2",
+    "general_neutral-listing-1440.png": "99ae947b799fd17afc33d89745eaf6722facb8c254986af1c5e0b2cca25cc637",
+    "general_neutral-listing-390.png": "dd1e666b1732009774d041be7fd3eefbd6d5c357c6d76b6d93617d88698d516c",
+    "general_neutral-pillar-1440.png": "1ee94624eb6233c8f0b0a22ba1426613aac3c5cfa4e5b458c617c76e623b73f8",
+    "general_neutral-pillar-390.png": "d1c8df302f1559dc549f70b457f6f68e24e7c2370971ec6eaf89b0721ab33b50",
+    "general_neutral-pillar_neutral-service-1440.png": "2644525101fa28b3c2b163140f167efcc4a66990c341a6978ea525fe1c94e0ad",
+    "general_neutral-pillar_neutral-service-390.png": "791844d9103320cdd8c9d0800d48e2dc845100ea2e2e792d6752698a33d6fa69",
+    "general_neutral-article-1440.png": "999da7bf1938611cde9de8db9d40dc861037b9eeecb401224dc916e87cd005d2",
+    "general_neutral-article-390.png": "20847b27d49b3c4445e8fc800fcea64a3f657a7650d59e07211152f916b76f57",
+    "general_neutral-job-1440.png": "f6a117a65cea015562f0cae1760e0a143046844ee9c1f773b80d8b3dcbc66b30",
+    "general_neutral-job-390.png": "63479c1e681701d647e72760982273a2f90045a3bf8b12c37b8b25528ec0a0e0"
+  }
 }
