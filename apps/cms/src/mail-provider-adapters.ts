@@ -70,6 +70,35 @@ function checkedAttachments(input: Envelope): readonly VerifiedAttachment[] {
   }
   return attachments;
 }
+const graphSimpleAttachmentMaximum = 3 * 1024 * 1024 - 1;
+const graphUploadChunk = 320 * 1024;
+function graphUploadURL(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 4096) throw new Error('provider_malformed_response');
+  let url: URL; try { url = new URL(value) } catch { throw new Error('provider_malformed_response') }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.hostname !== 'outlook.office.com' || !/^\/api\/v2\.0\/[^/]+\/AttachmentSessions\//.test(url.pathname) || !url.search) throw new Error('provider_malformed_response');
+  return url.toString();
+}
+async function graphAttachment(fetcher: Fetcher, token: string, messageID: string, attachment: VerifiedAttachment): Promise<void> {
+  const endpoint = `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments`;
+  if (attachment.size <= graphSimpleAttachmentMaximum) {
+    const added = await request(fetcher, endpoint, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ '@odata.type': '#microsoft.graph.fileAttachment', name: attachment.filename, contentType: attachment.mimeType, contentBytes: Buffer.from(attachment.bytes).toString('base64') }) });
+    if (added.status !== 201) fail(added.status); return;
+  }
+  const session = await request(fetcher, `${endpoint}/createUploadSession`, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ AttachmentItem: { attachmentType: 'file', name: attachment.filename, size: attachment.size, contentType: attachment.mimeType } }) });
+  if (session.status !== 201) fail(session.status);
+  const uploadURL = graphUploadURL((await json(session)).uploadUrl);
+  for (let start = 0; start < attachment.size; start += graphUploadChunk) {
+    const end = Math.min(start + graphUploadChunk, attachment.size) - 1;
+    const part = attachment.bytes.slice(start, end + 1);
+    const uploaded = await request(fetcher, uploadURL, { method: 'PUT', headers: { 'content-length': String(part.byteLength), 'content-range': `bytes ${start}-${end}/${attachment.size}`, 'content-type': 'application/octet-stream' }, body: part });
+    if (end + 1 === attachment.size) { if (uploaded.status !== 201) fail(uploaded.status); }
+    else {
+      if (uploaded.status !== 200) fail(uploaded.status);
+      const ranges = (await json(uploaded)).nextExpectedRanges;
+      if (!Array.isArray(ranges) || ranges[0] !== `${end + 1}-`) throw new Error('provider_malformed_response');
+    }
+  }
+}
 function mime(input: Envelope, attachments: readonly VerifiedAttachment[]) {
   if (!attachments.length) return `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ''}${input.rfcMessageID ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[input.rfcReferences, input.rfcMessageID].filter(Boolean).join(' ')}\r\n` : ''}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`;
   const seed = createHash('sha256').update(JSON.stringify({ sender: input.sender, recipient: input.recipient, subject: input.subject, body: input.body, attachments: attachments.map(({ filename, mimeType, size, sha256 }) => ({ filename, mimeType, size, sha256 })) })).digest('hex');
@@ -265,10 +294,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
           if (!draft.ok) fail(draft.status);
           const created = await json(draft); const id = typeof created.id === 'string' ? created.id : '';
           if (!opaque(id)) throw new Error('provider_malformed_response');
-          for (const attachment of attachments) {
-            const added = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/attachments`, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ '@odata.type': '#microsoft.graph.fileAttachment', name: attachment.filename, contentType: attachment.mimeType, contentBytes: Buffer.from(attachment.bytes).toString('base64') }) });
-            if (added.status !== 201) fail(added.status);
-          }
+          for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
           const sent = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
           if (sent.status !== 202) fail(sent.status);
           return { accepted: true as const };
@@ -307,10 +333,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       const id = typeof created.id === "string" ? created.id : "";
       const threadID = typeof created.conversationId === "string" ? created.conversationId : "";
       if (!opaque(id) || !opaque(threadID)) throw new Error("provider_malformed_response");
-      for (const attachment of attachments) {
-        const added = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/attachments`, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ '@odata.type': '#microsoft.graph.fileAttachment', name: attachment.filename, contentType: attachment.mimeType, contentBytes: Buffer.from(attachment.bytes).toString('base64') }) });
-        if (added.status !== 201) fail(added.status);
-      }
+      for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
       const sent = await request(
         fetcher,
         `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`,
