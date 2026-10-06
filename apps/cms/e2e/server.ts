@@ -496,9 +496,14 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const careersMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'careers' } }, limit: 1, depth: 0, overrideAccess: true })
       if (careersMapping.docs[0]) await payload.update({ collection: 'mailbox-area-mappings', id: careersMapping.docs[0].id, data: { mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
       else await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'careers', mailbox: mailbox.id, senderAddress: 'fixture-reply@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
-      const prepared = new URL(`https://fixture.test${request.url}`).searchParams.get('prepared') === '1'
-      const preparedDraft = prepared ? await prepareReply(payload, 'lead', firstEditableLeadID!, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }) : undefined
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
+      const fixtureURL = new URL(`https://fixture.test${request.url}`)
+      const prepared = fixtureURL.searchParams.get('prepared') === '1'
+      const deep = fixtureURL.searchParams.get('deep') === '1'
+      const deepLead = deep ? await payload.create({ collection: 'inquiries', data: { name: 'Deep linked assistant lead', email: `deep-link-${mailbox.id}@example.test`, message: 'A direct confirmation target that is outside the first lead page.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `deep-link-${mailbox.id}`, stage: 'new' }, overrideAccess: true }) : undefined
+      if (deepLead) await payload.update({ collection: 'inquiries', id: deepLead.id, data: { createdAt: '2025-01-01T00:00:00.000Z' }, overrideAccess: true })
+      const preparedTarget = deepLead?.id ?? firstEditableLeadID!
+      const preparedDraft = prepared ? await prepareReply(payload, 'lead', preparedTarget, localOwnerID!, { sender: 'fixture-reply@example.test', subject: 'Fixture OAuth reply B', body: 'MCP prepared exact body', threadID: 'fixture-oauth-thread-b' }, { clientIDHash: 'a'.repeat(64), actorID: localOwnerID!, oauthSessionID: 'fixture-assistant-origin-session' }) : undefined
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', application: firstEditableApplicationID, applicationName: 'Synthetic candidate', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name, ...(deepLead ? { deepLead: deepLead.id, deepLeadName: deepLead.name } : {}), ...(preparedDraft ? { preparedDraft: preparedDraft.id } : {}) })
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }
