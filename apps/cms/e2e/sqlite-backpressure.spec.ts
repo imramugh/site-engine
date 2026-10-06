@@ -33,10 +33,20 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     expect(blocked.headers()['retry-after']).toBe('1')
     expect(await blocked.json()).toEqual({ error: 'Saving is temporarily busy. Please retry.' })
     expect(Date.now() - started).toBeGreaterThanOrEqual(4_000)
-    const unchanged = await session.page.request.get(`/api/pages/${pageID}?draft=true`).then((response) => response.json()) as { blocks: Array<{ id: string; heading?: string }> }
-    expect(unchanged.blocks.find((block) => block.id === blockID)?.heading).toBe(before.blocks.find((block) => block.id === blockID)?.heading)
+    // A held writer lock can also make this read take Payload's retryable
+    // error path when its sliding session refresh is due. WAL can otherwise
+    // serve the read. Assert either documented response, then prove rollback
+    // only after releasing the lock when the page can be read reliably.
+    const lockedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect([200, 503]).toContain(lockedRead.status())
+    if (lockedRead.status() === 503) await expect(lockedRead.json()).resolves.toEqual({ error: 'Authentication is temporarily unavailable. Please retry.' })
+    else expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
     const released = await session.page.request.post('/__e2e/sqlite-lock/release')
     expect(released.status(), await released.text()).toBe(204)
+    const unchangedResponse = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect(unchangedResponse.status(), await unchangedResponse.text()).toBe(200)
+    const unchanged = await unchangedResponse.json() as { blocks: Array<{ id: string; heading?: string }> }
+    expect(unchanged.blocks.find((block) => block.id === blockID)?.heading).toBe(before.blocks.find((block) => block.id === blockID)?.heading)
     const retried = await session.page.request.post('/api/editorial/direct-edit', { headers: { origin, 'content-type': 'application/json' }, data: body })
     expect(retried.status(), await retried.text()).toBe(200)
   } finally { await session.page.request.post('/__e2e/sqlite-lock/release').catch(() => undefined); await session.context.close() }

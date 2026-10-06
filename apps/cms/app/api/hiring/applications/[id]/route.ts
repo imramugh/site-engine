@@ -19,11 +19,4 @@ async function PATCHHandler(request: Request, context: { params: Promise<{ id: s
   try { const { id } = await context.params; const current = await payload.findByID({ collection: 'applications', id, user, overrideAccess: false }) as { status: string }; const application = await payload.update({ collection: 'applications', id, data: { status: status as 'new' | 'reviewing' | 'interview' | 'offer' | 'hired' | 'declined' | 'closed' }, user, overrideAccess: false }) as { id: string; status: string }; if (current.status !== application.status) await payload.create({ collection: 'audit-events', data: { event: 'application.stage_changed', user: String(user.id), actor: String(user.id), detail: { applicationID: id, from: current.status, to: application.status } }, overrideAccess: true }); return Response.json({ id: application.id, status: application.status }) } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }) ?? Response.json({ error: 'Application not found.' }, { status: 404 }) }
 }
 
-async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
-  const payload = await getPayload({ config }); const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); const user = authenticated.user as { id: string; roles?: ('owner' | 'hiring')[]; disabled?: boolean } | null
-  if (!user || !hasRole(user, ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403 })
-  try { const { id } = await context.params; const application = await payload.findByID({ collection: 'applications', id, user, overrideAccess: false }); return Response.json({ application }, { headers: { 'Cache-Control': 'no-store' } }) } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }) ?? Response.json({ error: 'Application not found.' }, { status: 404 }) }
-}
-
 export const PATCH = sqliteAuthenticationBoundary(PATCHHandler)
-export const GET = sqliteAuthenticationBoundary(GETHandler)

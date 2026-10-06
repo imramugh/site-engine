@@ -81,21 +81,21 @@ afterAll(async () => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-async function createSignIn(email: string, subject: string) {
+async function createSignIn(email: string, subject: string, provider: 'google' | 'microsoft' = 'google') {
   issuerState.email = email
   issuerState.subject = subject
   const invitation = await payload.create({
     collection: 'invitations',
-    data: { email, provider: 'google', providerIssuer: issuerState.issuer, providerSubject: subject, requiredSubject: subject, roles: ['editor'], tokenHash: hashOpaqueToken(`invite-${subject}`), expiresAt: new Date(Date.now() + 60_000).toISOString() },
+    data: { email, provider, providerIssuer: issuerState.issuer, providerSubject: subject, requiredSubject: subject, roles: ['editor'], tokenHash: hashOpaqueToken(`invite-${subject}`), expiresAt: new Date(Date.now() + 60_000).toISOString() },
     overrideAccess: true,
   })
   const state = `state-${subject}`
   await payload.create({
     collection: 'auth-transactions',
-    data: { stateHash: hashOpaqueToken(state), nonce: issuerState.nonce, verifier: issuerState.verifier, provider: 'google', invitation: invitation.id, expiresAt: new Date(Date.now() + 60_000).toISOString() },
+    data: { stateHash: hashOpaqueToken(state), nonce: issuerState.nonce, verifier: issuerState.verifier, provider, invitation: invitation.id, expiresAt: new Date(Date.now() + 60_000).toISOString() },
     overrideAccess: true,
   })
-  const request = (code = 'accepted-code') => new Request(`http://localhost/api/auth/callback/google?code=${code}&state=${state}`, {
+  const request = (code = 'accepted-code') => new Request(`http://localhost/api/auth/callback/${provider}?code=${code}&state=${state}`, {
     headers: { cookie: `${cookieName(OIDC_TRANSACTION_COOKIE)}=${hashOpaqueToken(state)}` },
   })
   return { invitation, request, state }
@@ -155,6 +155,19 @@ describe('identity callback SQLite transaction (ENG-007)', () => {
       reason: 'transaction_not_current',
       secrets: [state, 'accepted-code', 'parallel@example.test', 'parallel-subject', issuerState.nonce, issuerState.verifier],
     })
+  })
+
+  it('enrolls an invited Microsoft identity through the configured local OIDC issuer and records the provider decision', async () => {
+    const { invitation, request, state } = await createSignIn('microsoft-invited@example.test', 'microsoft-subject', 'microsoft')
+    const response = await callback(request(), { params: Promise.resolve({ provider: 'microsoft' }) })
+    expect(response.status).toBe(307)
+    const user = (await payload.find({ collection: 'users', where: { providerSubject: { equals: 'microsoft-subject' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]!
+    expect(user).toMatchObject({ email: 'microsoft-invited@example.test', provider: 'microsoft', providerIssuer: issuerState.issuer, providerSubject: 'microsoft-subject', roles: ['editor'] })
+    expect((await payload.findByID({ collection: 'invitations', id: invitation.id, overrideAccess: true })).acceptedAt).toEqual(expect.any(String))
+    const transaction = (await payload.find({ collection: 'auth-transactions', where: { stateHash: { equals: hashOpaqueToken(state) } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]!
+    expect(transaction.consumedAt).toEqual(expect.any(String))
+    const audit = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.signed_in' } }, { user: { equals: user.id } }] }, limit: 1, depth: 0, overrideAccess: true })
+    expect(audit.docs[0]).toMatchObject({ detail: { provider: 'microsoft' } })
   })
 
   it('rolls back state, invitation, user, and session when the audit insert fails', async () => {

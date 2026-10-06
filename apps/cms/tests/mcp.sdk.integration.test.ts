@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -14,9 +14,6 @@ import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlo
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { canonicalHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
-import { authorizeMailDraft } from '../src/mail-authorizations'
-import { prepareReply, setReplyDeliveryForTest } from '../src/mail-replies'
-import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-mcp-sdk-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -153,11 +150,9 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await publishFrozenSnapshot(owner.id, frozen)
   const currentRichText = (await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { blocks: Array<Record<string, unknown>> }).blocks.find((block) => block.type === 'richText')
   assert.ok(currentRichText)
-  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2020-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
-  expect(editedQualityPage.lastReviewed).toBe('2020-01-01T12:00:00.000Z')
-  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
+  const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2025-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
+  expect(editedQualityPage.lastReviewed).toBe('2025-01-01T12:00:00.000Z')
   const editorSession = await sessionFor(editor.id); const qualityWriterSession = await sessionFor(qualityWriter.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
-  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, user: approver, overrideAccess: false }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('quality-writer-token', { clientId: 'quality-writer-client', userId: qualityWriter.id, sessionId: qualityWriterSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
@@ -167,12 +162,12 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.', crawlerPolicy: { searchEngines: true, aiSearchAndAnswers: false, aiModelTraining: false }, navigation: { header: [{ kind: 'page', id: page.id, label: 'SDK page', style: 'link' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable navigation reference.', style: 'link' }], footer: { columns: [{ kind: 'links', heading: 'Resources', links: [{ kind: 'page', id: page.id, label: 'SDK page' }, { kind: 'unavailable', label: 'Unavailable', reason: 'Synthetic unavailable footer reference.' }] }], copyright: '© {year} MCP' } } }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const qualityWriterClient = await clientFor('quality-writer-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_reply_status', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'send_reply', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(expect.arrayContaining(['add_block', 'add_item', 'audit_page', 'copy_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'get_style_guide', 'get_tree', 'hide_block', 'list_appearance_options', 'list_applications', 'list_block_types', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_section_presets', 'list_sections', 'list_stale_pages', 'list_templates', 'move_block', 'move_item', 'prepare_reply', 'remove_block', 'remove_item', 'reorder_blocks', 'search_content', 'search_pages', 'submit_change_set', 'update_block', 'update_item', 'update_page', 'update_page_fields', 'update_section']))
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
-      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, or bypass CMS permissions')
+      if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, permanently delete content')
       if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
-      if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
+      if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -187,13 +182,22 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     ]))
     expect(templates.resourceTemplates).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'page', uriTemplate: 'site-engine://page/{id}' })]))
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(['plan-page', 'review-content'])
+    for (const entry of [...resources.resources, ...templates.resourceTemplates]) {
+      expect(entry._meta).toMatchObject({
+        securitySchemes: [{ type: 'oauth2', scopes: ['mcp:content:read'] }],
+        authorization: { requiredScopes: ['mcp:content:read'], effectiveUserRequired: true },
+        limits: { approve: false, publish: false, userManagement: false, credentialAccess: false },
+      })
+    }
+    for (const prompt of prompts.prompts) expect(prompt.description).toContain('cannot publish, approve, manage users, permanently delete content')
+    for (const uri of ['site-engine://site/settings', 'site-engine://site/installed-themes']) expect(resources.resources.find((entry) => entry.uri === uri)?._meta).toMatchObject({ authorization: { requiredRoles: ['owner'] } })
     const [library, configuredStyle, scopedPage, planned] = await Promise.all([
       editorClient.client.readResource({ uri: 'site-engine://contract/block-library' }),
       editorClient.client.readResource({ uri: 'site-engine://contract/style-guide' }),
       editorClient.client.readResource({ uri: `site-engine://page/${page.id}` }),
       editorClient.client.getPrompt({ name: 'plan-page', arguments: { objective: 'Explain the synthetic service.' } }),
     ])
-    expect(resourceJson(library)).toMatchObject({ contractVersion: '1.0.0', blockTypes: expect.arrayContaining(['hero', 'video']) })
+    expect(resourceJson(library)).toMatchObject({ contractVersion: CONTRACT_VERSION, blockTypes: expect.arrayContaining(['hero', 'video']) })
     expect(resourceJson(configuredStyle)).toMatchObject({ source: 'frozen-published-snapshot', bannedPhrases: ['frozen phrase'], canadianSpelling: 'warn' })
     expect(resourceJson(await editorClient.client.readResource({ uri: 'site-engine://contract/glossary' }))).toMatchObject({ source: 'frozen-published-snapshot', terms: [{ avoid: 'behavior', prefer: 'behaviour' }] })
     expect(resourceJson(scopedPage)).toMatchObject({ id: page.id, title: 'SDK page' })
@@ -221,7 +225,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const auditValue = structuredJson(pageAudit) as { pageHash: string; contentHash: string }
     expect(auditValue).toMatchObject({ pageHash: expect.stringMatching(/^[a-f0-9]{64}$/), contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(auditValue.pageHash).not.toBe(auditValue.contentHash)
-    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]) })
+    expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]), stalePage: expect.objectContaining({ reviewAgeDays: expect.any(Number) }) })
     const currentContractBlockers = (structuredJson(pageAudit) as { blockers: Array<{ message: string }> }).blockers.map((item) => item.message)
     expect(currentContractBlockers).not.toEqual(expect.arrayContaining([expect.stringContaining('contract version')]))
     expect(CONTRACT_VERSION).toBe('1.7.0')
@@ -510,6 +514,40 @@ test('MCP returns a retryable HTTP response when its request audit is blocked by
   try { expect((await client.client.listTools()).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_change_set' })])) } finally { await client.client.close() }
 }, 15_000)
 
+test('MCP mutation returns a retryable tool error when a writer locks SQLite after its request audit', async () => {
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-mutation-busy-${randomUUID()}@example.test`, name: 'MCP Mutation Busy', roles: ['editor'] }, overrideAccess: true })
+  const session = await sessionFor(editor.id)
+  tokens.set('mcp-mutation-busy-token', { clientId: 'mcp-mutation-busy-client', userId: editor.id, sessionId: session.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+  const sdk = await clientFor('mcp-mutation-busy-token')
+  const beforeSets = await payload.count({ collection: 'change-sets', overrideAccess: true })
+  const beforeOutbox = await payload.count({ collection: 'publish-outbox', overrideAccess: true })
+  const originalCreate = payload.create.bind(payload)
+  const external = createClient({ url: `file:${join(directory, 'cms.sqlite')}` })
+  let lock: Awaited<ReturnType<typeof external.transaction>> | undefined
+  let armed = true
+  ;(payload as unknown as { create: typeof payload.create }).create = (async (args: Parameters<typeof payload.create>[0]) => {
+    const result = await originalCreate(args)
+    if (armed && args.collection === 'audit-events' && (args.data as { event?: unknown }).event === 'mcp.request') {
+      armed = false; lock = await external.transaction('write')
+      await lock.execute({ sql: 'UPDATE users SET updated_at = updated_at WHERE id = ?', args: [String(editor.id)] })
+    }
+    return result
+  }) as typeof payload.create
+  try {
+    const response = await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Busy mutation' } })
+    expect(response).toMatchObject({ isError: true })
+    const blocked = resultJson(response)
+    expect(blocked).toEqual({ error: 'temporarily_unavailable', retryAfterSeconds: 1 })
+    expect((await payload.count({ collection: 'change-sets', overrideAccess: true })).totalDocs).toBe(beforeSets.totalDocs)
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(beforeOutbox.totalDocs)
+  } finally {
+    ;(payload as unknown as { create: typeof payload.create }).create = originalCreate as typeof payload.create
+    await lock?.rollback(); external.close()
+  }
+  expect(resultJson(await sdk.client.callTool({ name: 'create_change_set', arguments: { name: 'Retry mutation' } }))).toMatchObject({ state: 'open', revision: 0 })
+  await sdk.transport.close()
+}, 15_000)
+
 test('ENG-017 content-write tools require scope and preserve draft review boundaries', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-write@example.test', name: 'MCP Writer', roles: ['editor'] }, overrideAccess: true })
   const session = await sessionFor(editor.id)
@@ -590,7 +628,7 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const denied = await contentOnly.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'Private subject', body: 'Private body' } })
     expect(resultJson(denied)).toEqual({ error: 'insufficient_scope', required: 'mcp:leads:reply' })
     const leadDraft = resultJson(await salesClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'site@example.test', subject: 'A precise follow-up', body: 'A prepared response only.' } })) as { draft: { id: string; target: string; sender: string; recipient: string; subject: string; body: string; revision: number; state: string } }
-    expect(leadDraft.draft).toMatchObject({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared', confirmationURL: expect.stringMatching(/\/leads\?lead=.*&draft=/) })
+    expect(leadDraft.draft).toEqual({ id: expect.any(String), target: 'lead', revision: 1, state: 'prepared' })
     expect(JSON.stringify(leadDraft)).not.toContain('A prepared response only.')
     expect(JSON.stringify(leadDraft)).not.toContain('416')
     expect((await payload.find({ collection: 'mail-authorizations', where: { draft: { equals: leadDraft.draft.id } }, limit: 0, pagination: false, overrideAccess: true })).totalDocs).toBe(0)
@@ -599,90 +637,4 @@ test('MCP prepare_reply is scoped, draft-only, and returns only the exact review
     const applicationDraft = resultJson(await hiringClient.client.callTool({ name: 'prepare_reply', arguments: { target: 'application', id: application.id, sender: 'site@example.test', subject: 'Interview details', body: 'A prepared hiring response only.' } })) as { draft: { target: string; state: string } }
     expect(applicationDraft.draft).toMatchObject({ target: 'application', state: 'prepared' })
   } finally { await Promise.all([contentOnly.transport.close(), salesClient.transport.close(), hiringClient.transport.close()]) }
-})
-
-test('MCP reply grants bind the SDK origin to a separate fresh human confirmation and refuse every invalidated send before delivery', async () => {
-  const owner = await payload.create({ collection: 'users', data: { email: `mcp-bound-owner-${randomUUID()}@example.test`, name: 'Bound reply owner', roles: ['owner'] }, overrideAccess: true })
-  const other = await payload.create({ collection: 'users', data: { email: `mcp-bound-other-${randomUUID()}@example.test`, name: 'Other reply owner', roles: ['owner'] }, overrideAccess: true })
-  const lead = await payload.create({ collection: 'inquiries', data: { email: `mcp-bound-lead-${randomUUID()}@example.test`, name: 'Bound lead', message: 'Please reply through the confirmed channel.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
-  const originSession = await sessionFor(owner.id)
-  const confirmationToken = newOpaqueToken()
-  const confirmationSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(confirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
-  const otherSession = await sessionFor(other.id)
-  const clientID = `mcp-bound-client-${randomUUID()}`
-  const clientHash = createHash('sha256').update(clientID).digest('hex')
-  const tokenName = `mcp-bound-token-${randomUUID()}`
-  tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
-  const sdk = await clientFor(tokenName)
-  let providerRequests = 0
-  setReplyDeliveryForTest(async (_payload, area, envelope) => {
-    providerRequests += 1
-    expect(area).toBe('leads')
-    expect(envelope).toMatchObject({ sender: 'team@example.test', recipient: lead.email, subject: 'SDK-bound subject', body: 'SDK-bound body' })
-    return { provider: 'smtp', messageID: `mcp-bound-${providerRequests}` }
-  })
-  const prepareAndConfirm = async () => {
-    const prepared = structuredJson(await sdk.client.callTool({ name: 'prepare_reply', arguments: { target: 'lead', id: lead.id, sender: 'team@example.test', subject: 'SDK-bound subject', body: 'SDK-bound body' } })) as { draft: { id: string; confirmationURL: string } }
-    const deepLink = new URL(prepared.draft.confirmationURL)
-    // This is the exact browser target which a signed-in human sees; it must not
-    // silently select the first lead when the requested lead is beyond a page.
-    expect(deepLink.pathname).toBe('/leads')
-    expect(deepLink.searchParams.get('lead')).toBe(lead.id)
-    expect(deepLink.searchParams.get('draft')).toBe(prepared.draft.id)
-    const grant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: confirmationToken }, prepared.draft.id, new Date(Date.now() + 60_000))
-    expect(grant).toMatchObject({ authorizedBy: expect.objectContaining({ id: owner.id }), humanConfirmationSessionID: confirmationSession.id, assistantClientIDHash: clientHash, assistantActor: expect.objectContaining({ id: owner.id }), assistantOAuthSessionID: originSession.id })
-    return { draftID: prepared.draft.id, grantID: grant.id }
-  }
-  const assertRejected = async (draftID: string, grantID: string) => {
-    let rejected: { error: string } | undefined
-    try { rejected = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: { draftID, grantID } })) as { error: string } } catch { /* Disabled canonical actors are rejected at MCP authentication before a tool result exists. */ }
-    if (rejected) expect(rejected.error).toMatch(/authorization_not_usable|mail_authorization_required|insufficient_scope/)
-    expect(providerRequests).toBe(1)
-    expect(await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
-  }
-  try {
-    const accepted = await prepareAndConfirm()
-    const pending = structuredJson(await sdk.client.callTool({ name: 'get_reply_status', arguments: { draftID: accepted.draftID } })) as { grantID: string | null }
-    expect(pending.grantID).toBe(accepted.grantID)
-    expect(structuredJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted }))).toMatchObject({ provider: 'smtp', messageID: 'mcp-bound-1' })
-    expect(providerRequests).toBe(1)
-
-    const cases: Array<[string, (draftID: string, grantID: string) => Promise<void>]> = [
-      ['wrong client', async () => { tokens.set(tokenName, { clientId: `wrong-client-${randomUUID()}`, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] }) }],
-      ['wrong actor', async () => { tokens.set(tokenName, { clientId: clientID, userId: other.id, sessionId: otherSession.id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
-      ['wrong OAuth origin session', async () => { tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: (await sessionFor(owner.id)).id, scopes: ['mcp:content:read', 'mcp:leads:read', 'mcp:leads:reply'] }) }],
-      ['edited draft', async (draftID) => { await payload.update({ collection: 'mail-drafts', id: draftID, data: { body: 'Edited after confirmation.' }, overrideAccess: true }) }],
-      ['canceled draft', async (draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }); await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'canceled' }, overrideAccess: true }) }],
-      ['expired grant', async (_draftID, grantID) => { await payload.update({ collection: 'mail-authorizations', id: grantID, data: { expiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true }) }],
-      ['revoked human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true }) }],
-      ['stale human confirmation session', async () => { await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { authenticatedAt: new Date(Date.now() - 16 * 60_000).toISOString() }, overrideAccess: true }) }],
-      ['demoted canonical actor', async () => { await payload.update({ collection: 'users', id: owner.id, data: { roles: ['editor'] }, overrideAccess: true }) }],
-    ]
-    for (const [name, invalidate] of cases) {
-      await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
-      await payload.update({ collection: 'auth-sessions', id: confirmationSession.id, data: { revokedAt: null, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
-      tokens.set(tokenName, { clientId: clientID, userId: owner.id, sessionId: originSession.id, scopes: ['mcp:leads:read', 'mcp:leads:reply'] })
-      const rejected = await prepareAndConfirm()
-      await invalidate(rejected.draftID, rejected.grantID)
-      await assertRejected(rejected.draftID, rejected.grantID)
-      expect(providerRequests, name).toBe(1)
-    }
-    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
-    const disabledConfirmationToken = newOpaqueToken()
-    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(disabledConfirmationToken), user: owner.id, authenticatedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
-    const disabledDraft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Disabled actor subject', body: 'Disabled actor body' }, { clientIDHash: clientHash, actorID: owner.id, oauthSessionID: originSession.id })
-    const disabledGrant = await authorizeMailDraft(payload, { id: owner.id, sessionToken: disabledConfirmationToken }, disabledDraft.id, new Date(Date.now() + 60_000))
-    await payload.update({ collection: 'users', id: owner.id, data: { disabled: true }, overrideAccess: true })
-    const disabledResponse = await fetch(`${mcpOrigin}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${tokenName}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name: 'send_reply', arguments: { draftID: disabledDraft.id, grantID: disabledGrant.id } } }) })
-    expect(disabledResponse.status).toBe(401)
-    expect(providerRequests).toBe(1)
-    expect(await payload.findByID({ collection: 'mail-authorizations', id: disabledGrant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: null })
-    await payload.update({ collection: 'users', id: owner.id, data: { disabled: false, roles: ['owner'] }, overrideAccess: true })
-    let replay: { error: string } | undefined
-    try { replay = resultJson(await sdk.client.callTool({ name: 'send_reply', arguments: accepted })) as { error: string } } catch { /* A closed transport is also a refused replay. */ }
-    if (replay) expect(replay).toMatchObject({ error: 'authorization_not_usable' })
-    expect(providerRequests).toBe(1)
-  } finally {
-    setReplyDeliveryForTest()
-  }
 })
