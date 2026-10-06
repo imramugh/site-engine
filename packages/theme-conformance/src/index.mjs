@@ -587,7 +587,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           );
           const state = await browserState(
             page,
-            path === "general/matrix",
+            path === "general/matrix" && manifest.name === "starter",
             path === "general/matrix",
           );
           if (
