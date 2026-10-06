@@ -21,3 +21,16 @@ test('reviewer sees a failed structured-data preview diagnostic and cannot appro
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await context.close()
 })
+
+test('reviewer cannot read failed diagnostics after the preview baseline becomes stale', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: 'synthetic-on-page-reviewer-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  const seeded = await page.request.post('/__e2e/failed-preview-review')
+  if (!seeded.ok()) throw new Error(await seeded.text())
+  const { id } = await seeded.json() as { id: string }
+  const stale = await page.request.post(`/__e2e/failed-preview-review/stale-baseline/${id}`)
+  expect(stale.status()).toBe(204)
+  expect((await page.request.get(`/api/editorial/review/${id}`)).status()).toBe(409)
+  await context.close()
+})

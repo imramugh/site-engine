@@ -681,13 +681,30 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     })().then((created) => json(response, created)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed second page review.') })
     return
   }
+  const staleFailedPreview = request.method === 'POST' ? /^\/__e2e\/failed-preview-review\/stale-baseline\/([0-9a-f-]{36})$/i.exec(request.url ?? '') : undefined
+  if (staleFailedPreview) {
+    void (async () => {
+      const set = await payload.findByID({ collection: 'change-sets', id: staleFailedPreview[1]!, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const preview = set.preview as Record<string, unknown> | undefined
+      if (!preview) throw new Error('Failed preview is missing.')
+      await payload.update({ collection: 'change-sets', id: String(set.id), data: { preview: { ...preview, baselineSequence: Number(preview.baselineSequence) + 1 } }, overrideAccess: true, context: { editorialInternal: true } })
+    })().then(() => { response.writeHead(204); response.end() }).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to stale failed preview.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/failed-preview-review') {
     void (async () => {
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
+      const snapshot = release?.snapshot
+      if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published diagnostic baseline is missing.')
+      const manifest = structuredClone(snapshot.manifest) as typeof initialBaseline
       const id = randomUUID(); const jobID = randomUUID(); const changes = source.changes as Array<Record<string, unknown>>; const changeHash = canonicalHash(changes)
-      const versionPins = { themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: initialBaseline.settings.contractVersion }
-      await payload.create({ collection: 'change-sets', data: { id, name: 'Structured data diagnostic review', actor: String(source.actor), state: 'submitted', revision: 1, changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSequence: 0, includedChangeKeys: changes.map((change) => `${change.collection}:${change.id}`), versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
-      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys: changes.map((change) => `${change.collection}:${change.id}`), baselineSequence: 0, liveSequence: 0, liveManifest: initialBaseline, proposedManifest: initialBaseline, liveManifestHash: canonicalHash(initialBaseline), proposedManifestHash: canonicalHash(initialBaseline), versionPins, status: 'pending', attempts: 2 }, overrideAccess: true, context: { editorialInternal: true } })
+      const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+      const versionPins = { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: manifest.settings.contractVersion }
+      const manifestHash = canonicalHash(manifest)
+      await payload.create({ collection: 'change-sets', data: { id, name: 'Structured data diagnostic review', actor: String(source.actor), state: 'submitted', revision: 1, changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSnapshotID: snapshot.id, baselineSequence: Number(release.sequence), includedChangeKeys, liveManifestHash: manifestHash, proposedManifestHash: manifestHash, versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: snapshot.id, liveSequence: Number(release.sequence), liveManifest: manifest, proposedManifest: manifest, liveManifestHash: manifestHash, proposedManifestHash: manifestHash, versionPins, status: 'pending', attempts: 2 }, overrideAccess: true, context: { editorialInternal: true } })
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim structured-data diagnostic job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
