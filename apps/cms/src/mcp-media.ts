@@ -8,7 +8,7 @@ import { mediaFocalContractVersion, mediaWorkspace } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
 import { isRetryableSQLiteError } from './sqlite'
 import { replaceAssetFile } from './media-ingestion'
-import { importPublicImage } from './media-url-ingestion'
+import { importPublicImage, type RemoteImage } from './media-url-ingestion'
 
 type Current = { id: string; roles?: string[]; disabled?: boolean }
 
@@ -36,15 +36,15 @@ const editableSet = async (payload: Payload, req: Parameters<typeof withPayloadT
   const actor = typeof set.actor === 'string' ? set.actor : set.actor?.id
   if (set.revision !== revision || actor !== current.id || !['open', 'changes-requested'].includes(String(set.state))) throw new Error('revision_conflict')
 }
-const decoded = async (source: z.infer<typeof mediaSource>) => {
-  if ('url' in source) return importPublicImage(source.url)
+const decoded = async (source: z.infer<typeof mediaSource>, remoteImporter: (url: string) => Promise<RemoteImage>) => {
+  if ('url' in source) return remoteImporter(source.url)
   const data = Buffer.from(source.dataBase64, 'base64')
   if (!data.length || data.length > 12 * 1024) throw new Error('payload_too_large')
   return { data, mimetype: source.mimeType, name: source.filename, size: data.length }
 }
 
-export function registerMediaTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; writeSecurity: Record<string, unknown> }) {
-  const { server, payload, current, read, write, contentSecurity, writeSecurity } = input
+export function registerMediaTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; writeSecurity: Record<string, unknown>; remoteImporter?: (url: string) => Promise<RemoteImage> }) {
+  const { server, payload, current, read, write, contentSecurity, writeSecurity, remoteImporter = importPublicImage } = input
   const roles = current.roles ?? []
   const mediaRead = read && roles.some((role) => ['owner', 'editor', 'approver'].includes(role))
   const mediaWrite = write && roles.some((role) => ['owner', 'editor'].includes(role))
@@ -85,7 +85,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
         const focal = await mediaFocalContractVersion(payload, await loadInitialPreviewBaseline(), req)
-        const file = await decoded(source)
+        const file = await decoded(source, remoteImporter)
         const asset = await payload.create({ collection: 'assets', data: { ...metadata, ...(focal ? { focalX: canonicalFocalPoint(metadata.focalX), focalY: canonicalFocalPoint(metadata.focalY) } : {}) }, file, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focal } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
@@ -99,7 +99,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
     try {
       const result = await withPayloadTransaction(payload, async (req) => {
         req.user = current as never; await editableSet(payload, req, current, changeSetId, expectedChangeSetRevision)
-        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file: await decoded(source), user: current, req })
+        const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file: await decoded(source, remoteImporter), user: current, req })
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
         return { replacement, revision: changed.revision, checks: quality.checks }

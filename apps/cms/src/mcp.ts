@@ -22,6 +22,7 @@ import { registerReviewTools } from './mcp-review'
 import { registerChangeLogTools } from './mcp-change-log'
 import { registerCrmTools } from './mcp-crm'
 import { archivePage, normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
+import type { RemoteImage } from './media-url-ingestion'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
@@ -142,7 +143,7 @@ const challenge = (origin: string) => `Bearer resource_metadata="${origin}/.well
 
 /** The evaluator is injectable so the transaction boundary can be exercised
  * through the protocol without weakening the production readiness check. */
-export type McpHandlerDependencies = { evaluateChangeSetQuality?: typeof changeSetQuality }
+export type McpHandlerDependencies = { evaluateChangeSetQuality?: typeof changeSetQuality; remoteImageImporter?: (url: string) => Promise<RemoteImage> }
 
 export async function handleMcp(request: Request, dependencies: McpHandlerDependencies = {}): Promise<Response> {
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST', 'cache-control': 'no-store' } })
@@ -475,7 +476,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     }
   })
   const writeSecurity = { securitySchemes: [{ type: 'oauth2', scopes: [contentWriteScope] }], requiredScopes: [contentWriteScope], effectiveUserRequired: true }
-  registerMediaTools({ server, payload, current: current as { id: string; roles?: string[]; disabled?: boolean }, read, write, contentSecurity, writeSecurity })
+  registerMediaTools({ server, payload, current: current as { id: string; roles?: string[]; disabled?: boolean }, read, write, contentSecurity, writeSecurity, remoteImporter: dependencies.remoteImageImporter })
   registerReviewTools({ server, payload, current: current as { id: string; roles?: string[]; disabled?: boolean }, read, write, contentSecurity, writeSecurity })
   registerChangeLogTools({ server, payload, current: current as { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[]; disabled?: boolean }, sessionID: identity.sessionId, read, write, contentSecurity, writeSecurity })
   server.registerTool('create_change_set', { title: 'Create change set', description: `Create an explicit draft change set. ${toolLimits}`, inputSchema: { name: z.string().min(1).max(120) }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ name }) => { if (!write) return denied(contentWriteScope); try { const result = await withPayloadTransaction(payload, (req) => { req.user = current as never; return createNamedChangeSet(payload, req, current as never, name) }); return text({ id: result.id, name: result.name, state: result.state, revision: result.revision }) } catch (error) { return mutationFailure(error, 'write_failed') } })
