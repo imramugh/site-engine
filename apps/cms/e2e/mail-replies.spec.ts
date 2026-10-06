@@ -205,6 +205,7 @@ test('ENG-020 adopts a persisted same-address conversation only after an explici
     await page.goto('/leads'); await page.getByRole('button', { name: fixture.adoptionLeadName }).click()
     const timeline = page.getByRole('region', { name: 'Mail timeline' })
     const adopt = timeline.getByRole('button', { name: 'Adopt conversation' })
+    await expect(adopt).toHaveCount(1)
     const before = await adopt.count()
     expect(before).toBeGreaterThan(0)
     await expect(timeline).not.toContainText('Hidden unmatched subject')
