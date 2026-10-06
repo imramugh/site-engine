@@ -5,6 +5,7 @@ import { withPayloadTransaction } from './auth-transaction'
 import { canonicalFocalPoint } from './media'
 import { mediaFocalContractVersion, mediaWorkspace } from './media-workspace'
 import { loadInitialPreviewBaseline } from './review-preview'
+import { isRetryableSQLiteError } from './sqlite'
 
 type Current = { id: string; roles?: string[]; disabled?: boolean }
 
@@ -14,6 +15,7 @@ const updateInput = z.object({ id: z.string().uuid(), changeSetId: z.string().uu
 
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: code }) }] })
+const clean = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 export function registerMediaTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; writeSecurity: Record<string, unknown> }) {
   const { server, payload, current, read, write, contentSecurity, writeSecurity } = input
@@ -22,19 +24,25 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
   const mediaWrite = write && roles.some((role) => ['owner', 'editor'].includes(role))
   const readMeta = { securitySchemes: (contentSecurity.securitySchemes as unknown[]), authorization: contentSecurity }
   const writeMeta = { securitySchemes: (writeSecurity.securitySchemes as unknown[]), authorization: writeSecurity }
+  const allMedia = async (query: { q?: string; filter?: string }) => {
+    const first = await mediaWorkspace(payload, current, { ...query, page: 1, pageSize: 100 })
+    const pages = [first]
+    for (let page = 2; page <= first.totalPages; page++) pages.push(await mediaWorkspace(payload, current, { ...query, page, pageSize: 100 }))
+    return { first, assets: pages.flatMap((item) => item.assets) }
+  }
 
-  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page, pageSize }) => {
+  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, outputSchema: z.object({ assets: z.array(z.object({}).passthrough()), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page = 1, pageSize = 24 }) => {
     if (!mediaRead) return error('role_access_required')
     try {
-      const found = await mediaWorkspace(payload, current, { q, filter, page, pageSize })
+      const found = await allMedia({ q, filter })
       const tagged = tag ? found.assets.filter((asset) => asset.tags?.includes(tag)) : found.assets
       const assets = usage === 'used' ? tagged.filter((asset) => asset.usages.length > 0) : usage === 'unused' ? tagged.filter((asset) => asset.usages.length === 0) : tagged
-      return text({ assets, total: assets.length, page: found.page, pageSize: found.pageSize, totalPages: Math.max(1, Math.ceil(assets.length / found.pageSize)) })
+      return text(clean({ assets: assets.slice((page - 1) * pageSize, page * pageSize), total: assets.length, page, pageSize, totalPages: Math.max(1, Math.ceil(assets.length / pageSize)) }))
     } catch { return error('read_failed') }
   })
-  server.registerTool('get_media_usage', { title: 'Get media usage', description: 'Read the scoped draft-page references for one media asset. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ id: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ id }) => {
+  server.registerTool('get_media_usage', { title: 'Get media usage', description: 'Read the scoped draft-page references for one media asset. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: z.object({ id: z.string().uuid(), usages: z.array(z.object({ pageId: z.string(), pageTitle: z.string(), locations: z.array(z.string()) }).strict()) }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ id }) => {
     if (!mediaRead) return error('role_access_required')
-    try { const found = await mediaWorkspace(payload, current, { pageSize: 100 }); const asset = found.assets.find((candidate) => candidate.id === id); return asset ? text({ id, usages: asset.usages }) : error('not_found') } catch { return error('read_failed') }
+    try { const found = await allMedia({}); const asset = found.assets.find((candidate) => candidate.id === id); return asset ? text({ id, usages: asset.usages }) : error('not_found') } catch { return error('read_failed') }
   })
   server.registerTool('update_media', { title: 'Update media metadata', description: 'Update media metadata and focal point in an explicit revisioned change set. Returns a draft result only; this server cannot publish, approve, manage users, or permanently delete content.', inputSchema: updateInput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, alt, decorative, caption, credit, tags, focalX, focalY }) => {
     if (!mediaWrite) return error('role_access_required')
@@ -50,7 +58,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number }
         return { id: asset.id, revision: changed.revision }
       })
-      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: [] })
-    } catch (cause) { return error(cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
+      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: [{ name: 'change-set-capture', status: 'passed', errors: [] }] })
+    } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
 }
