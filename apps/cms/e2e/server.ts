@@ -486,9 +486,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         const thread = await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'google', providerConversationID: conversationID }, overrideAccess: true })
         await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: firstEditableLeadID!, providerMessageID: messageID, rfcMessageID, direction: 'inbound', sender: 'notes-a.synthetic@example.test', recipient: 'fixture-reply@example.test', subject, body: 'Fixture OAuth correspondence.', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
       }
-      const lead = await payload.findByID({ collection: 'inquiries', id: firstEditableLeadID!, depth: 0, overrideAccess: true })
-      await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: 'fixture-unmatched-conversation', messageID: 'fixture-unmatched-message', sender: String(lead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
-      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b' })
+      const adoptionLead = await payload.create({ collection: 'inquiries', data: { name: `Suggestion adoption ${mailbox.id}`, email: `suggestion-${mailbox.id}@example.test`, message: 'Dedicated suggestion fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: `suggestion-${mailbox.id}`, stage: 'new' }, overrideAccess: true })
+      await appendMatchedInbound(payload, { mailbox: String(mailbox.id), provider: 'google', conversationID: `fixture-unmatched-${mailbox.id}`, messageID: `fixture-unmatched-message-${mailbox.id}`, sender: String(adoptionLead.email), recipient: 'fixture-reply@example.test', subject: 'Hidden unmatched subject', body: 'Hidden unmatched body', receivedAt: new Date().toISOString() })
+      json(response, { mailbox: mailbox.id, thread: 'fixture-oauth-thread-b', adoptionLead: adoptionLead.id, adoptionLeadName: adoptionLead.name })
     })().catch(() => { response.writeHead(500); response.end() })
     return
   }

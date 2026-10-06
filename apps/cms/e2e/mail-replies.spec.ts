@@ -199,8 +199,10 @@ test('ENG-020 adopts a persisted same-address conversation only after an explici
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   try {
-    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
-    await page.goto('/leads'); await page.getByRole('button', { name: /First editable lead/ }).click()
+    const fixture = await (await page.request.post(`${origin}/__e2e/mail-reply-fixture`)).json() as { adoptionLead: string; adoptionLeadName: string }
+    const suggestions = await (await page.request.get(`${origin}/api/mail-suggestions/lead/${fixture.adoptionLead}`)).json() as { suggestions: Array<{ id: string }> }
+    expect(suggestions.suggestions).toHaveLength(1)
+    await page.goto('/leads'); await page.getByRole('button', { name: fixture.adoptionLeadName }).click()
     const timeline = page.getByRole('region', { name: 'Mail timeline' })
     const adopt = timeline.getByRole('button', { name: 'Adopt conversation' })
     const before = await adopt.count()
