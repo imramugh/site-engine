@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { MediaReferenceSchema, PageSchema, RedirectSchema, SectionSchema, SiteSettingsDraftSchema, StyleGuideSchema, ThemeSelectionSchema } from '@site-engine/contract'
-import { CONTRACT_VERSION } from '@site-engine/contract'
 import { checkSiteSnapshot, type QualityReport } from '@site-engine/checks'
 import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
@@ -227,7 +226,7 @@ export async function captureChange(input: { collection: CapturedCollection; doc
   await req.payload.create({ collection: 'audit-events', data: { event: 'editorial.change_captured', user: actor.id, actor: actor.id, detail: { changeSet: changeSet.id, collection, id: doc.id } }, overrideAccess: true, req })
   // Editorial diagnostics guide correction; only the collection's contract and
   // tree hooks above may abort the write.
-  ;(doc as Record<string, unknown>).readiness = await currentDraftReadiness(req.payload, req)
+  ;(doc as Record<string, unknown>).readiness = await currentDraftReadiness(req.payload, req, changes)
 }
 
 function assertActor(actor: Actor | undefined): asserts actor is Actor {
@@ -269,38 +268,20 @@ export type ChangeSetQualityCheck = {
   errors: Array<{ collection: string; id: string; message: string }>
 }
 
-/** Build the same portable working manifest used by the static gate.  This is
- * deliberately draft-wide: a small edit can expose an existing broken link or
- * stale page elsewhere in the review candidate. */
-export async function currentDraftReadiness(payload: Payload, req: PayloadRequest, options: { asOf?: Date | string } = {}): Promise<QualityReport> {
-  const [siteSettings, sections, pages, redirects, assets, guides] = await Promise.all([
-    payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
-    payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
-    payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, overrideAccess: true, req }),
-    payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, overrideAccess: true, req }),
-    payload.find({ collection: 'assets', limit: 0, pagination: false, depth: 0, overrideAccess: true, req }),
-    payload.find({ collection: 'style-guides', limit: 1, depth: 0, draft: true, overrideAccess: true, req }),
-  ])
-  const captured = (collection: CapturedCollection, doc: unknown) => snapshot(collection, doc as Record<string, unknown>) ?? {}
-  const withoutNulls = (value: Record<string, unknown>, fields: string[]) => { const normalized = { ...value }; for (const field of fields) if (normalized[field] === null) delete normalized[field]; return normalized }
-  const settings = withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy'])
-  const currentPages = pages.docs.map((doc) => {
-    const raw = doc as unknown as Record<string, unknown>
-    const page = withoutNulls(captured('pages', raw), ['kicker', 'lede', 'seoDescription', 'publishedAt', 'lastReviewed', 'jobPosting', 'businessCase'])
-    return { id: String(raw.id), ...page, ...(typeof raw.lastReviewed === 'string' ? { lastReviewed: raw.lastReviewed } : {}), ...(typeof raw.updatedAt === 'string' ? { updatedAt: raw.updatedAt } : {}) }
-  })
-  const homepageID = idOf(settings.homepageId)
-  if (homepageID && !currentPages.some(page => page.id === homepageID && (page as Record<string, unknown>).template === 'landing')) delete settings.homepageId
-  const guide = guides.docs[0] ? captured('style-guides', guides.docs[0]) : undefined
-  const manifest = {
-    settings: { contractVersion: CONTRACT_VERSION, siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map(doc => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
-    pages: currentPages,
-    redirects: redirects.docs.map(doc => captured('redirects', doc)),
-    media: assets.docs.map(doc => ({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) })),
-    changeSets: [],
-    ...(guide ? { styleGuide: guide } : {}),
+/** Evaluate the identical normalized candidate that preview and publication
+ * use: captured changes are applied to the frozen queue/public baseline. */
+export async function currentDraftReadiness(payload: Payload, req: PayloadRequest, changes: CapturedChange[], options: { asOf?: Date | string } = {}): Promise<QualityReport> {
+  try {
+    const [{ currentPreviewBaseline }, { buildCandidate }] = await Promise.all([import('./review-preview'), import('./publishing')])
+    const base = await currentPreviewBaseline(payload, req)
+    if (!base) throw new Error('No configured baseline')
+    const candidate = buildCandidate(base.manifest, changes, changes.map(change => `${change.collection}:${change.id}`), base.versions)
+    return checkSiteSnapshot(candidate, { ...(options.asOf ? { asOf: options.asOf } : {}), style: candidate.styleGuide })
+  } catch {
+    // A stale or malformed capture must remain available for repair. The
+    // contract/tree evaluator is the only write-aborting quality gate.
+    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: true, issues: [], blockers: [], warnings: [{ code: 'READINESS_CANDIDATE_UNAVAILABLE', severity: 'warning', path: '$', message: 'Readiness will be available after the captured draft can be assembled against its publication baseline.', remediation: 'Correct the draft or refresh the change set, then review readiness again.' }], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }
   }
-  return checkSiteSnapshot(manifest, { asOf: options.asOf ?? new Date(), style: guide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style'] })
 }
 
 export async function changeSetQuality(payload: Payload, req: PayloadRequest, changes: CapturedChange[], options: { asOf?: Date | string } = {}): Promise<{ checks: ChangeSetQualityCheck[]; warnings: string[]; readiness: QualityReport }> {
@@ -333,7 +314,7 @@ export async function changeSetQuality(payload: Payload, req: PayloadRequest, ch
       errors.push(...treeErrors.map((issue) => ({ collection: change.collection, id: change.id, message: `${issue.field}: ${issue.message}` })))
     }
   }
-  const readiness = await currentDraftReadiness(payload, req, options)
+  const readiness = await currentDraftReadiness(payload, req, changes, options)
   return { checks: [{ name: 'contract-and-tree', status: errors.length ? 'failed' : 'passed', errors }], warnings: readiness.warnings.map(issue => `${issue.code}: ${issue.message}`), readiness }
 }
 
