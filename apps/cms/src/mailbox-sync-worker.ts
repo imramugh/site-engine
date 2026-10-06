@@ -1,0 +1,37 @@
+import { timingSafeEqual } from 'node:crypto'
+import { syncMailboxInbound } from './mailbox-inbound-sync'
+
+const noStore = { 'Cache-Control': 'no-store' }
+const workerBudgetMS = 35_000
+
+export function mailboxSyncWorkerAuthorized(request: Request): boolean {
+  const secret = process.env.MAILBOX_SYNC_WORKER_TOKEN
+  const authorization = request.headers.get('authorization')
+  if (!secret || Buffer.byteLength(secret) < 32 || !authorization?.startsWith('Bearer ')) return false
+  const supplied = Buffer.from(authorization.slice(7)); const expected = Buffer.from(secret)
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected)
+}
+
+/** A separate, one-mailbox bounded cycle. Notification dispatch never calls this. */
+export async function runMailboxSyncCycle(payload: any, dependencies = { sync: syncMailboxInbound }, now = Date.now()) {
+  const candidates = await payload.find({ collection: 'mailbox-configurations', where: { and: [{ health: { equals: 'connected' } }, { provider: { in: ['microsoft', 'google'] } }] }, sort: 'updatedAt', limit: 25, depth: 0, overrideAccess: true })
+  const mailbox = candidates.docs[0]
+  if (!mailbox || Date.now() - now >= workerBudgetMS) return { mailbox: null, processed: 0 }
+  try {
+    const result = await dependencies.sync(payload, mailbox.id)
+    await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { testedAt: new Date().toISOString() }, overrideAccess: true, context: { mailboxInternal: true } })
+    return { mailbox: mailbox.id, processed: result.processed }
+  } catch {
+    return { mailbox: mailbox.id, processed: 0 }
+  }
+}
+
+export function createMailboxSyncWorkerRunHandler(dependencies: { payload: () => Promise<any>; run: (payload: any) => Promise<{ mailbox: string | null; processed: number }> }) {
+  return async (request: Request): Promise<Response> => {
+    if (!mailboxSyncWorkerAuthorized(request)) return Response.json({ error: 'Unauthorized.' }, { status: 401, headers: noStore })
+    try {
+      const result = await dependencies.run(await dependencies.payload())
+      return Response.json(result, { headers: noStore })
+    } catch { return Response.json({ error: 'unavailable' }, { status: 503, headers: noStore }) }
+  }
+}
