@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest'
 import { createLocalReq, getPayload } from 'payload'
 import type { MigrateUpArgs } from '@payloadcms/db-sqlite'
 import { down, up } from '../src/migrations/20261005_191000_mail_replies'
+import { down as downMcpBindings, up as upMcpBindings } from '../src/migrations/20261006_007000_mcp_mail_confirmation'
 
 const directory = mkdtempSync(join(tmpdir(), 'retention-mail-replies-upgrade-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -21,12 +22,17 @@ it('preserves a locked legacy draft and authorization while adding application r
   const inquiry = await payload.create({ collection: 'inquiries', data: { email: 'lead-migration@example.test', message: 'Legacy draft lead', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'mail-replies-upgrade-lead', stage: 'new' }, overrideAccess: true })
   const draft = await payload.create({ collection: 'mail-drafts', data: { lead: inquiry.id, threadID: 'legacy-thread', recipient: inquiry.email, sender: owner.email, subject: 'Legacy draft', body: 'Retain this draft.', attachmentHashes: [], revision: 1, state: 'prepared' }, overrideAccess: true, context: { migrationFixture: true } })
   const client = (payload.db as unknown as Adapter).client
+  // Restore the historical input schema in reverse migration order. The
+  // production config includes later nullable MCP columns; the older table
+  // rebuild must not be exercised against that future schema.
+  await migrate(downMcpBindings)
   await migrate(down)
   await client.execute(`INSERT INTO payload_locked_documents (id, global_slug, updated_at, created_at) VALUES ('90000000-0000-4000-8000-000000000001', NULL, '2026-10-05T00:00:00.000Z', '2026-10-05T00:00:00.000Z')`)
   await client.execute(`INSERT INTO payload_locked_documents_rels (parent_id, path, mail_drafts_id) VALUES ('90000000-0000-4000-8000-000000000001', 'mail-drafts', '${draft.id}')`)
   const authorization = '90000000-0000-4000-8000-000000000002'
   await client.execute(`INSERT INTO mail_authorizations (id,draft_id,digest,draft_revision,authorized_by_id,expires_at,updated_at,created_at) VALUES ('${authorization}','${draft.id}','${'a'.repeat(64)}',1,'${owner.id}','2026-10-05T01:00:00.000Z','2026-10-05T00:00:00.000Z','2026-10-05T00:00:00.000Z')`)
   await migrate(up)
+  await migrate(upMcpBindings)
   expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ id: draft.id, lead: inquiry.id, subject: 'Legacy draft' })
   expect(await payload.findByID({ collection: 'mail-authorizations', id: authorization, depth: 0, overrideAccess: true })).toMatchObject({ id: authorization, draft: draft.id })
   expect((await client.execute(`SELECT mail_drafts_id FROM payload_locked_documents_rels WHERE parent_id = '90000000-0000-4000-8000-000000000001'`)).rows).toEqual([expect.objectContaining({ mail_drafts_id: draft.id })])
