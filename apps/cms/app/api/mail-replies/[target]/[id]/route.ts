@@ -26,8 +26,8 @@ export async function GET(request: Request, context: { params: Promise<{ target:
     })).then(items => items.filter((item): item is { id: string; subject: string } => Boolean(item)))
   }
   const prepared = await payload.find({ collection: 'mail-drafts', where: { and: [{ [target]: { equals: id } }, { state: { equals: 'prepared' } }] }, sort: '-updatedAt', limit: 1, depth: 0, overrideAccess: true })
-  const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string } | undefined
-  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body } : null, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
+  const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string } | undefined
+  return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body, threadID: draft.threadID } : null, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
 }
 export async function POST(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL

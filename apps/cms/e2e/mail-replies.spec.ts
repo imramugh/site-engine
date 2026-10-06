@@ -215,7 +215,7 @@ test('ENG-020 adopts a persisted same-address conversation only after an explici
 })
 
 
-test('ENG-020 displays an assistant-prepared envelope for human confirmation without sending first', async ({ browser }) => {
+test('ENG-020 displays an assistant-prepared envelope, retains it for editing, and requires a new confirmation before one send', async ({ browser }) => {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -231,6 +231,15 @@ test('ENG-020 displays an assistant-prepared envelope for human confirmation wit
     await expect(review).toContainText('Fixture OAuth reply B')
     await expect(review).toContainText('MCP prepared exact body')
     expect((await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }).deliveries).toHaveLength(before.deliveries.length)
+    await reply.getByRole('button', { name: 'Edit reply' }).click()
+    await expect(reply.getByLabel('Reply sender')).toHaveValue('fixture-reply@example.test')
+    await expect(reply.getByLabel('Existing conversation')).toHaveValue('fixture-oauth-thread-b')
+    await expect(reply.getByLabel('Reply subject')).toHaveValue('Fixture OAuth reply B')
+    await expect(reply.getByLabel('Reply message')).toHaveValue('MCP prepared exact body')
+    await reply.getByLabel('Reply message').fill('Edited MCP prepared body')
+    await reply.getByRole('button', { name: 'Prepare reply' }).click()
+    await expect(review).toContainText('Edited MCP prepared body')
+    await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
     await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
     await reply.getByRole('button', { name: 'Send confirmed reply' }).click()
     await expect(reply.getByRole('status')).toHaveText('Reply sent.')
@@ -238,6 +247,6 @@ test('ENG-020 displays an assistant-prepared envelope for human confirmation wit
     expect(after.deliveries).toHaveLength(before.deliveries.length + 1)
     expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-thread-b' })
     expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture OAuth reply B\r\n')
-    expect(after.deliveries.at(-1)?.mime).toContain('MCP prepared exact body')
+    expect(after.deliveries.at(-1)?.mime).toContain('Edited MCP prepared body')
   } finally { await context.close() }
 })

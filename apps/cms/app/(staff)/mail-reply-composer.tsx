@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import styles from './mail-reply-composer.module.css'
 
-type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string }
+type Envelope = { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string }
 type Options = { senders: Array<{ address: string; label: string }>; threads: Array<{ id: string; subject: string }>; preparedDraft?: Envelope | null; canAuthorize: boolean }
 type ReplyResponse = { error?: string; draft?: Envelope; authorization?: { id: string } }
 
@@ -45,10 +45,11 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
       if (!current()) return
       setOptions(value)
       setDraft(value.preparedDraft ?? null)
-      setSender(value.senders[0]?.address ?? '')
+      setSender(value.preparedDraft?.sender ?? value.senders[0]?.address ?? '')
       const threads = value.threads ?? []
-      setThreadID(threads[0]?.id ?? '')
-      if (threads[0]?.subject) setSubject(threads[0].subject)
+      setThreadID(value.preparedDraft?.threadID ?? threads[0]?.id ?? '')
+      setSubject(value.preparedDraft?.subject ?? threads[0]?.subject ?? '')
+      setBody(value.preparedDraft?.body ?? '')
     }).catch((error: unknown) => { if (!controller.signal.aborted && current()) setLoadError(error instanceof Error ? error.message : 'Reply addresses could not be loaded.') })
     return () => controller.abort()
   }, [endpoint, reload])
@@ -85,6 +86,10 @@ export function MailReplyComposer({ target, id, recipient }: { target: 'lead' | 
       } else if (kind === 'edit') {
         if (grant) await call('cancel', grant)
         if (!current()) return
+        setSender(draft?.sender ?? sender)
+        setSubject(draft?.subject ?? subject)
+        setBody(draft?.body ?? body)
+        setThreadID(draft?.threadID ?? threadID)
         setGrant('')
         setDraft(null)
         setStatus('Any changes require a new confirmation.')
