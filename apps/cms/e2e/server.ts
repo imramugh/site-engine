@@ -684,6 +684,15 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(() => { response.writeHead(500); response.end('Unable to age session.'); })
     return
   }
+  if (request.method === 'GET' && request.url === '/__e2e/session/state') {
+    const sessionCookie = request.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('site_engine_session=') || part.startsWith('__Host-site_engine_session='))
+    const token = sessionCookie?.slice(sessionCookie.indexOf('=') + 1)
+    if (!token) { response.writeHead(401); response.end('Session missing.'); return }
+    void payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+      .then(({ docs }) => docs[0] ? json(response, { lastSeenAt: docs[0].lastSeenAt }) : Promise.reject(new Error('Session missing')))
+      .catch(() => { response.writeHead(500); response.end('Unable to inspect session.'); })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
     void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))

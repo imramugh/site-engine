@@ -11,6 +11,12 @@ async function editor(browser: Browser) {
   return { context, page: await context.newPage() }
 }
 
+async function sessionLastSeen(session: Awaited<ReturnType<typeof editor>>): Promise<string> {
+  const response = await session.page.request.get('/__e2e/session/state')
+  expect(response.status(), await response.text()).toBe(200)
+  return (await response.json() as { lastSeenAt: string }).lastSeenAt
+}
+
 test('ENG-036 returns retryable backpressure from the authenticated direct-edit route and recovers after lock release', async ({ browser }) => {
   test.setTimeout(30_000)
   const session = await editor(browser)
@@ -49,6 +55,29 @@ test('ENG-036 returns retryable backpressure from the authenticated direct-edit 
     expect(unchanged.blocks.find((block) => block.id === blockID)?.heading).toBe(before.blocks.find((block) => block.id === blockID)?.heading)
     const retried = await session.page.request.post('/api/editorial/direct-edit', { headers: { origin, 'content-type': 'application/json' }, data: body })
     expect(retried.status(), await retried.text()).toBe(200)
+  } finally { await session.page.request.post('/__e2e/sqlite-lock/release').catch(() => undefined); await session.context.close() }
+})
+
+test('ENG-036 keeps a verified session usable while a writer defers its sliding refresh', async ({ browser }) => {
+  test.setTimeout(30_000)
+  const session = await editor(browser)
+  try {
+    const aged = await session.page.request.post('/__e2e/session/age-last-seen')
+    expect(aged.status(), await aged.text()).toBe(204)
+    const before = await sessionLastSeen(session)
+    const lock = await session.page.request.post('/__e2e/sqlite-lock')
+    expect(lock.status(), await lock.text()).toBe(204)
+
+    const lockedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect(lockedRead.status(), await lockedRead.text()).toBe(200)
+    expect((await lockedRead.json() as { blocks: Array<{ id: string }> }).blocks).toEqual(expect.any(Array))
+    expect(await sessionLastSeen(session)).toBe(before)
+
+    const released = await session.page.request.post('/__e2e/sqlite-lock/release')
+    expect(released.status(), await released.text()).toBe(204)
+    const refreshedRead = await session.page.request.get(`/api/pages/${pageID}?draft=true`)
+    expect(refreshedRead.status(), await refreshedRead.text()).toBe(200)
+    expect(Date.parse(await sessionLastSeen(session))).toBeGreaterThan(Date.parse(before))
   } finally { await session.page.request.post('/__e2e/sqlite-lock/release').catch(() => undefined); await session.context.close() }
 })
 
