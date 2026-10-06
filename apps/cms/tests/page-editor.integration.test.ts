@@ -678,5 +678,13 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
         )
       ).status,
     ).toBe(413)
+    const saved = await route(routeInput, { origin: 'http://cms.test', cookie })
+    expect(saved.status).toBe(200)
+    await expect(saved.json()).resolves.toMatchObject({
+      quality: {
+        checks: [expect.objectContaining({ name: 'contract-and-tree' })],
+        readiness: expect.objectContaining({ publishable: expect.any(Boolean) }),
+      },
+    })
   })
 })
