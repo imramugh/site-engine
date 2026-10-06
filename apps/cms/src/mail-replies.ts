@@ -38,6 +38,8 @@ export async function authorizeReply(payload: Payload, actor: { id: string; sess
 export async function cancelReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) { return revokeMailAuthorization(payload, actor, grantID) }
 export async function cancelPreparedReply(payload: Payload, actor: { id: string; sessionToken?: string }, draftID: string) { return cancelPreparedMailDraft(payload, actor, draftID) }
 async function deliverReply(payload: Payload, actorID: string, grantID: string, grant: any, attachments: readonly VerifiedOutgoingAttachment[] = []) {
+  const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
+  try {
   const pending = await payload.findByID({ collection: 'mail-authorizations', id: grantID, depth: 0, overrideAccess: true })
   const pendingDraft = await payload.findByID({ collection: 'mail-drafts', id: typeof pending.draft === 'string' ? pending.draft : pending.draft.id, depth: 0, overrideAccess: true })
   const pendingApplication = pendingDraft.application && (typeof pendingDraft.application === 'string' ? pendingDraft.application : pendingDraft.application.id)
@@ -59,9 +61,7 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
       providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: target, ...(mailbox.provider === 'google' ? { providerRFCMessageID: String(messages.docs[0].rfcMessageID), ...(messages.docs[0].rfcReferences ? { providerRFCReferences: String(messages.docs[0].rfcReferences) } : {}) } : {}), providerSubject: String(messages.docs[0].subject) }
     }
   }
-  const draftID = typeof grant.draft === 'string' ? grant.draft : grant.draft.id
   const draft = grant.envelope
-  try {
     const delivered = await replyDelivery(payload, area, {
       sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body),
       ...(providerReply ? { threadID: String(draft.threadID), ...providerReply } : {}),
@@ -74,11 +74,11 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
       await payload.create({ collection: 'mail-thread-messages', data: { thread: persistedThread.id, mailbox: initialProvider.mailboxID, [pendingApplication ? 'application' : 'lead']: target.id, providerMessageID: delivered.messageID, ...(initialProvider.rfcMessageID ? { rfcMessageID: initialProvider.rfcMessageID } : {}), direction: 'outbound', sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), receivedAt: new Date().toISOString(), attachmentMetadata: [] } as never, overrideAccess: true })
     }
     await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID } }, overrideAccess: true })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID, ...(typeof draft.assistantClientIDHash === 'string' ? { clientIdHash: draft.assistantClientIDHash } : {}) } }, overrideAccess: true })
     return delivered
   } catch (error) {
     await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'delivery-unknown' }, overrideAccess: true })
-    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID } }, overrideAccess: true })
+    await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_delivery_unknown', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID, ...(typeof grant.envelope?.assistantClientIDHash === 'string' ? { clientIdHash: grant.envelope.assistantClientIDHash } : {}) } }, overrideAccess: true })
     throw error
   }
 }

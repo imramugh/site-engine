@@ -56,6 +56,19 @@ describe('local mail authorization transactions', () => {
     await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
     expect(calls).toBe(1); setReplyDeliveryForTest()
   })
+  it('records a terminal unknown result when mailbox grounding fails after consumption without calling a provider', async () => {
+    const owner = await actor('owner'); const prepared = await draft(); await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { attachmentHashes: [] }, overrideAccess: true })
+    const mailbox = await payload.create({ collection: 'mailbox-configurations', data: { name: 'Grounding failure', provider: 'google', primaryAddress: 'team@example.test', aliases: [], verifiedAliases: [], host: 'oauth', port: 1, security: 'tls', username: 'team@example.test', encryptedCredential: 'opaque', credentialRevision: 'fixture', health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const mapping = await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'team@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
+    const grant = await authorizeMailDraft(payload, owner, prepared.id, future()); let calls = 0; const findByID = payload.findByID.bind(payload)
+    payload.findByID = async (args) => { if (args.collection === 'mailbox-configurations') throw new Error('mailbox grounding unavailable'); return findByID(args as never) }
+    setReplyDeliveryForTest(async () => { calls += 1; return { provider: 'google', messageID: 'must-not-send' } })
+    try {
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('mailbox grounding unavailable')
+      expect(calls).toBe(0); expect(await payload.findByID({ collection: 'mail-authorizations', id: grant.id, depth: 0, overrideAccess: true })).toMatchObject({ consumedAt: expect.any(String) }); expect(await payload.findByID({ collection: 'mail-drafts', id: prepared.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'delivery-unknown' })
+      await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable'); expect(calls).toBe(0)
+    } finally { payload.findByID = findByID; setReplyDeliveryForTest(); await payload.delete({ collection: 'mailbox-area-mappings', id: mapping.id, overrideAccess: true, context: { mailboxInternal: true } }); await payload.delete({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true, context: { mailboxInternal: true } }) }
+  })
   it('dispatches the exact confirmed envelope even when persisted draft content changes during consumption', async () => {
     const owner = await actor('owner'); const prepared = await draft()
     await payload.update({ collection: 'mail-drafts', id: prepared.id, data: { attachmentHashes: [] }, overrideAccess: true })
