@@ -102,7 +102,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     const mixed = await payload.create({ collection: 'users', data: { email: 'bridge-mixed@example.test', name: 'Bridge mixed', roles: ['editor', 'sales', 'hiring'] }, overrideAccess: true })
     const mixedToken = newOpaqueToken()
     const mixedSession = await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(mixedToken), user: mixed.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    await expect((await resolve(mixedToken)).json()).resolves.toEqual({ user: { id: mixed.id, sessionId: mixedSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:careers:read'] } })
+    await expect((await resolve(mixedToken)).json()).resolves.toEqual({ user: { id: mixed.id, sessionId: mixedSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:reply'] } })
     await payload.update({ collection: 'users', id: mixed.id, data: { roles: ['sales', 'hiring'] }, overrideAccess: true })
     expect((await resolve(mixedToken)).status).toBe(401)
   })
