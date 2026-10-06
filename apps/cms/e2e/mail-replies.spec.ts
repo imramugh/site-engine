@@ -8,7 +8,7 @@ const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const mcpStructured = <T>(result: unknown) => ((result as { structuredContent?: T; toolResult?: { structuredContent?: T } }).structuredContent ?? (result as { toolResult?: { structuredContent?: T } }).toolResult?.structuredContent) as T
 const mcpResult = <T>(result: unknown) => mcpStructured<T>(result) ?? JSON.parse(((result as { content?: Array<{ text?: string }>; toolResult?: { content?: Array<{ text?: string }> } }).content ?? (result as { toolResult?: { content?: Array<{ text?: string }> } }).toolResult?.content)?.find(item => item.text)?.text ?? '{}') as T
 
-async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true) {
+async function composer(browser: Browser, sendFails = false, threads: Array<{ id: string; subject: string }> = [], prepare = true, attachments: Array<{ filename: string; mimeType: string; size: number; sha256: string }> = []) {
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
@@ -17,7 +17,7 @@ async function composer(browser: Browser, sendFails = false, threads: Array<{ id
     if (route.request().method() === 'GET') return route.fulfill({ json: { senders: [{ address: 'team@example.test', label: 'Team mailbox' }], threads, canAuthorize: true } })
     const body = route.request().postDataJSON()
     requests.push(body.action)
-    if (body.action === 'prepare') return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'team@example.test', recipient: 'notes-a.synthetic@example.test', subject: body.subject.trim(), body: body.body.trim() } } })
+    if (body.action === 'prepare') return route.fulfill({ json: { draft: { id: '11111111-1111-4111-8111-111111111111', sender: 'team@example.test', recipient: 'notes-a.synthetic@example.test', subject: body.subject.trim(), body: body.body.trim(), attachments } } })
     if (body.action === 'send' && sendFails) return route.fulfill({ status: 503, json: { error: 'Provider acknowledgement was lost.' } })
     return route.fulfill({ json: { authorization: { id: '22222222-2222-4222-8222-222222222222' } } })
   })
@@ -54,6 +54,22 @@ test('ENG-020/033 reviews the persisted envelope, reconfirms edits, and cannot r
     expect(requests).toEqual(['prepare', 'authorize', 'cancel', 'prepare', 'authorize', 'send'])
     await page.addScriptTag({ path: axe })
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
+  } finally { await context.close() }
+})
+
+
+test('ENG-033 renders the immutable attachment descriptors before confirmation', async ({ browser }) => {
+  const attachment = { filename: 'brief.pdf', mimeType: 'application/pdf', size: 27, sha256: 'a'.repeat(64) }
+  const { context, reply, requests } = await composer(browser, false, [], true, [attachment])
+  try {
+    const review = reply.getByRole('region', { name: 'Exact reply review' })
+    await expect(review).toContainText('Attachments included in this exact confirmation')
+    await expect(review).toContainText('brief.pdf')
+    await expect(review).toContainText('application/pdf')
+    await expect(review).toContainText('27 bytes')
+    await expect(review).toContainText('SHA-256 ' + attachment.sha256)
+    await reply.getByRole('button', { name: 'Confirm exact reply' }).click()
+    expect(requests).toEqual(['prepare', 'authorize'])
   } finally { await context.close() }
 })
 
