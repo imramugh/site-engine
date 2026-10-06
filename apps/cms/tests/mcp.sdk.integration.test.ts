@@ -1069,6 +1069,7 @@ test('MCP SDK URL media sources use the shared create and immutable replacement 
     expect(denied).toMatchObject({ isError: true })
     expect((await payload.find({ collection: 'assets', limit: 0, overrideAccess: true })).totalDocs).toBeGreaterThanOrEqual(0)
     const uploaded = resultJson(await sdk.client.callTool({ name: 'upload_media', arguments: { changeSetId: set.id, expectedChangeSetRevision: set.revision, alt: 'URL sourced media', decorative: false, focalX: 50, focalY: 50, source: { url: 'https://images.example.test/upload.png' } } })) as { draft: { assetId: string; changeSetRevision: number } }
+    expect(uploaded).toMatchObject({ checks: expect.any(Array), warnings: expect.any(Array), readiness: { publishable: expect.any(Boolean) } })
     const before = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
     const section = await payload.create({ collection: 'sections', data: { name: `URL media ${randomUUID()}`, summary: 'Synthetic section for an MCP URL media reference.', slug: `url-media-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
     await payload.create({ collection: 'pages', data: { title: `URL media use ${randomUUID()}`, summary: 'Synthetic page proving the URL-created asset can be referenced.', slug: `url-media-use-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'media', mediaId: uploaded.draft.assetId, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, user: editor, overrideAccess: false })
@@ -1078,6 +1079,7 @@ test('MCP SDK URL media sources use the shared create and immutable replacement 
     const replacementCall = await sdk.client.callTool({ name: 'replace_media', arguments: { id: uploaded.draft.assetId, changeSetId: set.id, expectedChangeSetRevision: currentRevision, idempotencyKey: randomUUID(), source: { url: 'https://images.example.test/replacement.png' } } })
     expect(resultJson(replacementCall)).not.toEqual(expect.objectContaining({ error: expect.any(String) }))
     const replaced = resultJson(replacementCall) as { draft: { changeSetRevision: number } }
+    expect(replaced).toMatchObject({ checks: expect.any(Array), warnings: expect.any(Array), readiness: { publishable: expect.any(Boolean) } })
     expect(replaced.draft.changeSetRevision).toBeGreaterThan(uploaded.draft.changeSetRevision)
     const after = await payload.findByID({ collection: 'assets', id: uploaded.draft.assetId, depth: 0, overrideAccess: true }) as unknown as { currentFileVersion: string }
     expect(after.currentFileVersion).not.toBe(before.currentFileVersion)

@@ -93,9 +93,9 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         const asset = await payload.create({ collection: 'assets', data: { ...metadata, ...(focal ? { focalX: canonicalFocalPoint(metadata.focalX), focalY: canonicalFocalPoint(metadata.focalY) } : {}) }, file, user: current as never, overrideAccess: false, req, context: { mediaFocalContract: focal } }) as unknown as { id: string }
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
-        return { id: asset.id, revision: changed.revision, checks: quality.checks }
+        return { id: asset.id, revision: changed.revision, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness }
       })
-      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks })
+      return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
   server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
@@ -108,9 +108,9 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
         const replacement = await replaceAssetFile({ payload, assetID: id, idempotencyKey, file, user: current, req })
         const changed = await payload.findByID({ collection: 'change-sets', id: changeSetId, depth: 0, overrideAccess: true, req }) as unknown as { revision: number; changes?: CapturedChange[] }
         const quality = await changeSetQuality(payload, req, Array.isArray(changed.changes) ? changed.changes : [])
-        return { replacement, revision: changed.revision, checks: quality.checks }
+        return { replacement, revision: changed.revision, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness }
       })
-      return text({ draft: { assetId: id, changeSetId, changeSetRevision: result.revision, replayed: result.replacement.replayed }, asset: result.replacement.asset, checks: result.checks })
+      return text({ draft: { assetId: id, changeSetId, changeSetRevision: result.revision, replayed: result.replacement.replayed }, asset: result.replacement.asset, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && ['revision_conflict', 'idempotency_conflict'].includes(cause.message) ? cause.message : 'write_failed') }
   })
 }
