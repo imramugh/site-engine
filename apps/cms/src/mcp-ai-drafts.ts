@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { enqueueConfiguredAIJob } from './configured-ai-jobs'
 import { canonicalHash } from './publishing'
 import { pageEditorHash, pageEditorProjection } from './page-editor'
+import { integrationProviders, type IntegrationProvider } from './integrations'
 
 type Current = { id: string; roles?: string[] }
 type Target = { collection: 'pages' | 'assets'; id: string; revision: string }
@@ -13,7 +14,7 @@ type Envelope = { version: 1; kind: 'summary' | 'meta' | 'faq' | 'alt'; target: 
 const envelopePrefix = 'MCP_AI_DRAFT_ENVELOPE:'
 const text = <T extends Record<string, unknown>>(value: T) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (code: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: code }) }] })
-const ids = z.object({ id: z.string().uuid(), idempotencyKey: z.string().uuid() }).strict()
+const ids = z.object({ id: z.string().uuid(), idempotencyKey: z.string().uuid(), provider: z.enum(integrationProviders) }).strict()
 const pageIDs = ids.extend({ expectedPageHash: z.string().min(32).max(128) }).strict()
 
 const bounded = (value: unknown) => {
@@ -32,15 +33,15 @@ const parseEnvelope = (value: unknown): Envelope | undefined => {
 
 export function registerMcpAIDraftTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; aiSecurity: Record<string, unknown> }) {
   const { server, payload, current, read, write, contentSecurity, aiSecurity } = input
-  const enabled = read && write && (current.roles ?? []).some(role => role === 'owner' || role === 'editor')
-  const queue = async (kind: Envelope['kind'], collection: Target['collection'], id: string, idempotencyKey: string, expected?: string) => {
+  const enabled = read && write && (current.roles ?? []).some(role => role === 'owner' || role === 'editor' || role === 'approver')
+  const queue = async (kind: Exclude<Envelope['kind'], 'alt'>, collection: 'pages', id: string, idempotencyKey: string, provider: IntegrationProvider, expected?: string) => {
     if (!enabled) return error('role_access_required')
     try {
       const record = await payload.findByID({ collection, id, depth: 0, draft: true, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
       const actual = revision(collection, record)
       if (expected && expected !== actual) return error('revision_conflict')
       const target = { collection, id, revision: actual } as Target
-      const job = await enqueueConfiguredAIJob(payload, current.id, { provider: 'openai', input: envelope(kind, target, collection === 'pages' ? pageSource(record) : assetSource(record)), maxOutputTokens: 700, idempotencyKey })
+      const job = await enqueueConfiguredAIJob(payload, current.id, { provider, input: envelope(kind, target, pageSource(record)), maxOutputTokens: 700, idempotencyKey })
       return text({ jobId: String((job.job as { id: string }).id), status: String((job.job as { state: string }).state), created: job.created, target, notApplied: true })
     } catch (cause) {
       if (cause instanceof Error && cause.message === 'AI_JOB_UNAVAILABLE') return error('ai_provider_unavailable')
@@ -49,10 +50,11 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
     }
   }
   const description = 'Queue a durable AI suggestion for human review. It never applies a change or sends content. This server cannot publish, approve, manage users, or permanently delete content.'
-  server.registerTool('suggest_summary', { title: 'Suggest page summary', description, inputSchema: pageIDs, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('summary', 'pages', id, idempotencyKey, expectedPageHash))
-  server.registerTool('suggest_meta', { title: 'Suggest page metadata', description, inputSchema: pageIDs, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('meta', 'pages', id, idempotencyKey, expectedPageHash))
-  server.registerTool('suggest_faq', { title: 'Suggest page FAQs', description, inputSchema: pageIDs, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, expectedPageHash }) => queue('faq', 'pages', id, idempotencyKey, expectedPageHash))
-  server.registerTool('suggest_alt', { title: 'Suggest image alt text', description, inputSchema: ids, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey }) => queue('alt', 'assets', id, idempotencyKey))
+  const writeAnnotations = { readOnlyHint: false }
+  server.registerTool('suggest_summary', { title: 'Suggest page summary', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, provider, expectedPageHash }) => queue('summary', 'pages', id, idempotencyKey, provider, expectedPageHash))
+  server.registerTool('suggest_meta', { title: 'Suggest page metadata', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, provider, expectedPageHash }) => queue('meta', 'pages', id, idempotencyKey, provider, expectedPageHash))
+  server.registerTool('suggest_faq', { title: 'Suggest page FAQs', description, inputSchema: pageIDs, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, ({ id, idempotencyKey, provider, expectedPageHash }) => queue('faq', 'pages', id, idempotencyKey, provider, expectedPageHash))
+  server.registerTool('suggest_alt', { title: 'Suggest image alt text', description: 'Image-pixel alt suggestions are unavailable until a configured image-capable provider and bounded image-input path exist. This tool never infers visual content from filenames or metadata, and never changes assets.', inputSchema: ids, annotations: writeAnnotations, _meta: { securitySchemes: aiSecurity.securitySchemes, authorization: aiSecurity } }, () => error('image_input_unavailable'))
   server.registerTool('get_ai_suggestion', { title: 'Get AI suggestion status', description: 'Read one of your AI suggestion jobs. Completed text remains a human-review draft and is never applied automatically.', inputSchema: z.object({ jobId: z.string().uuid() }).strict(), annotations: { readOnlyHint: true }, _meta: { securitySchemes: contentSecurity.securitySchemes, authorization: contentSecurity } }, async ({ jobId }) => {
     if (!read) return error('insufficient_scope')
     try {
