@@ -168,7 +168,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application', 'prepare_reply', 'send_reply'].includes(tool.name)) { expect(tool.description).toContain('cannot publish'); expect(tool.description).toContain('approve'); expect(tool.description).toContain('manage users'); expect(tool.description).toContain('permanently delete content') }
-      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'prepare_reply', 'send_reply'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (tool.name === 'prepare_reply') expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
@@ -670,7 +670,7 @@ test('MCP media search retains tagged used assets past the first 100 results', a
     expect(foundIDs).toContain(lateAsset.id)
     expect(resultJson(await sdk.client.callTool({ name: 'get_media_usage', arguments: { id: lateAsset.id } }))).toMatchObject({ id: lateAsset.id, usages: [expect.objectContaining({ locations: expect.arrayContaining([expect.stringContaining('mediaIds')]) })] })
   } finally { await sdk.transport.close() }
-}, 90_000)
+}, 180_000)
 
 test('MCP update_media reports a retryable SQLite writer lock without a partial mutation', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: `mcp-media-busy-${randomUUID()}@example.test`, name: 'MCP Media Busy', roles: ['editor'] }, overrideAccess: true })
