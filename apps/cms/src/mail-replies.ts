@@ -84,12 +84,12 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
 }
 export async function sendReply(payload: Payload, actor: { id: string; sessionToken?: string }, grantID: string) {
   const attachments = await verifiedGrantAttachments(payload, actor.id, grantID)
-  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area)
+  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area, attachments.items)
   return deliverReply(payload, actor.id, grantID, await consumeMailAuthorization(payload, actor, grantID), attachments.items)
 }
 export async function sendMcpReply(payload: Payload, identity: McpMailIdentity, grantID: string) {
   const attachments = await verifiedGrantAttachments(payload, identity.userID, grantID)
-  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area)
+  if (attachments.items.length) await assertAreaAttachmentDelivery(payload, attachments.area, attachments.items)
   return deliverReply(payload, identity.userID, grantID, await consumeMcpMailAuthorization(payload, identity, grantID), attachments.items)
 }
 async function verifiedGrantAttachments(payload: Payload, actorID: string, grantID: string) {

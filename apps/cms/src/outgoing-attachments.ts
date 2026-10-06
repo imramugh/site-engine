@@ -16,7 +16,7 @@ const safeName = (value: unknown) => typeof value === 'string' && /^[^\u0000-\u0
 const roleAllowed = (roles: unknown, target: 'lead' | 'application') => Array.isArray(roles) && (roles.includes('owner') || (target === 'lead' ? roles.includes('sales') : roles.includes('hiring')))
 
 /** Resolves only server-owned asset IDs or the current target application's resume.
- * The returned immutable metadata is what confirmation binds; delivery remains disabled. */
+ * The returned immutable metadata is what confirmation binds; only internal delivery code receives verified bytes. */
 export async function resolveVerifiedOutgoingAttachments(payload: Payload, input: { target: 'lead' | 'application'; targetID: string; actorID: string; attachments?: unknown }): Promise<VerifiedOutgoingAttachment[]> {
   if (input.attachments === undefined) return []
   if (!Array.isArray(input.attachments) || input.attachments.length > maxCount) throw new Error('invalid_reply_attachments')

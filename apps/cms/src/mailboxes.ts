@@ -145,10 +145,10 @@ async function currentAreaMailbox(payload: Payload, area: MailboxArea) {
   return { mapping: mapping.docs[0], mailboxID, mailbox }
 }
 
-export async function assertAreaAttachmentDelivery(payload: Payload, area: MailboxArea) {
+export async function assertAreaAttachmentDelivery(payload: Payload, area: MailboxArea, attachments: readonly VerifiedAttachment[] = []) {
   try {
     const { mailbox } = await currentAreaMailbox(payload, area)
-    if (mailbox.health !== 'connected' || (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google')) throw new Error('reply_attachments_not_supported')
+    if (mailbox.health !== 'connected' || (mailbox.provider !== 'microsoft' && mailbox.provider !== 'google') || (mailbox.provider === 'microsoft' && attachments.some((attachment) => attachment.size >= 3 * 1024 * 1024))) throw new Error('reply_attachments_not_supported')
   } catch (error) {
     if (error instanceof Error && error.message === 'reply_attachments_not_supported') throw error
     throw new Error('reply_attachments_not_supported')
