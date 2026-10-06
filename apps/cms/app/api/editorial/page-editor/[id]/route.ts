@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import {
@@ -8,6 +9,7 @@ import {
 } from '../../../../../src/page-editor'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { loadInitialPreviewBaseline } from '../../../../../src/review-preview'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -52,7 +54,7 @@ async function boundedBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-export async function GET(
+async function GETHandler(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -81,7 +83,7 @@ export async function GET(
   }
 }
 
-export async function POST(
+async function POSTHandler(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -135,6 +137,8 @@ export async function POST(
       { headers: noStore },
     )
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const code = error instanceof Error ? error.message : ''
     const status =
       code === 'EDITOR_ROLE_REQUIRED' ||
@@ -161,3 +165,6 @@ export async function POST(
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

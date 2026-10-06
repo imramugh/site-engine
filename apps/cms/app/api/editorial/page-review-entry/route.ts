@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { freshStaff, hasRole } from '../../../../src/access'
@@ -8,7 +9,7 @@ export const dynamic = 'force-dynamic'
 const privateHeaders = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' }
 const empty = (status: 200 | 401 | 403, headers: Record<string, string> = {}) => new Response(null, { status, headers: { ...privateHeaders, ...headers } })
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   const user = authenticated.user as { id?: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] } | null
@@ -31,3 +32,5 @@ export async function GET(request: Request): Promise<Response> {
   if (!entries.length) return Response.json({ entries: [] }, { status: 403, headers: privateHeaders })
   return Response.json({ entries }, { headers: privateHeaders })
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

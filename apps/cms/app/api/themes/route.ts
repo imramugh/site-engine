@@ -1,6 +1,8 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { createNamedChangeSet } from '../../../src/editorial'
 import { serverSessionStrategy } from '../../../src/identity'
 import { compatibilityReport, getInstalledTheme, installedThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
@@ -108,7 +110,7 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>, acto
   }
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   try {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -119,7 +121,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403 })
   try {
     const payload = await getPayload({ config })
@@ -165,6 +167,11 @@ export async function POST(request: Request): Promise<Response> {
     })
     return Response.json({ changeSet: { id: result.changeSet.id, name: result.changeSet.name, state: result.changeSet.state, includedChangeKeys: [`theme-settings:${result.doc.id}`] }, selection: publicSelection(selection), compatibility, reused: Boolean(reusable) }, { status: reusable ? 200 : 201, headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
+    if (backpressure) return backpressure
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to draft a theme selection.' }, { status: 400 })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

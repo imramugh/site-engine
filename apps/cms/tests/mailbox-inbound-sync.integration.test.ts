@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getPayload } from 'payload'
+import { newOpaqueToken } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-inbound-sync-'))
 Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-inbound-sync-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64url'), MAILBOX_MICROSOFT_CLIENT_ID: 'client', MAILBOX_MICROSOFT_CLIENT_SECRET: 'secret', MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret' })
@@ -68,6 +69,29 @@ test('an aborted provider poll stops before it appends or advances a cursor', as
   const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(stored.inboundCursor).toBeNull()
   expect((await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'aborted-message' } }, overrideAccess: true })).docs).toHaveLength(0)
+})
+
+test('an abort during matched Graph attachment hydration leaves metadata and cursor untouched', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'attachment-abort@example.test', name: 'Attachment abort', roles: ['owner'] }, overrideAccess: true }); const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, 'attachment-abort-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'attachment-abort-session', async url => String(url).includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : Response.json({ mail: 'attachment-abort@example.test' }))
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'attachment-visitor@example.test', message: 'Original', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: newOpaqueToken(), stage: 'new' }, overrideAccess: true }); await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'attachment-thread' }, overrideAccess: true })
+  const controller = new AbortController()
+  await expect(syncMailboxInbound(payload, mailbox.id, async url => {
+    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'attachment-message', conversationId: 'attachment-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=attachment' }); if (value.includes('/attachments?')) { controller.abort(); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
+  }, controller.signal)).rejects.toThrow('sync_aborted')
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any; expect(stored.inboundCursor).toBeNull()
+  const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'attachment-message' } }, overrideAccess: true })).docs[0] as any; expect(message.attachmentMetadata).toEqual([])
+})
+
+test('a mailbox revision during matched Graph attachment hydration cannot persist metadata or advance its cursor', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'attachment-revision@example.test', name: 'Attachment revision', roles: ['owner'] }, overrideAccess: true }); const state = new URL(await startMailboxOAuth(payload, 'microsoft', owner.id, 'attachment-revision-session')).searchParams.get('state')!
+  const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'attachment-revision-session', async url => String(url).includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : Response.json({ mail: 'attachment-revision@example.test' }))
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'revision-visitor@example.test', message: 'Original', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: newOpaqueToken(), stage: 'new' }, overrideAccess: true }); await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'revision-thread' }, overrideAccess: true })
+  await expect(syncMailboxInbound(payload, mailbox.id, async url => {
+    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'revision-message', conversationId: 'revision-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=revision' }); if (value.includes('/attachments?')) { await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { credentialRevision: 'revoked-during-attachment' }, overrideAccess: true, context: { mailboxInternal: true } }); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
+  })).rejects.toThrow('mailbox_configuration_changed')
+  const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any; expect(stored.inboundCursor).toBeNull()
+  const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'revision-message' } }, overrideAccess: true })).docs[0] as any; expect(message.attachmentMetadata).toEqual([])
 })
 
 test('provider conversations and duplicate message IDs remain isolated by mailbox', async () => {

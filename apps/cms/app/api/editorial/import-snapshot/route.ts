@@ -1,9 +1,11 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { importReviewedSnapshot } from '../../../../src/reviewed-snapshot-import'
 import type { Role } from '../../../../src/access'
+import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
@@ -13,7 +15,7 @@ const sameOrigin = (request: Request) => {
   return Boolean(configured && origin === new URL(configured).origin)
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const body = await request.json() as { name?: unknown; manifest?: unknown }
@@ -34,7 +36,11 @@ export async function POST(request: Request): Promise<Response> {
     })
     return Response.json(result, { headers: noStore })
   } catch (error) {
+    const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore)
+    if (backpressure) return backpressure
     const message = error instanceof Error ? error.message : 'Snapshot import failed.'
     return Response.json({ error: message }, { status: /Owner role|required|Authentication/i.test(message) ? 403 : 400, headers: noStore })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

@@ -5,7 +5,7 @@ afterEach(() => { for (const key of Object.keys(process.env)) if (key.startsWith
 describe('mailbox OAuth provider contracts', () => {
   it('uses fixed delegated scopes and exact callbacks', () => {
     Object.assign(process.env, { PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.example.test', MAILBOX_MICROSOFT_CLIENT_ID: 'id', MAILBOX_MICROSOFT_CLIENT_SECRET: 'secret', MAILBOX_GOOGLE_CLIENT_ID: 'id', MAILBOX_GOOGLE_CLIENT_SECRET: 'secret' })
-    expect(mailboxOAuthSettings('microsoft')).toMatchObject({ redirectURI: 'https://cms.example.test/api/email-workspace/oauth/microsoft/callback', scopes: expect.arrayContaining(['offline_access', 'User.Read', 'Mail.Read', 'Mail.Send']) })
+    expect(mailboxOAuthSettings('microsoft')).toMatchObject({ redirectURI: 'https://cms.example.test/api/email-workspace/oauth/microsoft/callback', scopes: expect.arrayContaining(['offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send']) })
     expect(mailboxOAuthSettings('google')).toMatchObject({ redirectURI: 'https://cms.example.test/api/email-workspace/oauth/google/callback', scopes: expect.arrayContaining(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.settings.basic']) })
   })
   it('requests Google offline consent so reconnecting receives a refresh token', async () => {

@@ -48,13 +48,29 @@ describe('ENG-007 emergency authentication through HTTP requests and real SQLite
     const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 30_000)
     try { expect((await POST(request(future))).status).toBe(403) } finally { clock.mockRestore() }
   })
-  it('locks repeated invalid attempts and rejects disabled owners', async () => {
+  it('audits accepted and denied decisions with fixed private-safe metadata', async () => {
+    const events = await payload.find({ collection: 'audit-events', where: { user: { equals: userID } }, limit: 20, depth: 0, overrideAccess: true })
+    const serialized = JSON.stringify(events.docs)
+    expect(events.docs.some((event: any) => event.event === 'identity.emergency_signed_in' && event.detail?.provider === 'local')).toBe(true)
+    expect(serialized).not.toContain('one-time-recovery')
+    expect(serialized).not.toContain('owner@example.test')
+  })
+
+  it('locks repeated invalid attempts and records bounded account-state denials', async () => {
     await payload.update({ collection: 'users', id: userID, data: { emergencyFailedCount: 0, emergencyFailedAt: null }, overrideAccess: true })
+    const beforeInvalid = await payload.count({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.emergency_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, overrideAccess: true })
     for (let i = 0; i < 5; i++) expect((await POST(request('invalid-recovery'))).status).toBe(403)
     expect((await POST(request('invalid-recovery'))).status).toBe(429)
+    const invalidAudits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.emergency_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, limit: 20, depth: 0, overrideAccess: true })
+    expect(invalidAudits.docs).toHaveLength(beforeInvalid.totalDocs + 5)
+    expect(invalidAudits.docs.every((event: any) => event.detail?.provider === 'local')).toBe(true)
     // Disabling staff must preserve another active Owner.
     await payload.create({ collection: 'users', data: { email: 'retained-owner@example.test', name: 'Retained Owner', roles: ['owner'] }, overrideAccess: true })
     await payload.update({ collection: 'users', id: userID, data: { disabled: true }, overrideAccess: true })
     expect((await POST(request('invalid-recovery'))).status).toBe(403)
+    expect((await POST(request('invalid-recovery'))).status).toBe(403)
+    const disabledAudits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.emergency_denied' } }, { 'detail.reason': { equals: 'account_disabled' } }] }, limit: 20, depth: 0, overrideAccess: true })
+    expect(disabledAudits.docs).toHaveLength(1)
+    expect(JSON.stringify(disabledAudits.docs[0])).not.toContain('invalid-recovery')
   })
 })

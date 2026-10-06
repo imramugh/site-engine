@@ -1,6 +1,8 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { isAuthenticationSQLiteContention } from '../../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +14,7 @@ function response(status: 204 | 401 | 403): Response {
 }
 
 /** Internal Nginx auth_request check for the protected draft-preview upstream. */
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   try {
     const payload = await getPayload({ config })
     const result = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -20,7 +22,10 @@ export async function GET(request: Request): Promise<Response> {
     if (!user) return response(401)
     const roles = (user as { roles?: string[] }).roles
     return roles?.some((role) => previewRoles.has(role)) ? response(204) : response(403)
-  } catch {
+  } catch (error) {
+    if (isAuthenticationSQLiteContention(error)) throw error
     return response(401)
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
