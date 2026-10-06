@@ -51,6 +51,16 @@ try {
   const hiddenLayout = join(hidden, "src/components/Layout.astro");
   await writeFile(hiddenLayout, `${await readFile(hiddenLayout, "utf8")}\n<style is:global>.logo-media > .media { opacity: 0 !important; }</style>\n`);
   await execFile(process.execPath, [cli, hidden, "--artifacts-dir", join(temp, "hidden-logo")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a hidden logo glyph."); }, error => { if (!String(error.stderr).includes("logoVisibility")) throw error; });
+  const nested = join(temp, "nested-logo-surface-theme");
+  await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), nested, { recursive: true });
+  const nestedRenderer = join(nested, "src/components/BlockRenderer.astro");
+  const nestedSource = await readFile(nestedRenderer, "utf8");
+  const wrapped = nestedSource
+    .replace('<section class={classes} id={block.anchorId} data-block={block.type} data-block-id={block.id} data-background={block.appearance.background} data-logo-tone={block.appearance.logoTone} data-motion-intent={block.appearance.motionIntent} data-motion-effect={effect}>', '<div data-logo-tone={block.appearance.logoTone}><section class={classes} id={block.anchorId} data-block={block.type} data-block-id={block.id} data-background={block.appearance.background} data-motion-intent={block.appearance.motionIntent} data-motion-effect={effect}>')
+    .replace('</div></section>}', '</div></section></div>}');
+  if (wrapped === nestedSource) throw new Error("Nested logo surface fixture did not modify the starter renderer.");
+  await writeFile(nestedRenderer, wrapped);
+  await execFile(process.execPath, [cli, nested, "--artifacts-dir", join(temp, "nested-logo-surface"), "--baseline-file", join(temp, "nested-logo-surface.json"), "--record-baselines"], { cwd: consumer });
   const bad = join(temp, "bad-theme"); await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), bad, { recursive: true });
   const manifest = JSON.parse(await readFile(join(bad, "theme.json"), "utf8")); delete manifest.contractSurface.components.blockRenderer; await writeFile(join(bad, "theme.json"), JSON.stringify(manifest));
   await execFile(process.execPath, [cli, bad, "--artifacts-dir", join(temp, "bad-evidence")], { cwd: consumer }).then(() => { throw new Error("Packed CLI accepted a missing blockRenderer."); }, error => { if (!String(error.stderr).includes("blockRenderer")) throw error; });
