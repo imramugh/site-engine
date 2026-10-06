@@ -12,6 +12,9 @@ describe('ENG-038 starter theme descriptor', () => {
   });
   it('reports an incomplete theme', () => expect(validateStarterTheme({ ...starterTheme, supportedBlocks: [] })).toContain('Missing block hero'));
   it('requires declared motion presets', () => expect(validateStarterTheme({ ...starterTheme, motion: { supportedPresets: [], intentFallbacks: {} } })).toContain('Missing motion presets'));
+  it('declares the target presets used for each standard motion intent', () => {
+    expect(starterTheme.motion.intentFallbacks).toEqual({ subtle: 'subtle', ambient: 'ambient', signature: 'signature' });
+  });
   it('reports an omitted contract logo tone', () => expect(validateStarterTheme({ ...starterTheme, appearance: { ...starterTheme.appearance!, logoTones: ['default'] } })).toContain('Missing logo tone inverse'));
   it('renders frozen contracts as well as the current 1.7 snapshot contract', () => {
     expect(themeCanRender(neutralFixture)).toBe(true);
