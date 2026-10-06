@@ -124,6 +124,9 @@ test('ENG-023 denies non-Owners and cross-origin credential writes', async ({ br
 test('Owner saves and reloads durable AI job routing', async ({ browser }) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.goto('/integrations')
+  const configured = await owner.page.request.post('/api/integrations', { headers: { origin, 'content-type': 'application/json' }, data: { action: 'configure', provider: 'openai', model: 'browser-routing-model', credential: 'synthetic-routing-credential', fallbackProvider: null, monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/routing', pricingAsOf: '2026-10-06T00:00:00.000Z' } })
+  expect(configured.status()).toBe(201)
+  await owner.page.reload()
   const row = owner.page.locator('[data-ai-job-route="summary"]')
   await expect(row).toContainText('Page summaries')
   const saved = owner.page.waitForResponse(response => response.url().endsWith('/api/integrations') && response.request().method() === 'POST')
