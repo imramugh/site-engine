@@ -422,7 +422,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
         ),
         font: [...document.fonts].some((face) => face.status === "loaded"),
         formError:
-          !document.querySelector("[data-inquiry-form]") ||
+          !requireFormError || !document.querySelector("[data-inquiry-form]") ||
           document.querySelectorAll('[data-inquiry-form] [aria-invalid="true"]')
             .length >= 4,
         optionalEmpty:
