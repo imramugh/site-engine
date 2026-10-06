@@ -10,8 +10,9 @@ configuration, or credentials.
   `list_block_types`, `list_templates`, `list_section_presets`,
   `list_appearance_options`, `get_block_library`, and `list_sections`.
 - Draft editing: named change sets; page creation and recipe creation; whole
-  block updates; block add, remove, and reorder; and item add, update, move,
-  and remove for contract-defined item lists.
+  block updates; block add, move, hide, copy, remove, and reorder; validated
+  page-field updates; and item add, update, move, and remove for
+  contract-defined item lists.
 - Scoped reads: redirects, site settings, installed themes, frozen page
   quality, leads, and applications, subject to their declared scopes and roles.
 
