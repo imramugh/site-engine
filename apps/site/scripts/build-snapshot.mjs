@@ -13,6 +13,7 @@ import { nginxRedirectInclude } from './redirect-artifact.mjs';
 
 const stable = (value) => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(',')}}` : JSON.stringify(value);
 const sha = (value) => createHash('sha256').update(value).digest('hex');
+const sharp = createRequire(new URL('../../cms/package.json', import.meta.url))('sharp');
 async function files(directory, root = directory) { const entries = await readdir(directory, { withFileTypes: true }); return (await Promise.all(entries.map(async entry => { if (entry.isSymbolicLink()) throw new Error('Artifact contains a symbolic link.'); return entry.isDirectory() ? files(join(directory, entry.name), root) : [[relative(root, join(directory, entry.name)), sha(await readFile(join(directory, entry.name)))]]; }))).flat(); }
 const safeFilename = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(value);
 function referencedMedia(snapshot) {
@@ -27,8 +28,8 @@ function referencedMedia(snapshot) {
     }
   };
   deriveRoutes(snapshot, snapshot.settings.homepageId).routes.forEach(({ page }) => collect(page.blocks.filter((block) => !block.hidden)));
-  const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
-  if (symbol) ids.add(symbol.id);
+  const logos = snapshot.settings.logos;
+  for (const logo of [logos?.primaryLight, logos?.primaryDark, logos?.fullLockupLight, logos?.fullLockupDark, logos?.symbolLight, logos?.symbolDark, snapshot.settings.logo]) if (logo) ids.add(logo.id);
   return ids;
 }
 async function copyReferencedMedia(snapshot, output) {
@@ -39,8 +40,6 @@ async function copyReferencedMedia(snapshot, output) {
   const destination = join(output, 'media'); await rm(destination, { recursive: true, force: true }); await mkdir(destination, { recursive: true });
   const copied = new Map();
   const referenced = snapshot.media.filter((item) => references.has(item.id));
-  const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
-  if (symbol) referenced.push(symbol);
   for (const id of references) if (!referenced.some(media => media.id === id)) throw new Error(`Referenced media is absent from snapshot: ${id}`);
   for (const media of referenced) {
     const selections = [{ filename: media.filename, sha256: media.sha256 }, ...Object.values(media.variants ?? {})];
@@ -197,9 +196,11 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
     await copyReferencedMedia(snapshot, staged);
     const symbol = snapshot.settings.logos?.symbolLight ?? snapshot.settings.logos?.primaryLight ?? snapshot.settings.logo;
     if (symbol) {
-      const prefix = normalizedBase === '/' ? '' : normalizedBase;
-      const href = `${prefix}/media/${symbol.filename}`;
-      await writeFile(join(staged, 'site.webmanifest'), JSON.stringify({ name: snapshot.settings.siteName, short_name: snapshot.settings.siteName, icons: [{ src: href, type: symbol.mimeType, sizes: `${symbol.width}x${symbol.height}` }] }));
+      const prefix = normalizedBase === '/' ? '' : normalizedBase.replace(/\/$/, '');
+      const source = join(staged, 'media', symbol.filename);
+      const icon = async (filename, size) => writeFile(join(staged, filename), await sharp(source).resize({ width: size, height: size, fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer());
+      await Promise.all([icon('apple-touch-icon.png', 180), icon('icon-192.png', 192), icon('icon-512.png', 512)]);
+      await writeFile(join(staged, 'site.webmanifest'), JSON.stringify({ name: snapshot.settings.siteName, short_name: snapshot.settings.siteName, icons: [{ src: `${prefix}/icon-192.png`, type: 'image/png', sizes: '192x192' }, { src: `${prefix}/icon-512.png`, type: 'image/png', sizes: '512x512' }] }));
     }
     await writeIndexNowVerificationFile({ output: staged });
     // This is consumed by the edge deployment adapter only after approval. It

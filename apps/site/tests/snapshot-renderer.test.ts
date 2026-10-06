@@ -499,9 +499,17 @@ describe('static snapshot renderer', () => {
       await writeFile(join(source, 'unreferenced-private.txt'), 'must never enter artifact');
       process.env.SITE_MEDIA_DIR = source;
       const snapshot = fixture('Immutable media');
+      snapshot.settings.contractVersion = '1.5.0';
       snapshot.media = await Promise.all(snapshot.media.map(async (media) => ({ ...media, sha256: createHash('sha256').update(await readFile(join(source, media.filename))).digest('hex') })));
       const variant = await readFile(join(source, 'sample-image-hero.avif'));
       snapshot.media[0]!.variants = { heroAvif: { filename: 'sample-image-hero.avif', width: 640, height: 360, mimeType: 'image/avif', sha256: createHash('sha256').update(variant).digest('hex') } };
+      const semanticLogos = await Promise.all(['primary-light.svg', 'primary-dark.svg', 'full-light.svg', 'full-dark.svg', 'symbol-light.svg', 'symbol-dark.svg'].map(async (filename, index) => {
+        const bytes = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M${index} 0h64v64H${index}z"/></svg>`);
+        await writeFile(join(source, filename), bytes);
+        return { id: `77777777-aaaa-4aaa-8aaa-aaaaaaaaaa${String(index).padStart(2, '0')}`, filename, alt: `Semantic logo ${index}`, decorative: false, width: 64, height: 64, mimeType: 'image/svg+xml' as const, sha256: createHash('sha256').update(bytes).digest('hex') };
+      }));
+      snapshot.media.push(...semanticLogos);
+      snapshot.settings.logos = { primaryLight: semanticLogos[0]!, primaryDark: semanticLogos[1]!, fullLockupLight: semanticLogos[2]!, fullLockupDark: semanticLogos[3]!, symbolLight: semanticLogos[4]!, symbolDark: semanticLogos[5]! };
       const visibleMediaNames = snapshot.media.map((media) => media.filename);
       const privateMediaID = '99999999-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
       snapshot.media.push({ id: privateMediaID, filename: 'unreachable.svg', alt: 'Not publicly reachable', decorative: false, width: 640, height: 360, mimeType: 'image/svg+xml', sha256: 'f'.repeat(64) });
@@ -515,6 +523,14 @@ describe('static snapshot renderer', () => {
       snapshot.settings.sections[0]!.pageIds.push(hiddenChild.id);
       const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'immutable-media.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
       expect((await readdir(join(built.output, 'media'))).sort()).toEqual([...visibleMediaNames, 'sample-image-hero.avif'].sort());
+      for (const logo of semanticLogos) expect(await readFile(join(built.output, 'media', logo.filename), 'utf8')).toBe(await readFile(join(source, logo.filename), 'utf8'));
+      const manifest = JSON.parse(await readFile(join(built.output, 'site.webmanifest'), 'utf8'));
+      expect(manifest.icons).toEqual([{ src: `${BASE_PATH}icon-192.png`, type: 'image/png', sizes: '192x192' }, { src: `${BASE_PATH}icon-512.png`, type: 'image/png', sizes: '512x512' }]);
+      for (const [filename, size] of [['apple-touch-icon.png', 180], ['icon-192.png', 192], ['icon-512.png', 512]] as const) expect(await sharp(await readFile(join(built.output, filename))).metadata()).toMatchObject({ format: 'png', width: size, height: size });
+      const html = await readFile(join(built.output, 'index.html'), 'utf8');
+      expect(html).toContain(`rel="icon" type="image/svg+xml" href="${BASE_PATH}media/symbol-light.svg"`);
+      expect(html).toContain(`rel="apple-touch-icon" sizes="180x180" href="${BASE_PATH}apple-touch-icon.png"`);
+      expect(html).toContain(`rel="manifest" href="${BASE_PATH}site.webmanifest"`);
       expect(await readFile(join(built.output, 'media/sample-image.svg'), 'utf8')).toContain('<svg');
       expect(await readFile(join(built.output, 'docs/guide/install/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
       expect(await readFile(join(built.output, 'docs/release-notes/index.html'), 'utf8')).toContain(`${BASE_PATH}media/sample-image.svg`);
