@@ -24,6 +24,35 @@ export function isRetryableSQLiteError(error: unknown): boolean {
   return /SQLITE_BUSY|database is locked|busy timeout/i.test(message)
 }
 
+// A route must only translate contention which occurred while resolving the
+// current session. Keeping this marker separate from generic writer failures
+// prevents an HTTP retry response from implying that an external side effect
+// (mail, AI, or notification delivery) was safe to repeat.
+const authenticationContention = new WeakSet<object>()
+
+export function markAuthenticationSQLiteContention(error: unknown): void {
+  if (isRetryableSQLiteError(error) && error && typeof error === 'object') authenticationContention.add(error)
+}
+
+export function isAuthenticationSQLiteContention(error: unknown): boolean {
+  return isRetryableSQLiteError(error) && Boolean(error && typeof error === 'object' && authenticationContention.has(error))
+}
+
+/** Convert only session-resolution SQLite contention at the route boundary. */
+export function sqliteAuthenticationBoundary<Args extends unknown[]>(handler: (...args: Args) => Promise<Response>): (...args: Args) => Promise<Response> {
+  return async (...args) => {
+    try {
+      return await handler(...args)
+    } catch (error) {
+      if (!isAuthenticationSQLiteContention(error)) throw error
+      return Response.json({ error: 'Authentication is temporarily unavailable. Please retry.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '1' },
+      })
+    }
+  }
+}
+
 export const sqliteBackpressureMessage = 'Saving is temporarily busy. Please retry.'
 
 /** Return a stable retry response for a SQLite writer timeout without exposing driver details. */

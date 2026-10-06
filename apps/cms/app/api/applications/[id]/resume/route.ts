@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { cookieName, readCookie, serverSessionStrategy, SESSION_COOKIE } from '../../../../../src/identity'
@@ -6,7 +7,7 @@ import { verifyResumeLink } from '../../../../../src/resume-links'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }) {
   const payload = await getPayload({ config })
   const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   const roles = auth.user && (auth.user as { roles?: string[] }).roles; const { id } = await context.params; const token = readCookie(request.headers, cookieName(SESSION_COOKIE)); const signed = new URL(request.url).searchParams.get('token')
@@ -24,3 +25,5 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return new Response(null, { status: 404 })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

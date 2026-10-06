@@ -132,4 +132,20 @@ describe('ENG-008 discard, stale changes and rollback safety', () => {
     expect((await payload.findByID({ collection: 'pages', id: page.id, draft: true, overrideAccess: true })).title).toBe('Current editor changed again')
   })
 
+  it('does not let a demoted Owner reapply an owner-only site-settings change or write a resolution audit', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'demoted-settings-owner@example.test', name: 'Demoted settings owner', roles: ['owner'] }, overrideAccess: true })
+    const otherOwner = await payload.create({ collection: 'users', data: { email: 'current-settings-owner@example.test', name: 'Current settings owner', roles: ['owner'] }, overrideAccess: true })
+    const settings = await payload.create({ collection: 'site-settings', data: { key: 'active', siteName: 'Baseline settings', defaultLocale: 'en' }, draft: true, user: owner, overrideAccess: false })
+    await payload.update({ collection: 'site-settings', id: settings.id, data: { siteName: 'Captured owner-only settings' }, draft: true, user: owner, overrideAccess: false })
+    const set = await setFor(owner.id)
+    await payload.update({ collection: 'site-settings', id: settings.id, data: { siteName: 'Current owner settings' }, draft: true, user: otherOwner, overrideAccess: false })
+    await payload.update({ collection: 'users', id: owner.id, data: { roles: ['editor'] }, overrideAccess: true })
+    const demoted = await payload.findByID({ collection: 'users', id: owner.id, overrideAccess: true })
+    const view = await withPayloadTransaction(payload, req => changeSetConflicts({ payload, req, actor: demoted as never, id: set.id }))
+    const beforeAudit = await payload.count({ collection: 'audit-events', where: { event: { equals: 'editorial.change_set_conflicts_resolved' } }, overrideAccess: true })
+    await expect(withPayloadTransaction(payload, req => resolveChangeSetConflicts({ payload, req, actor: demoted as never, id: set.id, expectedRevision: view.revision, resolutions: view.conflicts.map((conflict) => ({ collection: conflict.collection, id: conflict.id, currentHash: conflict.currentHash, choice: 'reapply-proposed' as const })) }))).rejects.toThrow()
+    expect((await payload.findByID({ collection: 'site-settings', id: settings.id, draft: true, overrideAccess: true })).siteName).toBe('Current owner settings')
+    expect((await payload.count({ collection: 'audit-events', where: { event: { equals: 'editorial.change_set_conflicts_resolved' } }, overrideAccess: true })).totalDocs).toBe(beforeAudit.totalDocs)
+  })
+
 })

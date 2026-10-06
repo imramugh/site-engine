@@ -1,7 +1,8 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { withPayloadTransaction } from '../../../src/auth-transaction'
-import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
+import { isAuthenticationSQLiteContention, sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { hasRole } from '../../../src/access'
 import { buildContentTree, canonicalContentPath, type ContentTreeNode, type ContentTreePage, type ContentTreeSection } from '../../../src/content-tree'
 import { serverSessionStrategy } from '../../../src/identity'
@@ -126,15 +127,15 @@ function cleanCrawlerPolicy(value: unknown) {
   return { searchEngines: policy.searchEngines as boolean, aiSearchAndAnswers: policy.aiSearchAndAnswers as boolean, aiModelTraining: policy.aiModelTraining as boolean }
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   try {
     const payload = await getPayload({ config }); const actor = (await serverSessionStrategy.authenticate({ headers: request.headers, payload })).user as Actor | null
     if (!hasRole(actor as never, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
     return Response.json(await context(payload, actor!), { headers: noStore })
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'Unable to load Site.' }, { status: 400, headers: noStore }) }
+  } catch (error) { if (isAuthenticationSQLiteContention(error)) throw error; return Response.json({ error: error instanceof Error ? error.message : 'Unable to load Site.' }, { status: 400, headers: noStore }) }
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const payload = await getPayload({ config }); const actor = (await serverSessionStrategy.authenticate({ headers: request.headers, payload })).user as Actor | null
@@ -208,3 +209,6 @@ export async function POST(request: Request) {
     return Response.json(await context(payload, actor!), { headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Site update failed.' }, { status: 400, headers: noStore }) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

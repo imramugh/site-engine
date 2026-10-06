@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -11,7 +12,7 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 const sameOrigin = (request: Request) => { const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL; const origin = request.headers.get('origin'); return Boolean(configured && origin && origin === new URL(configured).origin) }
 async function actor(request: Request) { const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); return { payload, user: auth.user as { id: string; roles?: string[]; disabled?: boolean; name?: string; email?: string } | null } }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   try {
     const { payload, user } = await actor(request); if (!hasRole(user as never, [...roles])) return json({ error: 'Staff access required.' }, 403)
     const owner = hasRole(user as never, ['owner']); const grants = await listAssistantGrants(owner ? undefined : user!.id)
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
   } catch (error) { return json({ error: error instanceof Error ? error.message : 'Connected assistants could not be loaded.' }, 503) }
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return json({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await actor(request); if (!hasRole(user as never, [...roles])) return json({ error: 'Staff access required.' }, 403)
@@ -35,3 +36,6 @@ export async function POST(request: Request) {
     return json({ revoked: true })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'private, no-store' }) ?? json({ error: error instanceof Error ? error.message : 'Connected assistant could not be revoked.' }, 400) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

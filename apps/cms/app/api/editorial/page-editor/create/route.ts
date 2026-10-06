@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { createPageDraft } from '../../../../../src/page-creator'
@@ -42,7 +43,7 @@ async function boundedBody(request: Request): Promise<unknown> {
   }
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request))
     return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
@@ -68,3 +69,5 @@ export async function POST(request: Request) {
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

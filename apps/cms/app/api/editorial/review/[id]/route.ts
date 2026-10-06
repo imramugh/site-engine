@@ -1,13 +1,15 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { freshStaff, hasRole } from '../../../../../src/access'
 import { serverSessionStrategy } from '../../../../../src/identity'
+import { isAuthenticationSQLiteContention } from '../../../../../src/sqlite'
 import { loadReviewModeData } from '../../../../../src/review-mode'
 
 export const dynamic = 'force-dynamic'
 const privateHeaders = { 'Cache-Control': 'private, no-store' }
 
-export async function GET(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -22,8 +24,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
     return Response.json({ review, fresh }, { headers: privateHeaders })
   } catch (error) {
+    if (isAuthenticationSQLiteContention(error)) throw error
     const text = error instanceof Error ? error.message : 'Unable to load this review.'
     const status = /no longer current|ready comparison/i.test(text) ? 409 : /not found/i.test(text) ? 404 : 400
     return Response.json({ error: text }, { status, headers: privateHeaders })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)

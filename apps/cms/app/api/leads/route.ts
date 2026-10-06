@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload, type Payload } from 'payload'
 import config from '../../../payload.config'
 import { hasRole } from '../../../src/access'
@@ -73,7 +74,7 @@ async function pipelineFor(payload: Payload, filters: LeadFilters) {
   return Object.fromEntries(entries)
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function GETHandler(request: Request): Promise<Response> {
   const { payload, user } = await staff(request)
   if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
   const url = new URL(request.url)
@@ -94,7 +95,7 @@ export async function GET(request: Request): Promise<Response> {
   return Response.json({ leads: result.docs.map((lead) => view(lead as unknown as Record<string, unknown>)), pipeline, assignees, sourcePages, spamTotalDocs: spamCount.totalDocs, canDeleteSpam: hasRole(user, ['owner']), page: result.page, totalPages: result.totalPages, totalDocs: result.totalDocs, hasNextPage: result.hasNextPage, hasPrevPage: result.hasPrevPage }, { headers: noStore })
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const { payload, user } = await staff(request)
   if (!user) return Response.json({ error: 'Authentication required.' }, { status: 401, headers: noStore })
@@ -110,3 +111,6 @@ export async function POST(request: Request): Promise<Response> {
   if ('suppressed' in result) return Response.json({ error: 'Manual leads cannot use spam fields.' }, { status: 400, headers: noStore })
   return Response.json({ lead: view(result.inquiry as unknown as Record<string, unknown>) }, { status: 201, headers: noStore })
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

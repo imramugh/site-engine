@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { executeDirectEdit, type DirectEditInput } from '../../../../src/direct-edit'
@@ -40,7 +41,7 @@ async function body(request: Request): Promise<unknown> {
   try { return JSON.parse(new TextDecoder().decode(bytes)) } catch { throw new Error('INVALID_BODY') }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const edit = input(await body(request))
@@ -59,3 +60,5 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

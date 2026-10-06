@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { freshStaff, hasRole } from '../../../../src/access'
@@ -23,7 +24,7 @@ async function boundedJSON(request: Request) {
   return value as { action?: unknown; stage?: unknown; notes?: unknown; nextAction?: unknown; nextActionDueAt?: unknown; assignee?: unknown }
 }
 
-export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function PATCHHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -72,7 +73,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function DELETEHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const payload = await getPayload({ config })
   const authenticated = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
@@ -89,3 +90,6 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     return Response.json({ error: 'Spam record could not be deleted.' }, { status: 422, headers: noStore })
   }
 }
+
+export const PATCH = sqliteAuthenticationBoundary(PATCHHandler)
+export const DELETE = sqliteAuthenticationBoundary(DELETEHandler)

@@ -10,7 +10,7 @@ import { runReviewQuality } from '../../../../src/review-quality'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
 import { freshStaff } from '../../../../src/access'
 import { routeForReviewPreview } from '../../../../src/review-mode'
-import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
+import { isAuthenticationSQLiteContention, sqliteAuthenticationBoundary, sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
 
@@ -65,7 +65,7 @@ const sameKeys = (left: readonly string[], right: readonly string[]) => JSON.str
 
 /** Server-owned lifecycle API. Collection REST updates are denied so clients
  * cannot forge state, actor, baseline, or review timestamps. */
-export async function POST(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+async function POSTHandler(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403 })
   try {
     const payload = await getPayload({ config })
@@ -75,6 +75,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const { action } = await context.params
     const requestBody = body as { id?: string; name?: string; target?: string; removeNavigationReference?: boolean; proof?: unknown; scheduledFor?: unknown; expectedRevision?: unknown; resolutions?: unknown }
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
+    if (action === 'approve' && (!(authenticated.user as { roles?: string[] }).roles?.some((role) => role === 'owner' || role === 'approver') || !(await freshStaff(['owner', 'approver'])({ req: { payload, user: authenticated.user, headers: request.headers } as never })))) return Response.json({ error: 'Fresh reviewer authentication is required before approval.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
     const initialBaseline = action === 'approve' ? await loadInitialPreviewBaseline() : undefined
     const result = await withPayloadTransaction(payload, async (req) => {
       req.user = authenticated.user
@@ -147,7 +148,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
   }
 }
 
-export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+async function GETHandler(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   const { action } = await context.params
   if (!['list', 'preview-route', 'conflicts'].includes(action)) return Response.json({ error: 'Unknown editorial resource.' }, { status: 404 })
   try {
@@ -184,7 +185,11 @@ export async function GET(request: Request, context: { params: Promise<{ action:
       }
     })
     return Response.json({ sets, actor: { id: actor.id, roles: actor.roles ?? [] } }, { headers: { 'Cache-Control': 'no-store' } })
-  } catch {
+  } catch (error) {
+    if (isAuthenticationSQLiteContention(error)) throw error
     return Response.json({ error: 'Unable to load change sets.' }, { status: 403 })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)
+export const GET = sqliteAuthenticationBoundary(GETHandler)

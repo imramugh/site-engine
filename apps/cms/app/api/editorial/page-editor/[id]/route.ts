@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import {
@@ -53,7 +54,7 @@ async function boundedBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-export async function GET(
+async function GETHandler(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -82,7 +83,7 @@ export async function GET(
   }
 }
 
-export async function POST(
+async function POSTHandler(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -164,3 +165,6 @@ export async function POST(
     return Response.json({ error: message }, { status, headers: noStore })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

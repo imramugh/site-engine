@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { withPayloadTransaction } from '../../../../src/auth-transaction'
@@ -9,7 +10,7 @@ import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
 function sameOrigin(request: Request) { const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL; const origin = request.headers.get('origin'); return Boolean(configured && origin === new URL(configured).origin) }
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const body = await request.json() as { id?: string; includedChangeKeys?: string[] }
@@ -30,3 +31,5 @@ export async function POST(request: Request) {
     return Response.json({ job }, { headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Unable to prepare review preview.' }, { status: 400, headers: noStore }) }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { hasRole } from '../../../../../src/access'
@@ -7,7 +8,7 @@ import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../
 
 export const dynamic = 'force-dynamic'
 const noStore = { 'Cache-Control': 'no-store' }
-export async function GET(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
+async function GETHandler(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const { target, id } = await context.params; if (target !== 'lead' && target !== 'application') return Response.json({ error: 'Unknown mail target.' }, { status: 404, headers: noStore })
   const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); const user = auth.user as { id: string; roles?: string[] } | null
   if (!user || !hasRole(user as never, target === 'lead' ? ['owner', 'sales'] : ['owner', 'hiring'])) return Response.json({ error: 'Authentication required.' }, { status: 403, headers: noStore })
@@ -29,7 +30,7 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   const draft = prepared.docs[0] as { id: string; sender: string; recipient: string; subject: string; body: string; threadID?: string } | undefined
   return Response.json({ senders: verified ? [{ address, label: String(mailbox.name) }] : [], threads, preparedDraft: draft ? { id: draft.id, sender: draft.sender, recipient: draft.recipient, subject: draft.subject, body: draft.body, threadID: draft.threadID } : null, canAuthorize: user.roles?.includes('owner') === true }, { headers: noStore })
 }
-export async function POST(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
+async function POSTHandler(request: Request, context: { params: Promise<{ target: string; id: string }> }) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
   if (!configured || request.headers.get('origin') !== new URL(configured).origin) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const { target, id } = await context.params
@@ -52,3 +53,6 @@ export async function POST(request: Request, context: { params: Promise<{ target
     throw new Error('invalid_reply')
   } catch (error) { const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore); if (backpressure) return backpressure; const code = error instanceof Error ? error.message : ''; return Response.json({ error: code === 'owner_authorization_required' ? 'A freshly authenticated Owner must confirm this exact reply.' : code === 'authorization_not_usable' ? 'This confirmation is expired, changed, cancelled, or already used.' : 'The reply could not be processed.' }, { status: code === 'authorization_not_usable' ? 409 : 422, headers: noStore }) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import { createHash } from 'node:crypto'
 import config from '../../../../payload.config'
@@ -36,7 +37,7 @@ function stable(value: unknown): string {
   return JSON.stringify(value)
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POSTHandler(request: Request): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403 })
   try {
     const body = await boundedJSON(request) as { pageId?: unknown; changeSetId?: unknown; expectedRevision?: unknown; requestKey?: unknown; blocks?: unknown; blockTypes?: unknown }
@@ -80,3 +81,5 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: message }, { status: message === 'Recipe request is too large.' ? 413 : 400, headers: { 'Cache-Control': 'no-store' } })
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

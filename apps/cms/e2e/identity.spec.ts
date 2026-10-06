@@ -101,6 +101,43 @@ test('an invited Google identity creates an owner session and loads admin', asyn
   await expect(page.getByLabel('AI jobs')).not.toContainText('Synthetic browser prompt')
 })
 
+test('ENG-008 makes an editor select an explicit stale-draft resolution in the browser', async ({ browser, page }) => {
+  test.setTimeout(90_000)
+  await signIn(page, 'editor')
+  const created = await page.evaluate(async () => {
+    const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `Conflict ${crypto.randomUUID()}`, summary: 'A browser fixture for an explicit stale draft conflict decision.', slug: `conflict-${crypto.randomUUID()}`, allowedTemplates: ['standard'] }) })
+    const sectionBody = await section.json() as { doc: { id: string } }
+    const pageResponse = await fetch('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Conflict baseline', summary: 'The baseline summary is changed by a second session.', slug: `conflict-page-${crypto.randomUUID()}`, sectionId: sectionBody.doc.id, template: 'standard', blocks: [] }) })
+    const pageBody = await pageResponse.json() as { doc: { id: string } }
+    await fetch(`/api/pages/${pageBody.doc.id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Editor proposed title' }) })
+    const sets = await (await fetch('/api/editorial/list')).json() as { sets: Array<{ id: string; changes?: Array<{ collection: string; id: string }> }> }
+    const set = sets.sets.find((item) => item.changes?.some((change) => change.collection === 'pages' && change.id === pageBody.doc.id))!
+    const submitted = await fetch('/api/editorial/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id }) })
+    if (!submitted.ok) throw new Error(await submitted.text())
+    return { pageID: pageBody.doc.id, changeSetID: set.id }
+  })
+  const other = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true })
+  const otherPage = await other.newPage()
+  await signInLocalOwner(otherPage, 'synthetic-content-owner-code-05', 'content-owner.synthetic@example.test')
+  expect(await otherPage.evaluate(async (id) => (await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Owner current title', summary: 'Owner current summary survives the editor reapplying its title.' }) })).status, created.pageID)).toBe(200)
+  await other.close()
+  await page.goto(`/admin/editorial?changeSet=${created.changeSetID}`)
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="stale"]')).toBeVisible()
+  const conflicts = page.locator('[data-editorial-conflicts]')
+  await expect(conflicts).toContainText('Original')
+  await expect(conflicts).toContainText('Proposed')
+  await expect(conflicts).toContainText('Current draft')
+  await conflicts.getByLabel('Reapply proposed fields').check()
+  await conflicts.getByRole('button', { name: 'Resolve draft conflicts' }).click()
+  await expect(page.getByRole('status')).toContainText('Conflicts resolved')
+  await page.getByRole('button', { name: 'Refresh' }).click()
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="open"]')).toBeVisible()
+  await page.getByRole('button', { name: 'Submit for review' }).click()
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="submitted"]')).toBeVisible()
+  const draft = await page.evaluate(async (id) => (await (await fetch(`/api/pages/${id}?draft=true`)).json()) as { doc: { title: string; summary: string } }, created.pageID)
+  expect(draft.doc).toMatchObject({ title: 'Editor proposed title', summary: 'Owner current summary survives the editor reapplying its title.' })
+})
+
 test('an editor can read only its own profile and anonymous REST stays denied', async ({ browser, page }) => {
   const anonymous = await browser.newContext()
   const anonymousResponse = await anonymous.request.get(`${cmsOrigin}/api/users`)

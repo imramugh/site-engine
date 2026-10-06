@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -16,7 +17,7 @@ async function actorFor(request: Request) {
   return { payload, actor }
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, actor } = await actorFor(request)
   if (!actor || !hasRole(actor, ['owner'])) return Response.json({ error: 'Owner access required.' }, { status: 403, headers: noStore })
   const [policy, jobs, tombstones] = await Promise.all([
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
   return Response.json({ policy, defaults: defaultRetentionPolicy, backupNotice: 'Deleted records are replayed from a minimal deletion ledger before a restored backup serves traffic. Immutable backups age out on their configured schedule.', failedJobs: jobs.docs.map(({ id, resourceType, resourceID, attempts, lastError, updatedAt }) => ({ id, resourceType, resourceID, attempts, lastError, updatedAt })), tombstones: tombstones.docs.map(({ resourceType, resourceID, deletedAt }) => ({ resourceType, resourceID, deletedAt })) }, { headers: noStore })
 }
 
-export async function PUT(request: Request) {
+async function PUTHandler(request: Request) {
   if (!originOK(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const { payload, actor } = await actorFor(request)
   if (!actor?.id || !(await freshStaff(['owner'])({ req: { payload, user: actor, headers: request.headers } as never }))) return Response.json({ error: 'Fresh Owner authentication is required.' }, { status: 403, headers: noStore })
@@ -48,7 +49,7 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function DELETE(request: Request) {
+async function DELETEHandler(request: Request) {
   if (!originOK(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   const { payload, actor } = await actorFor(request)
   if (!actor?.id || !(await freshStaff(['owner'])({ req: { payload, user: actor, headers: request.headers } as never }))) return Response.json({ error: 'Fresh Owner authentication is required.' }, { status: 403, headers: noStore })
@@ -63,3 +64,7 @@ export async function DELETE(request: Request) {
     return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: 'Retention deletion could not be completed.' }, { status: 400, headers: noStore })
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const PUT = sqliteAuthenticationBoundary(PUTHandler)
+export const DELETE = sqliteAuthenticationBoundary(DELETEHandler)

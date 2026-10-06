@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -21,8 +22,8 @@ async function boundedBody(request: Request): Promise<{ hidePhone: boolean }> {
   return value as { hidePhone: boolean }
 }
 async function setting(payload: Awaited<ReturnType<typeof getPayload>>) { const result = await payload.find({ collection: 'mcp-privacy-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, overrideAccess: true }); return result.docs[0] as { id: string; hidePhone?: boolean } | undefined }
-export async function GET(request: Request) { const { payload, user } = await actor(request); if (!hasRole(user as never, ['owner'])) return response({ error: 'Owner access required.' }, 403); return response({ hidePhone: (await setting(payload))?.hidePhone !== false }) }
-export async function PUT(request: Request) {
+async function GETHandler(request: Request) { const { payload, user } = await actor(request); if (!hasRole(user as never, ['owner'])) return response({ error: 'Owner access required.' }, 403); return response({ hidePhone: (await setting(payload))?.hidePhone !== false }) }
+async function PUTHandler(request: Request) {
   if (!sameOrigin(request)) return response({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await actor(request)
@@ -32,3 +33,6 @@ export async function PUT(request: Request) {
     return response(body)
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? response({ error: error instanceof RangeError ? 'MCP privacy request is too large.' : 'MCP privacy settings are invalid.' }, error instanceof RangeError ? 413 : 400) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const PUT = sqliteAuthenticationBoundary(PUTHandler)

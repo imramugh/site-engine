@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { changeLogFilters } from '../../../src/change-log-query'
@@ -28,7 +29,7 @@ function pageOf(value: string | null): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const payload = await getPayload({ config })
   const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload })
   const user = auth.user as { roles?: ('owner')[]; disabled?: boolean } | null
@@ -98,7 +99,7 @@ export async function GET(request: Request) {
   }, { headers: noStore })
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   const configured = process.env.PAYLOAD_PUBLIC_SERVER_URL
   if (!configured || request.headers.get('origin') !== new URL(configured).origin) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
@@ -113,3 +114,6 @@ export async function POST(request: Request) {
     return Response.json({ changeSet: { id: set.id, name: set.name, state: set.state }, reviewURL: '/editorial' }, { status: 201, headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Rollback preparation failed.' }, { status: 400, headers: noStore }) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

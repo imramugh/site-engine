@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -29,14 +30,14 @@ async function body(request: Request): Promise<Contact[] | undefined> {
   return parsed
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, user } = await actor(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
   const result = await payload.find({ collection: 'urgent-contacts', sort: 'name', limit: 20, depth: 0, overrideAccess: true })
   return privateJSON({ contacts: result.docs.map((item) => ({ id: item.id, name: item.name, email: item.email, mobile: item.mobile ?? '', enabled: item.enabled })) })
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return privateJSON({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await actor(request)
@@ -53,3 +54,6 @@ export async function POST(request: Request) {
     return privateJSON({ contacts })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? privateJSON({ error: error instanceof RangeError ? 'Urgent contacts request is too large.' : 'Urgent contacts could not be saved.' }, error instanceof RangeError ? 413 : 400) }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

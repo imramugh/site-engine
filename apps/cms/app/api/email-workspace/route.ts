@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -12,12 +13,12 @@ const sameOrigin = (request: Request) => { const origin = request.headers.get('o
 async function body(request: Request) { if (!request.body) throw new Error('invalid'); const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const chunk = await reader.read(); if (chunk.done) break; size += chunk.value.byteLength; if (size > MAX_BYTES) throw new Error('too_large'); chunks.push(chunk.value) } } finally { await reader.cancel().catch(() => undefined) } const parsed: unknown = JSON.parse(new TextDecoder().decode(Buffer.concat(chunks))); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid'); return parsed as Record<string, unknown> }
 async function owner(request: Request) { const payload = await getPayload({ config }); const auth = await serverSessionStrategy.authenticate({ headers: request.headers, payload }); return { payload, user: auth.user as { id: string; roles?: string[] } | null } }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, user } = await owner(request); if (!hasRole(user as never, ['owner'])) return json({ error: 'Owner access required.' }, 403)
   return json(await mailboxWorkspace(payload))
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return json({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await owner(request); if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return json({ error: 'Fresh Owner authentication is required.' }, 403)
@@ -38,3 +39,6 @@ export async function POST(request: Request) {
     return json({ error: error instanceof Error && /confirmation|request key|not configured|not been verified|must be tested|could not be delivered|unassign this mailbox sender/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
   }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

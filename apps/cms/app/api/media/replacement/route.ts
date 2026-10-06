@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
@@ -31,7 +32,7 @@ async function serializeReplacement<T>(assetID: string, operation: () => Promise
 
 const extensionFor = (mimeType: string) => ({ 'image/avif': 'avif', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[mimeType])
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return json({ error: 'CSRF origin check failed.' }, 403)
   const declared = Number(request.headers.get('content-length') ?? 0)
   if (declared > maxBytes + 16_384) return json({ error: 'Replacement image is too large.' }, 413)
@@ -77,3 +78,5 @@ export async function POST(request: Request) {
     return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? json({ error: 'Unable to replace this asset file.' }, 400)
   }
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)

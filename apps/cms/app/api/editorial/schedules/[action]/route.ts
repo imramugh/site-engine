@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
 import { withPayloadTransaction } from '../../../../../src/auth-transaction'
@@ -15,7 +16,7 @@ function sameOrigin(request: Request): boolean {
   return Boolean(configured && origin && origin === new URL(configured).origin)
 }
 
-export async function POST(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+async function POSTHandler(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   if (!sameOrigin(request)) return Response.json({ error: 'CSRF origin check failed.' }, { status: 403, headers: noStore })
   try {
     const body = await request.json() as { id?: unknown; scheduledFor?: unknown }
@@ -39,7 +40,7 @@ export async function POST(request: Request, context: { params: Promise<{ action
   }
 }
 
-export async function GET(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
+async function GETHandler(request: Request, context: { params: Promise<{ action: string }> }): Promise<Response> {
   const { action } = await context.params
   if (action !== 'list') return Response.json({ error: 'Unknown scheduled publication action.' }, { status: 404, headers: noStore })
   const payload = await getPayload({ config })
@@ -63,3 +64,6 @@ export async function GET(request: Request, context: { params: Promise<{ action:
     totalDocs: schedules.totalDocs,
   }, { headers: noStore })
 }
+
+export const POST = sqliteAuthenticationBoundary(POSTHandler)
+export const GET = sqliteAuthenticationBoundary(GETHandler)

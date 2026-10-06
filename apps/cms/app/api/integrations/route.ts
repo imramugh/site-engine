@@ -1,3 +1,4 @@
+import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
@@ -52,7 +53,7 @@ async function owner(request: Request) {
   return { payload, user: auth.user as { id?: string; roles?: string[] } | null }
 }
 
-export async function GET(request: Request) {
+async function GETHandler(request: Request) {
   const { payload, user } = await owner(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
   const google = configuredProvider('google')
@@ -87,7 +88,7 @@ export async function GET(request: Request) {
   })
 }
 
-export async function POST(request: Request) {
+async function POSTHandler(request: Request) {
   if (!sameOrigin(request)) return privateJSON({ error: 'CSRF origin check failed.' }, 403)
   try {
     const { payload, user } = await owner(request)
@@ -109,3 +110,6 @@ export async function POST(request: Request) {
     return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? failure() }
 }
+
+export const GET = sqliteAuthenticationBoundary(GETHandler)
+export const POST = sqliteAuthenticationBoundary(POSTHandler)
