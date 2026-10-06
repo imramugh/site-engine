@@ -154,7 +154,9 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   assert.ok(currentRichText)
   const editedQualityPage = await payload.update({ collection: 'pages', id: qualityPage.id, draft: true, data: { blocks: [{ ...currentRichText, body: '# Current draft heading. This synthetic banned phrase is a deterministic current warning.' }], lastReviewed: '2020-01-01T12:00:00.000Z' }, overrideAccess: true, context: { editorialInternal: true } }) as unknown as { lastReviewed?: string }
   expect(editedQualityPage.lastReviewed).toBe('2020-01-01T12:00:00.000Z')
+  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, overrideAccess: true }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   const editorSession = await sessionFor(editor.id); const qualityWriterSession = await sessionFor(qualityWriter.id); const approverSession = await sessionFor(approver.id); const ownerSession = await sessionFor(owner.id); const salesSession = await sessionFor(sales.id); const hiringSession = await sessionFor(hiring.id)
+  expect((await payload.findByID({ collection: 'pages', id: qualityPage.id, draft: true, depth: 0, user: approver, overrideAccess: false }) as unknown as { lastReviewed?: string }).lastReviewed).toBe('2020-01-01T12:00:00.000Z')
   tokens.set('editor-token', { clientId: 'editor-client', userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] })
   tokens.set('quality-writer-token', { clientId: 'quality-writer-client', userId: qualityWriter.id, sessionId: qualityWriterSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
   tokens.set('approver-token', { clientId: 'approver-client', userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:read'] })
