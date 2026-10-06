@@ -75,8 +75,8 @@ const graphUploadChunk = 320 * 1024;
 function graphUploadURL(value: unknown): string {
   if (typeof value !== 'string' || value.length > 4096) throw new Error('provider_malformed_response');
   let url: URL; try { url = new URL(value) } catch { throw new Error('provider_malformed_response') }
-  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.hostname !== 'outlook.office.com' || !/^\/api\/v2\.0\/[^/]+\/AttachmentSessions\//.test(url.pathname) || !url.search) throw new Error('provider_malformed_response');
-  return url.toString();
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.hostname !== 'outlook.office.com' || !url.pathname.includes('/AttachmentSessions(') || !url.search) throw new Error('provider_malformed_response');
+  return value;
 }
 async function graphAttachment(fetcher: Fetcher, token: string, messageID: string, attachment: VerifiedAttachment): Promise<void> {
   const endpoint = `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments`;
