@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import { z } from 'zod'
 import { AppearanceOptions, BlockSchemas, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
@@ -19,7 +19,7 @@ const knownMethods = new Set([
   'resources/list', 'resources/templates/list', 'resources/read',
   'prompts/list', 'prompts/get',
 ])
-const knownTools = new Set(['list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block'])
+const knownTools = new Set(['list_sections', 'list_redirects', 'get_page', 'search_pages', 'get_block_library', 'get_site_settings', 'list_installed_themes', 'get_page_quality', 'list_leads', 'get_lead', 'list_applications', 'get_application', 'create_change_set', 'get_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block', 'add_block', 'remove_block', 'reorder_blocks'])
 const protectedReadMethods = new Set(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'])
 const contentReadScope = 'mcp:content:read'
 const contentWriteScope = 'mcp:content:write'
@@ -126,7 +126,7 @@ export async function handleMcp(request: Request): Promise<Response> {
   if (!identity.active) return new Response(null, { status: 401, headers: { 'www-authenticate': challenge(origin.origin), 'cache-control': 'no-store' } })
   if (!rateLimit(`client:${identity.clientId}`) || !rateLimit(`user:${identity.userId}`)) return new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': '60' } })
   const tool = typeof body.params?.name === 'string' ? body.params.name : undefined
-  const required = body.method === 'tools/call' && ['list_leads', 'get_lead'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && ['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
+  const required = body.method === 'tools/call' && ['list_leads', 'get_lead'].includes(tool ?? '') ? leadsReadScope : body.method === 'tools/call' && ['list_applications', 'get_application'].includes(tool ?? '') ? careersReadScope : body.method === 'tools/call' && ['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block', 'add_block', 'remove_block', 'reorder_blocks'].includes(tool ?? '') ? contentWriteScope : body.method === 'tools/call' && tool === 'list_redirects' ? redirectsReadScope : body.method !== 'tools/list' && protectedReadMethods.has(body.method) ? contentReadScope : undefined
   if (required && !identity.scopes.includes(required)) return new Response(JSON.stringify({ error: 'insufficient_scope', required }), { status: 403, headers: { 'content-type': 'application/json', 'www-authenticate': `${challenge(origin.origin)}, error="insufficient_scope", scope="${required}"`, 'cache-control': 'no-store' } })
   if (body.method === 'tools/list' && !identity.scopes.some((scope) => [contentReadScope, leadsReadScope, careersReadScope].includes(scope))) return new Response(JSON.stringify({ error: 'insufficient_scope', required: 'mcp:content:read mcp:leads:read mcp:careers:read' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
   const payload = await getPayload({ config })
@@ -307,6 +307,48 @@ export async function handleMcp(request: Request): Promise<Response> {
     try { return pageWrite(undefined, changeSetId, expectedChangeSetRevision, { ...data, id: requestKey, blocks: recipeBlocks(data.template, blocks, [], (index, type) => deterministicRecipeBlockID(requestKey, index, type)) }) } catch (error) { return { isError: true, ...text({ error: error instanceof Error ? error.message : 'invalid_recipe' }) } }
   })
   server.registerTool('update_page', { title: 'Update page', description: `Update a draft page in an explicit open change set. ${toolLimits}`, inputSchema: { id: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), title: z.string().min(1).max(160).optional(), summary: z.string().min(24).max(300).optional(), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional() }, _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ id, changeSetId, expectedChangeSetRevision, ...data }) => pageWrite(id, changeSetId, expectedChangeSetRevision, data))
+  const structureError = (error: unknown) => error instanceof Error && ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'fixed_block', 'invalid_order', 'invalid_block'].includes(error.message) ? error.message.toLowerCase() : 'write_failed'
+  const editableStructure = (block: { type: string }) => blockCatalog.some((item) => item.type === block.type && item.insertable)
+  const blockSave = async (tool: string, pageId: string, changeSetId: string, expectedChangeSetRevision: number, expectedPageHash: string, mutate: (draft: ReturnType<typeof pageEditorProjection>, existingRecord: Record<string, unknown>) => { batch: Record<string, unknown>; diff: Record<string, unknown> }) => {
+    const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
+    const draft = pageEditorProjection(existing)
+    const { batch, diff } = mutate(draft, existing)
+    const result = await executePageEditorSave({ payload, actor: current as never, save: { pageID: pageId, changeSetID: changeSetId, expectedPageHash, expectedChangeSetRevision, draft }, audit: { user: identity.userId, actor: identity.userId, detail: { clientIdHash: auditClient(identity.clientId), tool, scopes: identity.scopes, result: 'draft_saved', batch, diff } } })
+    return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks: [{ name: 'contract-and-tree', status: 'passed' as const, errors: [] }] })
+  }
+  const blockWriteSchema = { pageId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedPageHash: z.string().regex(/^[a-f0-9]{64}$/) }
+  const addBlock = z.object({ type: z.enum(['hero', 'incidentBar', 'featureGrid', 'splitList', 'chipList', 'faq', 'callout', 'richText', 'contact']), appearance: recipeAppearance.optional() }).strict()
+  server.registerTool('add_block', { title: 'Add block', description: `Add one supported generated draft block at a position through an explicit revisioned change set. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, index: z.number().int().nonnegative().max(40), block: addBlock }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, index, block }) => {
+    if (!write) return denied(contentWriteScope)
+    try { return await blockSave('add_block', pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, (draft, existingRecord) => {
+      if (index > draft.blocks.length || draft.blocks.length >= 40) throw new Error('invalid_order')
+      const inserted = recipeBlocks(String(existingRecord.template), [block], draft.blocks, () => randomUUID())[0]!
+      draft.blocks.splice(index, 0, inserted)
+      return { batch: { pageId, changeSetId, index, blockId: inserted.id }, diff: { blocks: [{ id: inserted.id, before: null, after: inserted }] } }
+    }) } catch (error) { return { isError: true, ...text({ error: structureError(error) }) } }
+  })
+  server.registerTool('remove_block', { title: 'Remove block', description: `Remove one editable draft block through an explicit revisioned change set. Fixed and generated blocks cannot be removed. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, blockId: z.string().uuid() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, blockId }) => {
+    if (!write) return denied(contentWriteScope)
+    try { return await blockSave('remove_block', pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, (draft) => {
+      const index = draft.blocks.findIndex((block) => block.id === blockId)
+      if (index < 0) throw new Error('block_not_found')
+      const removed = draft.blocks[index]!
+      if (!editableStructure(removed)) throw new Error('fixed_block')
+      draft.blocks.splice(index, 1)
+      return { batch: { pageId, changeSetId, blockId }, diff: { blocks: [{ id: blockId, before: removed, after: null }] } }
+    }) } catch (error) { return { isError: true, ...text({ error: structureError(error) }) } }
+  })
+  server.registerTool('reorder_blocks', { title: 'Reorder blocks', description: `Reorder all editable draft blocks through an explicit revisioned change set. Fixed and generated blocks retain their position. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, blockIds: z.array(z.string().uuid()).min(1).max(40) }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, blockIds }) => {
+    if (!write) return denied(contentWriteScope)
+    try { return await blockSave('reorder_blocks', pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, (draft) => {
+      if (blockIds.length !== draft.blocks.length || new Set(blockIds).size !== blockIds.length) throw new Error('invalid_order')
+      const current = new Map(draft.blocks.map((block) => [block.id, block]))
+      if (blockIds.some((id) => !current.has(id)) || draft.blocks.some((block, index) => !editableStructure(block) && blockIds[index] !== block.id)) throw new Error('fixed_block')
+      const before = [...draft.blocks]
+      draft.blocks = blockIds.map((id) => current.get(id)!)
+      return { batch: { pageId, changeSetId, blockIds }, diff: { before: before.map((block) => block.id), after: blockIds } }
+    }) } catch (error) { return { isError: true, ...text({ error: structureError(error) }) } }
+  })
   server.registerTool('update_block', { title: 'Update block', description: `Replace one block in a draft page through an explicit revisioned change set. Returns draft checks only; this server cannot approve or publish. ${toolLimits}`, inputSchema: z.object({ pageId: z.string().uuid(), blockId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedPageHash: z.string().regex(/^[a-f0-9]{64}$/), block: z.unknown() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, blockId, changeSetId, expectedChangeSetRevision, expectedPageHash, block }) => {
     if (!write) return denied(contentWriteScope)
     try {

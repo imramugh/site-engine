@@ -147,11 +147,11 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
   await payload.create({ collection: 'site-settings', data: { siteName: 'MCP site', legalName: 'MCP Site Incorporated', defaultLocale: 'en-CA', homepageId: page.id, address: { streetAddress: '100 Example Road', addressLocality: 'Toronto', addressRegion: 'ON', postalCode: 'M5V 2T6', addressCountry: 'CA' }, linkedIn: 'https://www.linkedin.com/company/mcp-site', incident: { label: 'Incident in progress?', guidance: 'Use the published incident line.' }, seoDescription: 'Synthetic owner-only site metadata returned through the bounded MCP resource.' }, draft: true, user: owner, overrideAccess: false })
   const editorClient = await clientFor('editor-token'); const approverClient = await clientFor('approver-token'); const ownerClient = await clientFor('owner-token'); const ownerPersonalClient = await clientFor('owner-personal-token'); const salesClient = await clientFor('sales-token'); const hiringClient = await clientFor('hiring-token')
   try {
-    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'list_applications', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_sections', 'search_pages', 'submit_change_set', 'update_block', 'update_page'])
+    const editorTools = await editorClient.client.listTools(); expect(editorTools.tools.map((tool) => tool.name).sort()).toEqual(['add_block', 'create_change_set', 'create_page', 'create_page_from_recipe', 'get_application', 'get_block_library', 'get_change_set', 'get_lead', 'get_page', 'get_page_quality', 'get_site_settings', 'list_applications', 'list_installed_themes', 'list_leads', 'list_redirects', 'list_sections', 'remove_block', 'reorder_blocks', 'search_pages', 'submit_change_set', 'update_block', 'update_page'])
     expect(editorTools.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(['approve_change_set', 'publish']))
     for (const tool of editorTools.tools) {
       if (!['list_leads', 'get_lead', 'list_applications', 'get_application'].includes(tool.name)) expect(tool.description).toContain('cannot publish, approve, manage users, send email')
-      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
+      if (!['create_change_set', 'submit_change_set', 'create_page', 'create_page_from_recipe', 'update_page', 'update_block', 'add_block', 'remove_block', 'reorder_blocks'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -252,6 +252,34 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(nestedUnknownResult).toEqual({ error: 'write_failed' })
     const afterNestedUnknown = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
     expect(pageEditorProjection(afterNestedUnknown)).toEqual(beforeStale)
+    const structuralSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP structural blocks' } })) as { id: string; revision: number }
+    const beforeAdd = pageEditorProjection(afterNestedUnknown)
+    const addResult = structuredJson(await editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: structuralSet.revision, expectedPageHash: pageEditorHash(beforeAdd), index: 1, block: { type: 'callout' } } })) as { draft: { pageHash: string; changeSetRevision: number }; checks: Array<{ name: string; status: string }> }
+    expect(addResult).toMatchObject({ draft: { changeSetRevision: structuralSet.revision + 1 }, checks: [{ name: 'contract-and-tree', status: 'passed' }] })
+    const afterAddRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterAdd = pageEditorProjection(afterAddRecord)
+    const added = afterAdd.blocks.find((block) => block.type === 'callout')
+    assert.ok(added)
+    const setAfterAdd = await payload.findByID({ collection: 'change-sets', id: structuralSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    const invalidReorder = resultJson(await editorClient.client.callTool({ name: 'reorder_blocks', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), blockIds: [added.id, added.id] } }))
+    expect(invalidReorder).toEqual({ error: 'invalid_order' })
+    const afterInvalidReorder = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterInvalidReorder)).toEqual(afterAdd)
+    await expect(editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), index: 2, block: { type: 'media' } } })).resolves.toMatchObject({ isError: true })
+    const afterForbiddenAdd = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterForbiddenAdd)).toEqual(afterAdd)
+    const reorderResult = structuredJson(await editorClient.client.callTool({ name: 'reorder_blocks', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterAdd.revision, expectedPageHash: pageEditorHash(afterAdd), blockIds: [added.id, originalBlock.id] } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(reorderResult).toMatchObject({ draft: { changeSetRevision: setAfterAdd.revision + 1 }, checks: [{ status: 'passed' }] })
+    const afterReorderRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    const afterReorder = pageEditorProjection(afterReorderRecord)
+    expect(afterReorder.blocks.map((block) => block.id)).toEqual([added.id, originalBlock.id])
+    const setAfterReorder = await payload.findByID({ collection: 'change-sets', id: structuralSet.id, depth: 0, overrideAccess: true }) as { revision: number }
+    const removeResult = structuredJson(await editorClient.client.callTool({ name: 'remove_block', arguments: { pageId: page.id, changeSetId: structuralSet.id, expectedChangeSetRevision: setAfterReorder.revision, expectedPageHash: pageEditorHash(afterReorder), blockId: added.id } })) as { draft: { changeSetRevision: number }; checks: Array<{ status: string }> }
+    expect(removeResult).toMatchObject({ draft: { changeSetRevision: setAfterReorder.revision + 1 }, checks: [{ status: 'passed' }] })
+    const afterRemove = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+    expect(pageEditorProjection(afterRemove).blocks.map((block) => block.id)).toEqual([originalBlock.id])
+    const structuralAudit = await payload.find({ collection: 'audit-events', where: { event: { equals: 'mcp.tool_result' } }, overrideAccess: true, limit: 100 })
+    for (const tool of ['add_block', 'reorder_blocks', 'remove_block']) expect(structuralAudit.docs.find((event) => (event.detail as Record<string, unknown> | undefined)?.tool === tool)).toMatchObject({ detail: expect.objectContaining({ result: 'draft_saved', batch: expect.any(Object), diff: expect.any(Object) }) })
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
     const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [{ type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse' } }, { type: 'faq' }] }
     const recipePage = resultJson(await editorClient.client.callTool({ name: 'create_page_from_recipe', arguments: recipeArguments })) as { id: string; blocks: Array<{ id: string; type: string; appearance: Record<string, string> }> }
