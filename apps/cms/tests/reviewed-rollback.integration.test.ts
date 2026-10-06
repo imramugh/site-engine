@@ -57,6 +57,31 @@ async function currentPage(change: (before: any, after: any) => void) {
 }
 
 describe('ENG-010 reviewed rollback', () => {
+  it('reverses a historical release while retaining a later unrelated release', async () => {
+    const before = fixture(), after = structuredClone(before)
+    const second = { ...after.pages[0], id: randomUUID(), slug: `later-${randomUUID().slice(0, 8)}`, title: 'Later independent page' }
+    before.pages.push(structuredClone(second)); after.pages.push(second)
+    before.settings.sections[0].pageIds.push(second.id); after.settings.sections[0].pageIds.push(second.id)
+    after.pages[0].summary = 'Historical approved summary'
+    const later = structuredClone(after); later.pages[1].summary = 'Later independently approved summary'
+    await seed(later); await release(before, [])
+    const historical = await release(after, [capture(before.pages[0], after.pages[0])])
+    await release(later, [capture(after.pages[1], later.pages[1])])
+    const set: any = await rollback.prepareReviewedRollback(payload, owner, await auth(), String(historical.id))
+    const proposed = candidate(later, set)
+    expect(proposed.pages.find((page: any) => page.id === before.pages[0].id).summary).toBe(before.pages[0].summary)
+    expect(proposed.pages.find((page: any) => page.id === later.pages[1].id).summary).toBe(later.pages[1].summary)
+    expect(set.state).toBe('open')
+  })
+  it('refuses historical reversal when a later release changed the same content', async () => {
+    const before = fixture(), after = structuredClone(before); after.pages[0].summary = 'Historical target'
+    const later = structuredClone(after); later.pages[0].summary = 'Later approved content'
+    await seed(later); await release(before, [])
+    const historical = await release(after, [capture(before.pages[0], after.pages[0])])
+    await release(later, [capture(after.pages[0], later.pages[0])])
+    await expect(rollback.prepareReviewedRollback(payload, owner, await auth(), String(historical.id))).rejects.toThrow(/conflict/)
+    expect((await payload.findByID({ collection: 'pages', id: later.pages[0].id, draft: true, overrideAccess: true })).summary).toBe('Later approved content')
+  })
   it('reverses one selected approved change without changing another approved draft', async () => {
     const before = fixture(), after = structuredClone(before), second = { ...after.pages[0], id: randomUUID(), slug: `second-${randomUUID().slice(0, 8)}`, title: 'Second reviewed page' }
     before.pages.push(structuredClone(second)); after.pages.push(second); before.settings.sections[0].pageIds.push(second.id); after.settings.sections[0].pageIds.push(second.id)

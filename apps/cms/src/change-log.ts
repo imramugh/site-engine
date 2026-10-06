@@ -1,5 +1,5 @@
 import type { Payload, PayloadRequest } from 'payload'
-import { freshStaff, type Role } from './access'
+import { freshStaff, hasRole, type Role } from './access'
 import { withPayloadTransaction } from './auth-transaction'
 import { captureReviewedRollback } from './reviewed-rollback'
 import type { CapturedChange } from './editorial'
@@ -80,7 +80,6 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
   const bySet=new Map(sets.docs.map(set=>[String(set.id),set]))
   const releaseBySet=new Map<string,any>()
   for(const release of releases.docs){const outbox=record(release.outbox);const id=relationID(outbox.changeSet);if(id)releaseBySet.set(id,release)}
-  const latestSequence=Math.max(0,...releases.docs.map(release=>Number(release.sequence)))
   return events.map(item=>{
     const detail=record(item.detail),setID=relationID(detail.changeSet),set=setID?bySet.get(setID):undefined
     const actor=record(item.actor),event=String(item.event),view=presentation(event,{...detail,actor:relationID(item.actor)},typeof set?.name==='string'?set.name:undefined)
@@ -88,25 +87,27 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const diff=reviewedDiff(changes)
     const release=setID?releaseBySet.get(setID):undefined; let approved:Record<string,unknown>[]=[];let supportNote=''
     if(release&&set){try{approved=selectedChanges(set as unknown as Record<string,unknown>,record(release.outbox))}catch(error){supportNote=error instanceof Error?error.message:'Rollback is unavailable.'}}
-    const canRollback=Boolean(release&&Number(release.sequence)===latestSequence&&latestSequence>1&&!supportNote)
-    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:diff?`${changes.length} ${changes.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':supportNote||'A newer release exists or no earlier release is available.',changes:approved.map(change=>({key:rollbackKey(change),label:`${words(String(change.collection))} · ${String(record(change.after).title??record(change.before).title??change.id)}`}))}:null}
+    const canRollback=Boolean(release&&Number(release.sequence)>1&&!supportNote)
+    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:diff?`${changes.length} ${changes.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':supportNote||'No earlier release is available.',changes:approved.map(change=>({key:rollbackKey(change),label:`${words(String(change.collection))} · ${String(record(change.after).title??record(change.before).title??change.id)}`}))}:null}
   })
 }
 
 export async function prepareReviewedRollbackCore(payload:Payload,req:PayloadRequest,actor:Actor,releaseID:string,request:RollbackRequest={}){
+  if(!hasRole(actor,['owner','approver']))throw new Error('Owner or Approver access is required.')
   if(!req.transactionID)throw new Error('Rollback preparation must run inside a database transaction.')
   const latest=(await payload.find({collection:'published-releases',sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
-  if(!latest||String(latest.id)!==releaseID)throw new Error('Only the current release can be prepared for rollback.')
-  const outbox=record(latest.outbox),setID=relationID(outbox.changeSet)
+  const selected=latest&&String(latest.id)===releaseID?latest:await payload.findByID({collection:'published-releases',id:releaseID,depth:1,overrideAccess:true,req})
+  if(!latest||!selected)throw new Error('Choose an existing immutable release.')
+  const outbox=record(selected.outbox),setID=relationID(outbox.changeSet)
   const set=setID?await payload.findByID({collection:'change-sets',id:setID,depth:0,overrideAccess:true,req}):undefined
   const changes=selectedChanges(set as unknown as Record<string,unknown>,outbox,request)
-  const sequence=Number(latest.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
+  const sequence=Number(selected.sequence);const previous=(await payload.find({collection:'published-releases',where:{sequence:{less_than:sequence}},sort:'-sequence',limit:1,depth:1,overrideAccess:true,req})).docs[0]
   const currentSnapshot=record(latest.snapshot),previousSnapshot=record(previous?.snapshot)
   if(!previous||!currentSnapshot.manifest||!previousSnapshot.manifest)throw new Error('An earlier immutable release is required for rollback.')
   return captureReviewedRollback(payload,req,actor.id,request.mode==='change'?`Rollback change from release #${sequence}`:`Rollback release #${sequence}`,SiteSnapshotSchema.parse(currentSnapshot.manifest),changes as CapturedChange[],SiteSnapshotSchema.parse(previousSnapshot.manifest))
 }
 
 export async function prepareReviewedRollback(payload:Payload,actor:Actor,headers:Headers,releaseID:string,request:RollbackRequest={}){
-  if(!(await freshStaff(['owner'])({req:{payload,user:actor,headers} as never})))throw new Error('Fresh Owner authentication is required.')
+  if(!(await freshStaff(['owner','approver'])({req:{payload,user:actor,headers} as never})))throw new Error('Fresh Owner or Approver authentication is required.')
   return withPayloadTransaction(payload,async(req:PayloadRequest)=>{req.user=actor as never;req.headers=headers;return prepareReviewedRollbackCore(payload,req,actor,releaseID,request)})
 }

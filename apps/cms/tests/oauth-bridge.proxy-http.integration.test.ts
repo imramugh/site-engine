@@ -31,6 +31,7 @@ Object.assign(process.env, {
   OAUTH_BRIDGE_SECRET: bridgeSecret,
   AI_WORKER_TOKEN: aiWorkerToken,
   NOTIFICATION_WORKER_TOKEN: notificationWorkerToken,
+  PUBLISH_WORKER_TOKEN: 'synthetic-publish-worker-proxy-http-token',
 })
 const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
@@ -78,7 +79,7 @@ afterAll(async () => {
   }
   await payload?.destroy()
   rmSync(directory, { recursive: true, force: true })
-  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'AI_WORKER_TOKEN', 'NOTIFICATION_WORKER_TOKEN', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
+  for (const key of ['DATABASE_URI', 'PAYLOAD_SECRET', 'PAYLOAD_PUBLIC_SERVER_URL', 'OAUTH_BRIDGE_SECRET', 'AI_WORKER_TOKEN', 'NOTIFICATION_WORKER_TOKEN', 'PUBLISH_WORKER_TOKEN', 'SYNTHETIC_PROXY_SESSION_COOKIE']) delete process.env[key]
 })
 
 test('actual Next proxy exempts only the secret-authenticated OAuth bridge from Origin CSRF', async () => {
@@ -129,4 +130,16 @@ test('actual Next proxy admits only the exact authenticated notification worker 
   }
   for (const method of ['PUT', 'PATCH']) assert.equal((await fetch(`${origin}/api/internal/notification-worker/run`, { method })).status, 403)
   for (const path of ['/api/internal/notification-worker/other', '/api/internal/notification-worker/run/other']) assert.equal((await fetch(`${origin}${path}`, { method: 'POST' })).status, 403)
+}, 45_000)
+
+// Exercise the compiled middleware and route together: direct handler tests
+// cannot detect a missing CSRF exemption in the internal worker allowlist.
+test('actual Next proxy routes publish build logs to their bearer and lease boundary', async () => {
+  for (const token of [undefined, 'wrong-publish-worker-token', process.env.PUBLISH_WORKER_TOKEN]) {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    if (token) headers.set('authorization', `Bearer ${token}`)
+    const response = await fetch(`${origin}/api/internal/publish-jobs/log`, { method: 'POST', headers, body: '{}' })
+    assert.equal(response.status, token === process.env.PUBLISH_WORKER_TOKEN ? 400 : 401)
+    if (response.status === 400) assert.match((await response.json()).error, /Job ID and lease token are required/)
+  }
 }, 45_000)
