@@ -66,6 +66,7 @@ export function registerMcpAIDraftTools(input: { server: McpServer; payload: Pay
     if (!enabled) return error('role_access_required')
     try {
       const asset = await payload.findByID({ collection: 'assets', id, depth: 0, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
+      if (asset.deletedAt) return error('image_input_unavailable')
       const route = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: 'alt' } }, limit: 1, depth: 0, overrideAccess: true })
       const selected = route.docs[0] as unknown as { provider?: IntegrationProvider; model?: string; fallbackProvider?: IntegrationProvider | null } | undefined
       if (!selected?.provider || typeof selected.model !== 'string' || !selected.model.trim() || !providerCapabilities[selected.provider].imageInput) return error('image_input_unavailable')
