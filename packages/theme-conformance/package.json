@@ -16,7 +16,7 @@
     "@site-engine/contract": "workspace:^",
     "@site-engine/engine": "workspace:^",
     "@site-engine/theme-starter": "workspace:^",
-    "astro": "7.3.5",
+    "astro": "7.3.6",
     "axe-core": "4.13.0",
     "@playwright/test": "1.63.0"
   }

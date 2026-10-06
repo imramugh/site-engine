@@ -1,1 +1,1 @@
-{"name":"@site-engine/theme-conformance-renderer","private":true,"type":"module","dependencies":{"astro":"7.3.5","@site-engine/contract":"workspace:^","@site-engine/engine":"workspace:^","@site-engine/theme-starter":"workspace:^"}}
+{"name":"@site-engine/theme-conformance-renderer","private":true,"type":"module","dependencies":{"astro":"7.3.6","@site-engine/contract":"workspace:^","@site-engine/engine":"workspace:^","@site-engine/theme-starter":"workspace:^"}}
