@@ -68,7 +68,7 @@ test('ENG-018 renders the complete active-theme library and captures an ordered 
   expect(prepared.ok(), await prepared.text()).toBeTruthy()
   expect((await reviewer.request.post('/__e2e/direct-preview-worker')).ok()).toBeTruthy()
   const review = await reviewer.newPage(); await review.goto(`/review/${setID}`)
-  const rendered = review.frameLocator('iframe[title]').locator('[data-block], [data-block-type]')
+  const rendered = review.frameLocator('iframe[title="Page review workspace"]').frameLocator('iframe[title="Proposed page"]').locator('[data-block], [data-block-type]')
   await expect(rendered).toHaveCount(2)
   await expect(rendered.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-block') ?? node.getAttribute('data-block-type')))).resolves.toEqual(['faq', 'callout'])
   await reviewer.close()
