@@ -52,7 +52,10 @@ const retryable = () => ({ isError: true, ...text({ error: 'temporarily_unavaila
 const mutationFailure = (error: unknown, fallback: string, known: readonly string[] = []) => isRetryableSQLiteError(error)
   ? retryable()
   : { isError: true, ...text({ error: error instanceof Error && known.includes(error.message) ? error.message.toLowerCase() : fallback }) }
-const page = (value: Record<string, unknown>) => ({ id: value.id, title: value.title, slug: value.slug, summary: value.summary, template: value.template, blocks: Array.isArray(value.blocks) ? value.blocks : [], sectionId: typeof value.sectionId === 'string' ? value.sectionId : value.sectionId && typeof value.sectionId === 'object' && 'id' in value.sectionId ? (value.sectionId as { id: unknown }).id : undefined })
+const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' ? value.id : undefined
+const structuralPageHash = (record: Record<string, unknown>) => canonicalHash({ ...pageEditorProjection(record), sectionId: relationID(record.sectionId), parentId: relationID(record.parentId), template: record.template })
+/** This is the exact optimistic-concurrency hash required by structural tools. */
+const page = (value: Record<string, unknown>) => ({ id: value.id, title: value.title, slug: value.slug, summary: value.summary, template: value.template, blocks: Array.isArray(value.blocks) ? value.blocks : [], sectionId: relationID(value.sectionId), parentId: relationID(value.parentId) ?? null, pageHash: structuralPageHash(value) })
 const section = (value: Record<string, unknown>) => ({ id: value.id, name: value.name, slug: value.slug, summary: value.summary, allowedTemplates: value.allowedTemplates })
 const redirect = (value: Record<string, unknown>) => ({ id: value.id, from: value.from, to: value.to, status: value.status })
 const resource = (uri: URL, value: unknown) => ({ contents: [{ uri: uri.toString(), mimeType: 'application/json', text: JSON.stringify(value) }] })
@@ -172,7 +175,6 @@ export async function handleMcp(request: Request): Promise<Response> {
     if (!setting) return { status: 'not-configured' }
     return { siteName: setting.siteName, legalName: setting.legalName, homepageId: setting.homepageId, defaultLocale: setting.defaultLocale, organizationType: setting.organizationType, logo: setting.logo, logos: setting.logos, contactEmail: setting.contactEmail, contactPhone: setting.contactPhone, address: setting.address, linkedIn: setting.linkedIn, incident: setting.incident, navigation: setting.navigation, seoDescription: setting.seoDescription, searchEnabled: setting.searchEnabled, crawlerPolicy: setting.crawlerPolicy }
   }
-  const relationID = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' ? value.id : undefined
   /** Published releases only retain a relationship ID at depth 0. Resolve the
    * immutable snapshot through the caller-scoped collection read instead of
    * relying on populated relationship data. */
@@ -488,7 +490,6 @@ export async function handleMcp(request: Request): Promise<Response> {
     if (set.revision !== expectedChangeSetRevision) throw new Error('revision_conflict')
     req.headers.set('x-site-engine-change-set', changeSetId)
   }
-  const structuralPageHash = (record: Record<string, unknown>) => canonicalHash({ ...pageEditorProjection(record), sectionId: relationID(record.sectionId), parentId: relationID(record.parentId), template: record.template })
   const currentPage = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, pageId: string, expectedPageHash: string) => {
     const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
     if (structuralPageHash(existing) !== expectedPageHash) throw new Error('STALE_PAGE_EDIT')
