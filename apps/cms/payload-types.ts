@@ -81,6 +81,7 @@ export interface Config {
     'site-settings': SiteSetting;
     'style-guides': StyleGuide;
     'integration-configurations': IntegrationConfiguration;
+    'ai-job-defaults': AiJobDefault;
     'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
@@ -131,6 +132,7 @@ export interface Config {
     'site-settings': SiteSettingsSelect<false> | SiteSettingsSelect<true>;
     'style-guides': StyleGuidesSelect<false> | StyleGuidesSelect<true>;
     'integration-configurations': IntegrationConfigurationsSelect<false> | IntegrationConfigurationsSelect<true>;
+    'ai-job-defaults': AiJobDefaultsSelect<false> | AiJobDefaultsSelect<true>;
     'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
@@ -735,6 +737,18 @@ export interface IntegrationConfiguration {
   credentialFingerprint?: string | null;
   health: 'unknown' | 'connected' | 'unavailable' | 'rejected' | 'revoked';
   testedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "ai-job-defaults".
+ */
+export interface AiJobDefault {
+  id: string;
+  jobType: 'summary' | 'meta' | 'faq' | 'alt' | 'lead-reply';
+  provider: 'openai' | 'anthropic' | 'google-gemini' | 'openrouter';
+  fallbackProvider?: ('openai' | 'anthropic' | 'google-gemini' | 'openrouter') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1610,6 +1624,10 @@ export interface PayloadLockedDocument {
         value: string | IntegrationConfiguration;
       } | null)
     | ({
+        relationTo: 'ai-job-defaults';
+        value: string | AiJobDefault;
+      } | null)
+    | ({
         relationTo: 'mcp-privacy-settings';
         value: string | McpPrivacySetting;
       } | null)
@@ -2169,6 +2187,17 @@ export interface IntegrationConfigurationsSelect<T extends boolean = true> {
   credentialFingerprint?: T;
   health?: T;
   testedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "ai-job-defaults_select".
+ */
+export interface AiJobDefaultsSelect<T extends boolean = true> {
+  jobType?: T;
+  provider?: T;
+  fallbackProvider?: T;
   updatedAt?: T;
   createdAt?: T;
 }
