@@ -48,19 +48,21 @@ describe('ENG-020 mail timeline route', () => {
     expect((await call('lead', 'not-a-uuid', owner)).status).toBe(404)
   })
 
-  it('returns the shared retryable authentication response when an aged session refresh is blocked', async () => {
+  it('keeps a verified aged session authorized when a writer defers its refresh', async () => {
     const owner = await session(['owner'])
+    const lead = await payload.create({ collection: 'inquiries', data: { email: 'refresh-lock-lead@example.test', message: 'A valid target proves the request remains authenticated.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: newOpaqueToken(), stage: 'new' }, overrideAccess: true })
     const ownerSession = (await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(owner) } }, limit: 1, overrideAccess: true })).docs[0]!
     await payload.update({ collection: 'auth-sessions', id: ownerSession.id, data: { lastSeenAt: new Date(Date.now() - 61_000).toISOString() }, overrideAccess: true })
     const external = createClient({ url: `file:${db}` })
     const lock = await external.transaction('write')
     try {
       await lock.execute({ sql: 'UPDATE auth_sessions SET updated_at = updated_at WHERE id = ?', args: [String(ownerSession.id)] })
-      const response = await call('lead', crypto.randomUUID(), owner)
-      expect(response.status).toBe(503)
-      expect(response.headers.get('Retry-After')).toBe('1')
-      expect(response.headers.get('Cache-Control')).toBe('no-store')
-      await expect(response.json()).resolves.toEqual({ error: 'Authentication is temporarily unavailable. Please retry.' })
+      const response = await call('lead', lead.id, owner)
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ messages: [], truncated: false })
+      // A real 404 after authentication proves the route did not convert the
+      // verified identity into an anonymous 403 while the refresh was deferred.
+      expect((await call('lead', crypto.randomUUID(), owner)).status).toBe(404)
     } finally { await lock.rollback(); external.close() }
   }, 15_000)
 })
