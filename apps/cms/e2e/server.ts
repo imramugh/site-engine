@@ -274,8 +274,9 @@ let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
 let firstEditableApplicationID: string | undefined
 const mcpBearer = 'synthetic-e2e-mcp-bearer'
-let mcpIdentity: { userId: string; sessionId: string; scopes: string[] } | undefined
+let mcpIdentity: { clientId: string; userId: string; sessionId: string; scopes: string[] } | undefined
 let mcpEditorID: string | undefined
+const mcpRoleIDs: Partial<Record<'owner' | 'editor' | 'hiring' | 'sales', string>> = {}
 
 function createCertificates(): void {
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', caKey, '-out', caCertificate, '-subj', '/CN=site-engine-e2e-ca', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' })
@@ -318,7 +319,7 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const input = JSON.parse(Buffer.concat(chunks).toString()) as { token?: string; resource?: string }
     if (request.headers['x-oauth-introspection-secret'] !== 'synthetic-e2e-mcp-secret' || input.token !== mcpBearer || input.resource !== `${cmsOrigin}/mcp` || !mcpIdentity) return json(response, { active: false })
-    return json(response, { active: true, clientId: 'synthetic-e2e-mcp-client', resource: input.resource, scopes: mcpIdentity.scopes, userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+    return json(response, { active: true, clientId: mcpIdentity.clientId, resource: input.resource, scopes: mcpIdentity.scopes, userId: mcpIdentity.userId, sessionId: mcpIdentity.sessionId, expiresAt: Math.floor(Date.now() / 1000) + 300 })
   }
   if (url.pathname === '/.well-known/openid-configuration') {
     return json(response, { issuer: issuerOrigin, authorization_endpoint: `${issuerOrigin}/authorize`, token_endpoint: `${issuerOrigin}/token`, jwks_uri: `${issuerOrigin}/jwks`, response_types_supported: ['code'], grant_types_supported: ['authorization_code'], id_token_signing_alg_values_supported: ['RS256'] })
@@ -375,6 +376,7 @@ async function seed(): Promise<void> {
   payload = await getPayload({ config })
   const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: editorRecoveryCodes.map(recoveryHash) }, overrideAccess: true })
   mcpEditorID = String(editor.id)
+  mcpRoleIDs.editor = mcpEditorID
   const onPageEditor = await payload.create({ collection: 'users', data: { email: 'on-page-editor.synthetic@example.test', name: 'Synthetic On-page Editor', roles: ['editor'] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
@@ -383,6 +385,8 @@ async function seed(): Promise<void> {
   const onPageReviewer = await payload.create({ collection: 'users', data: { email: 'on-page-reviewer.synthetic@example.test', name: 'Synthetic On-page Reviewer', roles: ['owner'] }, overrideAccess: true })
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
+  const mcpCatalogOwner = await payload.create({ collection: 'users', data: { email: 'mcp-catalog-owner.synthetic@example.test', name: 'Synthetic MCP Catalog Owner', roles: ['owner'] }, overrideAccess: true })
+  mcpRoleIDs.owner = String(mcpCatalogOwner.id)
   const pageEditorOwner = await payload.create({ collection: 'users', data: { email: 'page-editor-owner.synthetic@example.test', name: 'Synthetic Page Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const metadataEditorOwner = await payload.create({ collection: 'users', data: { email: 'metadata-editor-owner.synthetic@example.test', name: 'Synthetic Metadata Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const pageCreatorOwner = await payload.create({ collection: 'users', data: { email: 'page-creator-owner.synthetic@example.test', name: 'Synthetic Page Creator Owner', roles: ['owner'] }, overrideAccess: true })
@@ -413,6 +417,7 @@ async function seed(): Promise<void> {
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
   for (const [role, identity] of Object.entries({ hiring: identities.hiring, sales: identities.sales }) as Array<['hiring' | 'sales', Identity]>) {
     applicationUsers[role] = await payload.create({ collection: 'users', data: { email: identity.email, name: identity.name, roles: [role], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identity.subject }, overrideAccess: true })
+    mcpRoleIDs[role] = String(applicationUsers[role].id)
   }
   const sessionNow = new Date().toISOString(); const sessionExpiry = new Date(Date.now() + 10 * 60_000).toISOString()
   for (const [role, user] of Object.entries({ owner: applicationOwner, hiring: applicationUsers.hiring, editor, sales: applicationUsers.sales }) as Array<[keyof typeof applicationSessionTokens, { id: string }]>) {
@@ -628,12 +633,19 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/mcp-identity') {
     void (async () => {
       const query = new URL(request.url ?? '/', cmsOrigin).searchParams
-      const contentWriter = query.get('content') === 'write' && query.get('role') === 'editor'
-      const userID = contentWriter ? mcpEditorID : leadOwnerID
-      const scopes = contentWriter ? ['mcp:content:read', 'mcp:content:write'] : ['mcp:leads:read', 'mcp:leads:reply']
+      const role = query.get('role')
+      const scopedRole = role === 'owner' || role === 'editor' || role === 'hiring' || role === 'sales' ? role : undefined
+      const userID = scopedRole ? mcpRoleIDs[scopedRole] : leadOwnerID
+      const scopes = [
+        ...(query.get('content') === 'read' ? ['mcp:content:read'] : query.get('content') === 'write' ? ['mcp:content:read', 'mcp:content:write'] : []),
+        ...(query.get('leads') === 'read' ? ['mcp:leads:read'] : query.get('leads') === 'write' ? ['mcp:leads:read', 'mcp:leads:write'] : []),
+        ...(query.get('careers') === 'read' ? ['mcp:careers:read'] : query.get('careers') === 'write' ? ['mcp:careers:read', 'mcp:careers:write'] : []),
+      ]
+      if (!scopedRole) scopes.push('mcp:leads:read', 'mcp:leads:reply')
+      if (!userID || !scopes.length) { response.writeHead(400); response.end(); return }
       const now = new Date().toISOString()
-      const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: userID!, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
-      mcpIdentity = { userId: userID!, sessionId: String(session.id), scopes }
+      const session = await payload.create({ collection: 'auth-sessions', data: { tokenHash: `mcp-origin-${randomUUID()}`, user: userID, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 300_000).toISOString() }, overrideAccess: true })
+      mcpIdentity = { clientId: `e2e-mcp-${randomUUID()}`, userId: userID, sessionId: String(session.id), scopes }
       json(response, { bearer: mcpBearer })
     })().catch(() => { response.writeHead(500); response.end() }); return
   }
