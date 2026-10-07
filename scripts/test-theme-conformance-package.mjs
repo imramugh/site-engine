@@ -73,10 +73,17 @@ try {
   await cp(await realpath(join(consumer, "node_modules/@site-engine/theme-starter")), nested, { recursive: true });
   const nestedRenderer = join(nested, "src/components/BlockRenderer.astro");
   const nestedSource = await readFile(nestedRenderer, "utf8");
-  const wrapped = nestedSource
-    .replace('<section class={classes} id={block.anchorId} data-block={block.type} data-block-id={block.id} data-background={block.appearance.background} data-logo-tone={block.appearance.logoTone} data-motion-intent={block.appearance.motionIntent} data-motion-effect={effect}>', '<div data-logo-tone={block.appearance.logoTone}><section class={classes} id={block.anchorId} data-block={block.type} data-block-id={block.id} data-background={block.appearance.background} data-motion-intent={block.appearance.motionIntent} data-motion-effect={effect}>')
-    .replace('</div></section>}', '</div></section></div>}');
-  if (wrapped === nestedSource) throw new Error("Nested logo surface fixture did not modify the starter renderer.");
+  // Match the outer renderer section structurally. Attribute additions in the
+  // starter must not turn this negative fixture into malformed Astro.
+  const outerSection = /(\{!block\.hidden && )(<section\b[^>]*?)\sdata-logo-tone=\{block\.appearance\.logoTone\}([^>]*>)/;
+  const openingMatches = nestedSource.match(new RegExp(outerSection.source, 'g')) ?? [];
+  if (openingMatches.length !== 1) throw new Error(`Expected one logo-tone outer section, found ${openingMatches.length}.`);
+  const withWrapper = nestedSource.replace(outerSection, '$1<div data-logo-tone={block.appearance.logoTone}>$2$3');
+  const closing = /<\/div><\/section>\}(?=\s*$)/;
+  const closingMatches = withWrapper.match(new RegExp(closing.source, 'g')) ?? [];
+  if (closingMatches.length !== 1) throw new Error(`Expected one outer section closing tag, found ${closingMatches.length}.`);
+  const wrapped = withWrapper.replace(closing, '</div></section></div>}');
+  if (wrapped === nestedSource || !wrapped.includes('<div data-logo-tone={block.appearance.logoTone}><section')) throw new Error("Nested logo surface fixture did not wrap the starter renderer.");
   await writeFile(nestedRenderer, wrapped);
   await execFile(process.execPath, [cli, nested, "--artifacts-dir", join(temp, "nested-logo-surface"), "--baseline-file", join(temp, "nested-logo-surface.json"), "--record-baselines"], { cwd: consumer });
   const filtered = join(temp, "filtered-logo-surface-theme");

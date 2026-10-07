@@ -275,21 +275,6 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
   await expect(editor.page.getByRole('status')).toContainText('Saved draft preview is ready.', { timeout: 120_000 })
   await expect(preview.getByRole('heading', { name: 'Preview keyboard heading' })).toBeVisible()
-  const inlineHeadingField = editor.page.locator('[data-page-editor-block]').first().getByLabel('Heading', { exact: true })
-  await inlineHeadingField.fill('Stale local preview text')
-  await editor.page.getByRole('button', { name: 'Check draft' }).click()
-  await expect(editor.page.locator('[data-page-editor-readiness]')).toContainText(/Draft is valid|Checks passed/)
-  await editor.page.route(`**/api/editorial/page-editor/${pageID}`, async (route) => {
-    if (route.request().method() === 'POST') await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This draft or change set changed. Reload before saving.' }) })
-    else await route.continue()
-  })
-  await editor.page.getByRole('button', { name: 'Save draft' }).click()
-  await expect(editor.page.locator('[data-page-editor-stale]')).toContainText('unsaved text is still available')
-  await expect(inlineHeadingField).toHaveValue('Stale local preview text')
-  editor.page.once('dialog', (dialog) => dialog.accept())
-  await editor.page.getByRole('button', { name: 'Reload and discard changes' }).click()
-  await expect(inlineHeadingField).toHaveValue('Preview keyboard heading')
-  await editor.page.unroute(`**/api/editorial/page-editor/${pageID}`)
   await editor.page.emulateMedia({ reducedMotion: 'reduce' })
   await renderedBlocks.first().click({ position: { x: 5, y: 5 } })
   await expect(
@@ -478,6 +463,36 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     fullPage: true,
   })
 
+  const staleHero = editor.page.locator('[data-page-editor-block]').first()
+  if (await staleHero.getAttribute('open') === null) await staleHero.locator('summary').click()
+  const inlineHeadingField = staleHero.getByLabel('Heading', { exact: true })
+  await expect(inlineHeadingField).toBeVisible()
+  await inlineHeadingField.fill('Stale local preview text')
+  await editor.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(editor.page.locator('[data-page-editor-readiness]')).toContainText(/Draft is valid|Checks passed/)
+  await editor.page.route(`**/api/editorial/page-editor/${pageID}`, async (route) => {
+    if (route.request().method() === 'POST') await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This draft or change set changed. Reload before saving.' }) })
+    else await route.continue()
+  })
+  await editor.page.getByRole('button', { name: 'Save draft' }).click()
+  await expect(editor.page.locator('[data-page-editor-stale]')).toContainText('unsaved text is still available')
+  await expect(inlineHeadingField).toHaveValue('Stale local preview text')
+  editor.page.once('dialog', (dialog) => dialog.accept())
+  await editor.page.getByRole('button', { name: 'Reload and discard changes' }).click()
+  await expect(inlineHeadingField).toHaveValue('Preview keyboard heading')
+  await editor.page.unroute(`**/api/editorial/page-editor/${pageID}`)
+  const requeuedPreview = editor.page.waitForResponse((response) =>
+    response.url().endsWith('/api/editorial/direct-edit/preview') &&
+    response.request().method() === 'POST' &&
+    response.status() === 200,
+  )
+  await editor.page.getByRole('button', { name: 'Prepare preview' }).click()
+  const reusedPreview = await requeuedPreview
+  const reusedJob = (await reusedPreview.json()) as { job?: { status?: string } }
+  if (reusedJob.job?.status !== 'completed')
+    expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
+  await expect(editor.page.getByRole('status')).toContainText('Saved draft preview is ready.', { timeout: 120_000 })
+  await expect(preview.getByRole('heading', { name: 'Preview keyboard heading' })).toBeVisible()
   await editor.page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(editor.page.getByRole('status')).toContainText(
     'Submitted for review.',
