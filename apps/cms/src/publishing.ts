@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
+import { checkSiteSnapshot } from '@site-engine/checks'
 import { hasRole } from './access'
 import { cookieName, hasFreshAuthentication, hashOpaqueToken, readCookie, sessionIsUsable, SESSION_COOKIE } from './identity'
 import { markStaleIfNeeded, publicAssetSnapshot, snapshot as capturedSnapshot, type CapturedCollection } from './editorial'
@@ -31,6 +32,8 @@ async function recordPublishFailure(payload: Payload, req: PayloadRequest, job: 
   const id = String(job.id)
   await payload.create({ collection: 'audit-events', data: { event: 'publish.failed', detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: idOf(job.snapshot), errorCode: cleanErrorCode(errorCode), buildLink: `/operations?publish=${id}` } }, overrideAccess: true, req })
   await enqueueNotification(payload, req, { kind: 'publish-or-integration-failed', idempotencyKey: `publish-failed:${id}`, sourceType: 'publish-job', sourceID: id, payload: { publishJob: id, errorCode: cleanErrorCode(errorCode) } })
+  const schedule = await payload.update({ collection: 'scheduled-publications', where: { and: [{ outbox: { equals: id } }, { state: { equals: 'enqueued' } }] }, data: { state: 'failed', dispatchReason: cleanErrorCode(errorCode) }, overrideAccess: true, req, context: { editorialInternal: true } })
+  if (schedule.docs[0]) await payload.create({ collection: 'audit-events', data: { event: 'editorial.scheduled_publication_failed', detail: { scheduledPublication: schedule.docs[0].id, publishJob: id, reason: cleanErrorCode(errorCode) } }, overrideAccess: true, req })
 }
 export async function recordPublishStage(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, stage: string, now = new Date()) {
   requireTransaction(req, 'Publish stage')
@@ -320,14 +323,39 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
   const excluded = changes.filter((change) => !includedChangeKeys.includes(`${change.collection}:${change.id}`))
   if (excluded.length) await payload.create({ collection: 'change-sets', data: { name: `${String(set.name)} — remaining changes`, actor: idOf(set.actor), state: 'open', revision: 0, changes: excluded }, overrideAccess: true, req, context: { editorialInternal: true } })
   const snapshotDoc = await payload.create({ collection: 'publish-snapshots', data: { contentHash, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, manifest: candidate, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: reviewer.id, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence }, overrideAccess: true, req, context: { editorialInternal: true } })
-  const scheduled = scheduledFor ? await payload.create({ collection: 'scheduled-publications', data: { idempotencyKey, snapshot: snapshotDoc.id, changeSet: id, scheduledFor, state: 'scheduled', proof: { ...(structuredClone((set.quality as { proof?: Record<string, unknown> } | undefined)?.proof ?? {})), idempotencyKey, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, previewContentHash, approvedBy: reviewer.id } }, overrideAccess: true, req, context: { editorialInternal: true } }) : undefined
+  const scheduled = scheduledFor ? await payload.create({ collection: 'scheduled-publications', data: { idempotencyKey, snapshot: snapshotDoc.id, changeSet: id, scheduledFor, state: 'scheduled', proof: { ...(structuredClone((set.quality as { proof?: Record<string, unknown> } | undefined)?.proof ?? {})), idempotencyKey, reviewRevision: expectedRevision, changeHash: expectedChangeHash, approvedIncludedChangeHash: changeSetHash(changes.filter((change) => includedChangeKeys.includes(`${change.collection}:${change.id}`))), includedChangeKeys, previewContentHash, approvedBy: reviewer.id } }, overrideAccess: true, req, context: { editorialInternal: true } }) : undefined
   const outbox = scheduled ? undefined : await payload.create({ collection: 'publish-outbox', data: { idempotencyKey, sequence: await nextOutboxSequence(payload, req), snapshot: snapshotDoc.id, changeSet: id, reviewRevision: expectedRevision, changeHash: expectedChangeHash, includedChangeKeys, status: 'pending', attempts: 0, correlationID: randomUUID() }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.update({ collection: 'change-sets', id, data: { state: 'approved', changes: changes.filter((change) => includedChangeKeys.includes(`${change.collection}:${change.id}`)), reviewedAt: new Date().toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } })
   await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', user: reviewer.id, actor: reviewer.id, detail: { changeSet: id, snapshot: snapshotDoc.id, outbox: outbox?.id, scheduledPublication: scheduled?.id, scheduledFor, includedChangeKeys } }, overrideAccess: true, req })
   return { snapshotID: snapshotDoc.id, outboxID: outbox?.id, scheduledPublicationID: scheduled?.id, idempotencyKey, scheduledFor }
 }
 
-type ScheduledPublication = { id: string; idempotencyKey: string; state?: string; scheduledFor?: string; snapshot?: unknown; outbox?: unknown; proof?: { includedChangeKeys?: unknown } }
+type ScheduledPublication = { id: string; idempotencyKey: string; state?: string; scheduledFor?: string; snapshot?: unknown; changeSet?: unknown; outbox?: unknown; proof?: Record<string, unknown> }
+
+async function scheduledExecutionReason(payload: Payload, req: PayloadRequest, schedule: ScheduledPublication): Promise<string | undefined> {
+  const snapshot = schedule.snapshot && typeof schedule.snapshot === 'object' ? schedule.snapshot as Record<string, unknown> : undefined
+  const snapshotID = idOf(snapshot)
+  const changeSetID = idOf(schedule.changeSet) ?? idOf(snapshot?.changeSet)
+  const proof = schedule.proof && typeof schedule.proof === 'object' && !Array.isArray(schedule.proof) ? schedule.proof : undefined
+  if (!snapshot || !snapshotID || !changeSetID || idOf(snapshot.changeSet) !== changeSetID || !proof || proof.idempotencyKey !== schedule.idempotencyKey || proof.reviewRevision !== snapshot.reviewRevision || proof.changeHash !== snapshot.changeHash || proof.previewContentHash !== snapshot.contentHash || proof.approvedBy !== idOf(snapshot.approvedBy) || canonicalHash(snapshot.manifest) !== snapshot.contentHash) return 'APPROVAL_CONTEXT_INVALID'
+  const includedChangeKeys = Array.isArray(proof.includedChangeKeys) && proof.includedChangeKeys.every((key): key is string => typeof key === 'string') ? proof.includedChangeKeys : undefined
+  if (!includedChangeKeys?.length || new Set(includedChangeKeys).size !== includedChangeKeys.length) return 'APPROVAL_CONTEXT_INVALID'
+  const set = await payload.findByID({ collection: 'change-sets', id: changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+  const changes = Array.isArray(set.changes) ? set.changes as Change[] : []
+  const expectedIncludedHash = typeof proof.approvedIncludedChangeHash === 'string'
+    ? proof.approvedIncludedChangeHash
+    // Pre-ENG-031 full approvals can prove their retained set with the
+    // original change hash. A legacy partial approval has no retained-set
+    // hash, so it deliberately fails closed and must be reviewed again.
+    : keysEqual(changes.map((change) => `${change.collection}:${change.id}`), includedChangeKeys) && String(proof.changeHash) === changeSetHash(changes)
+      ? proof.changeHash
+      : undefined
+  if (set.state !== 'approved' || Number(set.revision) !== Number(snapshot.reviewRevision) || !keysEqual(changes.map((change) => `${change.collection}:${change.id}`), includedChangeKeys) || !expectedIncludedHash || expectedIncludedHash !== changeSetHash(changes)) return 'APPROVAL_CONTEXT_INVALID'
+  if (!exactQualityProof(set.quality, { revision: Number(snapshot.reviewRevision), changeHash: String(snapshot.changeHash), contentHash: String(snapshot.contentHash), includedChangeKeys, baselineSnapshotID: idOf(snapshot.baselineSnapshot), baselineSequence: Number(snapshot.baselineSequence ?? 0) })) return 'BLOCKING_CHECKS_FAILED'
+  const manifest = snapshot.manifest as SiteSnapshot
+  if (!checkSiteSnapshot(manifest, { style: manifest.styleGuide }).publishable) return 'BLOCKING_CHECKS_FAILED'
+  return undefined
+}
 
 async function skipScheduledPublication(payload: Payload, req: PayloadRequest, schedule: ScheduledPublication, reason: string) {
   const updated = await payload.update({ collection: 'scheduled-publications', where: { and: [{ id: { equals: schedule.id } }, { state: { equals: 'scheduled' } }] }, data: { state: 'stale', dispatchReason: reason }, overrideAccess: true, req, context: { editorialInternal: true } })
@@ -360,6 +388,11 @@ export async function dispatchDueScheduledPublications(payload: Payload, req: Pa
     const baseline = await approvalBaseline(payload, req)
     if (!baseline || baseline.snapshotID !== frozenSnapshotID || baseline.sequence !== frozenSequence) {
       if (await skipScheduledPublication(payload, req, schedule, 'BASELINE_STALE')) skipped += 1
+      continue
+    }
+    const executionReason = await scheduledExecutionReason(payload, req, schedule)
+    if (executionReason) {
+      if (await skipScheduledPublication(payload, req, schedule, executionReason)) skipped += 1
       continue
     }
     const existing = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { equals: schedule.idempotencyKey } }, limit: 1, depth: 0, overrideAccess: true, req })
@@ -428,7 +461,9 @@ export async function retryPublishJob(payload: Payload, req: PayloadRequest, id:
   const nextAttemptAt = terminal ? undefined : new Date(now.getTime() + 1_000 * 2 ** Math.max(0, Number(job.attempts) - 1)).toISOString()
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: terminal ? 'failed' : 'pending', errorCode: cleanErrorCode(errorCode), lastError: cleanErrorCode(errorCode), nextAttemptAt, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
-  if (terminal) await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, errorCode)
+  if (terminal) {
+    await recordPublishFailure(payload, req, job as unknown as Record<string, unknown>, errorCode)
+  }
   else await payload.create({ collection: 'audit-events', data: { event: 'editorial.publish_retry', detail: { publishJob: id, changeSet: idOf(job.changeSet), sequence: Number(job.sequence), attempt: Number(job.attempts), errorCode: cleanErrorCode(errorCode), nextAttemptAt, correlationID: String(job.correlationID) } }, overrideAccess: true, req })
   return updated.docs[0]
 }
@@ -453,6 +488,7 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   const existing = await payload.find({ collection: 'published-releases', where: { outbox: { equals: id } }, limit: 1, depth: 0, overrideAccess: true, req })
   if (existing.docs[0]) {
     if (canonicalHash(existing.docs[0].artifact) !== canonicalHash(artifact)) throw new Error('Completion does not match the persisted artifact.')
+    await payload.update({ collection: 'scheduled-publications', where: { and: [{ outbox: { equals: id } }, { state: { equals: 'enqueued' } }] }, data: { state: 'completed', dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
     return existing.docs[0]
   }
   const snapshot = job.snapshot
@@ -468,6 +504,7 @@ export async function completePublishJob(payload: Payload, req: PayloadRequest, 
   const release = await payload.create({ collection: 'published-releases', data: { outbox: id, sequence: Number(job.sequence), snapshot: snapshotID, activatedAt: now.toISOString(), healthEvidence: { checks: artifact.checks, ...(artifact.indexNow ? { indexNow: artifact.indexNow } : {}) }, artifact }, overrideAccess: true, req, context: { editorialInternal: true } })
   const updated = await payload.update({ collection: 'publish-outbox', where: { and: [{ id: { equals: id } }, { status: { equals: 'processing' } }, { leaseToken: { equals: leaseToken } }] }, data: { status: 'completed', completedAt: now.toISOString(), completionEvidence: artifact, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   if (!updated.docs[0]) throw new Error('The publish lease is no longer current.')
+  await payload.update({ collection: 'scheduled-publications', where: { and: [{ outbox: { equals: id } }, { state: { equals: 'enqueued' } }] }, data: { state: 'completed', dispatchReason: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   const changeSet = job.changeSet as unknown as Record<string, unknown> | undefined
   const reviewer = idOf((snapshot as unknown as Record<string, unknown>).approvedBy)
   await payload.create({ collection: 'audit-events', data: { event: 'publish.completed', user: reviewer, actor: reviewer, detail: { publishJob: id, changeSet: idOf(job.changeSet), snapshot: snapshotID, release: release.id, sequence: Number(job.sequence), actor: idOf(changeSet?.actor), reviewer, publishTime: now.toISOString(), result: 'deployed', correlationID: String(job.correlationID) } }, overrideAccess: true, req, context: { editorialInternal: true } })

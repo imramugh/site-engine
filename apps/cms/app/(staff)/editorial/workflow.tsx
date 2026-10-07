@@ -15,7 +15,18 @@ type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] }; schedul
 function fields(change: Change) { return relevantDiffs(change) }
 const localDate = (value: string | null | undefined) => !value || !Number.isFinite(new Date(value).getTime()) ? 'Time unavailable' : new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Toronto', timeZoneName: 'short' }).format(new Date(value))
 const pageCount = (count: number) => `${count} ${count === 1 ? 'page' : 'pages'}`
-const scheduleState = (state: string) => ({ scheduled: 'Scheduled', cancelled: 'Cancelled', stale: 'Needs review', enqueued: 'Queued for publishing' }[state] ?? state)
+const scheduleState = (state: string) => ({ scheduled: 'Scheduled', cancelled: 'Cancelled', stale: 'Needs review', enqueued: 'Queued for publishing', failed: 'Publish failed', completed: 'Published' }[state] ?? state)
+const scheduleOutcome = (state: string, reason?: string) => {
+  if (state === 'completed') return 'This scheduled publication was published successfully.'
+  if (state === 'failed') return 'The publish worker could not complete this release. The public site remains unchanged.'
+  if (state !== 'stale') return undefined
+  return ({
+    APPROVAL_AUTHORITY_REVOKED: 'This scheduled publication was not queued because its approving reviewer no longer has authorization. It remains private and needs a new review.',
+    APPROVAL_CONTEXT_INVALID: 'This scheduled publication was not queued because its approval context changed. It remains private and needs a new review.',
+    BLOCKING_CHECKS_FAILED: 'This scheduled publication was not queued because its readiness checks no longer pass. It remains private and needs a new review.',
+    BASELINE_STALE: 'This scheduled publication was not queued because another release changed the publication baseline. It remains private and needs a new review.',
+  } as Record<string, string>)[reason ?? ''] ?? 'This scheduled publication did not reach the public site. Review the technical details and create a new approval.'
+}
 
 export function EditorialWorkflow() {
   const [data, setData] = useState<Data | null>(null)
@@ -165,6 +176,6 @@ export function EditorialWorkflow() {
         </aside>
       </div>
     </section>}
-    {reviewer && Boolean(data?.schedules?.length) && <section className={styles.schedules} data-editorial-schedules aria-label="Scheduled publications"><h2>Scheduled publications</h2><ul>{data!.schedules!.map((schedule) => <li key={schedule.id}><div className={styles.scheduleSummary}><strong>{scheduleState(schedule.state)}</strong><time dateTime={schedule.scheduledFor}>{localDate(schedule.scheduledFor)}</time></div>{data!.actor.roles.includes('owner') && schedule.state === 'scheduled' && <p className={styles.scheduleActions}><button disabled={acting} onClick={() => void scheduleAction('reschedule', schedule)}>Reschedule</button><button disabled={acting} onClick={() => void scheduleAction('cancel', schedule)}>Cancel schedule</button></p>}<details className={styles.scheduleDiagnostics}><summary>Technical details</summary><p>UTC: {schedule.scheduledFor}</p>{schedule.snapshot?.contentHash && <p>Frozen snapshot: {schedule.snapshot.contentHash}</p>}{schedule.dispatchReason && <p>Dispatch status: {schedule.dispatchReason}</p>}</details></li>)}</ul>{data!.scheduleTotalPages && data!.scheduleTotalPages > 1 && <nav aria-label="Scheduled publication pages"><button disabled={acting || schedulePage <= 1} onClick={() => setSchedulePage((page) => page - 1)}>Previous schedules</button><span> Page {data!.schedulePage} of {data!.scheduleTotalPages} </span><button disabled={acting || schedulePage >= data!.scheduleTotalPages} onClick={() => setSchedulePage((page) => page + 1)}>Next schedules</button></nav>}</section>}
+    {reviewer && Boolean(data?.schedules?.length) && <section className={styles.schedules} data-editorial-schedules aria-label="Scheduled publications"><h2>Scheduled publications</h2><ul>{data!.schedules!.map((schedule) => <li key={schedule.id}><div className={styles.scheduleSummary}><strong>{scheduleState(schedule.state)}</strong><time dateTime={schedule.scheduledFor}>{localDate(schedule.scheduledFor)}</time></div>{scheduleOutcome(schedule.state, schedule.dispatchReason) && <p>{scheduleOutcome(schedule.state, schedule.dispatchReason)}</p>}{data!.actor.roles.includes('owner') && schedule.state === 'scheduled' && <p className={styles.scheduleActions}><button disabled={acting} onClick={() => void scheduleAction('reschedule', schedule)}>Reschedule</button><button disabled={acting} onClick={() => void scheduleAction('cancel', schedule)}>Cancel schedule</button></p>}<details className={styles.scheduleDiagnostics}><summary>Technical details</summary><p>UTC: {schedule.scheduledFor}</p>{schedule.snapshot?.contentHash && <p>Frozen snapshot: {schedule.snapshot.contentHash}</p>}{schedule.dispatchReason && <p>Dispatch status: {schedule.dispatchReason}</p>}</details></li>)}</ul>{data!.scheduleTotalPages && data!.scheduleTotalPages > 1 && <nav aria-label="Scheduled publication pages"><button disabled={acting || schedulePage <= 1} onClick={() => setSchedulePage((page) => page - 1)}>Previous schedules</button><span> Page {data!.schedulePage} of {data!.scheduleTotalPages} </span><button disabled={acting || schedulePage >= data!.scheduleTotalPages} onClick={() => setSchedulePage((page) => page + 1)}>Next schedules</button></nav>}</section>}
   </main>
 }

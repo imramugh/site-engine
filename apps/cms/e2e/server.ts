@@ -17,7 +17,7 @@ import { neutralFixture } from '@site-engine/contract/fixtures'
 import { hashOpaqueToken } from '../src/identity.js'
 import { withPayloadTransaction } from '../src/auth-transaction.js'
 import { claimPreviewRenderJob, completePreviewRenderJob, failPreviewRenderJob } from '../src/review-preview.js'
-import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, recordPublishStage, renewPublishLease, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
+import { buildCandidate, canonicalHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, recordPublishStage, renewPublishLease, retryPublishJob, type VerifiedArtifact } from '../src/publishing.js'
 import { runReviewQuality } from '../src/review-quality.js'
 import { deriveRoutes } from '@site-engine/engine'
 import { parseThemeRegistry } from '@site-engine/engine/theme-registry'
@@ -90,6 +90,7 @@ const onPageReviewSetID = '12345678-1234-4234-8234-1234567890ad'
 const secondOnPageReviewSetID = '12345678-1234-4234-8234-1234567890ae'
 const onPageEditorSessionToken = 'synthetic-on-page-editor-session-token'
 const onPageReviewerSessionToken = 'synthetic-on-page-reviewer-session-token'
+const eng031ReviewerSessionToken = 'synthetic-eng031-reviewer-session-token'
 const pageEditorPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
 const pageEditorSetID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbf'
 const pageEditorMetadataPageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
@@ -269,6 +270,7 @@ let localOwnerID: string | undefined
 let leadOwnerID: string | undefined
 let applicationOwnerID: string | undefined
 let reviewOwnerID: string | undefined
+let eng031ReviewerID: string | undefined
 let sqliteLock: Awaited<ReturnType<Client['transaction']>> | undefined
 let sqliteLockClient: Client | undefined
 let firstEditableLeadID: string | undefined
@@ -383,6 +385,8 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'users', data: { email: identities.owner.email, name: identities.owner.name, roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(ownerRecoveryCode)] }, overrideAccess: true })
   await payload.create({ collection: 'users', data: { email: localAuthOwnerEmail, name: 'Synthetic Local Auth Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: localAuthOwnerRecoveryCodes.map(recoveryHash) }, overrideAccess: true })
   const onPageReviewer = await payload.create({ collection: 'users', data: { email: 'on-page-reviewer.synthetic@example.test', name: 'Synthetic On-page Reviewer', roles: ['owner'] }, overrideAccess: true })
+  const eng031Reviewer = await payload.create({ collection: 'users', data: { email: 'eng031-reviewer.synthetic@example.test', name: 'Synthetic ENG-031 Reviewer', roles: ['owner'] }, overrideAccess: true })
+  eng031ReviewerID = String(eng031Reviewer.id)
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
   const mcpCatalogOwner = await payload.create({ collection: 'users', data: { email: 'mcp-catalog-owner.synthetic@example.test', name: 'Synthetic MCP Catalog Owner', roles: ['owner'] }, overrideAccess: true })
@@ -425,6 +429,7 @@ async function seed(): Promise<void> {
   }
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageEditorSessionToken), user: onPageEditor.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(onPageReviewerSessionToken), user: onPageReviewer.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
+  await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(eng031ReviewerSessionToken), user: eng031Reviewer.id, authenticatedAt: sessionNow, lastSeenAt: sessionNow, expiresAt: sessionExpiry }, overrideAccess: true })
   const directSection = await payload.create({ collection: 'sections', data: { id: directEditSectionID, name: 'Direct edit browser section', slug: 'direct-edit-browser', allowedTemplates: ['landing', 'standard'] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: directEditPageID, title: 'Direct edit browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'direct-edit-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: directEditBlockID, type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'pages', data: { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0016', title: 'MCP browser page', summary: 'Synthetic page for the protected direct Hero browser flow.', slug: 'mcp-browser-page', sectionId: directSection.id, template: 'landing', blocks: [{ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeee1016', type: 'hero', heading: 'Browser original heading', body: 'Browser original body.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
@@ -755,6 +760,74 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id }))
       return { id }
     })().then((value) => json(response, value)).catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to seed warning-only review.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/eng031-business-case') {
+    void (async () => {
+      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
+      const snapshot = release?.snapshot
+      if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published business-case review baseline is missing.')
+      const baseline = structuredClone(snapshot.manifest) as Record<string, unknown>
+      const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
+      const sectionID = '03100000-0000-4000-8000-000000000001'
+      const listingID = '03100000-0000-4000-8000-000000000002'
+      const articleID = '03100000-0000-4000-8000-000000000003'
+      const appearance = { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }
+      const section = { id: sectionID, name: 'Scheduled insights', summary: 'Neutral scheduled case-study evidence.', slug: 'scheduled-insights', allowedTemplates: ['listing', 'article'], landingPageId: listingID, pageIds: [listingID, articleID] }
+      const listing = { id: listingID, sectionId: sectionID, title: 'Insights', summary: 'Neutral published business-case insights.', slug: 'insights', template: 'listing', status: 'published', blocks: [] }
+      const article = { id: articleID, sectionId: sectionID, parentId: listingID, title: 'Scheduled case study', summary: 'A neutral business-case record scheduled through the staff workflow.', slug: 'scheduled-case-study', template: 'article', status: 'published', publishedAt: '2026-10-07T12:00:00.000Z', updatedAt: '2026-10-07T12:00:00.000Z', seoDescription: 'Neutral scheduled business-case evidence.', businessCase: { anonymizedClient: 'Synthetic client', industry: 'Synthetic services', challenge: 'A neutral synthetic challenge.', approach: 'A neutral synthetic approach.', outcome: 'A neutral synthetic outcome.', services: ['Synthetic strategy'], publicationDate: '2026-10-07T12:00:00.000Z' }, blocks: [{ id: '03100000-0000-4000-8000-000000000004', type: 'richText', body: 'Neutral scheduled business-case body.', hidden: false, appearance }] }
+      const changes = [
+        { collection: 'sections', id: sectionID, before: null, after: section, beforeHash: null, afterHash: null },
+        { collection: 'pages', id: listingID, before: null, after: listing, beforeHash: null, afterHash: null },
+        { collection: 'pages', id: articleID, before: null, after: article, beforeHash: null, afterHash: null },
+      ]
+      const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
+      const versionPins = { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String((baseline.settings as { contractVersion: string }).contractVersion) }
+      const proposedManifest = buildCandidate(baseline as never, changes as never, includedChangeKeys, versionPins)
+      const id = randomUUID(); const jobID = randomUUID(); const changeHash = canonicalHash(changes)
+      await payload.create({ collection: 'change-sets', data: { id, name: 'Scheduled business-case review', actor: String(source.actor), state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSnapshotID: snapshot.id, baselineSequence: Number(release.sequence), includedChangeKeys, versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: snapshot.id, liveSequence: Number(release.sequence), liveManifest: baseline, proposedManifest, liveManifestHash: canonicalHash(baseline), proposedManifestHash: canonicalHash(proposedManifest), versionPins, status: 'pending', attempts: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+      const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
+      if (!job || String(job.id) !== jobID) throw new Error('Unable to claim business-case review job.')
+      const api = async (action: string, body: Record<string, unknown> = {}) => {
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'renew') return { ok: true }
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        throw new Error('Unsupported ENG-031 preview worker action.')
+      }
+      await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
+      await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id }))
+      return { id, listingPath: '/scheduled-insights', articlePath: '/scheduled-insights/scheduled-case-study' }
+    })().then(value => json(response, value)).catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to prepare ENG-031 business-case review.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/eng031-business-case/disable-approver') {
+    void payload.update({ collection: 'users', id: eng031ReviewerID!, data: { disabled: true }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(500); response.end('Unable to disable ENG-031 reviewer.') })
+    return
+  }
+  if (request.method === 'POST' && request.url === '/__e2e/eng031-business-case/dispatch') {
+    void withPayloadTransaction(payload, req => dispatchDueScheduledPublications(payload, req, new Date(Date.now() + 24 * 60 * 60 * 1000)))
+      .then(value => json(response, value))
+      .catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to dispatch ENG-031 schedule.') })
+    return
+  }
+  if (request.method === 'POST' && new URL(request.url ?? '/', cmsOrigin).pathname === '/__e2e/eng031-business-case/cleanup') {
+    void (async () => {
+      const changeSetID = new URL(request.url ?? '/', cmsOrigin).searchParams.get('changeSet')
+      if (!changeSetID) throw new Error('ENG-031 cleanup requires a change set.')
+      const schedules = await payload.find({ collection: 'scheduled-publications', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      const snapshots = await payload.find({ collection: 'publish-snapshots', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      const previews = await payload.find({ collection: 'preview-render-jobs', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      await Promise.all(schedules.docs.map(schedule => payload.delete({ collection: 'scheduled-publications', id: schedule.id, overrideAccess: true })))
+      await Promise.all(previews.docs.map(preview => payload.delete({ collection: 'preview-render-jobs', id: preview.id, overrideAccess: true })))
+      await Promise.all(snapshots.docs.map(snapshot => payload.delete({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })))
+      await payload.delete({ collection: 'change-sets', id: changeSetID, overrideAccess: true })
+      await payload.update({ collection: 'users', id: eng031ReviewerID!, data: { disabled: false }, overrideAccess: true })
+      return { ok: true }
+    })().then(value => json(response, value)).catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clean ENG-031 fixtures.') })
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/second-page-review') {

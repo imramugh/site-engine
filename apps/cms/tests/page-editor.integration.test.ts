@@ -346,6 +346,20 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     expect(set.changes).toEqual([
       expect.objectContaining({ collection: 'pages', id: current.page.id }),
     ])
+    const revert = await withPayloadTransaction(payload, (req) => applyPageEditorSave({
+      payload,
+      req,
+      actor: editor as never,
+      save: {
+        pageID: current.page.id,
+        changeSetID: current.set.id,
+        expectedPageHash: pageEditorHash(pageEditorProjection(page as unknown as Record<string, unknown>)),
+        expectedChangeSetRevision: Number(set.revision),
+        draft: pageEditorProjection(current.page as unknown as Record<string, unknown>),
+      },
+    }))
+    expect(revert).toMatchObject({ replayed: false, noOp: false, changeSetRevision: 2 })
+    await expect(payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).resolves.toMatchObject({ changes: [] })
   })
 
   it('saves, clears, and hashes article and job metadata as part of the whole-page draft', async () => {
@@ -358,10 +372,35 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     const stored = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
     expect(pageEditorProjection(stored as unknown as Record<string, unknown>)).toMatchObject(desired)
     const changedSet = await payload.findByID({ collection: 'change-sets', id: article.set.id, overrideAccess: true })
+    const captured = (changedSet.changes as Array<{ before: Record<string, unknown>; after: Record<string, unknown> }>)[0]!
+    expect(captured.after.updatedAt).toEqual(expect.any(String))
+    expect(captured.before.updatedAt).toBeUndefined()
+    const baseline = structuredClone(neutralFixture)
+    baseline.settings.contractVersion = '1.4.0'
+    baseline.settings.sections[0]!.id = String(captured.before.sectionId)
+    baseline.settings.sections[0]!.allowedTemplates = ['landing', 'article']
+    baseline.pages[0]!.sectionId = String(captured.before.sectionId)
+    baseline.settings.sections[0]!.pageIds = [baseline.pages[0]!.id, String(article.page.id)]
+    baseline.pages.push({ id: String(article.page.id), ...captured.before } as typeof baseline.pages[number])
+    const preview = await withPayloadTransaction(payload, (req) => prepareReviewPreview({
+      payload,
+      req,
+      actor: editor as never,
+      id: article.set.id,
+      expectedRevision: Number(changedSet.revision),
+      expectedChangeHash: changeSetHash(changedSet.changes),
+      includedChangeKeys: [`pages:${article.page.id}`],
+      initialBaseline: { manifest: baseline, sequence: 0, versions: { themeVersion: 'test-theme', engineVersion: 'test-engine', contractVersion: '1.4.0' } },
+      draft: true,
+    }))
+    const frozenArticle = (preview.proposedManifest as typeof baseline).pages.find((page) => page.id === article.page.id)!
+    expect(frozenArticle).toMatchObject({ template: 'article', publishedAt: desired.publishedAt, updatedAt: captured.after.updatedAt, businessCase })
     const withMetadata = pageEditorProjection(stored as unknown as Record<string, unknown>)
     await withPayloadTransaction(payload, (req) => applyPageEditorSave({ payload, req, actor: editor as never, initialBaseline: previewBaseline('1.4.0'), save: { pageID: article.page.id, changeSetID: article.set.id, expectedPageHash: pageEditorHash(withMetadata), expectedChangeSetRevision: Number(changedSet.revision), draft: { ...withMetadata, publishedAt: undefined, lastReviewed: undefined, businessCase: undefined } } }))
     const cleared = await payload.findByID({ collection: 'pages', id: article.page.id, draft: true, overrideAccess: true })
     expect(cleared).toMatchObject({ publishedAt: null, lastReviewed: null, businessCase: null })
+    const laterSet = await payload.findByID({ collection: 'change-sets', id: article.set.id, overrideAccess: true })
+    expect((laterSet.changes as Array<{ after: Record<string, unknown> }>)[0]?.after.updatedAt).toEqual(expect.any(String))
 
     const job = await fixture(editor, 'job')
     const jobCurrent = pageEditorProjection(job.page as unknown as Record<string, unknown>)
