@@ -1430,7 +1430,7 @@ export interface ScheduledPublication {
   snapshot: string | PublishSnapshot;
   changeSet: string | ChangeSet;
   scheduledFor: string;
-  state: 'scheduled' | 'cancelled' | 'stale' | 'enqueued';
+  state: 'scheduled' | 'cancelled' | 'stale' | 'enqueued' | 'failed' | 'completed';
   outbox?: (string | null) | PublishOutbox;
   enqueuedAt?: string | null;
   dispatchReason?: string | null;

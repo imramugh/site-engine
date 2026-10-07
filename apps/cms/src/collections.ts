@@ -815,7 +815,7 @@ export const ScheduledPublications: CollectionConfig = {
     { name: 'snapshot', type: 'relationship', relationTo: 'publish-snapshots', required: true, unique: true, admin: { readOnly: true } },
     { name: 'changeSet', type: 'relationship', relationTo: 'change-sets', required: true, admin: { readOnly: true } },
     { name: 'scheduledFor', type: 'date', required: true, admin: { readOnly: true } },
-    { name: 'state', type: 'select', required: true, defaultValue: 'scheduled', options: ['scheduled', 'cancelled', 'stale', 'enqueued'], admin: { readOnly: true } },
+    { name: 'state', type: 'select', required: true, defaultValue: 'scheduled', options: ['scheduled', 'cancelled', 'stale', 'enqueued', 'failed', 'completed'], admin: { readOnly: true } },
     { name: 'outbox', type: 'relationship', relationTo: 'publish-outbox', unique: true, admin: { readOnly: true } },
     { name: 'enqueuedAt', type: 'date', admin: { readOnly: true } },
     { name: 'dispatchReason', type: 'text', admin: { readOnly: true } },
