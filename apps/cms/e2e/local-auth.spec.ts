@@ -47,9 +47,24 @@ function enrollmentCode(uri: string): string {
   return new TOTP({ secret: secret! }).generate()
 }
 
+function invalidEnrollmentCode(uri: string): string {
+  const secret = new URL(uri).searchParams.get('secret')
+  expect(secret).toBeTruthy()
+  const totp = new TOTP({ secret: secret!, algorithm: 'SHA1', digits: 6, period: 30 })
+  const valid = new Set([-1, 0, 1].map((window) => totp.generate({ timestamp: Date.now() + window * 30_000 })))
+  let invalid = '000000'
+  while (valid.has(invalid)) invalid = String((Number(invalid) + 1) % 1_000_000).padStart(6, '0')
+  return invalid
+}
+
 async function axe(page: Page): Promise<void> {
   await page.addScriptTag({ path: axeSource })
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+}
+
+async function wholeDocumentAxe(page: Page): Promise<void> {
+  await page.addScriptTag({ path: axeSource })
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 
 const localPost = (page: Page, path: string, data: unknown) => page.request.post(path, { headers: { origin }, data })
@@ -76,16 +91,17 @@ test('Owner can invite a local Editor who enrolls from QR or manual key, receive
   const preparedResponse = page.waitForResponse((response) => response.url().endsWith('/api/auth/enroll') && response.request().method() === 'POST')
   await page.goto(invitation.inviteURL)
   const prepared = await (await preparedResponse).json() as { otpauthURI: string }
+  await expect(page).toHaveTitle('Set up your authenticator | Site Engine')
   await expect(page.getByTestId('enrollment-qr')).toHaveAttribute('alt', 'QR code for your authenticator app')
-  for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(size)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
-    await axe(page)
-    await page.screenshot({ path: `artifacts/playwright-cms/local-enrollment-${size.width}.png`, fullPage: true })
-  }
   await page.getByText('Set up manually instead').click()
   const manualKey = await page.getByTestId('enrollment-manual-key').textContent()
   expect(manualKey).toBe(new URL(prepared.otpauthURI).searchParams.get('secret'))
+  for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(size)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+    await wholeDocumentAxe(page)
+    await page.screenshot({ path: `artifacts/playwright-cms/local-enrollment-${size.width}.png`, fullPage: true })
+  }
   await page.getByTestId('enrollment-name').fill('Enrolled Editor')
   await page.getByTestId('enrollment-code').fill(enrollmentCode(prepared.otpauthURI))
   await page.getByTestId('enrollment-confirm').click()
@@ -120,7 +136,7 @@ test('local enrollment rejects an invalid code and expired, revoked, and consume
   const prepared = await localPost(ownerSession.page, '/api/auth/enroll', { action: 'prepare', token: invalidToken })
   expect(prepared.ok()).toBeTruthy()
   const preparedBody = await prepared.json() as { otpauthURI: string }
-  const invalidCode = await localPost(ownerSession.page, '/api/auth/enroll', { action: 'confirm', token: invalidToken, name: 'Invalid Code', code: '000000' })
+  const invalidCode = await localPost(ownerSession.page, '/api/auth/enroll', { action: 'confirm', token: invalidToken, name: 'Invalid Code', code: invalidEnrollmentCode(preparedBody.otpauthURI) })
   expect(invalidCode.status()).toBe(403)
   const enrollingContext = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
   const confirmed = await enrollingContext.request.post('/api/auth/enroll', { headers: { origin }, data: { action: 'confirm', token: invalidToken, name: 'Confirmed Editor', code: enrollmentCode(preparedBody.otpauthURI) } })

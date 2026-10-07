@@ -177,7 +177,13 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   await signIn(page, editorEmail, editorRecoveryCodes.appearance)
   await page.goto('/block-gallery')
   await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
-  const unavailableBlock = page.locator('[data-block-gallery-card][data-allowed="false"]').first()
+  const recipeableUnavailable = page.locator('[data-block-gallery-card][data-allowed="false"]').filter({ has: page.getByRole('button', { name: /^\+ Add to recipe/ }) })
+  for (const template of ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job']) {
+    await page.locator('[data-block-gallery-templates]').getByRole('button', { name: template, exact: true }).click()
+    if (await recipeableUnavailable.count()) break
+  }
+  await expect(recipeableUnavailable).not.toHaveCount(0)
+  const unavailableBlock = recipeableUnavailable.first()
   await expect(unavailableBlock).toContainText('Allowed on:')
   await expect(unavailableBlock.getByRole('button', { name: /^\+ Add to recipe/ })).toBeDisabled()
   await page.addScriptTag({ path: axeSource })
