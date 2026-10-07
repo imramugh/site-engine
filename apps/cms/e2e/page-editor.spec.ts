@@ -212,6 +212,12 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
       response.request().method() === 'POST' &&
       response.status() === 200,
   )
+  await editor.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(editor.page.getByRole('status')).toContainText('Draft checks are ready')
+  const readiness = editor.page.locator('[data-page-editor-readiness]')
+  await expect(readiness).toContainText('Draft is valid to save')
+  const detailSummary = readiness.locator('summary')
+  if (await detailSummary.count()) { await detailSummary.click(); await expect(readiness.locator('li').first()).toBeVisible() }
   await editor.page.getByRole('button', { name: 'Save draft' }).click()
   await queued
   const worker = await editor.page.request.post('/__e2e/direct-preview-worker')
@@ -240,11 +246,39 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(
     editor.page.locator('[data-page-editor-preview-selection]'),
   ).toContainText('Select a rendered block')
+  await expect(editor.page.getByRole('button', { name: 'Edit text in preview' })).toBeEnabled()
   await expect(
     editor.page.locator('[data-page-editor-preview] > header'),
   ).toContainText(/Saved draft preview · \S+ \S+/)
   const renderedBlocks = preview.locator('[data-page-editor-preview-block-id]')
   await expect(renderedBlocks).toHaveCount(2)
+  const previewEdit = editor.page.getByRole('button', { name: 'Edit text in preview' })
+  await expect(previewEdit).toBeEnabled()
+  await expect(preview.getByRole('navigation', { name: 'Primary' }).locator('[data-site-engine-edit-field], [contenteditable]')).toHaveCount(0)
+  await previewEdit.click()
+  const previewHeading = preview.locator('[data-site-engine-edit-field="heading"]').first()
+  await expect(previewHeading).toHaveAttribute('contenteditable', 'plaintext-only')
+  await expect(previewHeading).toHaveCSS('outline-style', 'solid')
+  await previewHeading.fill('Preview keyboard heading')
+  await previewHeading.press('Tab')
+  await expect(previewHeading).toHaveText('Preview keyboard heading')
+  await previewHeading.evaluate((node) => {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })
+    Object.defineProperty(event, 'isComposing', { value: true })
+    node.dispatchEvent(event)
+  })
+  await expect(editor.page.getByRole('button', { name: 'Finish preview text editing' })).toBeVisible()
+  await editor.page.getByRole('button', { name: 'Finish preview text editing' }).click()
+  await editor.page.locator('[data-page-editor-block]').first().locator('summary').click()
+  await expect(editor.page.locator('[data-page-editor-block]').first().getByLabel('Heading', { exact: true })).toHaveValue('Preview keyboard heading')
+  const inlineQueued = editor.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST' && response.status() === 200)
+  await editor.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(editor.page.getByRole('status')).toContainText('Draft checks are ready')
+  await editor.page.getByRole('button', { name: 'Save draft' }).click()
+  await inlineQueued
+  expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
+  await expect(editor.page.getByRole('status')).toContainText('Saved draft preview is ready.', { timeout: 120_000 })
+  await expect(preview.getByRole('heading', { name: 'Preview keyboard heading' })).toBeVisible()
   await editor.page.emulateMedia({ reducedMotion: 'reduce' })
   await renderedBlocks.first().click({ position: { x: 5, y: 5 } })
   await expect(
@@ -295,6 +329,7 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(
     editor.page.locator('[data-page-editor-preview-selection]'),
   ).toContainText('unavailable')
+  await expect(editor.page.getByRole('button', { name: 'Edit text in preview' })).toBeDisabled()
   await expect(renderedBlocks).toHaveCount(0)
   await preview
     .locator(`[${previewTypeAttribute.name}]`)
@@ -307,6 +342,19 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await expect(
     editor.page.locator('[data-page-editor-preview-selection]'),
   ).toContainText('Select a rendered block')
+  await expect(editor.page.getByRole('button', { name: 'Edit text in preview' })).toBeEnabled()
+  await preview.locator('[data-block-id]').first().evaluate((node) => {
+    const duplicate = document.createElement('span')
+    duplicate.dataset.siteEngineEditField = 'heading'
+    duplicate.textContent = node.querySelector('[data-site-engine-edit-field="heading"]')?.textContent ?? ''
+    duplicate.dataset.e2eDuplicateMarker = 'true'
+    node.append(duplicate)
+  })
+  await editor.page.getByTitle('Saved page draft preview').dispatchEvent('load')
+  await expect(editor.page.getByRole('button', { name: 'Edit text in preview' })).toBeDisabled()
+  await preview.locator('[data-e2e-duplicate-marker="true"]').evaluate((node) => node.remove())
+  await editor.page.getByTitle('Saved page draft preview').dispatchEvent('load')
+  await expect(editor.page.getByRole('button', { name: 'Edit text in preview' })).toBeEnabled()
   expect(
     await editor.page
       .getByTitle('Saved page draft preview')
@@ -419,6 +467,36 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     fullPage: true,
   })
 
+  const staleHero = editor.page.locator('[data-page-editor-block]').first()
+  if (await staleHero.getAttribute('open') === null) await staleHero.locator('summary').click()
+  const inlineHeadingField = staleHero.getByLabel('Heading', { exact: true })
+  await expect(inlineHeadingField).toBeVisible()
+  await inlineHeadingField.fill('Stale local preview text')
+  await editor.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(editor.page.locator('[data-page-editor-readiness]')).toContainText(/Draft is valid|Checks passed/)
+  await editor.page.route(`**/api/editorial/page-editor/${pageID}`, async (route) => {
+    if (route.request().method() === 'POST') await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'This draft or change set changed. Reload before saving.' }) })
+    else await route.continue()
+  })
+  await editor.page.getByRole('button', { name: 'Save draft' }).click()
+  await expect(editor.page.locator('[data-page-editor-stale]')).toContainText('unsaved text is still available')
+  await expect(inlineHeadingField).toHaveValue('Stale local preview text')
+  editor.page.once('dialog', (dialog) => dialog.accept())
+  await editor.page.getByRole('button', { name: 'Reload and discard changes' }).click()
+  await expect(inlineHeadingField).toHaveValue('Preview keyboard heading')
+  await editor.page.unroute(`**/api/editorial/page-editor/${pageID}`)
+  const requeuedPreview = editor.page.waitForResponse((response) =>
+    response.url().endsWith('/api/editorial/direct-edit/preview') &&
+    response.request().method() === 'POST' &&
+    response.status() === 200,
+  )
+  await editor.page.getByRole('button', { name: 'Prepare preview' }).click()
+  const reusedPreview = await requeuedPreview
+  const reusedJob = (await reusedPreview.json()) as { job?: { status?: string } }
+  if (reusedJob.job?.status !== 'completed')
+    expect((await editor.page.request.post('/__e2e/direct-preview-worker')).status()).toBe(200)
+  await expect(editor.page.getByRole('status')).toContainText('Saved draft preview is ready.', { timeout: 120_000 })
+  await expect(preview.getByRole('heading', { name: 'Preview keyboard heading' })).toBeVisible()
   await editor.page.getByRole('button', { name: 'Submit for review' }).click()
   await expect(editor.page.getByRole('status')).toContainText(
     'Submitted for review.',
@@ -452,6 +530,8 @@ test('ENG-006 persists service, article, business-case, and job metadata through
   const saveAndReload = async (id: string) => {
     const saved = editor.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${id}`) && response.request().method() === 'POST')
     const queued = editor.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST')
+    await editor.page.getByRole('button', { name: 'Check draft' }).click()
+    await expect(editor.page.getByRole('status')).toContainText('Draft checks are ready')
     await editor.page.getByRole('button', { name: 'Save draft' }).click()
     const [savedResponse, queuedResponse] = await Promise.all([saved, queued])
     expect(savedResponse.status(), await savedResponse.text()).toBe(200)

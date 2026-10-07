@@ -70,3 +70,20 @@ UPDATE_THEME_CONFORMANCE_BASELINES=1 corepack pnpm@12.8.1 conformance:starter
 The browser fixture covers every standard block and template at desktop and
 mobile sizes, retains screenshots as test artifacts, runs axe, and checks
 reduced-motion behavior.
+
+## Optional preview text editing
+
+Render each visible block with its exact `data-block-id` and block type.
+For supported plain text, annotate the element containing only that field's
+rendered text with `data-site-engine-edit-field="heading"` (or `body`, or
+Hero-only `eyebrow`). The allowlist is exported as `InlineTextFieldPolicy` by
+`@site-engine/contract`. Omit absent optional fields. Never mark generated
+navigation, links, rich/nested markup or values derived from another field.
+
+Accept the host's `inlineEditingDisabled` prop on `BlockRenderer.astro` and
+emit `data-site-engine-edit-disabled="true"` on that block's root when set.
+This prevents editing a service Hero projected from page metadata even when
+its visible text happens to match stored block text. The CMS enables typing
+only after validating unique markers against the current owned draft. Theme
+output itself must never ship `contenteditable`. A theme without valid markers
+continues to work through the full split-view editor.

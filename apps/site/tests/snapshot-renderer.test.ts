@@ -393,6 +393,9 @@ describe('static snapshot renderer', () => {
     expect(withHero).toContain('A persisted service introduction.');
     expect(withHero).toContain('Preserved action');
     expect(withHero).toContain('block--accent');
+    expect(withHero).toMatch(/data-block-id="cccccccc-0000-4000-8000-000000000001"[^>]*data-site-engine-edit-disabled="true"/);
+    expect(withHero).toContain('data-site-engine-edit-field="heading"');
+    expect(withHero).toContain('data-site-engine-edit-field="body"');
     expect(withHero).toContain('Last reviewed');
     expect(generated.match(/<h1(?:\s|>)/g)).toHaveLength(1);
     expect(generated).toContain('Service without hero');

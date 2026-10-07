@@ -191,7 +191,9 @@ test('ENG-014 uploads accurate metadata, saves every field, searches, pages, blo
   const mediaBlock = page.locator('[data-page-editor-block]').first()
   if (await mediaBlock.getAttribute('open') === null) await mediaBlock.locator('summary').click()
   await page.getByRole('combobox', { name: 'Media', exact: true }).selectOption({ label: 'media-fixture-25.png' })
-  const rejectedSave = page.waitForResponse((response) => response.url().includes('/api/editorial/page-editor/') && response.request().method() === 'POST')
+  const rejectedSave = page.waitForResponse((response) => response.url().includes('/api/editorial/page-editor/') && !response.url().endsWith('/validate') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(page.getByRole('status')).toContainText('Draft checks are ready')
   await page.getByRole('button', { name: 'Save draft' }).click()
   const rejectedResponse = await rejectedSave
   expect(rejectedResponse.status()).toBe(400)

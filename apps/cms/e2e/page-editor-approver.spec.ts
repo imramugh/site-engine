@@ -36,6 +36,8 @@ test('ENG-006 lets an Approver save, render, and submit an owned page draft with
   await expect(approver.page.getByRole('button', { name: 'Submit for review' })).toBeDisabled()
 
   const queued = approver.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST' && response.status() === 200)
+  await approver.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(approver.page.getByRole('status')).toContainText('Draft checks are ready')
   await approver.page.getByRole('button', { name: 'Save draft' }).click()
   await queued
   const worker = await approver.page.request.post('/__e2e/direct-preview-worker')

@@ -103,6 +103,26 @@ export const BlockSchema = z.discriminatedUnion('type', [BlockSchemas.hero, Bloc
  * independently maintained interfaces. */
 export type Appearance = z.infer<typeof AppearanceSchema>;
 export type Block = z.infer<typeof BlockSchema>;
+
+/**
+ * The deliberately small text surface that a renderer may expose for inline
+ * editing.  It is a field allowlist, never a path language: links, media,
+ * repeaters, appearance, generated values, and every other block property
+ * remain available through the complete page editor only.
+ */
+export const InlineTextFieldPolicy = Object.freeze({
+  hero: Object.freeze(['eyebrow', 'heading', 'body'] as const),
+  callout: Object.freeze(['heading', 'body'] as const),
+  cta: Object.freeze(['heading', 'body'] as const),
+});
+export type InlineTextBlockType = keyof typeof InlineTextFieldPolicy;
+export type InlineTextField = (typeof InlineTextFieldPolicy)[InlineTextBlockType][number];
+export function isInlineTextTarget(block: Pick<Block, 'type'> | { type: unknown }, field: unknown): field is InlineTextField {
+  return typeof field === 'string'
+    && typeof block.type === 'string'
+    && Object.hasOwn(InlineTextFieldPolicy, block.type)
+    && (InlineTextFieldPolicy[block.type as InlineTextBlockType] as readonly string[]).includes(field);
+}
 const hrefUsesFragment = (href: string | undefined) => Boolean(href?.includes('#'));
 const linkUsesFragment = (link: z.infer<typeof LinkSchema> | undefined) => hrefUsesFragment(link?.href);
 function requiresContract13(block: Block): boolean { return block.type === 'contact' && block.contactDetails !== undefined; }

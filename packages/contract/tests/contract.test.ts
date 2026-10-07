@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BlockSchema, PageSchema, SiteSnapshotSchema, ThemeInstallSchema,
   ThemeManifestSchema, SectionPresets, compatibleContractVersion, formatSnapshotValidationError,
+  InlineTextFieldPolicy, isInlineTextTarget,
 } from '../src/index.js';
 import { neutralFixture } from '../src/fixtures.js';
 
@@ -11,6 +12,17 @@ const cta = { id: blockId, type: 'cta', heading: 'Next steps', body: 'Read more.
 const fixture = () => structuredClone(neutralFixture);
 
 describe('ENG-002 versioned contract', () => {
+  it('keeps inline text editing to the explicit rendered scalar policy', () => {
+    expect(InlineTextFieldPolicy).toEqual({ hero: ['eyebrow', 'heading', 'body'], callout: ['heading', 'body'], cta: ['heading', 'body'] });
+    expect(isInlineTextTarget({ type: 'hero' }, 'heading')).toBe(true);
+    expect(isInlineTextTarget({ type: 'hero' }, 'cta')).toBe(false);
+    expect(isInlineTextTarget({ type: 'callout' }, 'body')).toBe(true);
+    expect(isInlineTextTarget({ type: 'cta' }, 'href')).toBe(false);
+    expect(isInlineTextTarget({ type: 'faq' }, 'heading')).toBe(false);
+    expect(isInlineTextTarget({ type: 'hero' }, 'items.0.title')).toBe(false);
+    expect(isInlineTextTarget({ type: 'constructor' }, 'heading')).toBe(false);
+    expect(isInlineTextTarget({ type: 'toString' }, 'heading')).toBe(false);
+  });
   it('accepts the neutral legacy snapshot and only supported contract versions', () => {
     expect(SiteSnapshotSchema.safeParse(neutralFixture).success).toBe(true);
     expect(compatibleContractVersion('1.0.0')).toBe(true);
