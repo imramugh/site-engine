@@ -157,7 +157,7 @@ export const Users: CollectionConfig = {
     { name: 'roles', type: 'select', hasMany: true, required: true, options: [...roles] },
     { name: 'disabled', type: 'checkbox', defaultValue: false },
     { name: 'invitedAt', type: 'date', admin: { readOnly: true } },
-    { name: 'provider', type: 'select', options: ['google', 'microsoft'], admin: { readOnly: true } },
+    { name: 'provider', type: 'select', options: ['local', 'google', 'microsoft'], admin: { readOnly: true } },
     { name: 'providerIssuer', type: 'text', admin: { readOnly: true } },
     { name: 'providerSubject', type: 'text', admin: { readOnly: true } },
     { name: 'emergencyTotpSecret', access: { read: () => false, update: () => false, create: () => false }, type: 'text', admin: { hidden: true } },
@@ -175,11 +175,16 @@ export const Invitations: CollectionConfig = {
   access: { create: () => false, read: () => false, update: () => false, delete: () => false },
   fields: [
     { name: 'email', type: 'email', required: true, unique: true },
-    { name: 'provider', type: 'select', required: true, options: ['google', 'microsoft'] },
+    // Historical OIDC metadata remains readable for prior records. New staff
+    // invitations use `local` and the encrypted pending authenticator seed.
+    { name: 'provider', type: 'select', required: true, options: ['local', 'google', 'microsoft'] },
     { name: 'providerIssuer', type: 'text', required: true, admin: { description: 'Trusted configured issuer for this invite.' } },
     { name: 'providerSubject', type: 'text', required: true, defaultValue: () => `unbound:${randomUUID()}`, admin: { hidden: true, readOnly: true } },
     { name: 'requiredSubject', type: 'text', admin: { description: 'Optional prebound verified OIDC subject. Enrollment always requires the one-time invitation.' } },
     { name: 'tokenHash', type: 'text', required: true, unique: true, admin: { readOnly: true, description: 'Opaque invite credential hash; its original value is never shown in admin.' } },
+    { name: 'pendingTotpSecret', access: { read: () => false, update: () => false, create: () => false }, type: 'text', admin: { hidden: true } },
+    { name: 'enrollmentFailedAt', access: { read: () => false, update: () => false, create: () => false }, type: 'date', admin: { hidden: true } },
+    { name: 'enrollmentFailedCount', access: { read: () => false, update: () => false, create: () => false }, type: 'number', defaultValue: 0, admin: { hidden: true } },
     { name: 'roles', type: 'select', hasMany: true, required: true, options: [...roles] },
     { name: 'expiresAt', type: 'date', required: true },
     { name: 'acceptedAt', type: 'date', admin: { readOnly: true } },

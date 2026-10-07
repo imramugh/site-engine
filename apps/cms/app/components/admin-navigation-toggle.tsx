@@ -179,7 +179,7 @@ export function AdminNavigationToggle({ primary, site, displayName, email, provi
       <details className={styles.adminAccount} data-admin-account aria-label="Account menu">
         <summary data-admin-account-button><span className={styles.accountInitials} data-admin-account-avatar aria-hidden="true">{displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'S'}</span><span><strong data-admin-account-name>{displayName}</strong><small data-admin-account-role>{roles.join(', ') || 'staff'}</small></span><svg className={styles.accountChevron} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg></summary>
         <div className={styles.accountMenu} role="menu">
-          <div><strong>{email}</strong><small>{provider ? `Signed in with ${provider}` : 'Emergency access'}</small></div>
+          <div><strong>{email}</strong><small>{provider && provider !== 'local' ? `Signed in with ${provider}` : 'Authenticator app'}</small></div>
           <a role="menuitem" href="/account">Account and sessions</a>
           <a role="menuitem" href="/integrations?tab=assistants">My connected assistants</a>
           <button role="menuitem" type="button" disabled={signingOut} onClick={() => void signOut()}>Sign out</button>

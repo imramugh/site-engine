@@ -17,7 +17,7 @@ type EmergencyReason = (typeof identityAuditReasons.emergency)[number]
 type AuditInput = {
   payload: Payload
   req?: PayloadRequest
-  event: 'identity.sign_in_denied' | 'identity.signed_in' | 'identity.emergency_denied' | 'identity.emergency_signed_in'
+  event: 'identity.sign_in_denied' | 'identity.signed_in' | 'identity.emergency_denied' | 'identity.emergency_signed_in' | 'identity.local_denied' | 'identity.local_signed_in' | 'identity.local_enrolled'
   user?: string
   provider?: 'google' | 'microsoft' | 'local'
   reason?: CallbackReason | EmergencyReason

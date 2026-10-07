@@ -27,14 +27,22 @@ beforeAll(async () => {
 afterAll(async () => { vi.restoreAllMocks(); await payload?.destroy(); rmSync(directory, { recursive: true, force: true }) })
 
 describe('ENG-007 emergency authentication through HTTP requests and real SQLite', () => {
+  it('signs in every enabled role with a local authenticator', async () => {
+    for (const role of ['owner', 'approver', 'editor', 'sales', 'hiring'] as const) {
+      const user = await payload.create({ collection: 'users', data: { email: `${role}-local@example.test`, name: role, roles: [role], emergencyTotpSecret: encryptSecret(secret), emergencyRecoveryHashes: [recoveryHash(`${role}-recovery`)] }, overrideAccess: true })
+      const response = await POST(new Request('https://cms.example.test/api/auth/local', { method: 'POST', headers: { origin: 'https://cms.example.test', 'content-type': 'application/json' }, body: JSON.stringify({ email: user.email, code: `${role}-recovery` }) }))
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie')).toContain('site_engine_session')
+    }
+  })
   it('rejects cross-origin credentials without creating a session', async () => {
     expect((await POST(request('one-time-recovery', 'https://attacker.example.test'))).status).toBe(403)
-    expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(0)
+    expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(5)
   })
   it('consumes a recovery credential once, even when submitted concurrently', async () => {
     const results = await Promise.all([POST(request('one-time-recovery')), POST(request('one-time-recovery'))])
     expect(results.filter((response) => response.status === 200)).toHaveLength(1)
-    expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(1)
+    expect((await payload.count({ collection: 'auth-sessions', overrideAccess: true })).totalDocs).toBe(6)
     const user = await payload.findByID({ collection: 'users', id: userID, overrideAccess: true })
     expect(user.emergencyRecoveryHashes).toEqual([])
   })
@@ -51,17 +59,17 @@ describe('ENG-007 emergency authentication through HTTP requests and real SQLite
   it('audits accepted and denied decisions with fixed private-safe metadata', async () => {
     const events = await payload.find({ collection: 'audit-events', where: { user: { equals: userID } }, limit: 20, depth: 0, overrideAccess: true })
     const serialized = JSON.stringify(events.docs)
-    expect(events.docs.some((event: any) => event.event === 'identity.emergency_signed_in' && event.detail?.provider === 'local')).toBe(true)
+    expect(events.docs.some((event: any) => event.event === 'identity.local_signed_in' && event.detail?.provider === 'local')).toBe(true)
     expect(serialized).not.toContain('one-time-recovery')
     expect(serialized).not.toContain('owner@example.test')
   })
 
   it('locks repeated invalid attempts and records bounded account-state denials', async () => {
     await payload.update({ collection: 'users', id: userID, data: { emergencyFailedCount: 0, emergencyFailedAt: null }, overrideAccess: true })
-    const beforeInvalid = await payload.count({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.emergency_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, overrideAccess: true })
+    const beforeInvalid = await payload.count({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.local_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, overrideAccess: true })
     for (let i = 0; i < 5; i++) expect((await POST(request('invalid-recovery'))).status).toBe(403)
     expect((await POST(request('invalid-recovery'))).status).toBe(429)
-    const invalidAudits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.emergency_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, limit: 20, depth: 0, overrideAccess: true })
+    const invalidAudits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'identity.local_denied' } }, { 'detail.reason': { equals: 'invalid_credential' } }] }, limit: 20, depth: 0, overrideAccess: true })
     expect(invalidAudits.docs).toHaveLength(beforeInvalid.totalDocs + 5)
     expect(invalidAudits.docs.every((event: any) => event.detail?.provider === 'local')).toBe(true)
     // Disabling staff must preserve another active Owner.

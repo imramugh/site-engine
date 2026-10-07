@@ -51,6 +51,18 @@ const emergencyEmail = 'emergency-owner.synthetic@example.test'
 const emergencyRecoveryCode = 'synthetic-recovery-code-01'
 const localOwnerRecoveryCode = 'synthetic-local-recovery-code-02'
 const localOwnerDisableRecoveryCode = 'synthetic-local-recovery-code-03'
+const ownerRecoveryCode = 'synthetic-owner-recovery-code-01'
+const localAuthOwnerEmail = 'local-auth-owner.synthetic@example.test'
+const localAuthOwnerRecoveryCodes = ['synthetic-local-auth-owner-code-01', 'synthetic-local-auth-owner-code-02']
+const editorRecoveryCodes = [
+  'synthetic-editor-recovery-code-01',
+  'synthetic-editor-recovery-code-02',
+  'synthetic-editor-recovery-code-03',
+  'synthetic-editor-recovery-code-04',
+  'synthetic-editor-recovery-code-05',
+  'synthetic-editor-recovery-code-06',
+  'synthetic-editor-recovery-code-07',
+]
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
@@ -361,11 +373,13 @@ async function provider(request: IncomingMessage, response: ServerResponse): Pro
 async function seed(): Promise<void> {
   const { default: config } = await import('../payload.config.js')
   payload = await getPayload({ config })
-  const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.editor.subject, emergencyTotpSecret: encryptedFixture, emergencyRecoveryHashes: [recoveryFixture] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: identities.editor.email, name: identities.editor.name, roles: ['editor'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: editorRecoveryCodes.map(recoveryHash) }, overrideAccess: true })
   mcpEditorID = String(editor.id)
   const onPageEditor = await payload.create({ collection: 'users', data: { email: 'on-page-editor.synthetic@example.test', name: 'Synthetic On-page Editor', roles: ['editor'] }, overrideAccess: true })
   const localOwner = await payload.create({ collection: 'users', data: { email: emergencyEmail, name: 'Synthetic Emergency Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(emergencyRecoveryCode), recoveryHash(localOwnerRecoveryCode), recoveryHash(localOwnerDisableRecoveryCode)] }, overrideAccess: true })
   localOwnerID = String(localOwner.id)
+  await payload.create({ collection: 'users', data: { email: identities.owner.email, name: identities.owner.name, roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(ownerRecoveryCode)] }, overrideAccess: true })
+  await payload.create({ collection: 'users', data: { email: localAuthOwnerEmail, name: 'Synthetic Local Auth Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: localAuthOwnerRecoveryCodes.map(recoveryHash) }, overrideAccess: true })
   const onPageReviewer = await payload.create({ collection: 'users', data: { email: 'on-page-reviewer.synthetic@example.test', name: 'Synthetic On-page Reviewer', roles: ['owner'] }, overrideAccess: true })
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
@@ -396,7 +410,6 @@ async function seed(): Promise<void> {
   await payload.create({ collection: 'users', data: { email: scheduleOwnerEmail, name: 'Synthetic Schedule Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(scheduleOwnerRecoveryCode)] }, overrideAccess: true })
   const themeOwner = await payload.create({ collection: 'users', data: { email: themeOwnerEmail, name: 'Synthetic Theme Owner', roles: ['owner'], emergencyTotpSecret: encryptSecret('JBSWY3DPEHPK3PXP'), emergencyRecoveryHashes: [recoveryHash(themeOwnerRecoveryCode)] }, overrideAccess: true })
   const mediaOwner = await payload.create({ collection: 'users', data: { email: 'media-owner.synthetic@example.test', name: 'Synthetic Media Owner', roles: ['owner'] }, overrideAccess: true })
-  await payload.create({ collection: 'invitations', data: { email: identities.owner.email, provider: 'google', providerIssuer: issuerOrigin, providerSubject: identities.owner.subject, requiredSubject: identities.owner.subject, roles: ['owner'], tokenHash: hashOpaqueToken(inviteToken), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }, overrideAccess: true })
   const applicationUsers: Record<'hiring' | 'sales', { id: string }> = {} as Record<'hiring' | 'sales', { id: string }>
   for (const [role, identity] of Object.entries({ hiring: identities.hiring, sales: identities.sales }) as Array<['hiring' | 'sales', Identity]>) {
     applicationUsers[role] = await payload.create({ collection: 'users', data: { email: identity.email, name: identity.name, roles: [role], provider: 'google', providerIssuer: issuerOrigin, providerSubject: identity.subject }, overrideAccess: true })
@@ -869,10 +882,17 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
     return
   }
   if (request.method === 'POST' && request.url === '/__e2e/owner/disable') {
-    void payload.find({ collection: 'users', where: { providerSubject: { equals: identities.owner.subject } }, limit: 1, overrideAccess: true })
+    void payload.find({ collection: 'users', where: { email: { equals: identities.owner.email } }, limit: 1, overrideAccess: true })
       .then(({ docs }) => docs[0] ? payload.update({ collection: 'users', id: docs[0].id, data: { disabled: true }, overrideAccess: true }) : Promise.reject(new Error('Owner missing')))
       .then(() => { response.writeHead(204); response.end() })
       .catch(() => { response.writeHead(500); response.end('Unable to disable owner.') })
+    return
+  }
+  const expiredInvitation = request.method === 'POST' ? /^\/__e2e\/invitations\/([0-9a-f-]{36})\/expire$/i.exec(request.url ?? '') : undefined
+  if (expiredInvitation) {
+    void payload.update({ collection: 'invitations', id: expiredInvitation[1]!, data: { expiresAt: new Date(Date.now() - 1_000).toISOString() }, overrideAccess: true })
+      .then(() => { response.writeHead(204); response.end() })
+      .catch(() => { response.writeHead(404); response.end('Invitation missing.') })
     return
   }
   if (request.method === 'POST' && /^\/__e2e\/applications\/[^/]+\/expired-link$/.test(request.url ?? '')) {

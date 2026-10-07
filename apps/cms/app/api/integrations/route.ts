@@ -5,7 +5,6 @@ import { freshStaff, hasRole } from '../../../src/access'
 import { integrationProviders, publicIntegration, type IntegrationProvider } from '../../../src/integrations'
 import { serverSessionStrategy, SENSITIVE_REAUTH_SECONDS } from '../../../src/identity'
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
-import { configuredProvider } from '../../../src/oidc'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { supportsProductionVisionInput } from '../../../src/ai-providers'
 
@@ -18,20 +17,6 @@ const isProvider = (value: unknown): value is IntegrationProvider => typeof valu
 const privateJSON = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
 const failure = () => privateJSON({ error: 'Integration request could not be completed.' }, 400)
 const MAX_REQUEST_BYTES = 24 * 1024
-const publicIssuer = (issuer: string) => {
-  try {
-    const value = new URL(issuer)
-    if (!['https:', 'http:'].includes(value.protocol)) return null
-    value.username = ''; value.password = ''; value.search = ''; value.hash = ''
-    return value.href
-  } catch { return null }
-}
-const microsoftTenant = (issuer: string) => {
-  try {
-    const segments = new URL(issuer).pathname.split('/').filter(Boolean)
-    return segments[0] ? decodeURIComponent(segments[0]) : null
-  } catch { return null }
-}
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   if (!request.body) throw new Error('missing_body')
   const reader = request.body.getReader(); const chunks: Uint8Array[] = []; let size = 0
@@ -57,16 +42,11 @@ async function owner(request: Request) {
 async function GETHandler(request: Request) {
   const { payload, user } = await owner(request)
   if (!hasRole(user as never, ['owner'])) return privateJSON({ error: 'Owner access required.' }, 403)
-  const google = configuredProvider('google')
-  const microsoft = configuredProvider('microsoft')
-  const microsoftPublicIssuer = microsoft ? publicIssuer(microsoft.issuer) : null
-  const [records, aiJobDefaults, googleUsers, microsoftUsers, emergencyOwners, emergencyUses, queued, delivered, failed] = await Promise.all([
+  const [records, aiJobDefaults, localUsers, localUses, queued, delivered, failed] = await Promise.all([
     payload.find({ collection: 'integration-configurations', sort: 'provider', limit: 20, depth: 0, overrideAccess: true }),
     payload.find({ collection: 'ai-job-defaults', sort: 'jobType', limit: 10, depth: 0, overrideAccess: true }),
-    payload.count({ collection: 'users', where: { provider: { equals: 'google' } }, overrideAccess: true }),
-    payload.count({ collection: 'users', where: { provider: { equals: 'microsoft' } }, overrideAccess: true }),
     payload.count({ collection: 'users', where: { emergencyTotpSecret: { exists: true } }, overrideAccess: true }),
-    payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.emergency_signed_in' } }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true }),
+    payload.find({ collection: 'audit-events', where: { event: { equals: 'identity.local_signed_in' } }, sort: '-createdAt', limit: 1, depth: 0, overrideAccess: true }),
     payload.count({ collection: 'notification-outbox', where: { state: { equals: 'queued' } }, overrideAccess: true }),
     payload.count({ collection: 'notification-outbox', where: { state: { equals: 'delivered' } }, overrideAccess: true }),
     payload.count({ collection: 'notification-outbox', where: { state: { equals: 'failed' } }, overrideAccess: true }),
@@ -79,9 +59,7 @@ async function GETHandler(request: Request) {
     productionVisionProviders: records.docs.map((doc) => doc as unknown as { provider?: IntegrationProvider; model?: string }).filter((item): item is { provider: IntegrationProvider; model: string } => Boolean(item.provider && typeof item.model === 'string' && supportsProductionVisionInput(item.provider, item.model))).map((item) => item.provider),
     capabilities: {
       identity: {
-        google: { configured: Boolean(google), users: googleUsers.totalDocs, enrollment: 'invited-only', roleAssignment: 'manual' },
-        microsoft: { configured: Boolean(microsoft), users: microsoftUsers.totalDocs, enrollment: 'invited-only', roleAssignment: 'manual', issuer: microsoftPublicIssuer, allowedTenant: microsoftPublicIssuer ? microsoftTenant(microsoftPublicIssuer) : null },
-        emergencyOwner: { configured: emergencyOwners.totalDocs > 0, users: emergencyOwners.totalDocs, lastUsedAt: emergencyUses.docs[0]?.createdAt ?? null, sensitiveReauthMinutes: SENSITIVE_REAUTH_SECONDS / 60 },
+        local: { configured: localUsers.totalDocs > 0, users: localUsers.totalDocs, lastUsedAt: localUses.docs[0]?.createdAt ?? null, sensitiveReauthMinutes: SENSITIVE_REAUTH_SECONDS / 60 },
       },
       assistants: { oauthConfigured, endpoint: oauthConfigured ? new URL('/mcp', publicOrigin).href : null },
       // A durable outbox exists, but provider delivery is intentionally a later

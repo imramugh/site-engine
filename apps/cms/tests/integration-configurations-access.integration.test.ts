@@ -11,6 +11,7 @@ const directory = mkdtempSync(join(tmpdir(), 'site-engine-integration-access-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
 process.env.PAYLOAD_SECRET = 'test-secret-that-is-long-enough-for-integration-access'
 process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 5).toString('base64url')
+process.env.EMERGENCY_TOTP_ENCRYPTION_KEY = Buffer.alloc(32, 6).toString('base64url')
 process.env.PAYLOAD_PUBLIC_SERVER_URL = 'http://cms.test'
 const { default: config } = await import('../payload.config.js')
 const integrationRoute = await import('../app/api/integrations/route.js')
@@ -28,12 +29,9 @@ async function freshSession(userID: string) {
 describe('ENG-023 integration configuration access', () => {
   it('returns only redacted, real capability state for the five-tab workspace', async () => {
     const owner = await payload.create({ collection: 'users', data: { email: 'workspace-owner@example.test', name: 'Workspace owner', roles: ['owner'], emergencyTotpSecret: 'encrypted-local-secret' }, overrideAccess: true })
-    await payload.create({ collection: 'users', data: { email: 'google-user@example.test', name: 'Google user', roles: ['editor'], provider: 'google', providerIssuer: 'https://issuer.example.test', providerSubject: 'google-subject' }, overrideAccess: true })
-    const emergencyUse = await payload.create({ collection: 'audit-events', data: { event: 'identity.emergency_signed_in', user: owner.id, detail: { mustNotEscape: 'private-audit-payload' } }, overrideAccess: true })
+    const localUse = await payload.create({ collection: 'audit-events', data: { event: 'identity.local_signed_in', user: owner.id, detail: { mustNotEscape: 'private-audit-payload' } }, overrideAccess: true })
     const session = await freshSession(owner.id)
     Object.assign(process.env, {
-      OIDC_GOOGLE_ISSUER_URL: 'https://issuer.example.test', OIDC_GOOGLE_CLIENT_ID: 'client', OIDC_GOOGLE_CLIENT_SECRET: 'secret',
-      OIDC_MICROSOFT_ISSUER_URL: 'https://issuer-user-must-not-escape:issuer-password-must-not-escape@login.microsoftonline.com/allowed-tenant-id/v2.0?private=query#private-fragment', OIDC_MICROSOFT_CLIENT_ID: 'microsoft-client-must-not-escape', OIDC_MICROSOFT_CLIENT_SECRET: 'microsoft-secret-must-not-escape',
       OAUTH_INTERNAL_ORIGIN: 'http://oauth.example.test', OAUTH_INTROSPECTION_SECRET: 'introspection-secret',
     })
     try {
@@ -42,9 +40,7 @@ describe('ENG-023 integration configuration access', () => {
       const body = await response.json() as Record<string, any>
       expect(body.capabilities).toEqual({
         identity: {
-          google: { configured: true, users: 1, enrollment: 'invited-only', roleAssignment: 'manual' },
-          microsoft: { configured: true, users: 0, enrollment: 'invited-only', roleAssignment: 'manual', issuer: 'https://login.microsoftonline.com/allowed-tenant-id/v2.0', allowedTenant: 'allowed-tenant-id' },
-          emergencyOwner: { configured: true, users: 1, lastUsedAt: emergencyUse.createdAt, sensitiveReauthMinutes: 15 },
+          local: { configured: true, users: 1, lastUsedAt: localUse.createdAt, sensitiveReauthMinutes: 15 },
         },
         assistants: { oauthConfigured: true, endpoint: 'http://cms.test/mcp' },
         email: { workerConfigured: false },
@@ -60,7 +56,7 @@ describe('ENG-023 integration configuration access', () => {
       expect(JSON.stringify(body)).not.toContain('?private=query')
       expect(JSON.stringify(body)).not.toContain('private-audit-payload')
     } finally {
-      for (const name of ['OIDC_GOOGLE_ISSUER_URL', 'OIDC_GOOGLE_CLIENT_ID', 'OIDC_GOOGLE_CLIENT_SECRET', 'OIDC_MICROSOFT_ISSUER_URL', 'OIDC_MICROSOFT_CLIENT_ID', 'OIDC_MICROSOFT_CLIENT_SECRET', 'OAUTH_INTERNAL_ORIGIN', 'OAUTH_INTROSPECTION_SECRET']) delete process.env[name]
+      for (const name of ['OAUTH_INTERNAL_ORIGIN', 'OAUTH_INTROSPECTION_SECRET']) delete process.env[name]
     }
   })
 

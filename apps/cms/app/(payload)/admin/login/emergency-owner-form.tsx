@@ -1,14 +1,18 @@
 'use client'
 
-import { type FormEvent, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { type FormEvent, useEffect, useState } from 'react'
 
 export function EmergencyOwnerForm() {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
+  const [continueTo, setContinueTo] = useState('/admin')
+
+  useEffect(() => {
+    const target = new URLSearchParams(window.location.search).get('returnTo') ?? new URLSearchParams(window.location.search).get('resume')
+    if (target?.startsWith('/oauth/interaction/')) setContinueTo(target)
+  }, [])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -16,38 +20,37 @@ export function EmergencyOwnerForm() {
     setPending(true)
     setMessage('')
     try {
-      const response = await fetch('/api/auth/emergency', {
+      const response = await fetch('/api/auth/local', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), code }),
       })
       setCode('')
       if (response.ok) {
-        router.push('/admin')
-        router.refresh()
+        window.location.assign(continueTo)
         return
       }
-      setMessage(response.status === 429 ? 'Emergency sign-in is temporarily locked. Please wait before trying again.' : 'Emergency sign-in was not accepted. Check your email and code, then try again.')
+      setMessage(response.status === 429 ? 'Sign-in is temporarily locked. Please wait before trying again.' : 'Sign-in was not accepted. Check your email and code, then try again.')
     } catch {
       setCode('')
-      setMessage('Emergency sign-in is unavailable. Please try again shortly.')
+      setMessage('Sign-in is unavailable. Please try again shortly.')
     } finally {
       setPending(false)
     }
   }
 
   return <section aria-labelledby="emergency-owner-heading">
-    <h2 id="emergency-owner-heading">Owner authenticator sign-in</h2>
-    <p>Use your Owner email with a current authenticator or recovery code.</p>
+    <h2 id="emergency-owner-heading">Authenticator sign-in</h2>
+    <p>Use your work email with a current authenticator or recovery code.</p>
     <form onSubmit={submit}>
-      <label htmlFor="emergency-email">Owner email</label>
-      <input id="emergency-email" name="email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} disabled={pending} />
+      <label htmlFor="emergency-email">Work email</label>
+      <input id="emergency-email" data-testid="local-auth-email" name="email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} disabled={pending} />
       <label htmlFor="emergency-code">TOTP or recovery code</label>
-      <input id="emergency-code" name="code" type="password" autoComplete="one-time-code" required maxLength={128} pattern="[A-Za-z0-9_-]{6,128}" value={code} onChange={(event) => setCode(event.target.value)} disabled={pending} />
-      <button type="submit" disabled={pending} data-testid="emergency-sign-in" style={{ minHeight: 44, minWidth: 44 }}>
-        {pending ? 'Signing in…' : 'Sign in as Owner'}
+      <input id="emergency-code" data-testid="local-auth-code" name="code" type="password" autoComplete="one-time-code" required maxLength={128} pattern="[A-Za-z0-9_-]{6,128}" value={code} onChange={(event) => setCode(event.target.value)} disabled={pending} />
+      <button type="submit" disabled={pending} data-testid="emergency-sign-in" data-local-auth-sign-in style={{ minHeight: 44, minWidth: 44 }}>
+        {pending ? 'Signing in…' : 'Sign in'}
       </button>
     </form>
-    <p aria-live="polite" data-testid="emergency-sign-in-message">{message}</p>
+    <p aria-live="polite" data-testid="emergency-sign-in-message" data-local-auth-error>{message}</p>
   </section>
 }

@@ -212,7 +212,7 @@ export interface User {
   roles: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[];
   disabled?: boolean | null;
   invitedAt?: string | null;
-  provider?: ('google' | 'microsoft') | null;
+  provider?: ('local' | 'google' | 'microsoft') | null;
   providerIssuer?: string | null;
   providerSubject?: string | null;
   emergencyTotpSecret?: string | null;
@@ -239,7 +239,7 @@ export interface User {
 export interface Invitation {
   id: string;
   email: string;
-  provider: 'google' | 'microsoft';
+  provider: 'local' | 'google' | 'microsoft';
   /**
    * Trusted configured issuer for this invite.
    */
@@ -253,6 +253,9 @@ export interface Invitation {
    * Opaque invite credential hash; its original value is never shown in admin.
    */
   tokenHash: string;
+  pendingTotpSecret?: string | null;
+  enrollmentFailedAt?: string | null;
+  enrollmentFailedCount?: number | null;
   roles: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[];
   expiresAt: string;
   acceptedAt?: string | null;
@@ -1819,6 +1822,9 @@ export interface InvitationsSelect<T extends boolean = true> {
   providerSubject?: T;
   requiredSubject?: T;
   tokenHash?: T;
+  pendingTotpSecret?: T;
+  enrollmentFailedAt?: T;
+  enrollmentFailedCount?: T;
   roles?: T;
   expiresAt?: T;
   acceptedAt?: T;
