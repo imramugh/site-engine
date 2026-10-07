@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { withPayloadTransaction } from './auth-transaction'
 import { leadStages, validateLeadAssignee } from './inquiries'
 import { hasFreshAuthentication, sessionIsUsable } from './identity'
+import { mcpCatalogMeta } from './mcp-catalog'
 
 type Current = { id: string; roles?: string[]; disabled?: boolean }
 type Identity = { userId: string; sessionId: string; clientId: string; scopes: string[] }
@@ -29,10 +30,11 @@ export function registerCrmTools(input: { server: McpServer; payload: Payload; c
   const hiring = identity.scopes.includes(careerScope) && roles.some((role) => hiringRoles.includes(role))
   const salesWrite = sales && identity.scopes.includes(leadWriteScope)
   const hiringWrite = hiring && identity.scopes.includes(careerWriteScope)
-  const leadMeta = { securitySchemes: [{ type: 'oauth2', scopes: [leadScope] }], authorization: { requiredScopes: [leadScope], effectiveUserRequired: true } }
-  const leadWriteMeta = { securitySchemes: [{ type: 'oauth2', scopes: [leadScope, leadWriteScope] }], authorization: { requiredScopes: [leadScope, leadWriteScope], effectiveUserRequired: true } }
-  const careerMeta = { securitySchemes: [{ type: 'oauth2', scopes: [careerScope] }], authorization: { requiredScopes: [careerScope], effectiveUserRequired: true } }
-  const careerWriteMeta = { securitySchemes: [{ type: 'oauth2', scopes: [careerScope, careerWriteScope] }], authorization: { requiredScopes: [careerScope, careerWriteScope], effectiveUserRequired: true } }
+  const meta = (scopes: string[], requiredRoles: string[]) => ({ securitySchemes: [{ type: 'oauth2' as const, scopes }], authorization: { requiredScopes: scopes, effectiveUserRequired: true as const, requiredRoles }, limits: mcpCatalogMeta(scopes[0]!, requiredRoles).limits })
+  const leadMeta = meta([leadScope], leadRoles)
+  const leadWriteMeta = meta([leadScope, leadWriteScope], leadRoles)
+  const careerMeta = meta([careerScope], hiringRoles)
+  const careerWriteMeta = meta([careerScope, careerWriteScope], hiringRoles)
 
   const requireFresh = async (req: Parameters<Payload['findByID']>[0]['req']) => {
     const user = await payload.findByID({ collection: 'users', id: identity.userId, depth: 0, overrideAccess: true, req }) as Current

@@ -4,6 +4,7 @@ export const mcpCatalogLimits = Object.freeze({
   publish: false,
   userManagement: false,
   credentialAccess: false,
+  permanentDelete: false,
 })
 
 type CatalogAuthorization = {

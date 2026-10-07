@@ -32,6 +32,36 @@ tool. Unknown top-level arguments are rejected before the handler runs, includin
 attempts to supply `overrideAccess`. Embedded content remains subject to the
 contract's schema and field rules.
 
+## Resources and prompts
+
+The catalog lists the following read-only resources. Each entry advertises its
+OAuth requirement, requires an effective CMS user, and carries limits stating
+that it cannot approve, publish, manage users, access credentials, or permanently
+delete content. Authorization is enforced when a resource is read; a client may
+discover catalog metadata without gaining access to a resource outside its grant.
+
+| Resource | Purpose |
+| --- | --- |
+| `site-engine://contract/style-guide` | Scoped style settings |
+| `site-engine://contract/glossary` | Preferred terminology |
+| `site-engine://contract/block-library` | Block, template, and recipe contract |
+| `site-engine://site/summary` | Scoped content totals |
+| `site-engine://site/page-tree` | Scoped page and section structure |
+| `site-engine://page/{id}` | One authorized draft page |
+| `site-engine://site/settings` | Owner-only site metadata |
+| `site-engine://site/installed-themes` | Owner-only theme compatibility metadata |
+
+The eight content prompts require `mcp:content:read` and an effective user.
+They return untrusted-data guidance and, without content-write scope, a read-only
+plan or review rather than a mutation: `plan-page`, `review-content`,
+`create-section`, `build-page-from-recipe`, `write-service-page`, `add-faq`,
+`refresh-page-facts`, and `monthly-content-review`.
+
+Lead prompts (`draft-inquiry-reply`, `weekly-lead-follow-ups`) require their lead
+read scope. `summarize-role-applications` requires the careers read scope. Prompt
+retrieval never sends, approves, publishes, or changes a record; a separately
+authorized tool call is required for any later draft workflow.
+
 ## Suggestions
 
 The four `suggest_*` calls require content-read and content-write scopes plus an
