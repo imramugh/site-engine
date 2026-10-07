@@ -56,6 +56,31 @@ approval still requires a separate fresh-authentication action bound to the
 exact change-set revision, change hash, rendered preview, and version pins.
 MCP exposes no approval or publication tool.
 
+### Direct text editing in the page preview
+
+In the full page editor, prepare the saved draft preview and choose **Edit text
+in preview**. Explicit renderer markers support existing Hero eyebrow,
+heading and body, and Callout/CTA heading and body. Generated navigation,
+service introductions projected from page metadata, links, nested items and
+unsupported fields retain the complete split-view controls. An absent,
+duplicate or mismatched marker disables preview typing rather than guessing
+which source field owns the text.
+
+Typing updates only the local draft. **Check draft** validates the exact page
+hash and owned change-set revision without saving; review its field errors and
+publication-readiness results before **Save draft**. Selecting Save on an
+unchecked draft performs the check first and requires another Save to persist.
+A valid draft may still have publication blockers. Save uses normal change-set
+capture and refreshes the protected preview; it never publishes. A stale save
+retains typed text until the editor explicitly chooses to reload and discard.
+Owners, Editors and Approvers use the same whole-page authorization boundary.
+
+Expose `POST /api/editorial/page-editor/:id/validate` through the deployment
+edge with the existing 2,000,000-byte page-save limit. Allow the generic
+`GET /page-editor-preview.css` stylesheet so preview highlighting works under
+a strict same-origin CSP without inline styles. Keep private preview access
+protected by the existing session and change-set checks.
+
 ### AI provider pricing and caps
 
 Provider jobs use integer micro-USD (`1,000,000` = US $1) for every cap and

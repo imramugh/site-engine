@@ -12,6 +12,7 @@ import {
   pageEditorHash,
   pageEditorProjection,
   parsePageEditorDraft,
+  validatePageEditorSave,
 } from '../src/page-editor'
 import { neutralFixture } from '@site-engine/contract/fixtures'
 import { changeSetHash } from '../src/publishing'
@@ -37,6 +38,9 @@ writeFileSync(
 const { default: config } = await import('../payload.config.js')
 const editorRoute = await import(
   '../app/api/editorial/page-editor/[id]/route.js'
+)
+const validateRoute = await import(
+  '../app/api/editorial/page-editor/[id]/validate/route.js'
 )
 let payload: Awaited<ReturnType<typeof getPayload>>
 
@@ -725,5 +729,54 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
         readiness: expect.objectContaining({ publishable: expect.any(Boolean) }),
       },
     })
+  })
+
+  it('preflights an owned unsaved page draft with readiness checks without mutating it', async () => {
+    const editor = await actor()
+    const other = await actor('owner')
+    const current = await fixture(editor)
+    const input = save(current.page as unknown as Record<string, unknown>, current.set, 'Preflight only title')
+    const request = (body: unknown, cookie: string, origin = 'http://cms.test', pageID = current.page.id) => validateRoute.POST(
+      new Request(`http://cms.test/api/editorial/page-editor/${pageID}/validate`, {
+        method: 'POST', headers: { origin, cookie, 'content-type': 'application/json' }, body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ id: pageID }) },
+    )
+    const publicInput = (({ pageID: _pageID, ...body }) => body)(input)
+    // The public shape intentionally excludes pageID; the route path supplies it.
+    expect((await request({ ...publicInput, pageID: current.page.id }, await session(editor))).status).toBe(400)
+    const accepted = await request(publicInput, await session(editor))
+    expect(accepted.status).toBe(200)
+    await expect(accepted.json()).resolves.toMatchObject({
+      valid: true,
+      pageID: current.page.id,
+      changeSetID: current.set.id,
+      quality: { checks: [expect.objectContaining({ name: 'contract-and-tree' })], readiness: expect.any(Object) },
+    })
+    expect(await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })).toMatchObject({ title: 'Full page editor fixture' })
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ revision: 0, changes: [] })
+    const approver = await actor('approver')
+    const approverCurrent = await fixture(approver)
+    const approverInput = (({ pageID: _pageID, ...body }) => body)(save(approverCurrent.page as unknown as Record<string, unknown>, approverCurrent.set, 'Approver preflight'))
+    expect((await request(approverInput, await session(approver), 'http://cms.test', approverCurrent.page.id)).status).toBe(200)
+    const ownerCurrent = await fixture(other)
+    const ownerInput = (({ pageID: _pageID, ...body }) => body)(save(ownerCurrent.page as unknown as Record<string, unknown>, ownerCurrent.set, 'Owner preflight'))
+    expect((await request(ownerInput, await session(other), 'http://cms.test', ownerCurrent.page.id)).status).toBe(200)
+    const sales = await payload.create({ collection: 'users', data: { email: `sales-${newOpaqueToken()}@example.test`, name: 'sales', roles: ['sales'] }, overrideAccess: true })
+    expect((await request(publicInput, await session(sales))).status).toBe(403)
+    const invalid = await request({ ...publicInput, draft: { ...publicInput.draft, blocks: [{ ...publicInput.draft.blocks[0], heading: 'x'.repeat(121) }] } }, await session(editor))
+    expect(invalid.status).toBe(400)
+    await expect(invalid.json()).resolves.toMatchObject({ validation: [expect.objectContaining({ path: 'blocks[0].heading', message: 'Value is too long.' })] })
+    expect(await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })).toMatchObject({ title: 'Full page editor fixture' })
+    expect((await request({ ...publicInput, draft: { ...publicInput.draft, status: 'published' } }, await session(editor))).status).toBe(400)
+    expect((await request(publicInput, await session(other))).status).toBe(403)
+    await payload.update({ collection: 'pages', id: current.page.id, data: { title: 'Changed outside preflight' }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    expect((await request(publicInput, await session(editor))).status).toBe(409)
+    const fresh = await payload.findByID({ collection: 'pages', id: current.page.id, draft: true, overrideAccess: true })
+    const freshSet = await payload.findByID({ collection: 'change-sets', id: current.set.id, depth: 0, overrideAccess: true })
+    const freshInput = save(fresh as unknown as Record<string, unknown>, freshSet, 'Candidate null before')
+    await payload.update({ collection: 'change-sets', id: current.set.id, data: { changes: [{ collection: 'pages', id: current.page.id, before: null, after: null, beforeHash: null, afterHash: null }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const candidate = await withPayloadTransaction(payload, (req) => validatePageEditorSave({ payload, req, actor: editor as never, save: freshInput }))
+    expect(candidate.changes.find((change) => change.collection === 'pages' && change.id === current.page.id)?.before).toBeNull()
   })
 })

@@ -11,6 +11,7 @@ import {
 } from 'react'
 import type { Block, Page } from '@site-engine/contract'
 import { MetadataFields, type PageMetadataValue } from './metadata-fields'
+import { isPreviewEditableField, type PreviewEditableField } from './preview-edit-policy'
 import styles from './page-editor.module.css'
 
 type Draft = PageMetadataValue & {
@@ -874,6 +875,10 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const [previewWidth, setPreviewWidth] = useState(1280)
   const [activeBlockID, setActiveBlockID] = useState<string>()
   const [previewInteractive, setPreviewInteractive] = useState<boolean>()
+  const [previewEditMode, setPreviewEditMode] = useState(false)
+  const [previewTextAvailable, setPreviewTextAvailable] = useState(false)
+  const [readiness, setReadiness] = useState<{ message: string; fingerprint: string }>()
+  const [stale, setStale] = useState(false)
   const [newSetName, setNewSetName] = useState('Page edits')
   const timer = useRef<number | undefined>(undefined)
   const requestVersion = useRef(0)
@@ -883,7 +888,9 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const previewFrame = useRef<HTMLIFrameElement>(null)
   const previewBlockCleanup = useRef<() => void>(() => undefined)
   const activeBlockIDRef = useRef<string | undefined>(undefined)
+  const draftRef = useRef<Draft | undefined>(undefined)
   const saved = data?.page.draft
+  useEffect(() => { draftRef.current = draft }, [draft])
   const selectedSet =
     data?.changeSets.find((item) => item.id === changeSetID) ??
     data?.changeSets[0]
@@ -901,6 +908,8 @@ export function PageEditor({ pageID }: { pageID: string }) {
     timer.current = undefined
     setPreview(undefined)
     setPreviewInteractive(undefined)
+    setPreviewEditMode(false)
+    setPreviewTextAvailable(false)
   }, [])
   const closePicker = useCallback(() => {
     setPicker(false)
@@ -998,96 +1007,93 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const wirePreviewBlocks = useCallback(() => {
     previewBlockCleanup.current()
     const document = previewFrame.current?.contentDocument
-    if (!document?.head || document.readyState === 'loading' || !draft) {
+    const currentDraft = draftRef.current
+    if (!document?.head || document.readyState === 'loading' || !currentDraft) {
       setPreviewInteractive(undefined)
+      setPreviewTextAvailable(false)
       return
     }
-    const visible = draft.blocks.filter((block) => !block.hidden)
-    const identified = [
-      ...document.querySelectorAll<HTMLElement>('[data-block-id]'),
-    ]
-    const typed = [
-      ...document.querySelectorAll<HTMLElement>('[data-block-type]'),
-    ]
-    const generic = [...document.querySelectorAll<HTMLElement>('[data-block]')]
-    const nodes = identified.length
-      ? identified
-      : typed.length
-        ? typed
-        : generic
-    const matches =
-      nodes.length === visible.length &&
-      nodes.every((node, index) => {
-        const block = visible[index]
-        if (!block) return false
-        const id = node.dataset.blockId
-        const type = node.dataset.blockType ?? node.dataset.block
-        if (id !== undefined && id !== block.id) return false
-        if (type !== undefined && type !== block.type) return false
-        return id !== undefined || type !== undefined
-      })
+    const visible = currentDraft.blocks.filter((block) => !block.hidden)
+    const nodes = [...document.querySelectorAll<HTMLElement>('[data-block-id]')]
+    const byID = new Map(visible.map((block) => [block.id, block]))
+    const renderedIDs = nodes.map((node) => node.dataset.blockId ?? '')
+    const matches = nodes.length === visible.length && new Set(renderedIDs).size === visible.length && renderedIDs.every((id) => byID.has(id)) && nodes.every((node) => {
+      const block = byID.get(node.dataset.blockId ?? '')
+      return Boolean(block && (node.dataset.blockType ?? node.dataset.block) === block.type)
+    })
     if (!matches) {
       setPreviewInteractive(false)
+      setPreviewTextAvailable(false)
       return
     }
-    const style = document.createElement('style')
+    const style = document.createElement('link')
     style.dataset.pageEditorSelectionStyle = 'true'
-    style.textContent = `[data-page-editor-preview-block-id]{cursor:pointer}[data-page-editor-preview-block-id]:focus-visible{outline:2px dashed Highlight;outline-offset:-2px}[data-page-editor-preview-block-id][data-page-editor-selected="true"]{outline:3px solid Highlight;outline-offset:-3px}`
+    style.rel = 'stylesheet'
+    style.href = '/page-editor-preview.css'
     document.head.append(style)
     const cleanups: Array<() => void> = []
-    nodes.forEach((node, index) => {
-      const block = visible[index]!
+    nodes.forEach((node) => {
+      const block = byID.get(node.dataset.blockId!)!
       const previousTabIndex = node.getAttribute('tabindex')
       const previousLabel = node.getAttribute('aria-label')
       node.dataset.pageEditorPreviewBlockId = block.id
       node.dataset.pageEditorSelected = String(activeBlockID === block.id)
       node.tabIndex = 0
       node.setAttribute('aria-label', `Edit ${title(block.type)} block`)
-      const activate = (event: Event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        selectBlock(block.id, true)
-      }
+      const activate = (event: Event) => { if (previewEditMode) return; event.preventDefault(); event.stopPropagation(); selectBlock(block.id, true) }
       const keydown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          collapseBlock(block.id)
-        } else if (
-          event.target === node &&
-          (event.key === 'Enter' || event.key === ' ')
-        ) {
-          event.preventDefault()
-          event.stopPropagation()
-          selectBlock(block.id, true)
-        }
+        if (event.key === 'Escape' && !previewEditMode) { event.preventDefault(); collapseBlock(block.id) }
+        else if (!previewEditMode && event.target === node && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); selectBlock(block.id, true) }
       }
-      node.addEventListener('click', activate)
-      node.addEventListener('keydown', keydown)
-      cleanups.push(() => {
-        node.removeEventListener('click', activate)
-        node.removeEventListener('keydown', keydown)
-        delete node.dataset.pageEditorPreviewBlockId
-        delete node.dataset.pageEditorSelected
-        if (previousLabel === null) node.removeAttribute('aria-label')
-        else node.setAttribute('aria-label', previousLabel)
-        if (previousTabIndex === null) node.removeAttribute('tabindex')
-        else node.setAttribute('tabindex', previousTabIndex)
-      })
-      if (activeBlockID === block.id)
-        node.scrollIntoView({
-          block: 'center',
-          behavior: window.matchMedia('(prefers-reduced-motion: reduce)')
-            .matches
-            ? 'auto'
-            : 'smooth',
-        })
+      node.addEventListener('click', activate); node.addEventListener('keydown', keydown)
+      cleanups.push(() => { node.removeEventListener('click', activate); node.removeEventListener('keydown', keydown); delete node.dataset.pageEditorPreviewBlockId; delete node.dataset.pageEditorSelected; if (previousLabel === null) node.removeAttribute('aria-label'); else node.setAttribute('aria-label', previousLabel); if (previousTabIndex === null) node.removeAttribute('tabindex'); else node.setAttribute('tabindex', previousTabIndex) })
     })
-    setPreviewInteractive(true)
-    previewBlockCleanup.current = () => {
-      cleanups.forEach((cleanup) => cleanup())
-      style.remove()
+    const candidates = [...document.querySelectorAll<HTMLElement>('[data-site-engine-edit-field]')].filter((target) => !target.closest('[data-site-engine-edit-disabled="true"]'))
+    const editable = candidates.filter((target) => {
+      const field = target.dataset.siteEngineEditField ?? ''
+      const blockNode = target.closest<HTMLElement>('[data-block-id]')
+      const block = blockNode ? byID.get(blockNode.dataset.blockId ?? '') : undefined
+      return Boolean(block && blockNode && nodes.includes(blockNode) && !target.closest('[data-site-engine-edit-disabled="true"]') && isPreviewEditableField(block, field) && target.textContent === (block as unknown as Record<string, unknown>)[field])
+    })
+    const unique = editable.length > 0 && editable.length === candidates.length && new Set(editable.map((target) => `${target.closest('[data-block-id]')?.getAttribute('data-block-id')}:${target.dataset.siteEngineEditField}`)).size === editable.length
+    setPreviewTextAvailable(unique)
+    if (previewEditMode && unique) {
+      const preventInteractive = (event: Event) => {
+        const target = event.target as Element | null
+        if (target?.closest('[contenteditable="plaintext-only"]')) return
+        if (target?.closest('a, button, input, select, textarea, form')) { event.preventDefault(); event.stopPropagation() }
+      }
+      document.addEventListener('click', preventInteractive, true)
+      document.addEventListener('submit', preventInteractive, true)
+      cleanups.push(() => { document.removeEventListener('click', preventInteractive, true); document.removeEventListener('submit', preventInteractive, true) })
+      editable.forEach((target) => {
+      const field = target.dataset.siteEngineEditField as PreviewEditableField
+      const blockNode = target.closest<HTMLElement>('[data-block-id]')!
+      const blockID = blockNode.dataset.blockId!
+      const original = target.textContent ?? ''
+      const previousContentEditable = target.getAttribute('contenteditable')
+      const previousRole = target.getAttribute('role')
+      const previousLabel = target.getAttribute('aria-label')
+      target.dataset.pageEditorPreviewEdit = 'true'
+      target.contentEditable = 'plaintext-only'
+      target.setAttribute('role', 'textbox')
+      target.setAttribute('aria-label', `Edit ${title(field)}`)
+      const input = () => {
+        const value = target.textContent ?? ''
+        setDraft((current) => current ? { ...current, blocks: current.blocks.map((block) => block.id === blockID ? ({ ...block, [field]: value } as Block) : block) } : current)
+        setMessage('Unsaved page changes. Run checks before saving.')
+        setReadiness(undefined)
+      }
+      const paste = (event: ClipboardEvent) => { event.preventDefault(); document.execCommand('insertText', false, event.clipboardData?.getData('text/plain') ?? '') }
+      const editKeydown = (event: KeyboardEvent) => { if (event.key === 'Enter' && field !== 'body' && !event.isComposing) { event.preventDefault(); return } if (event.key === 'Escape' && !event.isComposing) { event.preventDefault(); target.textContent = original; input(); setPreviewEditMode(false); window.parent.requestAnimationFrame(() => (document.defaultView?.frameElement as HTMLElement | null)?.focus()) } }
+      const blockInteraction = (event: Event) => { if ((event.target as Element | null)?.closest('a, button, input, select, textarea, form') && !target.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation() } }
+      blockNode.addEventListener('click', blockInteraction, true); target.addEventListener('input', input); target.addEventListener('paste', paste); target.addEventListener('keydown', editKeydown)
+      cleanups.push(() => { blockNode.removeEventListener('click', blockInteraction, true); target.removeEventListener('input', input); target.removeEventListener('paste', paste); target.removeEventListener('keydown', editKeydown); delete target.dataset.pageEditorPreviewEdit; if (previousContentEditable === null) target.removeAttribute('contenteditable'); else target.setAttribute('contenteditable', previousContentEditable); if (previousRole === null) target.removeAttribute('role'); else target.setAttribute('role', previousRole); if (previousLabel === null) target.removeAttribute('aria-label'); else target.setAttribute('aria-label', previousLabel) })
+      })
     }
-  }, [activeBlockID, collapseBlock, draft, selectBlock])
+    setPreviewInteractive(true)
+    previewBlockCleanup.current = () => { cleanups.forEach((cleanup) => cleanup()); style.remove() }
+  }, [activeBlockID, collapseBlock, previewEditMode, selectBlock])
   useEffect(() => {
     if (preview?.status === 'completed') wirePreviewBlocks()
     return () => previewBlockCleanup.current()
@@ -1102,6 +1108,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       throw new Error(next.error || 'Unable to load this page draft.')
     setData(next)
     setDraft(clone(next.page.draft))
+    setStale(false)
     const active = activeBlockIDRef.current
     setActiveBlock(
       next.page.draft.blocks.some((block) => block.id === active)
@@ -1131,6 +1138,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
         : current,
     )
     setMessage('Unsaved page changes.')
+    setReadiness(undefined)
   }
   const poll = useCallback(
     async (jobID: string, page: string, version: number) => {
@@ -1179,8 +1187,33 @@ export function PageEditor({ pageID }: { pageID: string }) {
     setPreview(result.job)
     await poll(result.job.id, pageID, version)
   }
+  const validateDraft = async () => {
+    if (!data || !draft || !selectedSet || !dirty) return false
+    setBusy(true)
+    setReadiness(undefined)
+    setMessage('Checking page draft…')
+    try {
+      const response = await fetch(`/api/editorial/page-editor/${encodeURIComponent(pageID)}/validate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ changeSetID: selectedSet.id, expectedPageHash: data.page.hash, expectedChangeSetRevision: selectedSet.revision, draft }) })
+      const result = await response.json() as { valid?: boolean; error?: string; validation?: Array<{ path: string; message: string }>; quality?: { checks?: Array<{ name: string; status: string; errors?: Array<{ message: string }> }>; warnings?: string[]; readiness?: { publishable?: boolean; blockers?: Array<{ code?: string; path?: string; message?: string }>; issues?: Array<{ code?: string; path?: string; message?: string }>; warnings?: Array<{ code?: string; path?: string; message?: string }> } } }
+      if (!response.ok || !result.valid) { if (response.status === 409) setStale(true); const details = result.validation?.map((item) => `${item.path}: ${item.message}`).join(' ') ; throw new Error(details || result.error || 'The page draft did not pass checks.') }
+      const checks = result.quality?.checks ?? []
+      const failed = checks.filter((check) => check.status !== 'passed')
+      const checkErrors = failed.flatMap((check) => check.errors?.map((error) => error.message) ?? [])
+      const warnings = result.quality?.warnings ?? []
+      const readinessErrors = [...(result.quality?.readiness?.blockers ?? []), ...(result.quality?.readiness?.issues ?? [])]
+      const text = (item: { code?: string; path?: string; message?: string } | string) => typeof item === 'string' ? item : `${item.code ? `${item.code}: ` : ''}${item.message ?? 'Readiness issue'}${item.path ? ` (${item.path})` : ''}`
+      const message = !result.quality?.readiness?.publishable ? `Draft is valid to save, but is not ready to publish: ${[...checkErrors, ...readinessErrors.map(text)].join(' ') || 'resolve the reported readiness checks.'}` : failed.length ? `Draft is valid to save. ${checkErrors.join(' ') || `${failed.length} readiness checks need attention.`}` : warnings.length ? `Draft is valid to save with advisory warnings: ${warnings.join(' ')}` : checks.length ? `Checks passed: ${checks.map((check) => check.name).join(', ')}.` : 'Page draft is valid and ready to save.'
+      setReadiness({ message, fingerprint: JSON.stringify({ draft, changeSetID: selectedSet.id, revision: selectedSet.revision, pageHash: data.page.hash }) })
+      setMessage('Draft checks are ready for review before saving.')
+      return true
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to check this page draft.'); return false } finally { setBusy(false) }
+  }
   const save = async () => {
     if (!data || !draft || !selectedSet || !dirty) return
+    if (!readiness || readiness.fingerprint !== JSON.stringify({ draft, changeSetID: selectedSet.id, revision: selectedSet.revision, pageHash: data.page.hash })) {
+      await validateDraft()
+      return
+    }
     setBusy(true)
     clearPreview()
     setMessage('Saving page draft…')
@@ -1199,8 +1232,10 @@ export function PageEditor({ pageID }: { pageID: string }) {
         },
       )
       const result = (await response.json()) as { error?: string }
-      if (!response.ok)
+      if (!response.ok) {
+        if (response.status === 409) setStale(true)
         throw new Error(result.error || 'Unable to save this page draft.')
+      }
       const next = await load()
       const set = next.changeSets.find((item) => item.id === selectedSet.id)
       setChangeSetID(set?.id ?? '')
@@ -1336,6 +1371,13 @@ export function PageEditor({ pageID }: { pageID: string }) {
           <button
             type="button"
             disabled={busy || !dirty || !selectedSet}
+            onClick={() => void validateDraft()}
+          >
+            Check draft
+          </button>
+          <button
+            type="button"
+            disabled={busy || !dirty || !selectedSet}
             onClick={() => void save()}
           >
             Save draft
@@ -1354,6 +1396,8 @@ export function PageEditor({ pageID }: { pageID: string }) {
       <p role="status" aria-live="polite">
         {message}
       </p>
+      {readiness ? <section className={styles.readiness} data-page-editor-readiness aria-label="Draft check results"><strong>Draft checks</strong><p>{readiness.message}</p></section> : null}
+      {stale ? <section className={styles.stale} role="alert" data-page-editor-stale><p>This draft changed elsewhere. Your unsaved text is still available.</p><button type="button" onClick={() => { if (window.confirm('Reload and discard your unsaved page changes?')) { clearPreview(); void load().then(() => setMessage('Reloaded the latest draft.')).catch((error: Error) => setMessage(error.message)) } }}>Reload and discard changes</button></section> : null}
       {!selectedSet ? (
         <section className={styles.createSet}>
           <label>
@@ -1381,6 +1425,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
             onChange={(event) => {
               clearPreview()
               setChangeSetID(event.target.value)
+              setReadiness(undefined)
             }}
           >
             {data.changeSets.map((item) => (
@@ -1552,11 +1597,18 @@ export function PageEditor({ pageID }: { pageID: string }) {
                 Mobile
               </button>
             </div>
+            <button type="button" aria-pressed={previewEditMode} disabled={preview?.status !== 'completed' || !previewTextAvailable} onClick={() => setPreviewEditMode((current) => !current)}>
+              {previewEditMode ? 'Finish preview text editing' : 'Edit text in preview'}
+            </button>
             {preview?.status === 'completed' ? (
               <small data-page-editor-preview-selection>
                 {previewInteractive === false
                   ? 'Block selection unavailable for this renderer.'
-                  : 'Select a rendered block to edit it.'}
+                  : previewEditMode
+                    ? 'Type in supported text fields. Escape cancels the focused field.'
+                    : previewTextAvailable
+                      ? 'Select a rendered block or edit supported text in the preview.'
+                      : 'Select a rendered block to edit it.'}
               </small>
             ) : null}
           </header>

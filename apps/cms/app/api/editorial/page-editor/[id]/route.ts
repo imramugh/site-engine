@@ -4,7 +4,7 @@ import config from '../../../../../payload.config'
 import {
   executePageEditorSave,
   pageEditorContext,
-  parsePageEditorDraft,
+  parsePageEditorSaveInput,
   type PageEditorSave,
 } from '../../../../../src/page-editor'
 import { serverSessionStrategy } from '../../../../../src/identity'
@@ -96,28 +96,8 @@ async function POSTHandler(
   try {
     const initialBaseline = await loadInitialPreviewBaseline()
     const body = await boundedBody(request)
-    if (
-      !Object.keys(body).every((key) =>
-        [
-          'changeSetID',
-          'expectedPageHash',
-          'expectedChangeSetRevision',
-          'draft',
-        ].includes(key),
-      ) ||
-      typeof body.changeSetID !== 'string' ||
-      typeof body.expectedPageHash !== 'string' ||
-      !Number.isInteger(body.expectedChangeSetRevision)
-    )
-      throw new Error('INVALID_PAGE_EDIT')
     const { id } = await context.params
-    const save: PageEditorSave = {
-      pageID: id,
-      changeSetID: body.changeSetID,
-      expectedPageHash: body.expectedPageHash,
-      expectedChangeSetRevision: body.expectedChangeSetRevision as number,
-      draft: parsePageEditorDraft(body.draft),
-    }
+    const save: PageEditorSave = parsePageEditorSaveInput(id, body)
     const payload = await getPayload({ config })
     const authenticated = await serverSessionStrategy.authenticate({
       headers: request.headers,

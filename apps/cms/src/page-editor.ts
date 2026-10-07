@@ -15,6 +15,8 @@ import { blockCatalog } from './block-gallery'
 import { workingPageState } from './content-readiness'
 import { canonicalHash } from './publishing'
 import { previewThemeContext, type PreviewBaseline } from './review-preview'
+import { snapshot, type CapturedChange } from './editorial'
+import { ZodError } from 'zod'
 
 export type PageEditorActor = {
   id: string
@@ -51,6 +53,17 @@ export type PageEditorSaveResult = {
   replayed: boolean
   noOp: boolean
   quality?: unknown
+}
+export type PageEditorPreflight = {
+  pageID: string
+  changeSetID: string
+  pageHash: string
+  changeSetRevision: number
+  replayed: boolean
+  noOp: boolean
+  /** Candidate captures are intentionally returned only to the server route
+   * that evaluates readiness; they are never persisted by preflight. */
+  changes: CapturedChange[]
 }
 
 const uuid =
@@ -122,7 +135,16 @@ export function parsePageEditorDraft(value: unknown): PageEditorDraft {
     draft.blocks.length > 40
   )
     throw new Error('INVALID_PAGE_EDIT')
-  const blocks = draft.blocks.map((block) => BlockSchema.parse(block))
+  const blocks = draft.blocks.map((block, index) => {
+    try {
+      return BlockSchema.parse(block)
+    } catch (error) {
+      if (error instanceof ZodError) {
+        throw new ZodError(error.issues.map((issue) => ({ ...issue, path: ['blocks', index, ...issue.path] })))
+      }
+      throw error
+    }
+  })
   const seoDescription = draft.seoDescription?.trim()
   const kicker = typeof draft.kicker === 'string' ? draft.kicker.trim() : undefined
   const lede = typeof draft.lede === 'string' ? draft.lede.trim() : undefined
@@ -143,6 +165,18 @@ export function parsePageEditorDraft(value: unknown): PageEditorDraft {
     ...(businessCase ? { businessCase } : {}),
     noindex: draft.noindex,
     blocks,
+  }
+}
+
+/** Strict transport parser shared by save and preflight routes. */
+export function parsePageEditorSaveInput(pageID: string, body: Record<string, unknown>): PageEditorSave {
+  if (!Object.keys(body).every((key) => ['changeSetID', 'expectedPageHash', 'expectedChangeSetRevision', 'draft'].includes(key)) || typeof body.changeSetID !== 'string' || typeof body.expectedPageHash !== 'string' || !Number.isInteger(body.expectedChangeSetRevision)) throw new Error('INVALID_PAGE_EDIT')
+  return {
+    pageID,
+    changeSetID: body.changeSetID,
+    expectedPageHash: body.expectedPageHash,
+    expectedChangeSetRevision: body.expectedChangeSetRevision as number,
+    draft: parsePageEditorDraft(body.draft),
   }
 }
 
@@ -227,6 +261,87 @@ function contractPage(
   })
 }
 
+type PreparedPageEditorSave = {
+  desired: PageEditorDraft
+  page: Record<string, unknown>
+  set: Record<string, unknown>
+  current: PageEditorDraft
+  currentHash: string
+  desiredHash: string
+}
+
+async function preparePageEditorSave(input: {
+  payload: Payload
+  req: PayloadRequest
+  actor: PageEditorActor
+  save: PageEditorSave
+  initialBaseline?: PreviewBaseline
+}): Promise<PreparedPageEditorSave> {
+  const { payload, req, actor, save } = input
+  if (!hasRole(actor, ['owner', 'approver', 'editor'])) throw new Error('EDITOR_ROLE_REQUIRED')
+  if (!uuid.test(save.pageID) || !uuid.test(save.changeSetID) || !sha256.test(save.expectedPageHash) || !Number.isInteger(save.expectedChangeSetRevision) || save.expectedChangeSetRevision < 0) throw new Error('INVALID_PAGE_EDIT')
+  const desired = parsePageEditorDraft(save.draft)
+  req.user = actor as never
+  const page = await payload.findByID({ collection: 'pages', id: save.pageID, depth: 0, draft: true, user: actor as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
+  const sectionID = relationID(page.sectionId)
+  if (!sectionID) throw new Error('SECTION_NOT_ACCESSIBLE')
+  await payload.findByID({ collection: 'sections', id: sectionID, depth: 0, draft: true, user: actor as never, overrideAccess: false, req })
+  const set = await payload.findByID({ collection: 'change-sets', id: save.changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
+  editableSet(set, actor, save.changeSetID)
+  if (desired.kicker || desired.lede || desired.lastReviewed) {
+    const previewContext = await previewThemeContext({ payload, changeSets: [set], initialBaseline: input.initialBaseline, req })
+    if (!['1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(previewContext.changeSetContractVersions[save.changeSetID] ?? '')) throw new Error('PAGE_METADATA_UNSUPPORTED')
+  }
+  const current = pageEditorProjection(page)
+  return { desired, page, set, current, currentHash: pageEditorHash(current), desiredHash: pageEditorHash(desired) }
+}
+
+function assertFreshPageEditorSave(prepared: PreparedPageEditorSave, save: PageEditorSave): { replayed: boolean; noOp: boolean } {
+  if (prepared.currentHash === prepared.desiredHash) {
+    if (prepared.currentHash === save.expectedPageHash) return { replayed: false, noOp: true }
+    if (replayed(prepared.set, save, prepared.desiredHash)) return { replayed: true, noOp: false }
+  }
+  if (prepared.currentHash !== save.expectedPageHash) throw new Error('STALE_PAGE_EDIT')
+  if (Number(prepared.set.revision ?? 0) !== save.expectedChangeSetRevision) throw new Error('STALE_CHANGE_SET')
+  return { replayed: false, noOp: false }
+}
+
+function candidateChanges(set: Record<string, unknown>, page: Record<string, unknown>, desired: PageEditorDraft): CapturedChange[] {
+  const current = Array.isArray(set.changes) ? structuredClone(set.changes) as CapturedChange[] : []
+  const index = current.findIndex((change) => change.collection === 'pages' && change.id === String(page.id))
+  const existing = index >= 0 ? current[index] : undefined
+  const after = snapshot('pages', { ...page, ...desired, status: 'draft' })
+  const change: CapturedChange = {
+    collection: 'pages', id: String(page.id),
+    before: existing ? existing.before : snapshot('pages', page), after,
+    beforeHash: existing?.beforeHash ?? null, afterHash: null,
+    ...(existing?.retainedDraftHash ? { retainedDraftHash: existing.retainedDraftHash } : {}),
+  }
+  if (index >= 0) current[index] = change
+  else current.push(change)
+  return current
+}
+
+/** Validates the exact full-page save contract and builds an in-memory
+ * candidate for readiness checks. It never writes a page or change set. */
+export async function validatePageEditorSave(input: {
+  payload: Payload
+  req: PayloadRequest
+  actor: PageEditorActor
+  save: PageEditorSave
+  initialBaseline?: PreviewBaseline
+}): Promise<PageEditorPreflight> {
+  const prepared = await preparePageEditorSave(input)
+  const freshness = assertFreshPageEditorSave(prepared, input.save)
+  contractPage(prepared.page, prepared.desired)
+  return {
+    pageID: input.save.pageID, changeSetID: input.save.changeSetID,
+    pageHash: prepared.desiredHash, changeSetRevision: Number(prepared.set.revision ?? 0),
+    ...freshness,
+    changes: candidateChanges(prepared.set, prepared.page, prepared.desired),
+  }
+}
+
 export async function applyPageEditorSave(input: {
   payload: Payload
   req: PayloadRequest
@@ -236,65 +351,12 @@ export async function applyPageEditorSave(input: {
   audit?: PageEditorAudit
   evaluateQuality?: (req: PayloadRequest, changeSet: Record<string, unknown>) => Promise<unknown>
 }): Promise<PageEditorSaveResult> {
-  const { payload, req, actor, save } = input
-  if (!hasRole(actor, ['owner', 'approver', 'editor']))
-    throw new Error('EDITOR_ROLE_REQUIRED')
-  if (
-    !uuid.test(save.pageID) ||
-    !uuid.test(save.changeSetID) ||
-    !sha256.test(save.expectedPageHash) ||
-    !Number.isInteger(save.expectedChangeSetRevision) ||
-    save.expectedChangeSetRevision < 0
-  )
-    throw new Error('INVALID_PAGE_EDIT')
-  const desired = parsePageEditorDraft(save.draft)
-  req.user = actor as never
-  const page = (await payload.findByID({
-    collection: 'pages',
-    id: save.pageID,
-    depth: 0,
-    draft: true,
-    user: actor as never,
-    overrideAccess: false,
-    req,
-  })) as unknown as Record<string, unknown>
-  const sectionID = relationID(page.sectionId)
-  if (!sectionID) throw new Error('SECTION_NOT_ACCESSIBLE')
-  await payload.findByID({
-    collection: 'sections',
-    id: sectionID,
-    depth: 0,
-    draft: true,
-    user: actor as never,
-    overrideAccess: false,
-    req,
-  })
-  const set = (await payload.findByID({
-    collection: 'change-sets',
-    id: save.changeSetID,
-    depth: 0,
-    overrideAccess: true,
-    req,
-  })) as unknown as Record<string, unknown>
-  editableSet(set, actor, save.changeSetID)
+  const { payload, req, save } = input
+  const prepared = await preparePageEditorSave(input)
+  const { desired, page, set, currentHash, desiredHash } = prepared
   const withQuality = async (result: PageEditorSaveResult, changeSet: Record<string, unknown>) => input.evaluateQuality ? { ...result, quality: await input.evaluateQuality(req, changeSet) } : result
-  if (desired.kicker || desired.lede || desired.lastReviewed) {
-    const previewContext = await previewThemeContext({
-      payload,
-      changeSets: [set],
-      initialBaseline: input.initialBaseline,
-      req,
-    })
-    if (
-      !['1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(previewContext.changeSetContractVersions[save.changeSetID] ?? '')
-    )
-      throw new Error('PAGE_METADATA_UNSUPPORTED')
-  }
-  const current = pageEditorProjection(page)
-  const currentHash = pageEditorHash(current)
-  const desiredHash = pageEditorHash(desired)
-  if (currentHash === desiredHash) {
-    if (currentHash === save.expectedPageHash)
+  const freshness = assertFreshPageEditorSave(prepared, save)
+  if (freshness.noOp) {
       return withQuality({
         pageID: save.pageID,
         changeSetID: save.changeSetID,
@@ -303,7 +365,8 @@ export async function applyPageEditorSave(input: {
         replayed: false,
         noOp: true,
       }, set)
-    if (replayed(set, save, desiredHash))
+  }
+  if (freshness.replayed) {
       return withQuality({
         pageID: save.pageID,
         changeSetID: save.changeSetID,
@@ -313,9 +376,6 @@ export async function applyPageEditorSave(input: {
         noOp: false,
       }, set)
   }
-  if (currentHash !== save.expectedPageHash) throw new Error('STALE_PAGE_EDIT')
-  if (Number(set.revision ?? 0) !== save.expectedChangeSetRevision)
-    throw new Error('STALE_CHANGE_SET')
   contractPage(page, desired)
   req.headers.set('x-site-engine-change-set', save.changeSetID)
   await payload.update({
@@ -333,7 +393,7 @@ export async function applyPageEditorSave(input: {
       status: 'draft',
     },
     draft: true,
-    user: actor as never,
+    user: input.actor as never,
     overrideAccess: false,
     req,
   })

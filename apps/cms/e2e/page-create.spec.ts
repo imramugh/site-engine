@@ -58,6 +58,8 @@ test('ENG-006/ENG-026 creates a validated private page and reopens its saved dra
   await owner.page.getByLabel('Title', { exact: true }).fill('Created browser landing revised')
   const savedResponse = owner.page.waitForResponse((response) => response.url().endsWith(`/api/editorial/page-editor/${pageID}`) && response.request().method() === 'POST' && response.status() === 200)
   const queuedPreview = owner.page.waitForResponse((response) => response.url().endsWith('/api/editorial/direct-edit/preview') && response.request().method() === 'POST' && response.status() === 200)
+  await owner.page.getByRole('button', { name: 'Check draft' }).click()
+  await expect(owner.page.getByRole('status')).toContainText('Draft checks are ready')
   await owner.page.getByRole('button', { name: 'Save draft' }).click()
   await Promise.all([savedResponse, queuedPreview])
   const worker = await owner.page.request.post('/__e2e/direct-preview-worker')
