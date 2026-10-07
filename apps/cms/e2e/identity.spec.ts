@@ -177,6 +177,9 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   await signIn(page, editorEmail, editorRecoveryCodes.appearance)
   await page.goto('/block-gallery')
   await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
+  const unavailableBlock = page.locator('[data-block-gallery-card][data-allowed="false"]').first()
+  await expect(unavailableBlock).toContainText('Allowed on:')
+  await expect(unavailableBlock.getByRole('button', { name: /^\+ Add to recipe/ })).toBeDisabled()
   await page.addScriptTag({ path: axeSource })
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 

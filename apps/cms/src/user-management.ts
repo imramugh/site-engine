@@ -27,7 +27,7 @@ export async function loadUsersWorkspace(payload: Payload) {
     if (id && (!lastSignIn.has(id) || Date.parse(session.authenticatedAt) > Date.parse(lastSignIn.get(id)!))) lastSignIn.set(id, session.authenticatedAt)
   }
   return {
-    users: users.docs.map((user) => ({ id: user.id, name: user.name, email: user.email, roles: user.roles, provider: user.provider ?? (user.emergencyTotpSecret ? 'local' : null), disabled: Boolean(user.disabled), lastSignIn: lastSignIn.get(String(user.id)) ?? null })),
+    users: users.docs.map((user) => ({ id: user.id, name: user.name, email: user.email, roles: user.roles, provider: user.emergencyTotpSecret ? 'local' : user.provider ?? null, disabled: Boolean(user.disabled), lastSignIn: lastSignIn.get(String(user.id)) ?? null })),
     invitations: invitations.docs.map((invite) => ({ id: invite.id, email: invite.email, roles: invite.roles, expiresAt: invite.expiresAt })),
     truncated: users.totalDocs > users.docs.length || invitations.totalDocs > invitations.docs.length,
   }
@@ -42,8 +42,8 @@ export async function createUserInvitation(payload: Payload, actor: { id: string
   const invitation = await withPayloadTransaction(payload, async (req) => {
     const existing = await payload.find({ collection: 'users', where: { email: { equals: email } }, limit: 1, overrideAccess: true, req })
     if (existing.docs[0]) throw new UserManagementError('A user with this email already exists.', 'conflict')
-    const prior = await payload.find({ collection: 'invitations', where: { and: [{ email: { equals: email } }, { provider: { equals: 'local' } }] }, limit: 10, overrideAccess: true, req })
-    if (prior.docs.some((invite) => !invite.acceptedAt && Date.parse(invite.expiresAt) > Date.now())) throw new UserManagementError('An active invitation already exists for this email.', 'conflict')
+    const prior = await payload.find({ collection: 'invitations', where: { email: { equals: email } }, limit: 10, overrideAccess: true, req })
+    if (prior.docs.some((invite) => invite.provider === 'local' && !invite.acceptedAt && Date.parse(invite.expiresAt) > Date.now())) throw new UserManagementError('An active invitation already exists for this email.', 'conflict')
     for (const invite of prior.docs) await payload.delete({ collection: 'invitations', id: invite.id, overrideAccess: true, req })
     const created = await payload.create({ collection: 'invitations', data: { email, provider: 'local', providerIssuer: 'local', providerSubject: `local:${newOpaqueToken()}`, roles: input.roles, tokenHash: hashOpaqueToken(token), pendingTotpSecret: encryptSecret(new Secret({ size: 20 }).base32), expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString() }, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: 'identity.invitation_created', actor: actor.id, detail: { invitationID: created.id, provider: 'local', roles: input.roles } }, overrideAccess: true, req })
