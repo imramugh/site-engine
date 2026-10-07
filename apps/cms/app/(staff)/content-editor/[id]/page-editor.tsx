@@ -60,6 +60,7 @@ type Context = {
   references: { media: Reference[]; pages: Reference[] }
 }
 type Preview = { id: string; status: string; path?: string }
+type Readiness = { summary: string; details: string[]; fingerprint: string }
 type Path = Array<string | number>
 type Appearance = Block['appearance']
 
@@ -877,7 +878,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const [previewInteractive, setPreviewInteractive] = useState<boolean>()
   const [previewEditMode, setPreviewEditMode] = useState(false)
   const [previewTextAvailable, setPreviewTextAvailable] = useState(false)
-  const [readiness, setReadiness] = useState<{ message: string; fingerprint: string }>()
+  const [readiness, setReadiness] = useState<Readiness>()
   const [stale, setStale] = useState(false)
   const [newSetName, setNewSetName] = useState('Page edits')
   const timer = useRef<number | undefined>(undefined)
@@ -1202,8 +1203,16 @@ export function PageEditor({ pageID }: { pageID: string }) {
       const warnings = result.quality?.warnings ?? []
       const readinessErrors = [...(result.quality?.readiness?.blockers ?? []), ...(result.quality?.readiness?.issues ?? [])]
       const text = (item: { code?: string; path?: string; message?: string } | string) => typeof item === 'string' ? item : `${item.code ? `${item.code}: ` : ''}${item.message ?? 'Readiness issue'}${item.path ? ` (${item.path})` : ''}`
-      const message = !result.quality?.readiness?.publishable ? `Draft is valid to save, but is not ready to publish: ${[...checkErrors, ...readinessErrors.map(text)].join(' ') || 'resolve the reported readiness checks.'}` : failed.length ? `Draft is valid to save. ${checkErrors.join(' ') || `${failed.length} readiness checks need attention.`}` : warnings.length ? `Draft is valid to save with advisory warnings: ${warnings.join(' ')}` : checks.length ? `Checks passed: ${checks.map((check) => check.name).join(', ')}.` : 'Page draft is valid and ready to save.'
-      setReadiness({ message, fingerprint: JSON.stringify({ draft, changeSetID: selectedSet.id, revision: selectedSet.revision, pageHash: data.page.hash }) })
+      const details = [...checkErrors, ...readinessErrors.map(text), ...warnings].filter((item, index, all) => all.indexOf(item) === index)
+      if ((failed.length || !result.quality?.readiness?.publishable) && details.length === 0) details.push('Resolve the reported readiness checks before publishing.')
+      const summary = !result.quality?.readiness?.publishable
+        ? 'Draft is valid to save, but is not ready to publish.'
+        : failed.length
+          ? `Draft is valid to save, with ${details.length || failed.length} check item${(details.length || failed.length) === 1 ? '' : 's'}.`
+          : warnings.length
+            ? `Draft is valid to save, with ${details.length} advisory warning${details.length === 1 ? '' : 's'}.`
+            : 'Draft is valid and ready to save.'
+      setReadiness({ summary, details, fingerprint: JSON.stringify({ draft, changeSetID: selectedSet.id, revision: selectedSet.revision, pageHash: data.page.hash }) })
       setMessage('Draft checks are ready for review before saving.')
       return true
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to check this page draft.'); return false } finally { setBusy(false) }
@@ -1396,7 +1405,7 @@ export function PageEditor({ pageID }: { pageID: string }) {
       <p role="status" aria-live="polite">
         {message}
       </p>
-      {readiness ? <section className={styles.readiness} data-page-editor-readiness aria-label="Draft check results"><strong>Draft checks</strong><p>{readiness.message}</p></section> : null}
+      {readiness ? <section className={styles.readiness} data-page-editor-readiness aria-label="Draft check results"><div><strong>Draft checks</strong><p>{readiness.summary}</p></div>{readiness.details.length ? <details><summary>View {readiness.details.length} check detail{readiness.details.length === 1 ? '' : 's'}</summary><ul>{readiness.details.map((detail) => <li key={detail}>{detail}</li>)}</ul></details> : null}</section> : null}
       {stale ? <section className={styles.stale} role="alert" data-page-editor-stale><p>This draft changed elsewhere. Your unsaved text is still available.</p><button type="button" onClick={() => { if (window.confirm('Reload and discard your unsaved page changes?')) { clearPreview(); void load().then(() => setMessage('Reloaded the latest draft.')).catch((error: Error) => setMessage(error.message)) } }}>Reload and discard changes</button></section> : null}
       {!selectedSet ? (
         <section className={styles.createSet}>

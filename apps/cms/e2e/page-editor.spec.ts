@@ -214,6 +214,10 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   )
   await editor.page.getByRole('button', { name: 'Check draft' }).click()
   await expect(editor.page.getByRole('status')).toContainText('Draft checks are ready')
+  const readiness = editor.page.locator('[data-page-editor-readiness]')
+  await expect(readiness).toContainText('Draft is valid to save')
+  const detailSummary = readiness.locator('summary')
+  if (await detailSummary.count()) { await detailSummary.click(); await expect(readiness.locator('li').first()).toBeVisible() }
   await editor.page.getByRole('button', { name: 'Save draft' }).click()
   await queued
   const worker = await editor.page.request.post('/__e2e/direct-preview-worker')
