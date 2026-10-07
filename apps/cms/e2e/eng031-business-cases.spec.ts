@@ -20,10 +20,12 @@ test('ENG-031 schedules an approved business case and keeps an invalidated appro
   const reviewer = await ownerContext(browser, 'synthetic-eng031-reviewer-session-token')
   const observer = await ownerContext(browser, 'synthetic-on-page-reviewer-session-token')
   const editor = await ownerContext(browser, 'synthetic-on-page-editor-session-token')
+  let changeSetID: string | undefined
   try {
     const seeded = await reviewer.page.request.post('/__e2e/eng031-business-case')
     expect(seeded.status(), await seeded.text()).toBe(200)
     const businessCase = await seeded.json() as { id: string; listingPath: string; articlePath: string }
+    changeSetID = businessCase.id
 
     await reviewer.page.goto(`/editorial?changeSet=${businessCase.id}`)
     await expect(reviewer.page.getByText('Scheduled business-case review', { exact: true })).toBeVisible()
@@ -64,6 +66,10 @@ test('ENG-031 schedules an approved business case and keeps an invalidated appro
       expect(await observer.page.evaluate(async () => (await (window as any).axe.run('main')).violations)).toEqual([])
     }
   } finally {
+    if (changeSetID) {
+      const cleanup = await observer.page.request.post(`/__e2e/eng031-business-case/cleanup?changeSet=${changeSetID}`)
+      expect(cleanup.status(), await cleanup.text()).toBe(200)
+    }
     await Promise.all([reviewer.context.close(), observer.context.close(), editor.context.close()])
   }
 })

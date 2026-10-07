@@ -814,6 +814,22 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       .catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to dispatch ENG-031 schedule.') })
     return
   }
+  if (request.method === 'POST' && new URL(request.url ?? '/', cmsOrigin).pathname === '/__e2e/eng031-business-case/cleanup') {
+    void (async () => {
+      const changeSetID = new URL(request.url ?? '/', cmsOrigin).searchParams.get('changeSet')
+      if (!changeSetID) throw new Error('ENG-031 cleanup requires a change set.')
+      const schedules = await payload.find({ collection: 'scheduled-publications', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      const snapshots = await payload.find({ collection: 'publish-snapshots', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      const previews = await payload.find({ collection: 'preview-render-jobs', where: { changeSet: { equals: changeSetID } }, pagination: false, limit: 10, depth: 0, overrideAccess: true })
+      await Promise.all(schedules.docs.map(schedule => payload.delete({ collection: 'scheduled-publications', id: schedule.id, overrideAccess: true })))
+      await Promise.all(previews.docs.map(preview => payload.delete({ collection: 'preview-render-jobs', id: preview.id, overrideAccess: true })))
+      await Promise.all(snapshots.docs.map(snapshot => payload.delete({ collection: 'publish-snapshots', id: snapshot.id, overrideAccess: true })))
+      await payload.delete({ collection: 'change-sets', id: changeSetID, overrideAccess: true })
+      await payload.update({ collection: 'users', id: eng031ReviewerID!, data: { disabled: false }, overrideAccess: true })
+      return { ok: true }
+    })().then(value => json(response, value)).catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to clean ENG-031 fixtures.') })
+    return
+  }
   if (request.method === 'POST' && request.url === '/__e2e/second-page-review') {
     void (async () => {
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true })
