@@ -65,6 +65,28 @@ const block = (value, type, data) => ({
   ...data,
 });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * Normalize only the transient browser state used for visual capture. Behavior
+ * checks run before this so keyboard focus remains part of conformance.
+ */
+export async function stabilizeCaptureState(page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const rootScrollBehavior = document.documentElement.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = "auto";
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    document.documentElement.style.scrollBehavior = rootScrollBehavior;
+  });
+  const viewport = page.viewportSize();
+  if (viewport) await page.mouse.move(viewport.width - 1, viewport.height - 1);
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+}
 async function assertVisualBaselines(actual, { file, record, identity }) {
   if (!file) throw new Error(`No visual baseline is configured for ${identity.name}@${identity.themeVersion}. Pass baselineFile, or use recordBaselines with a caller-owned baselineFile.`);
   if (record) {
@@ -762,7 +784,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
             content:
               "*,*::before,*::after { animation: none !important; caret-color: transparent !important; transition: none !important; } [data-inquiry-form] { display: none !important; }",
           });
-          await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
+          await stabilizeCaptureState(page);
           const filename = `${path.replaceAll("/", "_") || "home"}-${width}.png`;
           const screenshot = join(evidence, filename);
           await page.screenshot({ path: screenshot, fullPage: true });
