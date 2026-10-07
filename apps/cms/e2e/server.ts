@@ -385,7 +385,8 @@ async function seed(): Promise<void> {
   const onPageReviewer = await payload.create({ collection: 'users', data: { email: 'on-page-reviewer.synthetic@example.test', name: 'Synthetic On-page Reviewer', roles: ['owner'] }, overrideAccess: true })
   const applicationOwner = await payload.create({ collection: 'users', data: { email: 'application-owner.synthetic@example.test', name: 'Synthetic Application Owner', roles: ['owner'] }, overrideAccess: true })
   applicationOwnerID = String(applicationOwner.id)
-  mcpRoleIDs.owner = applicationOwnerID
+  const mcpCatalogOwner = await payload.create({ collection: 'users', data: { email: 'mcp-catalog-owner.synthetic@example.test', name: 'Synthetic MCP Catalog Owner', roles: ['owner'] }, overrideAccess: true })
+  mcpRoleIDs.owner = String(mcpCatalogOwner.id)
   const pageEditorOwner = await payload.create({ collection: 'users', data: { email: 'page-editor-owner.synthetic@example.test', name: 'Synthetic Page Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const metadataEditorOwner = await payload.create({ collection: 'users', data: { email: 'metadata-editor-owner.synthetic@example.test', name: 'Synthetic Metadata Editor Owner', roles: ['owner'] }, overrideAccess: true })
   const pageCreatorOwner = await payload.create({ collection: 'users', data: { email: 'page-creator-owner.synthetic@example.test', name: 'Synthetic Page Creator Owner', roles: ['owner'] }, overrideAccess: true })
