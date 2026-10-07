@@ -113,6 +113,13 @@ export function snapshot(collection: CapturedCollection, document: Record<string
   }))
 }
 
+/** The generated edit timestamp is publication metadata, never a draft input.
+ * It is attached only after content comparison so a reverted edit remains a
+ * no-op and restoration/proposed deltas never write Payload-managed fields. */
+function withCapturedPageTimestamp(value: Record<string, unknown> | null, document: Record<string, unknown>): Record<string, unknown> | null {
+  return value && typeof document.updatedAt === 'string' ? { ...value, updatedAt: document.updatedAt } : value
+}
+
 export function restoration(collection: CapturedCollection, value: Record<string, unknown>): Record<string, unknown> {
   // Payload applies partial updates. Explicit nulls clear fields that were absent
   // from the baseline rather than leaving a later editor's addition behind.
@@ -223,8 +230,16 @@ export async function captureChange(input: { collection: CapturedCollection; doc
     change.before = changes[index].before
     change.beforeHash = changes[index].beforeHash
     if (equivalent(change.before, change.after)) changes.splice(index, 1)
-    else changes[index] = change
-  } else changes.push(change)
+    else {
+      if (collection === 'pages') change.after = withCapturedPageTimestamp(change.after, doc)
+      change.afterHash = hash(change.after)
+      changes[index] = change
+    }
+  } else {
+    if (collection === 'pages') change.after = withCapturedPageTimestamp(change.after, doc)
+    change.afterHash = hash(change.after)
+    changes.push(change)
+  }
   await req.payload.update({ collection: 'change-sets', id: String(changeSet.id), data: { changes, revision: Number(changeSet.revision ?? 0) + 1 }, overrideAccess: true, req, context: { editorialInternal: true } })
   await req.payload.create({ collection: 'audit-events', data: { event: 'editorial.change_captured', user: actor.id, actor: actor.id, detail: { changeSet: changeSet.id, collection, id: doc.id } }, overrideAccess: true, req })
   // Editorial diagnostics guide correction; only the collection's contract and
@@ -243,7 +258,13 @@ async function loadSet(payload: Payload, id: string, req: PayloadRequest): Promi
 export function currentChange(collection: CapturedCollection, value: Record<string, unknown> | undefined, expected?: Record<string, unknown> | null): Record<string, unknown> | null {
   let current = snapshot(collection, value, collection === 'assets' && capturedAssetHasFocalPoint(expected))
   if (collection === 'assets' && current && !capturedAssetHasMetadata(expected)) current = publicAssetSnapshot(current)
-  if (collection === 'pages') return normalizePageOptionalNulls(current, expected)
+  if (collection === 'pages') {
+    current = normalizePageOptionalNulls(current, expected)
+    // Compare the mutable page projection while retaining the trusted capture
+    // timestamp for candidate assembly. A generated timestamp alone must not
+    // stale, conflict, or prevent discarding a reverted content edit.
+    return current && typeof expected?.updatedAt === 'string' ? { ...current, updatedAt: expected.updatedAt } : current
+  }
   if (collection === 'site-settings') return normalizeSiteOptionalNulls(current, expected)
   return current
 }
