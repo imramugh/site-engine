@@ -82,7 +82,7 @@ export function AccountWorkspace() {
   return <main className={styles.main} data-account-workspace aria-busy={!data && !error}>
     <section className={styles.profile}>
       <h1>Your account</h1>
-      {data && <><div className={styles.identity}><span aria-hidden="true">{(data.account.name || data.account.email || 'S').split(/\s+/).slice(0, 2).map(value => value[0]).join('').toUpperCase()}</span><div><strong>{data.account.name}</strong><p>{data.account.email}</p></div></div><dl><div><dt>Roles</dt><dd>{data.account.roles.map(role => role[0].toUpperCase() + role.slice(1)).join(', ')}</dd></div><div><dt>Sign-in</dt><dd>{data.account.provider ? data.account.provider[0].toUpperCase() + data.account.provider.slice(1) : 'Emergency access'}</dd></div></dl></>}
+      {data && <><div className={styles.identity}><span aria-hidden="true">{(data.account.name || data.account.email || 'S').split(/\s+/).slice(0, 2).map(value => value[0]).join('').toUpperCase()}</span><div><strong>{data.account.name}</strong><p>{data.account.email}</p></div></div><dl><div><dt>Roles</dt><dd>{data.account.roles.map(role => role[0].toUpperCase() + role.slice(1)).join(', ')}</dd></div><div><dt>Sign-in</dt><dd>{data.account.provider && data.account.provider !== 'local' ? data.account.provider[0].toUpperCase() + data.account.provider.slice(1) : 'Authenticator app'}</dd></div></dl></>}
     </section>
     <div className={styles.details}>
       <section className={styles.sessions}>

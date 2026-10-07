@@ -26,40 +26,24 @@ writer, or network filesystem-backed database without a separately tested databa
 
 For production, create and review an expand/contract migration with `pnpm migrate:create`,
 commit it, back up the database, then apply it with `pnpm migrate`. The migration command is
-the deployment hook; production config disables schema push. Initial enrollment is created
-once through `BOOTSTRAP_OPERATOR_TOKEN_FILE=/secure/token pnpm bootstrap:operator email name provider [prebound-subject]`.
-It creates no account: it emits a one-time, 24-hour invitation link, and the first verified OIDC callback
-creates the Owner account. A supplied subject is enforced. The restricted operator-readable file is the only
-bootstrap secret source; copy the link through an approved channel and remove the mount.
-
-Google and Microsoft OIDC callbacks validate issuer, nonce, state, PKCE, invitation binding,
-and browser state. Accounts bind to an exact provider/issuer/subject tuple; email never
-links a second provider. Opaque sessions are checked against SQLite on each request,
+the deployment hook; production config disables schema push. The initial Owner is created through the protected local bootstrap command described below. Owners issue one-time, 24-hour enrollment links; invitees scan the authenticator QR code and prove their first code before an account or session exists. The invite token stays in the URL fragment and only its hash is stored. Opaque sessions are checked against SQLite on each request,
 expire after eight idle hours, and have a seven-day absolute limit. Sensitive identity
 mutations require authentication within fifteen minutes. Disabling a user or changing
 roles revokes sessions and writes an audit event in the same transaction.
 
-Emergency Owner authentication uses an encrypted TOTP seed and single-use recovery codes.
+Local authenticator authentication uses an encrypted TOTP seed and single-use recovery codes.
 Credential consumption, rate counters, sessions, and audit writes are transactional;
 secret fields are excluded from ordinary API reads and writes and from the authenticated
 profile passed to the admin client. Provisioning is an operator CLI action. The login
-page accepts a TOTP or recovery code through the existing emergency-owner endpoint.
+page accepts a TOTP or recovery code through `/api/auth/local`; `/api/auth/emergency` remains a compatibility alias.
 
-The deployment edge controls exposure of admin and authentication routes. A
-verified local Owner can use the authenticator path before external providers
-are registered. Real provider integration, approval workflows, preview,
-publishing, and MCP remain unfinished. There is no `/mcp` placeholder route.
+The deployment edge controls exposure of admin and authentication routes. The
+MCP OAuth service remains independent from staff sign-in and resolves the same
+server-side CMS session after local authenticator authentication.
 
-Mail drafts and their one-time authorization records are local foundation data
-for a future reviewed mail workflow. They have no admin collection entry, REST
-send endpoint, or compose/send UI; the edge does not expose a mail-drafts API.
-
-`pnpm test:e2e:cms` builds and runs the actual CMS against an isolated SQLite
-database and a synthetic TLS OIDC issuer. It exercises browser navigation,
-session cookies, profile permissions, logout, callback replay, and CSRF. A local
-Owner journey also verifies collection navigation, the actual admin logout
-link, revoked-cookie rejection, and immediate disablement. These
-tests do not establish connectivity to a real Google or Microsoft registration.
+`pnpm test:e2e:cms` runs the CMS against isolated SQLite state. It covers local
+sign-in, token-bound invitation enrollment, sessions, logout, CSRF, revoked
+cookies, and disabled accounts.
 
 ### Editorial role boundary
 

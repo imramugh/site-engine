@@ -21,7 +21,7 @@ test('ENG-023 Owner rotates a masked credential and explicitly tests a connectio
   await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(4)
   await expect(owner.page.locator('[data-provider="openai"]')).toContainText('Not connected')
   await owner.page.getByRole('tab', { name: 'AI providers' }).focus(); await owner.page.keyboard.press('ArrowRight'); await expect(owner.page.getByRole('tab', { name: 'Email' })).toBeFocused(); await expect(owner.page.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true'); await expect(owner.page).toHaveURL(/tab=email/); await expect(owner.page.getByRole('tabpanel')).toContainText('Mailboxes and addresses')
-  await owner.page.getByRole('tab', { name: 'Sign-in' }).click(); await expect(owner.page).toHaveURL(/tab=signin/); await expect(owner.page.getByRole('tabpanel')).toContainText('Google'); await expect(owner.page.getByRole('tabpanel')).toContainText('Enabled'); await owner.page.goBack(); await expect(owner.page.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true'); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
+  await owner.page.getByRole('tab', { name: 'Sign-in' }).click(); await expect(owner.page).toHaveURL(/tab=signin/); await expect(owner.page.getByRole('tabpanel')).toContainText('Authenticator app'); await expect(owner.page.getByRole('tabpanel')).toContainText('Enabled'); await owner.page.goBack(); await expect(owner.page.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true'); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
   await owner.page.getByRole('tab', { name: 'Connected assistants' }).click(); await expect(owner.page.getByRole('tabpanel')).toContainText(/Not configured|Connection service available/)
   await owner.page.getByRole('tab', { name: 'Notifications' }).click(); await expect(owner.page.getByRole('tabpanel')).toContainText('Active incident lead')
   await owner.page.getByRole('tab', { name: 'AI providers' }).click()
@@ -71,8 +71,7 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   for (const tab of ['Email', 'Sign-in', 'Connected assistants', 'Notifications', 'AI providers']) { await owner.page.getByRole('tab', { name: tab, exact: true }).click(); await expect(owner.page.getByRole('tabpanel')).toBeVisible() }
   await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
   await expect(owner.page.locator('[data-integrations-status][role="alert"]')).toHaveCount(0)
-  const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(3)
-  await expect(signin.locator('[data-signin-method="google"]')).toContainText('Invitation only'); await expect(signin.locator('[data-signin-method="google"]')).toContainText(/assigned manually/i)
+  const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(1)
   await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last used'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
   await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-1440.png'), fullPage: true })

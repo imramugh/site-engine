@@ -176,23 +176,26 @@
       "source_refs": [
         "Strategy §8 Security",
         "Strategy §9 Roles",
-        "Strategy §9 Sign-in providers"
+        "Strategy §9 Sign-in providers",
+        "2026-10-07 decision: external staff SSO retired; local staff enrollment supersedes it in ENG-039"
       ],
       "user_story": "As an owner, I want scoped staff access so only appropriate people can change content, approve work, or see personal data.",
       "acceptance": [
         "Support Owner, Approver, Editor, Sales, and Hiring roles, including multiple roles per person.",
-        "Implement invite-only Microsoft or Google sign-in and one emergency passkey/authenticator owner path.",
+        "Historical requirement retired on 2026-10-07: invite-only Microsoft/Google staff sign-in. Preserve its accepted evidence; local authenticator staff enrollment is now required by ENG-039.",
+        "Permit explicitly authorized operator bootstrap of an initial local Owner when provider registration is unavailable, using the same authenticator/recovery/session protections. Write setup credentials only to an exclusive restricted file; refuse duplicate bootstrap and leave no account after a failed provisioning transaction.",
         "Require reauthentication when an approval session is older than 15 minutes and expire idle sessions after 8 hours.",
         "Allow Owners to disable a user and revoke active application/MCP sessions immediately with a measurable revocation audit event.",
         "Record sign-in and authorization decisions in audit history."
       ],
       "testing": {
         "unit": "Test role matrix and session-age decisions.",
-        "integration": "Validate OAuth callback, invitation redemption, disablement, and passkey fallback with test providers."
+        "integration": "Preserve historical signed-provider evidence; current local authenticator enrollment and retired staff OIDC endpoints are verified under ENG-039. Retain disablement and session protection regression."
       },
       "e2e": [
         "Given an Editor tries to approve, when they submit a decision, then the API returns forbidden and no publish begins.",
-        "Given a disabled identity, when it reuses a session, then protected endpoints reject it."
+        "Given a disabled identity, when it reuses a session, then protected endpoints reject it.",
+        "Given a locally provisioned Owner and no configured external provider, when they sign in with an authenticator or recovery code, then they can load the admin and permitted collections; logout revokes their session and a consumed recovery code cannot be reused."
       ],
       "dependencies": [
         "ENG-006"
@@ -1108,6 +1111,40 @@
         "ENG-002",
         "ENG-005",
         "ENG-015"
+      ]
+    },
+    {
+      "id": "ENG-039",
+      "title": "Replace external staff SSO with local authenticator enrollment",
+      "phase": "launch",
+      "source_refs": [
+        "2026-10-07 user decision: retire Microsoft/Google staff sign-in; keep local authenticator access and Owner-issued invitations"
+      ],
+      "user_story": "As an Owner, I can invite staff with specific roles and give each person an expiring setup link, so they can enroll their own authenticator and access only their permitted workspace. As invited staff, I can scan a TOTP QR code, prove enrollment, save recovery codes, and sign in without an external identity account.",
+      "acceptance": [
+        "Existing local Owner credentials and sessions survive the deployment. Initial Owner bootstrap remains explicit, restricted, and unavailable once the instance is initialized.",
+        "Staff login uses email plus an authenticator or single-use recovery code. All supported staff roles can sign in; disabled users cannot. Replay rejection, failure throttling, session expiration, fresh authentication, and role enforcement remain in force.",
+        "Staff Microsoft/Google login and callback endpoints are retired. The staff interface no longer advertises those providers. Mailbox OAuth and the independent MCP OAuth service remain supported.",
+        "Only a freshly authenticated Owner can issue or revoke a local invitation. Invitations carry explicit roles, expire in 24 hours, and cannot create duplicate accounts. Owner is never the default role.",
+        "The enrollment token is opaque and stored hashed. The setup URL uses a fragment so the token does not reach ordinary request logs. Pending TOTP seeds are encrypted, and staff-list responses, audit events, initial HTML, and logs do not expose them.",
+        "The invitee can scan a locally generated QR code or use an accessible manual setup alternative. An account and session are created only after successful TOTP confirmation. Redemption is atomic and single-use, including concurrent requests.",
+        "Recovery codes are shown once after enrollment and stored only as hashes. The interface asks the user to save them before continuing.",
+        "Expired, revoked, consumed, malformed, and incorrectly confirmed invitations fail safely. Owner protections and immediate session revocation after role/disable changes remain intact.",
+        "Existing local sessions still authorize MCP through the engine's OAuth consent/token flow. No external staff identity tenant is required."
+      ],
+      "testing": {
+        "unit": "Validate input bounds, local-only policy, credential redaction, role defaults and QR enrollment states.",
+        "integration": "Exercise real SQLite enrollment atomicity/concurrency, expiry/revocation, all-role local login, replay/rate-limit/recovery protections, fresh Owner/CSRF controls, existing Owner preservation and MCP OAuth regression."
+      },
+      "e2e": [
+        "Given a fresh Owner, when they invite an Editor and the invitee scans the QR or uses manual setup and confirms TOTP, then one account and session are created and recovery codes are displayed once before entering the permitted workspace.",
+        "Given an invalid, expired, revoked or consumed invitation, when enrollment is attempted, then it creates no account/session and shows an accessible safe error.",
+        "Given enrolled staff, when they use an authenticator or recovery code, then permitted pages work, privileged actions remain denied and no external identity provider is contacted.",
+        "Verify keyboard access, desktop/mobile layout and axe; deploy immutable images and verify live local Owner, user management and OAuth/MCP access."
+      ],
+      "dependencies": [
+        "ENG-007",
+        "ENG-017"
       ]
     }
   ]

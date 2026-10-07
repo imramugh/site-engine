@@ -2,9 +2,8 @@ import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
 import { freshStaff, hasRole, roles, type Role } from '../../../../src/access'
-import { serverSessionStrategy, type IdentityProvider } from '../../../../src/identity'
-import { configuredProvider } from '../../../../src/oidc'
-import { createUserInvitation, loadUsersWorkspace, updateManagedUser, UserManagementError } from '../../../../src/user-management'
+import { serverSessionStrategy } from '../../../../src/identity'
+import { createUserInvitation, loadUsersWorkspace, revokeUserInvitation, updateManagedUser, UserManagementError } from '../../../../src/user-management'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
@@ -17,7 +16,7 @@ async function context(request: Request) { const payload = await getPayload({ co
 async function GETHandler(request: Request) {
   const { payload, user } = await context(request)
   if (!hasRole(user as never, ['owner'])) return json({ error: 'Owner access required.' }, 403)
-  return json({ ...(await loadUsersWorkspace(payload)), providers: { google: Boolean(configuredProvider('google')), microsoft: Boolean(configuredProvider('microsoft')) } })
+  return json(await loadUsersWorkspace(payload))
 }
 
 async function POSTHandler(request: Request) {
@@ -26,7 +25,8 @@ async function POSTHandler(request: Request) {
     const { payload, user } = await context(request)
     if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return json({ error: 'Fresh Owner authentication is required.' }, 403)
     const input = await body(request)
-    if (input.action === 'invite' && typeof input.email === 'string' && (input.provider === 'google' || input.provider === 'microsoft') && validRoles(input.roles)) return json(await createUserInvitation(payload, user, { email: input.email, provider: input.provider as IdentityProvider, roles: input.roles }), 201)
+    if (input.action === 'invite' && typeof input.email === 'string' && validRoles(input.roles)) return json(await createUserInvitation(payload, user, { email: input.email, roles: input.roles }), 201)
+    if (input.action === 'revoke-invitation' && typeof input.id === 'string') return json(await revokeUserInvitation(payload, user, input.id))
     if (input.action === 'update' && typeof input.id === 'string' && typeof input.name === 'string' && typeof input.disabled === 'boolean' && validRoles(input.roles)) {
       const updated = await updateManagedUser(payload, user, { id: input.id, name: input.name, roles: input.roles, disabled: input.disabled })
       return json({ user: { id: updated.id, name: updated.name, email: updated.email, roles: updated.roles, provider: updated.provider ?? null, disabled: Boolean(updated.disabled) } })

@@ -6,13 +6,14 @@
 - Strategy §8 Security
 - Strategy §9 Roles
 - Strategy §9 Sign-in providers
+- 2026-10-07 decision: external staff SSO retired; local staff enrollment supersedes it in ENG-039
 
 ## User story
 As an owner, I want scoped staff access so only appropriate people can change content, approve work, or see personal data.
 
 ## Acceptance criteria
 - [ ] Support Owner, Approver, Editor, Sales, and Hiring roles, including multiple roles per person.
-- [ ] Implement invite-only Microsoft or Google sign-in and one emergency passkey/authenticator owner path.
+- [ ] Historical requirement retired on 2026-10-07: invite-only Microsoft/Google staff sign-in. Preserve its accepted evidence; local authenticator staff enrollment is now required by ENG-039.
 - [ ] Permit explicitly authorized operator bootstrap of an initial local Owner when provider registration is unavailable, using the same authenticator/recovery/session protections. Write setup credentials only to an exclusive restricted file; refuse duplicate bootstrap and leave no account after a failed provisioning transaction.
 - [ ] Require reauthentication when an approval session is older than 15 minutes and expire idle sessions after 8 hours.
 - [ ] Allow Owners to disable a user and revoke active application/MCP sessions immediately with a measurable revocation audit event.
@@ -20,7 +21,7 @@ As an owner, I want scoped staff access so only appropriate people can change co
 
 ## Test requirements
 - **Unit:** Test role matrix and session-age decisions.
-- **Integration:** Validate OAuth callback, invitation redemption, disablement, and passkey fallback with test providers.
+- **Integration:** Preserve historical signed-provider evidence; current local authenticator enrollment and retired staff OIDC endpoints are verified under ENG-039. Retain disablement and session protection regression.
 
 ## Browser scenarios
 - Given an Editor tries to approve, when they submit a decision, then the API returns forbidden and no publish begins.

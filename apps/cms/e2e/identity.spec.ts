@@ -3,7 +3,18 @@ import { createRequire } from 'node:module'
 
 const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
-const ownerInvite = 'synthetic-browser-owner-invite'
+const ownerEmail = 'owner.synthetic@example.test'
+const ownerRecoveryCode = 'synthetic-owner-recovery-code-01'
+const editorEmail = 'editor.synthetic@example.test'
+const editorRecoveryCodes = {
+  contentValidation: 'synthetic-editor-recovery-code-01',
+  staleDraft: 'synthetic-editor-recovery-code-02',
+  profile: 'synthetic-editor-recovery-code-03',
+  appearance: 'synthetic-editor-recovery-code-04',
+  editorial: 'synthetic-editor-recovery-code-05',
+  scheduling: 'synthetic-editor-recovery-code-06',
+  logout: 'synthetic-editor-recovery-code-07',
+} as const
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
 const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
@@ -13,15 +24,17 @@ const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 
-async function signIn(page: Page, identity: 'owner' | 'editor', invite?: string): Promise<string> {
-  const start = page.waitForResponse((response) => response.url().startsWith(`${cmsOrigin}/api/auth/google`) && response.status() === 307)
-  const callback = page.waitForRequest((request) => request.url().startsWith(`${cmsOrigin}/api/auth/callback/google?`))
-  await page.goto(invite ? `/api/auth/google?invite=${invite}` : '/api/auth/google')
-  expect((await start).headers()['critical-ch']).toBeUndefined()
-  await page.getByRole('button', { name: identity === 'owner' ? 'Sign in as Synthetic Owner' : 'Sign in as Synthetic Editor' }).click()
-  const callbackURL = (await callback).url()
+async function signIn(page: Page, email: string, recoveryCode: string): Promise<void> {
+  const providerRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().startsWith(`${issuerOrigin}/`)) providerRequests.push(request.url())
+  })
+  await page.goto('/admin/login')
+  await page.locator('#emergency-email').fill(email)
+  await page.locator('#emergency-code').fill(recoveryCode)
+  await page.getByTestId('emergency-sign-in').click()
   await page.waitForURL(/\/admin(?:\?.*)?$/)
-  return callbackURL
+  expect(providerRequests).toEqual([])
 }
 
 async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-recovery-code-02', email = 'emergency-owner.synthetic@example.test'): Promise<void> {
@@ -37,8 +50,8 @@ async function signInLocalOwner(page: Page, recoveryCode = 'synthetic-local-reco
   expect(providerRequests).toEqual([])
 }
 
-test('an invited Google identity creates an owner session and loads admin', async ({ page }) => {
-  await signIn(page, 'owner', ownerInvite)
+test('a local Owner credential creates a secure session and loads admin', async ({ page }) => {
+  await signIn(page, ownerEmail, ownerRecoveryCode)
   await expect(page).not.toHaveURL(/\/admin\/login/)
   await expect(page.locator('body')).not.toContainText('Synthetic identity provider')
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' })
@@ -103,7 +116,7 @@ test('an invited Google identity creates an owner session and loads admin', asyn
 
 test('ENG-008 makes an editor select an explicit stale-draft resolution in the browser', async ({ browser, page }) => {
   test.setTimeout(90_000)
-  await signIn(page, 'editor')
+  await signIn(page, editorEmail, editorRecoveryCodes.staleDraft)
   const created = await page.evaluate(async () => {
     const pageID = '12345678-1234-4234-8234-1234567890ab'
     await fetch(`/api/pages/${pageID}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Editor proposed title' }) })
@@ -142,7 +155,7 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
   expect(await anonymousResponse.text()).not.toContain('owner.synthetic@example.test')
   await anonymous.close()
 
-  await signIn(page, 'editor')
+  await signIn(page, editorEmail, editorRecoveryCodes.profile)
   const me = await page.request.get('/api/users/me')
   expect(me.ok()).toBeTruthy()
   expect(await me.text()).toContain('editor.synthetic@example.test')
@@ -161,9 +174,18 @@ test('an editor can read only its own profile and anonymous REST stays denied', 
 })
 
 test('ENG-002 rejects an editor draft block with an undeclared appearance value without changing the draft', async ({ page }) => {
-  await signIn(page, 'editor')
+  await signIn(page, editorEmail, editorRecoveryCodes.appearance)
   await page.goto('/block-gallery')
   await expect(page.getByRole('heading', { name: 'Block gallery' })).toBeVisible()
+  const recipeableUnavailable = page.locator('[data-block-gallery-card][data-allowed="false"]').filter({ has: page.getByRole('button', { name: /^\+ Add to recipe/ }) })
+  for (const template of ['landing', 'standard', 'listing', 'pillar', 'service', 'article', 'job']) {
+    await page.locator('[data-block-gallery-templates]').getByRole('button', { name: template, exact: true }).click()
+    if (await recipeableUnavailable.count()) break
+  }
+  await expect(recipeableUnavailable).not.toHaveCount(0)
+  const unavailableBlock = recipeableUnavailable.first()
+  await expect(unavailableBlock).toContainText('Allowed on:')
+  await expect(unavailableBlock.getByRole('button', { name: /^\+ Add to recipe/ })).toBeDisabled()
   await page.addScriptTag({ path: axeSource })
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 
@@ -242,7 +264,7 @@ async function selectCapturedSet(page: import('@playwright/test').Page, pageID: 
 
 test('editorial UI shows field diffs and routes review actions through CSRF-protected lifecycle endpoints', async ({ browser, page }) => {
   test.setTimeout(120_000)
-  await signIn(page, 'editor')
+  await signIn(page, editorEmail, editorRecoveryCodes.editorial)
   const created = await page.evaluate(async () => {
     const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Workflow', summary: 'This synthetic section supports the editorial browser workflow acceptance test.', slug: 'workflow-browser', allowedTemplates: ['standard'] }) })
     const sectionBody = await section.json() as { doc: { id: string } }
@@ -425,7 +447,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
 
 test('an owner schedules, reschedules, and cancels a reviewed future publication without queuing it immediately', async ({ browser, page }) => {
   test.setTimeout(60_000)
-  await signIn(page, 'editor')
+  await signIn(page, editorEmail, editorRecoveryCodes.scheduling)
   const scheduledPageID = await page.evaluate(async () => {
     const section = await fetch('/api/sections', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Scheduled workflow', summary: 'This synthetic section exercises reviewed future publication scheduling in a real browser.', slug: 'scheduled-workflow', allowedTemplates: ['standard'] }) })
     const sectionBody = await section.json() as { doc: { id: string } }
@@ -456,8 +478,8 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   await ownerContext.close()
 })
 
-test('logout revokes the session, replays are denied, and cross-origin POST is blocked by Next proxy', async ({ page }) => {
-  const callbackURL = await signIn(page, 'editor')
+test('logout revokes the session, local recovery-code replays are denied, and cross-origin POST is blocked by Next proxy', async ({ page }) => {
+  await signIn(page, editorEmail, editorRecoveryCodes.logout)
   const logoutStatus = await page.evaluate(async () => (await fetch('/api/auth/logout', { method: 'POST' })).status)
   expect(logoutStatus).toBe(204)
   const afterLogout = await page.request.get('/api/users/me')
@@ -466,8 +488,8 @@ test('logout revokes the session, replays are denied, and cross-origin POST is b
   const protectedAfterLogout = await page.request.get('/api/users')
   expect(protectedAfterLogout.status()).toBeGreaterThanOrEqual(400)
 
-  await page.goto(callbackURL)
-  await expect(page.locator('body')).toContainText(/Sign-in browser binding is invalid|Sign-in request expired or was already used/)
+  const replay = await page.request.post('/api/auth/local', { data: { email: editorEmail, code: editorRecoveryCodes.logout } })
+  expect(replay.status()).toBeGreaterThanOrEqual(400)
 
   await page.goto(`${issuerOrigin}/cross-origin-post`)
   await page.getByRole('button', { name: 'Submit cross-origin logout' }).click()
@@ -501,10 +523,15 @@ test('ENG-019 exposes accessible public validation and queues an urgent inquiry'
   expect(leadText).toContain('Example Company')
 })
 
-test('the login page truthfully reports a disabled provider', async ({ page }) => {
+test('the login page offers only local authentication and retired staff OIDC routes return gone', async ({ page }) => {
   await page.goto('/admin/login')
-  await expect(page.getByText('Microsoft sign-in is not configured.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Continue with Google' })).toBeVisible()
+  await expect(page.getByText('Use your work email and a code from your authenticator app.')).toBeVisible()
+  await expect(page.getByRole('link', { name: /Google|Microsoft/ })).toHaveCount(0)
+  for (const provider of ['google', 'microsoft']) {
+    const retired = await page.request.get(`/api/auth/${provider}`)
+    expect(retired.status()).toBe(410)
+    expect(await retired.text()).toContain('retired')
+  }
 })
 
 test('emergency owner UI rejects a wrong code and accepts a single-use recovery code', async ({ page }) => {
@@ -512,7 +539,7 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
   await page.locator('#emergency-email').fill('emergency-owner.synthetic@example.test')
   await page.locator('#emergency-code').fill('wrong-code')
   await page.getByTestId('emergency-sign-in').click()
-  await expect(page.getByTestId('emergency-sign-in-message')).toHaveText('Emergency sign-in was not accepted. Check your email and code, then try again.')
+  await expect(page.getByTestId('emergency-sign-in-message')).toHaveText('Sign-in was not accepted. Check your email and code, then try again.')
   await page.locator('#emergency-code').fill('synthetic-recovery-code-01')
   await page.getByTestId('emergency-sign-in').click()
   await page.waitForURL(/\/admin(?:\?.*)?$/)
@@ -523,7 +550,7 @@ test('emergency owner UI rejects a wrong code and accepts a single-use recovery 
   await page.locator('#emergency-email').fill('emergency-owner.synthetic@example.test')
   await page.locator('#emergency-code').fill('synthetic-recovery-code-01')
   await page.getByTestId('emergency-sign-in').click()
-  await expect(page.getByTestId('emergency-sign-in-message')).toHaveText('Emergency sign-in was not accepted. Check your email and code, then try again.')
+  await expect(page.getByTestId('emergency-sign-in-message')).toHaveText('Sign-in was not accepted. Check your email and code, then try again.')
 })
 
 test('a locally provisioned owner uses the authenticator without OIDC, browses collections, and is disabled authoritatively', async ({ page }) => {
