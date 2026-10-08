@@ -30,3 +30,9 @@ test('gallery variations preserve the complete conformance fixture and valid uni
   assert.equal(motion.blocks.find(block => block.type === 'faq').appearance.motionPreset, 'subtle')
   assert(motion.blocks.filter(block => block.type !== 'faq').every(block => block.appearance.motionIntent === 'none'))
 })
+
+test('conformance fixtures use the candidate theme contract while retaining the legacy default', () => {
+  assert.equal(createConformanceFixture().settings.contractVersion, '1.7.0')
+  assert.equal(createConformanceFixture('1.8.0').settings.contractVersion, '1.8.0')
+  SiteSnapshotSchema.parse(createConformanceFixture('1.8.0'))
+})

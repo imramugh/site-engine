@@ -104,7 +104,7 @@ async function assertVisualBaselines(actual, { file, record, identity }) {
   }
 }
 
-function fixture() {
+function fixture(contractVersion = "1.7.0") {
   const media = [
     {
       id: id(201),
@@ -297,7 +297,7 @@ function fixture() {
   });
   return {
     settings: {
-      contractVersion: "1.7.0",
+      contractVersion,
       siteName: "Neutral starter",
       homepageId: id(20),
       defaultLocale: "en",
@@ -638,7 +638,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
     const outputRoot = join(temp, "output");
     await mkdir(outputRoot);
     const input = join(temp, "fixture.json");
-    await writeFile(input, JSON.stringify(fixture()));
+    await writeFile(input, JSON.stringify(fixture(manifest.contract)));
     const built = await buildSnapshot({
       input,
       publicOrigin: "https://example.test",

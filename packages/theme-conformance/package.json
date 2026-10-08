@@ -1,6 +1,6 @@
 {
   "name": "@site-engine/theme-conformance",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Neutral, installable visual and accessibility conformance harness for Site Engine themes.",
   "license": "Apache-2.0",
   "type": "module",
