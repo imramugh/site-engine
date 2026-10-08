@@ -195,7 +195,7 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
     expect(unconfigured.changeSets.find((set) => set.id === current.set.id)?.theme).toBeNull()
     const manifest = structuredClone(neutralFixture)
     manifest.settings.theme = {
-      id: 'watchfloor',
+      id: 'fixture-initial',
       version: '1.0.0',
       contract: '1.0.0',
       manifestDigest: 'a'.repeat(64),
@@ -215,13 +215,13 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
       current.page.id,
       initialBaseline,
     )
-    expect(baselineContext.activeTheme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+    expect(baselineContext.activeTheme).toEqual({ name: 'fixture-initial', version: '1.0.0' })
     expect(baselineContext.activeContractVersion).toBe('1.0.0')
-    expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.theme).toEqual({ name: 'watchfloor', version: '1.0.0' })
+    expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.theme).toEqual({ name: 'fixture-initial', version: '1.0.0' })
     expect(baselineContext.changeSets.find((set) => set.id === current.set.id)?.contractVersion).toBe('1.0.0')
 
     const selection = {
-      id: 'counsel',
+      id: 'fixture-proposed',
       version: '2.0.0',
       contract: '1.0.0',
       manifestDigest: 'b'.repeat(64),
@@ -248,7 +248,7 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
       initialBaseline,
     )
     const contextTheme = proposedContext.changeSets.find((item) => item.id === current.set.id)?.theme
-    expect(contextTheme).toEqual({ name: 'counsel', version: '2.0.0' })
+    expect(contextTheme).toEqual({ name: 'fixture-proposed', version: '2.0.0' })
     expect(proposedContext.changeSets.find((item) => item.id === current.set.id)?.contractVersion).toBe('1.0.0')
     const job = await withPayloadTransaction(payload, (req) => prepareReviewPreview({
       payload,

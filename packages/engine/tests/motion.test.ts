@@ -75,9 +75,9 @@ describe('ENG-015 motion preference', () => {
 
   it('lets an opted-in theme controller keep OS reduction, labels, and host effects in sync', () => {
     document.documentElement.dataset.motionController = 'engine';
-    document.documentElement.dataset.motionStorageKey = 'watchfloor-motion';
+    document.documentElement.dataset.motionStorageKey = 'fixture-motion-preference';
     window.localStorage.clear();
-    window.localStorage.setItem('watchfloor-motion', 'allow');
+    window.localStorage.setItem('fixture-motion-preference', 'allow');
     document.body.innerHTML = [
       '<button data-motion-toggle aria-pressed="false">Reduce motion</button>',
       '<video data-motion-effect poster="/still.svg"></video>',
@@ -128,7 +128,7 @@ describe('ENG-015 motion preference', () => {
     expect(protectedEffect.dataset.motionPaused).toBe('true');
 
     control.click();
-    expect(window.localStorage.getItem('watchfloor-motion')).toBe('reduce');
+    expect(window.localStorage.getItem('fixture-motion-preference')).toBe('reduce');
     expect(document.documentElement.dataset.motion).toBe('reduce');
     teardown();
     expect(effect.dataset.motionPaused).toBe('true');
