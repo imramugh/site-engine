@@ -163,7 +163,7 @@ test('ENG-023 Owner routes each task only through configured reviewed models and
 
     rejectNext = true
     await summary.getByLabel('summary fallback provider').selectOption('openai')
-    await expect(owner.page.getByRole('alert')).toContainText('The selected fallback is unavailable.')
+    await expect(owner.page.locator('[data-integrations-status]')).toContainText('The selected fallback is unavailable.')
     await expect(summary.getByLabel('summary fallback provider')).toHaveValue('anthropic')
   } finally {
     await owner.context.close()
