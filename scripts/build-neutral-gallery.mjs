@@ -79,7 +79,7 @@ const work = await mkdtemp(join(tmpdir(), 'neutral-gallery-'))
 try {
   const input = join(work, 'fixture.json')
   await writeFile(input, JSON.stringify(fixture))
-  const built = await buildSnapshot({ input, outputRoot: work, basePath: `${base}/renders`, publicOrigin: 'https://example.test', timeoutMs: 120_000, versionPins: { themeVersion: version, engineVersion: '1.0.0', contractVersion: contract } })
+  const built = await buildSnapshot({ input, outputRoot: work, basePath: `${base}/renders`, publicOrigin: 'https://example.test', timeoutMs: 120_000, versionPins: { themeVersion: version, engineVersion: '1.0.1', contractVersion: contract } })
   await rm(output, { recursive: true, force: true })
   await mkdir(output, { recursive: true })
   await rename(built.output, join(output, 'renders'))

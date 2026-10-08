@@ -126,6 +126,34 @@ async function assertVisualBaselines(actual, { file, record, identity }) {
   }
 }
 
+/**
+ * Reduced motion is effective when the document declares it and every
+ * animation rooted in a themed effect has stopped.  Themes may pause an
+ * animation or remove it entirely to leave its final static state visible.
+ */
+export function hasEffectiveReducedMotion({ motion, animations }) {
+  return motion === "reduce" && animations.every(
+    ({ pending, playState }) => !pending && playState !== "running",
+  );
+}
+
+/**
+ * Capture every animation under declared motion effects, including descendant
+ * and pseudo-element effects reported by the Web Animations API.
+ */
+export function collectMotionState(domDocument = document) {
+  return {
+    motion: domDocument.documentElement.dataset.motion,
+    animations: [...domDocument.querySelectorAll("[data-motion-effect]")]
+      .flatMap((element) => element.getAnimations({ subtree: true }))
+      .map((animation) => ({
+        pending: animation.pending,
+        playState: animation.playState,
+        pseudoElement: animation.effect?.pseudoElement ?? null,
+      })),
+  };
+}
+
 function fixture(contractVersion = "1.7.0") {
   const media = [
     {
@@ -568,16 +596,11 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
       .locator('[data-inquiry-form] [name="name"]')
       .evaluate((element) => element.blur());
   }
+  const motion = await page.evaluate(collectMotionState);
   const state = await page.evaluate(
     async ({ requireFormError, requireTokenCoverage }) => {
       await document.fonts.ready;
       return {
-        motion:
-          document.documentElement.dataset.motion === "reduce" &&
-          [...document.querySelectorAll("[data-motion-effect]")].every(
-            (element) =>
-              getComputedStyle(element).animationPlayState === "paused",
-          ),
         overflow: document.body.scrollWidth <= innerWidth,
         images: [...document.images].every(
           (image) => image.complete && image.naturalWidth > 0,
@@ -610,7 +633,7 @@ async function browserState(page, requireFormError, requireTokenCoverage) {
     },
     { requireFormError, requireTokenCoverage },
   );
-  return state;
+  return { ...state, motion: hasEffectiveReducedMotion(motion) };
 }
 
 /**

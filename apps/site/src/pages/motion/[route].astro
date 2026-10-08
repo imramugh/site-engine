@@ -1,9 +1,11 @@
 ---
-export function getStaticPaths() { return process.env.SITE_SNAPSHOT_PATH ? [] : ['one', 'two'].map((route) => ({ params: { route } })); }
+import MotionRuntime from '../../components/MotionRuntime.astro';
+export function getStaticPaths() { return process.env.SITE_SNAPSHOT_PATH ? [] : ['one', 'two', 'zero'].map((route) => ({ params: { route } })); }
 const { route } = Astro.params;
+const zeroEffect = route === 'zero';
 ---
 <!doctype html>
-<html lang="en" data-motion="allow">
+<html lang="en" data-motion="allow" data-motion-controller={zeroEffect ? 'engine' : undefined}>
   <head>
     <title>Motion fixture</title>
     <style>
@@ -17,7 +19,7 @@ const { route } = Astro.params;
     <main>
       <h1>Motion fixture</h1>
       <button data-motion-toggle aria-pressed="false">Reduce motion</button>
-      <div data-motion-effect="decorative">Motion fixture</div>
+      {!zeroEffect && <><div data-motion-effect="decorative">Motion fixture</div>
       <video data-motion-effect="video" controls poster="/media/sample-poster.svg" aria-label="Motion fixture video">
         <source src="/media/sample-video.webm" type="video/webm" />
         Your browser does not support video.
@@ -37,12 +39,9 @@ const { route } = Astro.params;
             <source src="/media/sample-video.webm" type="video/webm" />
           </video>
         </div>
-      </form>
+      </form></>}
       <p>{route}</p>
     </main>
-    <script>
-      import { mountMotionRuntime } from '@site-engine/engine/motion';
-      mountMotionRuntime(document, window);
-    </script>
+    <MotionRuntime />
   </body>
 </html>
