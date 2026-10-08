@@ -11,3 +11,9 @@ Library callers use `runThemeConformance({ themePackage, artifactsDir, baselineF
 Before each screenshot, the harness waits for fonts and rendering frames, then returns the viewport to the top and clears transient focus and pointer state. Keyboard and form behavior checks run before that capture reset. The matrix also verifies video playback and loaded caption cues before hiding native controls and caption overlays for static capture; browser-owned overlays depend on viewport state and are not theme pixels.
 
 The harness contains no client assets, credentials, or checkout paths.
+
+## Optional application-form copy
+
+A staged theme component root may include `application-form.json` for static, plain-text copy only. Its required `schemaVersion` is `1`; optional keys are `linkedInLabel`, `noteLabel`, `consentLabel`, `submitLabel`, `successMessage`, `nameRequired`, `emailRequired`, `emailInvalid`, `resumeRequired`, `consentRequired`, `errorSummarySingular`, and `errorSummaryPlural`. The plural summary supports literal `{count}` replacement. Each value is non-empty plain text up to 1,024 characters; the file is limited to 8 KiB and rejects unknown keys, invalid JSON, control characters, symlinks, and files outside the trusted staged root. Missing files use neutral defaults. Rendered values are escaped.
+
+This file cannot change the application endpoint, upload MIME types or size limit, privacy links, consent mechanics, idempotency, or validation behavior beyond the listed messages.

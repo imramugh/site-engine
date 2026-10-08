@@ -1,13 +1,16 @@
 ---
+import { applicationFormCopy } from '../lib/application-form-copy'
 interface Props { jobId: string; enabled: boolean }
 const { jobId, enabled } = Astro.props;
+const copy = applicationFormCopy();
 ---
-<form class="application-form" data-application-form data-application-state="idle" method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status application-error-summary">
+<form class="application-form" data-application-form data-application-state="idle" data-application-copy={JSON.stringify(copy)} method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status application-error-summary">
   <input type="hidden" name="jobId" value={jobId} />
   <div class="application-form__error-summary" id="application-error-summary" data-application-error-summary role="alert" tabindex="-1" hidden>
-    <h3>Check your application</h3>
+    <h3 data-application-error-heading>Check your application</h3>
     <ul data-application-error-list></ul>
   </div>
+  <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>
   <div class="application-form__field" data-application-field="name">
     <label class="application-form__label" for="application-name">Full name</label>
     <input class="application-form__control" id="application-name" name="name" required maxlength="160" autocomplete="name" aria-describedby="application-name-error" disabled={!enabled} />
@@ -24,25 +27,31 @@ const { jobId, enabled } = Astro.props;
     <p class="application-form__field-error" id="application-telephone-error" data-application-field-error="telephone" hidden></p>
   </div>
   <div class="application-form__field" data-application-field="linkedIn">
-    <label class="application-form__label" for="application-linkedin">LinkedIn <span>(optional)</span></label>
+    <label class="application-form__label" for="application-linkedin">{copy.linkedInLabel} <span>(optional)</span></label>
     <input class="application-form__control" id="application-linkedin" name="linkedIn" type="url" inputmode="url" maxlength="500" autocomplete="url" placeholder="https://www.linkedin.com/in/…" aria-describedby="application-linkedin-error" disabled={!enabled} />
     <p class="application-form__field-error" id="application-linkedin-error" data-application-field-error="linkedIn" hidden></p>
   </div>
   <div class="application-form__field application-form__file-card" data-application-field="resume">
-    <label class="application-form__label" for="application-resume">Resume <span>(PDF or DOCX, 5 MB maximum)</span></label>
-    <input class="application-form__control" id="application-resume" name="resume" type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx" required aria-describedby="application-resume-error" disabled={!enabled} />
+    <label class="application-form__label" for="application-resume">Resume</label>
+    <label class="application-form__upload" data-application-upload>
+      <input class="application-form__upload-input" id="application-resume" name="resume" type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx" required aria-describedby="application-resume-error application-resume-filename" disabled={!enabled} />
+      <span class="application-form__upload-label" data-application-upload-label>Choose a file or drop it here</span>
+      <span class="application-form__upload-hint" data-application-upload-hint>PDF or DOCX, 5 MB maximum</span>
+    </label>
+    <p class="application-form__upload-filename" id="application-resume-filename" data-application-upload-filename aria-live="polite"></p>
     <p class="application-form__field-error" id="application-resume-error" data-application-field-error="resume" hidden></p>
   </div>
   <div class="application-form__field" data-application-field="coverLetter">
-    <label class="application-form__label" for="application-cover-letter">Note <span>(optional)</span></label>
-    <textarea class="application-form__control" id="application-cover-letter" name="coverLetter" maxlength="10000" aria-describedby="application-cover-letter-error" disabled={!enabled}></textarea>
+    <label class="application-form__label" for="application-cover-letter">{copy.noteLabel} <span>(optional)</span></label>
+    <textarea class="application-form__control" id="application-cover-letter" name="coverLetter" maxlength="10000" rows="4" aria-describedby="application-cover-letter-error" disabled={!enabled}></textarea>
     <p class="application-form__field-error" id="application-cover-letter-error" data-application-field-error="coverLetter" hidden></p>
   </div>
   <div class="application-form__field application-form__consent" data-application-field="consent">
-    <label class="application-form__label" for="application-consent"><input id="application-consent" name="consent" type="checkbox" value="true" required aria-describedby="application-consent-error" disabled={!enabled} /> I consent to the handling of this application.</label>
+    <label class="application-form__label" for="application-consent"><input id="application-consent" name="consent" type="checkbox" value="true" required aria-describedby="application-consent-error" disabled={!enabled} /> {copy.consentLabel}</label>
     <p class="application-form__field-error" id="application-consent-error" data-application-field-error="consent" hidden></p>
   </div>
-  <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>
-  <button class="application-form__submit" type="submit" disabled={!enabled}>Submit application</button>
+  <button class="application-form__submit" type="submit" disabled={!enabled}>{copy.submitLabel}</button>
 </form>
 {enabled && <script is:inline src="/application-form.js"></script>}
+
+<style>.application-form__upload-filename{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
