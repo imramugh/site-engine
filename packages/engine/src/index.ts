@@ -117,6 +117,7 @@ export {
   resolveDeclaredMotionPreset,
   resolveMotionPreset,
   type EffectiveMotion,
+  type MotionRuntimeOptions,
   type MotionPreference,
   type ResolvedMotionPreset,
 } from './motion.js';

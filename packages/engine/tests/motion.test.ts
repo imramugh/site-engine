@@ -72,4 +72,72 @@ describe('ENG-015 motion preference', () => {
     document.querySelector<HTMLButtonElement>('[data-motion-toggle]')!.click();
     expect(document.documentElement.dataset.motion).toBe('allow');
   });
+
+  it('lets an opted-in theme controller keep OS reduction, labels, and host effects in sync', () => {
+    document.documentElement.dataset.motionController = 'engine';
+    document.documentElement.dataset.motionStorageKey = 'watchfloor-motion';
+    window.localStorage.clear();
+    window.localStorage.setItem('watchfloor-motion', 'allow');
+    document.body.innerHTML = [
+      '<button data-motion-toggle aria-pressed="false">Reduce motion</button>',
+      '<video data-motion-effect poster="/still.svg"></video>',
+      '<form><video data-motion-effect poster="/still.svg"></video></form>',
+    ].join('');
+    const [effect, protectedEffect] = [...document.querySelectorAll<HTMLVideoElement>('[data-motion-effect]')];
+    const pause = vi.fn();
+    Object.defineProperty(effect, 'pause', { configurable: true, value: pause });
+    Object.defineProperty(protectedEffect, 'pause', { configurable: true, value: pause });
+
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const media = {
+      matches: true,
+      addEventListener: vi.fn((_event: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener)),
+      removeEventListener: vi.fn((_event: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener)),
+    };
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => media as unknown as MediaQueryList) });
+
+    let observerCallback: IntersectionObserverCallback | undefined;
+    class Observer {
+      constructor(callback: IntersectionObserverCallback) { observerCallback = callback; }
+      observe = vi.fn(); disconnect = vi.fn(); takeRecords = vi.fn(() => []); unobserve = vi.fn();
+      root = null; rootMargin = '0px'; thresholds: readonly number[] = [];
+    }
+    Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: Observer });
+
+    const teardown = mountMotionRuntime(document, window);
+    const control = document.querySelector<HTMLButtonElement>('[data-motion-toggle]')!;
+    expect(document.documentElement.dataset.motion).toBe('reduce');
+    expect(document.documentElement.dataset.motionPreference).toBe('reduce');
+    expect(control.getAttribute('aria-pressed')).toBe('true');
+    expect(control.textContent).toBe('Allow motion');
+
+    observerCallback?.([
+      { target: effect, isIntersecting: true } as IntersectionObserverEntry,
+      { target: protectedEffect, isIntersecting: true } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+    expect(effect.dataset.motionPaused).toBe('true');
+    expect(protectedEffect.dataset.motionPaused).toBe('true');
+
+    media.matches = false;
+    for (const listener of listeners) listener({ matches: false } as MediaQueryListEvent);
+    expect(document.documentElement.dataset.motion).toBe('allow');
+    expect(document.documentElement.dataset.motionPreference).toBe('allow');
+    expect(control.getAttribute('aria-pressed')).toBe('false');
+    expect(control.textContent).toBe('Reduce motion');
+    expect(effect.dataset.motionPaused).toBe('false');
+    expect(protectedEffect.dataset.motionPaused).toBe('true');
+
+    control.click();
+    expect(window.localStorage.getItem('watchfloor-motion')).toBe('reduce');
+    expect(document.documentElement.dataset.motion).toBe('reduce');
+    teardown();
+    expect(effect.dataset.motionPaused).toBe('true');
+
+    const remount = mountMotionRuntime(document, window);
+    expect(document.documentElement.dataset.motion).toBe('reduce');
+    expect(document.documentElement.dataset.motionPreference).toBe('reduce');
+    remount();
+    delete document.documentElement.dataset.motionController;
+    delete document.documentElement.dataset.motionStorageKey;
+  });
 });
