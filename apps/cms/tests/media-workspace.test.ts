@@ -24,7 +24,7 @@ const user = { id: 'editor', roles: ['editor'] }
 
 describe('media workspace pagination', () => {
   it('allows focal metadata for the current 1.8 preview contract while retaining the unsupported guard', async () => {
-    const activeContract = async (contractVersion: string) => {
+    const activeContract = async (contractVersion: typeof neutralFixture.settings.contractVersion) => {
       const manifest = structuredClone(neutralFixture)
       manifest.settings.contractVersion = contractVersion
       const payload = { find: vi.fn(async ({ collection }: { collection: string }) => {
