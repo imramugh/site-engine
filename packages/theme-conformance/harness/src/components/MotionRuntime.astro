@@ -1,7 +1,8 @@
----
-const { enabled } = Astro.props as { enabled: boolean };
----
-{enabled && <script>
+<script>
   import { mountMotionRuntime } from '@site-engine/engine/motion';
-  mountMotionRuntime(document, window);
-</script>}
+  // An engine-controlled shell needs a preference controller even on routes
+  // with no effects, so its footer control persists across navigation.
+  if (document.documentElement.dataset.motionController === 'engine' || document.querySelector('[data-motion-effect]')) {
+    mountMotionRuntime(document, window);
+  }
+</script>
