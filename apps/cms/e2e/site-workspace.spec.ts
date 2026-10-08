@@ -257,6 +257,38 @@ test('Site workspace captures real settings, redirects, and navigation into an o
   await owner.context.close()
 })
 
+test('Site workspace saves navigation for the installed 1.8 theme', async ({ browser }) => {
+  const owner = await session(browser, 'synthetic-site-owner-session-token')
+  const draft = await owner.page.request.post('/api/themes', {
+    headers: { origin, 'content-type': 'application/json' },
+    data: { id: 'search-browser-theme', version: '1.8.0', changeSetName: 'Navigation 1.8 browser draft' },
+  })
+  expect(draft.status(), await draft.text()).toBe(201)
+
+  await owner.page.goto('/site')
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Navigation 1.8 browser draft · open' })
+  await owner.page.getByRole('button', { name: 'Navigation' }).click()
+  const workspace = owner.page.locator('[data-site-navigation]')
+  await expect(workspace).toBeVisible()
+  await owner.page.getByRole('button', { name: 'Add header item' }).click()
+  const item = workspace.locator('[data-site-navigation-header] [data-site-navigation-item]').last()
+  await item.locator('summary').click()
+  await item.getByLabel('Type').selectOption('unavailable')
+  await item.getByLabel('Label', { exact: true }).fill('1.8 browser navigation')
+  await item.getByLabel('Explanation').fill('This synthetic destination is intentionally unavailable.')
+  const saved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
+  await owner.page.getByRole('button', { name: 'Save navigation' }).click()
+  expect((await saved).status()).toBe(200)
+  const context = await owner.page.request.get('/api/site-workspace').then(response => response.json()) as { changeSets: Array<{ id: string; name: string; contractVersion: string | null }>; settings: { navigation: { header: Array<{ label: string; kind: string; reason?: string }> } } }
+  expect(context.changeSets.find(set => set.name === 'Navigation 1.8 browser draft')?.contractVersion).toBe('1.8.0')
+  expect(context.settings.navigation.header).toEqual(expect.arrayContaining([expect.objectContaining({ label: '1.8 browser navigation', kind: 'unavailable', reason: 'This synthetic destination is intentionally unavailable.' })]))
+
+  const changeSet = context.changeSets.find(set => set.name === 'Navigation 1.8 browser draft')
+  const discarded = await owner.page.request.post('/api/editorial/discard', { headers: { origin, 'content-type': 'application/json' }, data: { id: changeSet!.id } })
+  expect(discarded.status(), await discarded.text()).toBe(200)
+  await owner.context.close()
+})
+
 test('Site workspace rejects non-owners and cross-origin writes', async ({ browser }) => {
   const editor = await session(browser, 'synthetic-application-editor-session-token')
   expect((await editor.page.request.get('/api/site-workspace')).status()).toBe(403)
