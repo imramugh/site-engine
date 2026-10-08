@@ -20,7 +20,9 @@ const sectionLandingMigration = '20261003_230000_section_landing_page'
 const siteIdentityMigration = '20261005_114210_site_identity_navigation_1_5'
 const crawlerPolicyMigration = '20261005_164500_crawler_policy_1_7'
 const previewRenderDiagnosticsMigration = '20261006_009000_preview_render_diagnostics'
-const childTimeoutMs = 30_000
+// CI can run another isolated SQLite migration while Payload tears down after reporting Done.
+// Keep a bounded timeout, but leave enough time for that process cleanup.
+const childTimeoutMs = 60_000
 
 describe('production migrations (ENG-036)', () => {
   it('creates Payload tables and supports a production-mode Payload read/write without schema push', async () => {
