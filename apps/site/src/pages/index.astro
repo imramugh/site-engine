@@ -23,6 +23,6 @@ const inquiryHeading = (block: PageBlock): string | undefined => block.type === 
 ---
 <Layout route={route} model={model} snapshot={siteSnapshot} title={route.page.title} description={route.page.seoDescription ?? route.page.summary} motionEnabled={motionEnabled} noindex={preview || route.page.noindex} searchEnabled={searchEnabled} schema={schemaForRoute(route, model, siteSnapshot, publicOrigin)}>
   {route.page.blocks.map((block) => <>{composedInquiry(block) && <InquiryForm enabled={renderBase === '/'} formId={`${block.id}-inquiry`} heading={inquiryHeading(block)} headingId={`${block.id}-inquiry-title`} topicLabel={block.type === 'contact' ? block.inquiryTopicLabel : undefined} topics={block.type === 'contact' ? block.inquiryTopics : undefined} consentLabel={block.type === 'contact' ? block.inquiryConsentLabel : undefined} />}<BlockRenderer block={projectThemeBlock(block)} snapshot={siteSnapshot} model={model} motionPreset={resolveStarterMotion(block)} hostInquiryRendered={composedInquiry(block)} />{!composedInquiry(block) && !block.hidden && block.type === 'contact' && block.inquiryForm && <InquiryForm enabled={renderBase === '/'} formId={`${block.id}-inquiry`} topicLabel={block.inquiryTopicLabel} topics={block.inquiryTopics} consentLabel={block.inquiryConsentLabel} />}</>)}
-  <MotionRuntime enabled={motionEnabled} />
+  <MotionRuntime />
   {AnalyticsHooks && <AnalyticsHooks path={route.path} />}
 </Layout>

@@ -144,4 +144,21 @@ describe('ENG-015 motion preference', () => {
     delete document.documentElement.dataset.motionController;
     delete document.documentElement.dataset.motionStorageKey;
   });
+
+  it('uses a readable static ceiling for an opted-in theme without IntersectionObserver', () => {
+    document.documentElement.dataset.motionController = 'engine';
+    window.localStorage.clear();
+    window.localStorage.setItem('site-engine:motion', 'allow');
+    document.body.innerHTML = '<button data-motion-toggle aria-pressed="false">Reduce motion</button><div data-motion-effect>Readable content</div>';
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })) });
+    Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: undefined });
+
+    const teardown = mountMotionRuntime(document, window);
+    expect(document.documentElement.dataset.motion).toBe('reduce');
+    expect(document.documentElement.dataset.motionPreference).toBe('reduce');
+    expect(document.querySelector<HTMLElement>('[data-motion-effect]')!.dataset.motionPaused).toBe('true');
+    expect(document.querySelector<HTMLButtonElement>('[data-motion-toggle]')!.textContent).toBe('Allow motion');
+    teardown();
+    delete document.documentElement.dataset.motionController;
+  });
 });

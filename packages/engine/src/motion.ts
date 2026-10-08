@@ -110,15 +110,17 @@ export function mountMotionRuntime(document: Document, window: Window, options: 
   const root = document.documentElement;
   const themeController = options.themeController ?? (root.dataset.motionController === 'engine');
   const storageKey = options.storageKey ?? (themeController ? root.dataset.motionStorageKey || motionPreferenceKey : motionPreferenceKey);
+  const supportsIntersectionObserver = Boolean(motionWindow.IntersectionObserver);
   let choice = savedMotionPreference(window, storageKey);
   const effects = [...document.querySelectorAll<HTMLElement>('[data-motion-effect]')];
   const controls = [...document.querySelectorAll<HTMLElement>('[data-motion-toggle]')];
 
   const apply = () => {
     // The generic controller retains its historical visitor-choice precedence.
-    // A theme that opts into engine ownership instead treats an OS reduction as
-    // an accessibility ceiling: a saved allow cannot reactivate animation.
-    const motion = themeController && media?.matches
+    // A theme that opts into engine ownership treats an OS reduction or absent
+    // visibility support as an accessibility ceiling: a saved allow cannot
+    // reactivate animation without a safe off-screen pause signal.
+    const motion = themeController && (media?.matches || !supportsIntersectionObserver)
       ? 'reduce'
       : effectiveMotion(choice, Boolean(media?.matches));
     root.dataset.motion = motion;

@@ -1,7 +1,8 @@
----
-const { enabled } = Astro.props as { enabled: boolean };
----
-{enabled && <script>
+<script>
   import { mountMotionRuntime } from '@site-engine/engine/motion';
-  mountMotionRuntime(document, window);
-</script>}
+  // The shell opt-in also needs a controller on pages that intentionally have
+  // no effects: a footer preference must still persist and follow OS changes.
+  if (document.documentElement.dataset.motionController === 'engine' || document.querySelector('[data-motion-effect]')) {
+    mountMotionRuntime(document, window);
+  }
+</script>

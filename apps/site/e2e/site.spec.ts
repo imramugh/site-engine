@@ -164,6 +164,29 @@ test('ENG-015 runtime respects OS preference and static CSS starts paused', asyn
  await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion','allow');
 });
 
+test('ENG-015 engine-controller pages without effects retain a working persisted footer preference', async ({ page }) => {
+ await page.emulateMedia({ reducedMotion: 'no-preference' }); await page.goto('/motion/zero');
+ await expect(page.locator('html')).toHaveAttribute('data-motion-controller', 'engine');
+ await expect(page.locator('[data-motion-effect]')).toHaveCount(0);
+ await page.getByRole('button', { name: 'Reduce motion' }).click();
+ await expect(page.locator('html')).toHaveAttribute('data-motion-preference', 'reduce');
+ await expect.poll(() => page.evaluate(() => localStorage.getItem('site-engine:motion'))).toBe('reduce');
+ await page.reload(); await expect(page.locator('html')).toHaveAttribute('data-motion-preference', 'reduce');
+ await page.getByRole('button', { name: 'Allow motion' }).click();
+ await expect.poll(() => page.evaluate(() => localStorage.getItem('site-engine:motion'))).toBe('allow');
+ await page.emulateMedia({ reducedMotion: 'reduce' }); await expect(page.locator('html')).toHaveAttribute('data-motion-preference', 'reduce');
+ await page.emulateMedia({ reducedMotion: 'no-preference' }); await expect(page.locator('html')).toHaveAttribute('data-motion-preference', 'allow');
+});
+
+test('ENG-015 engine-controller falls back to readable still content without IntersectionObserver', async ({ browser }) => {
+ const context = await browser.newContext(); await context.addInitScript(() => { Object.defineProperty(window, 'IntersectionObserver', { configurable: true, value: undefined }); });
+ const page = await context.newPage(); await page.goto('/motion/zero');
+ await expect(page.getByRole('heading', { name: 'Motion fixture' })).toBeVisible();
+ await expect(page.locator('html')).toHaveAttribute('data-motion-preference', 'reduce');
+ await expect(page.getByRole('button', { name: 'Allow motion' })).toBeVisible();
+ await context.close();
+});
+
 test('ENG-015 no-JS fixture remains readable and paused', async ({ browser }) => { const context=await browser.newContext({ javaScriptEnabled:false }); const page=await context.newPage(); await page.goto('/motion/one'); await expect(page.getByRole('heading')).toBeVisible(); await expect(page.locator('[data-motion-effect]').first()).toHaveCSS('animation-play-state','paused'); await context.close(); });
 test('ENG-015 toggle works when storage is blocked', async ({ page }) => { await page.addInitScript(() => { Storage.prototype.getItem=()=>{throw new Error('blocked')}; Storage.prototype.setItem=()=>{throw new Error('blocked')} }); await page.goto('/motion/one'); await page.getByRole('button',{name:'Reduce motion'}).click(); await expect(page.locator('html')).toHaveAttribute('data-motion','reduce'); await expect(page.getByRole('button',{name:'Reduce motion'})).toHaveAttribute('aria-pressed','true'); });
 
@@ -226,7 +249,7 @@ test('ENG-015 lets an explicit Allow motion choice override OS reduced motion', 
   await expect(effect).toHaveCSS('animation-play-state', 'paused');
 });
 
-test('ENG-015 starts real starter effects still and pauses no-motion pages without a bundle', async ({ page, browser }) => {
+test('ENG-015 starts real starter effects still and leaves non-opt-in no-motion pages inert', async ({ page, browser }) => {
   await page.goto('/general/gallery');
   const offscreen = page.locator('#motion-offscreen');
   await expect(offscreen).toHaveCSS('animation-play-state', 'paused');
@@ -234,7 +257,7 @@ test('ENG-015 starts real starter effects still and pauses no-motion pages witho
   await expect(offscreen).toHaveCSS('animation-play-state', 'running');
 
   await page.goto('/general/guide');
-  await expect(page.locator('script[type="module"]')).toHaveCount(0);
+  await expect(page.locator('[data-motion-effect]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Reduce motion' })).toHaveCount(0);
 
   const noJavaScript = await browser.newContext({ javaScriptEnabled: false });
