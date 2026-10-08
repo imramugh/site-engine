@@ -23,7 +23,7 @@
 .adminSidebar a { color: inherit; text-decoration: none; }
 .adminBrand { min-height: 76px; padding: 16px 20px; display: flex; align-items: center; gap: .7rem; border-bottom: 1px solid color-mix(in srgb, var(--admin-sidebar-foreground) 18%, transparent); font-size: 1rem; }
 .adminBrand img { max-width: 104px; max-height: 44px; width: auto; height: auto; object-fit: contain; }
-.adminBrand > span { width: 2.25rem; height: 2.25rem; border-radius: .375rem; display: grid; place-items: center; background: var(--admin-accent); color: var(--admin-accent-contrast); font-weight: 800; }
+.brandInitials { width: 2.25rem; height: 2.25rem; flex: none; border-radius: .375rem; display: grid; place-items: center; background: var(--admin-accent); color: var(--admin-accent-contrast); font-weight: 800; }
 .navigationContents { min-height: 0; flex: 1; padding: .75rem .625rem 0; display: flex; flex-direction: column; gap: .5rem; }
 .adminLinks { display: grid; gap: 2px; }
 .adminLinks a { min-height: 40px; padding: 0 .75rem; display: flex; align-items: center; gap: .625rem; border-radius: .375rem; color: var(--admin-sidebar-foreground); font-size: .875rem; }
