@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,10 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import { approveChangeSet, buildCandidate, canonicalHash, cancelScheduledPublication, changeSetHash, claimNextPublishJob, completePublishJob, dispatchDueScheduledPublications, recordPublishStage, renewPublishLease, reschedulePublication, retryPublishJob, scheduledPublicationTime } from '../src/publishing'
 import { snapshot as capturedSnapshot } from '../src/editorial'
 import { hashOpaqueToken, newOpaqueToken } from '../src/identity'
+import { dispatchExpiredJobClosures } from '../src/job-closure-publication'
+const { buildSnapshot } = await import('../../site/scripts/build-snapshot.mjs')
+const { createPublicServer } = await import('../../site/scripts/public-server.mjs')
+const { activatePublicRelease } = await import('../../site/scripts/public-release.mjs')
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-publishing-'))
 process.env.DATABASE_URI = `file:${join(directory, 'cms.sqlite')}`
@@ -78,11 +82,25 @@ async function ownerSession(label: string, freshAt = new Date()) {
   return { owner, headers: new Headers({ cookie: `site_engine_session=${token}` }) }
 }
 
-async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>) {
+async function installPublishedBaseline(current: Awaited<ReturnType<typeof fixture>>, sequence = 1) {
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
-  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence: 1, snapshot: snapshot.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: artifact(snapshot.contentHash) }, overrideAccess: true, context: { editorialInternal: true } })
-  return { snapshot, sequence: 1 }
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `baseline:${snapshot.id}`, sequence, snapshot: snapshot.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: artifact(snapshot.contentHash) }, overrideAccess: true, context: { editorialInternal: true } })
+  return { snapshot, sequence }
+}
+
+async function installExpiredJobs(current: Awaited<ReturnType<typeof fixture>>, validThrough = '2030-01-02T03:04:05.000Z', count = 1) {
+  const section = current.baseline.settings.sections[0]!
+  if (!section.allowedTemplates.includes('job')) section.allowedTemplates.push('job')
+  await payload.update({ collection: 'sections', id: section.id, data: { allowedTemplates: section.allowedTemplates }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+  const pages = Array.from({ length: count }, (_, index) => ({ ...structuredClone(current.baseline.pages[0]!), id: randomUUID(), slug: `expired-${index}-${randomUUID().slice(0, 8)}`, title: `Expired ${index}` }))
+  for (const page of pages) {
+    page.template = 'job'; page.blocks = []; page.jobPosting = { datePosted: '2030-01-01T00:00:00.000Z', validThrough, employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' } }
+    current.baseline.pages.push(page); section.pageIds.push(page.id)
+    await payload.create({ collection: 'pages', data: { id: page.id, sectionId: page.sectionId, title: page.title, summary: page.summary, slug: page.slug, template: page.template, blocks: page.blocks, jobPosting: page.jobPosting }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+  }
+  await payload.update({ collection: 'sections', id: section.id, data: { pageIds: section.pageIds }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+  return pages
 }
 
 function artifact(sourceContentHash: string) { return { digest: 'a'.repeat(64), sourceContentHash, ...versions, checks: [{ name: 'artifact-integrity', status: 'passed' as const }, { name: 'public-health', status: 'passed' as const }] } }
@@ -102,6 +120,108 @@ async function prepareRedirectApproval(current: Awaited<ReturnType<typeof fixtur
 }
 
 describe('ENG-029 immutable approval snapshots and durable publish outbox', () => {
+  it('ENG-021 atomically withdraws every expired role from the immutable published baseline and preserves drafts and applications', async () => {
+    const current = await fixture('job-closure')
+    const jobs = await installExpiredJobs(current, '2030-01-02T03:04:05.000Z', 2)
+    const published = await installPublishedBaseline(current)
+    const application = await payload.create({ collection: 'applications', data: { name: 'Applicant', email: 'applicant@example.test', consent: true, jobId: jobs[0]!.id, resumeKey: 'private-resume-key', idempotencyKey: randomUUID() }, overrideAccess: true })
+    const savedBlocks = [{ id: randomUUID(), type: 'richText', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' }, body: (current.baseline.pages[0]!.blocks[0]! as { body: unknown }).body }]
+    await withPayloadTransaction(payload, async req => {
+      req.user = current.editor as never
+      await payload.update({ collection: 'pages', id: jobs[0]!.id, data: { title: 'Saved unpublished title', blocks: savedBlocks }, draft: true, overrideAccess: true, req })
+    })
+    const captured = await payload.find({ collection: 'change-sets', where: { and: [{ actor: { equals: current.editor.id } }, { state: { equals: 'open' } }] }, limit: 1, overrideAccess: true })
+    const draft = await payload.update({ collection: 'change-sets', id: captured.docs[0]!.id, data: { state: 'submitted', preview: { status: 'ready', marker: 'must-be-cleared' }, quality: { proof: { report: { publishable: true } } } }, overrideAccess: true, context: { editorialInternal: true } })
+    const result = await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:05.000Z')))
+    expect(result).toEqual({ enqueued: 1, deferred: 0, blocked: 0 })
+    const outbox = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { like: 'job-close-batch:%' } }, depth: 1, overrideAccess: true })
+    expect(outbox.docs).toHaveLength(1)
+    const snapshot = outbox.docs[0]!.snapshot as unknown as { manifest: ReturnType<typeof baseline> }
+    expect(snapshot.manifest.pages.filter((page) => jobs.some((job) => job.id === page.id)).every((page) => page.status === 'archived')).toBe(true)
+    expect(await payload.findByID({ collection: 'pages', id: jobs[0]!.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'archived', title: 'Saved unpublished title', blocks: savedBlocks })
+    expect(await payload.findByID({ collection: 'applications', id: application.id, overrideAccess: true })).toMatchObject({ jobId: jobs[0]!.id, resumeKey: 'private-resume-key' })
+    expect(await payload.findByID({ collection: 'change-sets', id: draft.id, overrideAccess: true })).toMatchObject({ state: 'stale', preview: null, quality: null })
+    await payload.update({ collection: 'publish-outbox', id: outbox.docs[0]!.id, data: { status: 'failed', errorCode: 'BUILD_TIMEOUT' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(await payload.findByID({ collection: 'applications', id: application.id, overrideAccess: true })).toMatchObject({ resumeKey: 'private-resume-key' })
+    expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.job_closed' } }, overrideAccess: true })).docs).toHaveLength(2)
+    expect(published.sequence).toBe(1)
+  })
+
+  it('ENG-021 leaves future roles untouched and defers once while a newer publication is unresolved', async () => {
+    const current = await fixture('job-closure-deferred')
+    const jobs = await installExpiredJobs(current, '2030-01-02T03:04:05.000Z')
+    const published = await installPublishedBaseline(current)
+    await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `unsettled:${randomUUID()}`, sequence: 2, snapshot: published.snapshot.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'unsettled', includedChangeKeys: [], status: 'failed', attempts: 3, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 0, deferred: 1, blocked: 0 })
+    expect(await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:06.000Z')))).toEqual({ enqueued: 0, deferred: 1, blocked: 0 })
+    expect((await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.job_closure_deferred' } }, overrideAccess: true })).docs).toHaveLength(1)
+    expect((await payload.findByID({ collection: 'pages', id: jobs[0]!.id, draft: true, overrideAccess: true })).status).toBe('draft')
+  })
+
+  it('ENG-021 leaves a future role public before its deadline', async () => {
+    const current = await fixture('job-closure-future')
+    const [job] = await installExpiredJobs(current, '2030-01-02T03:04:05.000Z')
+    await installPublishedBaseline(current)
+    expect(await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:04.999Z')))).toEqual({ enqueued: 0, deferred: 0, blocked: 0 })
+    expect((await payload.findByID({ collection: 'pages', id: job!.id, draft: true, overrideAccess: true })).status).toBe('draft')
+    expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(1)
+  })
+
+  it('ENG-021 does not let a historical failed outbox superseded by the active release block withdrawal', async () => {
+    const current = await fixture('job-closure-historical-failure')
+    await installExpiredJobs(current)
+    const old = await payload.create({ collection: 'publish-snapshots', data: { changeSet: current.set.id, reviewRevision: 0, changeHash: 'old', contentHash: canonicalHash(current.baseline), manifest: current.baseline, themeVersion: versions.themeVersion, engineVersion: versions.engineVersion, contractVersion: versions.contractVersion, approvedBy: current.reviewer.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `historical-failure:${randomUUID()}`, sequence: 1, snapshot: old.id, changeSet: current.set.id, reviewRevision: 0, changeHash: 'old', includedChangeKeys: [], status: 'failed', attempts: 3, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+    await installPublishedBaseline(current, 2)
+    expect(await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 1, deferred: 0, blocked: 0 })
+  })
+
+  it('ENG-021 renders an immutable closure artifact that withdraws the expired role from public routes, search, and sitemap', async () => {
+    const current = await fixture('job-closure-artifact')
+    const [job] = await installExpiredJobs(current, '2030-01-02T03:04:05.000Z')
+    const published = await installPublishedBaseline(current)
+    const root = mkdtempSync(join(tmpdir(), 'eng021-closure-artifact-'))
+    const releases = join(root, 'releases'); mkdirSync(releases)
+    const render = async (manifest: unknown, name: string) => {
+      const input = join(root, `${name}.json`); writeFileSync(input, JSON.stringify(manifest))
+      return buildSnapshot({ input, outputRoot: root, publicOrigin: 'https://public.example.test', versionPins: versions })
+    }
+    const path = `/${current.baseline.settings.sections[0]!.slug}/${job!.slug}`
+    const server = createPublicServer({ releasesRoot: releases })
+    try {
+      const before = await render(current.baseline, 'before')
+      await activatePublicRelease({ releasesRoot: releases, artifact: before.output, jobID: 'eng021-before', sequence: 1, pins: { contentHash: before.manifest.snapshotContentHash, ...versions } })
+      await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address() as { port: number }; const origin = `http://127.0.0.1:${address.port}`
+      expect((await fetch(`${origin}${path}`)).status).toBe(200)
+      expect(await (await fetch(`${origin}/sitemap.xml`)).text()).toContain(job!.slug)
+
+      const application = await payload.create({ collection: 'applications', data: { name: 'Retained applicant', email: 'retained@example.test', consent: true, jobId: job!.id, resumeKey: 'private-resume-key', idempotencyKey: randomUUID() }, overrideAccess: true })
+      await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:06.000Z')))
+      const closure = await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { like: 'job-close-batch:%' } }, limit: 1, depth: 1, overrideAccess: true })
+      const snapshot = closure.docs[0]!.snapshot as unknown as { manifest: typeof current.baseline }
+      const after = await render(snapshot.manifest, 'after')
+      await activatePublicRelease({ releasesRoot: releases, artifact: after.output, jobID: 'eng021-after', sequence: 2, pins: { contentHash: after.manifest.snapshotContentHash, ...versions } })
+      expect((await fetch(`${origin}${path}`)).status).toBe(404)
+      const sitemap = await (await fetch(`${origin}/sitemap.xml`)).text(); expect(sitemap).not.toContain(job!.slug)
+      const search = await (await fetch(`${origin}/search/`)).text(); expect(search).not.toContain(job!.title)
+      expect(await payload.findByID({ collection: 'applications', id: application.id, overrideAccess: true })).toMatchObject({ jobId: job!.id, resumeKey: 'private-resume-key' })
+      expect(published.sequence).toBe(1)
+    } finally { await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }) }
+  }, 120_000)
+
+  it('ENG-021 is triggered by the ordinary dispatcher claim and leases its verified closure artifact', async () => {
+    const current = await fixture('job-closure-dispatcher')
+    const [job] = await installExpiredJobs(current)
+    await installPublishedBaseline(current)
+    const claim = await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date('2030-01-02T03:04:05.000Z')))
+    expect(claim).toMatchObject({ status: 'processing', idempotencyKey: expect.stringMatching(/^job-close-batch:/), includedChangeKeys: [`pages:${job!.id}`] })
+    expect(await withPayloadTransaction(payload, req => claimNextPublishJob(payload, req, new Date('2030-01-02T03:04:06.000Z')))).toBeNull()
+    expect((await payload.find({ collection: 'publish-outbox', where: { idempotencyKey: { like: 'job-close-batch:%' } }, overrideAccess: true })).docs).toHaveLength(1)
+    const snapshotID = typeof claim!.snapshot === 'string' ? claim!.snapshot : claim!.snapshot.id
+    const snapshot = await payload.findByID({ collection: 'publish-snapshots', id: snapshotID, overrideAccess: true })
+    expect((snapshot.manifest as unknown as ReturnType<typeof baseline>).pages.find((page) => page.id === job!.id)?.status).toBe('archived')
+  })
+
   it('keeps captured media metadata private and rejects tampered original asset captures', () => {
     const base = baseline()
     const asset = { id: randomUUID(), filename: 'public-media.png', mimeType: 'image/png', width: 4, height: 4, alt: 'Public media', decorative: false }

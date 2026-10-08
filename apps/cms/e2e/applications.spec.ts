@@ -75,12 +75,17 @@ test('ENG-021 accepts a valid multipart application only for a published role an
 
   const hiring = await newPage(browser, 'hiring')
   expect((await hiring.page.request.get(resumeURL)).status()).toBe(200)
+  const hiringMinted = await hiring.page.request.post(`/api/hiring/applications/${created.body.id}/resume-link`, { headers: { origin: cmsOrigin } })
+  expect(hiringMinted.status()).toBe(200)
+  const hiringSignedURL = (await hiringMinted.json() as { url: string }).url
+  expect((await hiring.page.request.get(hiringSignedURL)).status()).toBe(200)
   expect((await hiring.page.request.get(signedURL)).status()).toBe(403)
   await hiring.context.close()
 
   for (const role of ['editor', 'sales'] as const) {
     const denied = await newPage(browser, role)
     expect((await denied.page.request.get(resumeURL)).status()).toBe(403)
+    expect((await denied.page.request.post(`/api/hiring/applications/${created.body.id}/resume-link`, { headers: { origin: cmsOrigin } })).status()).toBe(403)
     await denied.context.close()
   }
 })

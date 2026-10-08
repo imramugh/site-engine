@@ -8,6 +8,7 @@ import { markStaleIfNeeded, publicAssetSnapshot, snapshot as capturedSnapshot, t
 import { validateRedirectSet } from './redirect-lifecycle'
 import { deriveRoutes } from '@site-engine/engine'
 import { enqueueNotification } from './notification-settings'
+import { dispatchExpiredJobClosures } from './job-closure-publication'
 
 type Actor = { id: string; roles?: ('owner' | 'approver' | 'editor' | 'sales' | 'hiring')[] | null; disabled?: boolean | null }
 type Change = { collection: CapturedCollection; id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; beforeHash: string | null; afterHash: string | null }
@@ -435,6 +436,7 @@ export async function reschedulePublication(input: { payload: Payload; req: Payl
 export async function claimNextPublishJob(payload: Payload, req: PayloadRequest, now = new Date(), leaseMilliseconds = 60_000, maxAttempts = MAX_PUBLISH_ATTEMPTS) {
   requireTransaction(req, 'Publish claim')
   await dispatchDueScheduledPublications(payload, req, now)
+  await dispatchExpiredJobClosures(payload, req, now)
   const result = await payload.find({ collection: 'publish-outbox', where: { status: { in: ['pending', 'processing'] } }, sort: 'sequence', limit: 1, depth: 0, overrideAccess: true, req })
   const job = result.docs[0]
   if (!job) return null
