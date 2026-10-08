@@ -93,7 +93,7 @@ test('ENG-021 submits optional contact details through the public Astro form and
   await page.getByLabel('Email').fill('browser.applicant@example.test')
   await page.getByLabel('Phone').fill('(647) 555-0123')
   await page.getByLabel('LinkedIn').fill(longLinkedIn)
-  await page.getByLabel('Cover letter').fill('I would like to apply through the public careers page.')
+  await page.getByLabel('Note (optional)').fill('I would like to apply through the public careers page.')
   await page.getByLabel(/Resume/).setInputFiles({ name: 'browser-resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from(resume) })
   await page.getByLabel(/I consent/).check()
   const submit = page.getByRole('button', { name: 'Submit application' })
