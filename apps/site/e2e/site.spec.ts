@@ -54,6 +54,73 @@ test('ENG-005 starter blocks retain their semantic HTML and omit hidden content'
   await expect(page.locator('[data-block-id="40000000-0000-4000-8000-000000000022"]')).toHaveCount(0);
 });
 
+test('listing routes progressively filter canonical pages', async ({ page, browser }) => {
+  await page.goto('/insights/all');
+  const listing = page.locator('[data-page-listing]');
+  await expect(listing).toHaveAttribute('data-page-listing-kind', 'articles');
+  await expect(listing.locator('[data-page-listing-item]')).toHaveCount(7);
+  await expect(listing.locator('[data-page-listing-item]:not([hidden])')).toHaveCount(6);
+  const query = listing.locator('[data-page-listing-query]');
+  await query.focus();
+  await page.keyboard.type('article 7');
+  await expect(listing.locator('[data-page-listing-count]')).toHaveText('1 result');
+  await expect(listing.locator('[data-page-listing-item]:not([hidden]) [data-page-listing-title]')).toHaveText('Article 7');
+  await expect(listing.locator('[data-page-listing-reset]')).toBeVisible();
+  await page.getByRole('button', { name: 'Reset' }).click();
+  await expect(query).toBeFocused();
+  await expect(listing.locator('[data-page-listing-pagination]')).toBeVisible();
+  await page.getByRole('button', { name: 'Page 2' }).press('Enter');
+  await expect(listing.locator('[data-page-listing-item]:not([hidden]) [data-page-listing-title]')).toHaveText('Article 7');
+  await expect(listing.locator('[data-page-listing-results]')).toBeFocused();
+  await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-page-listing]')!;
+    const url = new URL(location.href);
+    url.searchParams.set(`${root.dataset.pageListingId}-page`, '2.5');
+    url.searchParams.set('unrelated', 'preserved');
+    history.replaceState({ marker: 'preserved' }, '', url);
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(listing.locator('[data-page-listing-item]:not([hidden]) [data-page-listing-title]')).toHaveText('Article 7');
+  await expect.poll(() => page.evaluate(() => history.state)).toEqual({ marker: 'preserved' });
+  await expect(page).toHaveURL(/unrelated=preserved/);
+  await page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-page-listing]')!;
+    const url = new URL(location.href);
+    url.searchParams.set(`${root.dataset.pageListingId}-page`, 'Infinity');
+    history.replaceState({ marker: 'still-preserved' }, '', url);
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(listing.locator('[data-page-listing-item]:not([hidden])')).toHaveCount(6);
+  await expect(page).not.toHaveURL(/Infinity/);
+  await expect.poll(() => page.evaluate(() => history.state)).toEqual({ marker: 'still-preserved' });
+  await query.fill('does not occur');
+  await expect(listing.locator('[data-page-listing-empty]')).toBeVisible();
+  await expect(listing.locator('[data-page-listing-item]:not([hidden])')).toHaveCount(0);
+
+  await page.goto('/careers/all');
+  const jobs = page.locator('[data-page-listing]');
+  await expect(jobs).toHaveAttribute('data-page-listing-kind', 'jobs');
+  await jobs.locator('[data-page-listing-query]').fill('sample city');
+  await expect(jobs.locator('[data-page-listing-count]')).toHaveText('1 result');
+  await jobs.locator('[data-page-listing-query]').fill('unavailable');
+  await expect(jobs.locator('[data-page-listing-empty]')).toBeVisible();
+  await expect(jobs.locator('[data-page-listing-pagination]')).toBeHidden();
+
+  const noJavaScript = await browser.newContext({ javaScriptEnabled: false });
+  const staticPage = await noJavaScript.newPage();
+  await staticPage.goto('/insights/all');
+  await expect(staticPage.locator('[data-page-listing-item]')).toHaveCount(7);
+  await expect(staticPage.locator('[data-page-listing-controls]')).toBeHidden();
+  await expect(staticPage.locator('[data-page-listing-item] a').last()).toHaveAttribute('href', '/insights/all/article-7');
+  await staticPage.goto('/insights/empty');
+  await expect(staticPage.locator('[data-page-listing-empty]')).toHaveText('No matching pages.');
+  await expect(staticPage.locator('[data-page-listing-controls]')).toBeHidden();
+  await noJavaScript.close();
+
+  await page.addScriptTag({ path: axeSource });
+  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]);
+});
+
 test('ENG-038 starter fixture matrix renders every declared surface at desktop and mobile', async ({ page }, testInfo) => {
   const standardBlocks = ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'];
   await page.goto('/');

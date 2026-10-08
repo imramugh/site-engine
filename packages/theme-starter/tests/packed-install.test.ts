@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 const execFile = promisify(execFileCallback)
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const temporary: string[] = []
-const pnpm = (cwd: string, args: string[], environment: NodeJS.ProcessEnv = process.env) => execFile('corepack', ['pnpm@12.8.1', ...args], { cwd, env: { ...environment, npm_config_ignore_scripts: 'true' } })
+const pnpm = (cwd: string, args: string[], environment: NodeJS.ProcessEnv = process.env) => execFile('corepack', ['pnpm@12.10.1', ...args], { cwd, env: { ...environment, npm_config_ignore_scripts: 'true' } })
 
 async function packedConsumer() {
   const directory = await mkdtemp(join(tmpdir(), 'starter-packed-consumer-')); temporary.push(directory)

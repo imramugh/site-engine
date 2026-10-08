@@ -16,11 +16,11 @@
     "@site-engine/contract": "workspace:^",
     "@site-engine/engine": "workspace:^",
     "@site-engine/theme-starter": "workspace:^",
-    "astro": "7.3.7",
+    "astro": "7.3.8",
     "sharp": "0.35.5"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
-    "typescript": "6.0.2"
+    "typescript": "6.0.3"
   }
 }

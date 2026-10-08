@@ -1252,7 +1252,7 @@ async function stop(code = 0): Promise<void> {
 }
 
 function runNext(args: string[], keepRunning = false): Promise<ChildProcess> {
-  const child = spawn('corepack', ['pnpm@12.8.1', '--filter', '@site-engine/cms', 'exec', 'next', ...args], { cwd: process.cwd(), env: { ...process.env, NODE_EXTRA_CA_CERTS: caCertificate }, stdio: 'inherit' })
+  const child = spawn('corepack', ['pnpm@12.10.1', '--filter', '@site-engine/cms', 'exec', 'next', ...args], { cwd: process.cwd(), env: { ...process.env, NODE_EXTRA_CA_CERTS: caCertificate }, stdio: 'inherit' })
   if (keepRunning) return Promise.resolve(child)
   return new Promise((resolve, reject) => {
     child.once('error', reject)
@@ -1327,7 +1327,7 @@ async function main(): Promise<void> {
 
 function runAstroBuild(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('corepack', ['pnpm@12.8.1', '--filter', '@site-engine/site', 'build'], { cwd: process.cwd(), env: { ...process.env, SITE_PUBLIC_ORIGIN: cmsOrigin, SITE_SNAPSHOT_PATH: initialPreviewBaseline, SITE_PUBLIC_DEMO: 'false' }, stdio: 'inherit' })
+    const child = spawn('corepack', ['pnpm@12.10.1', '--filter', '@site-engine/site', 'build'], { cwd: process.cwd(), env: { ...process.env, SITE_PUBLIC_ORIGIN: cmsOrigin, SITE_SNAPSHOT_PATH: initialPreviewBaseline, SITE_PUBLIC_DEMO: 'false' }, stdio: 'inherit' })
     child.once('error', reject)
     child.once('exit', (status) => status === 0 ? resolve() : reject(new Error(`Astro build exited with ${status ?? 'no'} status.`)))
   })

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 const root = resolve(new URL("..", import.meta.url).pathname);
-const run = (cwd, args, options = {}) => execFile("corepack", ["pnpm@12.8.1", ...args], { cwd, maxBuffer: 10_000_000, ...options });
+const run = (cwd, args, options = {}) => execFile("corepack", ["pnpm@12.10.1", ...args], { cwd, maxBuffer: 10_000_000, ...options });
 const tarball = async (directory, destination) => { await run(join(root, directory), ["pack", "--pack-destination", destination]); };
 const file = async (directory, prefix) => {
   const items = await (await import("node:fs/promises")).readdir(directory);
