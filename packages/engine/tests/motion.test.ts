@@ -132,6 +132,10 @@ describe('ENG-015 motion preference', () => {
     expect(document.documentElement.dataset.motion).toBe('reduce');
     teardown();
     expect(effect.dataset.motionPaused).toBe('true');
+    expect(document.documentElement.dataset.motion).toBe('reduce');
+    expect(document.documentElement.dataset.motionPreference).toBe('reduce');
+    expect(control.getAttribute('aria-pressed')).toBe('true');
+    expect(control.textContent).toBe('Allow motion');
 
     const remount = mountMotionRuntime(document, window);
     expect(document.documentElement.dataset.motion).toBe('reduce');

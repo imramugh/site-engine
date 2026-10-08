@@ -174,5 +174,13 @@ export function mountMotionRuntime(document: Document, window: Window, options: 
 
     // A torn-down enhancement must leave the page in the safe no-motion state.
     for (const effect of effects) setEffectStill(effect, true);
+    if (themeController) {
+      root.dataset.motion = 'reduce';
+      root.dataset.motionPreference = 'reduce';
+      for (const control of controls) {
+        control.setAttribute('aria-pressed', 'true');
+        control.textContent = 'Allow motion';
+      }
+    }
   };
 }
