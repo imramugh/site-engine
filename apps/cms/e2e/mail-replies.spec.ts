@@ -394,7 +394,9 @@ test('ENG-033 lets a fresh Hiring user cancel then send one confirmed applicatio
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-application-hiring-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
   const page = await context.newPage()
   try {
-    await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    const fixtureResponse = await page.request.post(`${origin}/__e2e/mail-reply-fixture`)
+    expect(fixtureResponse.ok()).toBe(true)
+    const fixture = await fixtureResponse.json() as { application: string }
     const before = await (await page.request.get(`${origin}/__e2e/mail-reply-deliveries`)).json() as { deliveries: unknown[] }
     await page.goto('/applications')
     await page.getByRole('button', { name: /^Applications/ }).click()
@@ -416,5 +418,14 @@ test('ENG-033 lets a fresh Hiring user cancel then send one confirmed applicatio
     expect(after.deliveries.at(-1)).toMatchObject({ threadID: 'fixture-oauth-application-thread' })
     expect(after.deliveries.at(-1)?.mime).toContain('Subject: Fixture hiring reply\r\n')
     expect(after.deliveries.at(-1)?.mime).toContain('Confirmed hiring body')
+    const timelineResponse = await page.request.get(`${origin}/api/mail-threads/application/${fixture.application}`)
+    expect(timelineResponse.ok()).toBe(true)
+    const timeline = await timelineResponse.json() as { messages: Array<{ direction: string; body: string }> }
+    expect(timeline.messages).toContainEqual(expect.objectContaining({ direction: 'outbound', body: 'Confirmed hiring body' }))
+    const loadedTimeline = page.waitForResponse(response => response.url().includes(`/api/mail-threads/application/${fixture.application}`) && response.status() === 200)
+    await page.getByRole('button', { name: 'Close application details' }).click()
+    await page.getByRole('button', { name: /Synthetic candidate/ }).click()
+    await loadedTimeline
+    await expect(page.getByRole('region', { name: 'Mail timeline' })).toContainText('Confirmed hiring body')
   } finally { await context.close() }
 })

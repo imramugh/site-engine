@@ -59,6 +59,14 @@ const rfcReferences = (value: unknown) => {
     ? [...new Set(references)].join(" ")
     : undefined;
 };
+export function boundedRFCReferenceChain(references: unknown, messageID: string) {
+  const values = (String(references ?? '').match(/<[^<>\s]{1,480}>/g) ?? []).filter((value, index, all) => value !== messageID && all.indexOf(value) === index)
+  const selected: string[] = [messageID]; let length = messageID.length
+  // Keep the newest valid identifiers while leaving room for the header name
+  // and CRLF inside RFC 5322's 998-character physical-line limit.
+  for (const value of values.reverse()) { const next = length + 1 + value.length; if (next <= 980) { selected.unshift(value); length = next } }
+  return selected.join(' ')
+}
 function checkedAttachments(input: Envelope): readonly VerifiedAttachment[] {
   const attachments = input.attachments ?? [];
   if (!Array.isArray(attachments) || attachments.length > attachmentCountMaximum) throw new Error('invalid_attachments');
@@ -102,12 +110,13 @@ async function graphAttachment(fetcher: Fetcher, token: string, messageID: strin
   }
 }
 function mime(input: Envelope, attachments: readonly VerifiedAttachment[]) {
-  if (!attachments.length) return `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ''}${input.rfcMessageID ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[input.rfcReferences, input.rfcMessageID].filter(Boolean).join(' ')}\r\n` : ''}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`;
+  const references = input.rfcMessageID ? boundedRFCReferenceChain(input.rfcReferences, input.rfcMessageID) : ''
+  if (!attachments.length) return `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ''}${input.rfcMessageID ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${references}\r\n` : ''}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.body}`;
   const seed = createHash('sha256').update(JSON.stringify({ sender: input.sender, recipient: input.recipient, subject: input.subject, body: input.body, attachments: attachments.map(({ filename, mimeType, size, sha256 }) => ({ filename, mimeType, size, sha256 })) })).digest('hex');
   let index = 0; let boundary = `=_mail_${seed.slice(0, 32)}`;
   const encoded = attachments.map((attachment) => Buffer.from(attachment.bytes).toString('base64').replace(/.{1,76}/g, '$&\r\n').replace(/\r\n$/, ''));
   while ([input.body, ...encoded].some((part) => part.includes(`--${boundary}`))) boundary = `=_mail_${seed.slice(0, 28)}_${++index}`;
-  const headers = `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ''}${input.rfcMessageID ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${[input.rfcReferences, input.rfcMessageID].filter(Boolean).join(' ')}\r\n` : ''}MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${input.body}\r\n`;
+  const headers = `To: ${input.recipient}\r\nFrom: ${input.sender}\r\nSubject: ${input.subject}\r\n${input.outboundRFCMessageID ? `Message-ID: ${input.outboundRFCMessageID}\r\n` : ''}${input.rfcMessageID ? `In-Reply-To: ${input.rfcMessageID}\r\nReferences: ${references}\r\n` : ''}MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${input.body}\r\n`;
   return headers + attachments.map((attachment, position) => `--${boundary}\r\nContent-Type: ${attachment.mimeType}; name="${attachment.filename}"\r\nContent-Disposition: attachment; filename="${attachment.filename}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encoded[position]}\r\n`).join('') + `--${boundary}--\r\n`;
 }
 function fail(status: number): never {
@@ -289,36 +298,16 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         throw new Error("invalid_envelope");
       if (input.replyMessageID) {
         if (!opaque(input.replyMessageID)) throw new Error("invalid_envelope");
-        if (attachments.length) {
-          const draft = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/createReply`, {
-            method: 'POST', headers: graphAuth(token), body: JSON.stringify({ message: { subject: input.subject, body: { contentType: 'Text', content: input.body }, toRecipients: [{ emailAddress: { address: input.recipient } }], from: { emailAddress: { address: verifiedSender } } } }),
-          });
-          if (!draft.ok) fail(draft.status);
-          const created = await json(draft); const id = typeof created.id === 'string' ? created.id : '';
-          if (!opaque(id)) throw new Error('provider_malformed_response');
-          for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
-          const sent = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
-          if (sent.status !== 202) fail(sent.status);
-          return { accepted: true as const };
-        }
-        const response = await request(
-          fetcher,
-          `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/reply`,
-          {
-            method: "POST",
-            headers: graphAuth(token),
-            body: JSON.stringify({
-              message: {
-                subject: input.subject,
-                body: { contentType: "Text", content: input.body },
-                toRecipients: [{ emailAddress: { address: input.recipient } }],
-                from: { emailAddress: { address: verifiedSender } },
-              },
-            }),
-          },
-        );
-        if (response.status !== 202) fail(response.status);
-        return { accepted: true as const };
+        const draft = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/createReply`, {
+          method: 'POST', headers: graphAuth(token), body: JSON.stringify({ message: { subject: input.subject, body: { contentType: 'Text', content: input.body }, toRecipients: [{ emailAddress: { address: input.recipient } }], from: { emailAddress: { address: verifiedSender } } } }),
+        });
+        if (!draft.ok) fail(draft.status);
+        const created = await json(draft); const id = typeof created.id === 'string' ? created.id : '';
+        if (!opaque(id)) throw new Error('provider_malformed_response');
+        for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
+        const sent = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
+        if (sent.status !== 202) fail(sent.status);
+        return { accepted: true as const, id };
       }
       const draft = await request(fetcher, `${graph}/v1.0/me/messages`, {
         method: "POST",

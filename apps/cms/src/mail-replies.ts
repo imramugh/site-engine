@@ -5,6 +5,7 @@ import { assertAreaAttachmentDelivery, sendAreaMail } from './mailboxes'
 import { withPayloadTransaction } from './auth-transaction'
 import { assertLeadAcceptsOutbound } from './lead-outbound'
 import { resolveOutgoingAttachments, resolveVerifiedOutgoingAttachments, type VerifiedOutgoingAttachment } from './outgoing-attachments'
+import { boundedRFCReferenceChain } from './mail-provider-adapters'
 
 let replyDelivery = sendAreaMail
 export function setReplyDeliveryForTest(sender?: typeof sendAreaMail) { if (process.env.NODE_ENV !== 'test') throw new Error('Test delivery override is disabled.'); replyDelivery = sender ?? sendAreaMail }
@@ -48,7 +49,9 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
   const mapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: area } }, limit: 1, depth: 0, overrideAccess: true })
   const mailboxID = mapping.docs[0] && (typeof mapping.docs[0].mailbox === 'string' ? mapping.docs[0].mailbox : mapping.docs[0].mailbox.id)
   const mailbox = mailboxID ? await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) : undefined
-  let providerReply: { providerThreadID: string; providerMessageID: string; providerMailboxID: string; provider: 'microsoft' | 'google'; providerTarget: { collection: 'inquiries' | 'applications'; id: string }; providerRFCMessageID?: string; providerRFCReferences?: string; providerSubject: string } | undefined
+  let providerReply: { providerThreadID: string; providerMessageID: string; providerMailboxID: string; provider: 'microsoft' | 'google'; providerTarget: { collection: 'inquiries' | 'applications'; id: string }; providerRFCMessageID?: string; providerRFCReferences?: string; outboundRFCMessageID?: string; outboundRFCReferences?: string; providerSubject: string } | undefined
+  let persistedReplyThread: { id: string; mailboxID: string; provider: 'microsoft' | 'google'; targetField: 'lead' | 'application'; targetID: string } | undefined
+  const smtpTimeline = mailbox?.provider === 'smtp' ? { mailboxID: String(mailboxID), targetField: pendingApplication ? 'application' as const : 'lead' as const, targetID: target.id, draftThreadID: String(pendingDraft.threadID) } : undefined
   let initialProvider: { provider: 'microsoft' | 'google'; mailboxID: string; rfcMessageID?: string } | undefined
   if (mailbox && (mailbox.provider === 'microsoft' || mailbox.provider === 'google')) {
     const thread = await payload.find({ collection: 'mail-threads', where: { and: [{ [pendingApplication ? 'application' : 'lead']: { equals: target.id } }, { mailbox: { equals: mailboxID } }, { provider: { equals: mailbox.provider } }, { providerConversationID: { equals: String(pendingDraft.threadID) } }] }, limit: 1, depth: 0, overrideAccess: true })
@@ -58,13 +61,18 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
     } else {
       const messages = await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.docs[0].id } }, sort: '-receivedAt', limit: 1, depth: 0, overrideAccess: true })
       if (!messages.docs[0]?.providerMessageID || (mailbox.provider === 'google' && (!messages.docs[0].rfcMessageID || String(messages.docs[0].subject) !== String(pendingDraft.subject)))) throw new Error('mailbox_thread_not_grounded')
-      providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: target, ...(mailbox.provider === 'google' ? { providerRFCMessageID: String(messages.docs[0].rfcMessageID), ...(messages.docs[0].rfcReferences ? { providerRFCReferences: String(messages.docs[0].rfcReferences) } : {}) } : {}), providerSubject: String(messages.docs[0].subject) }
+      const inboundRFCMessageID = String(messages.docs[0].rfcMessageID)
+      const outboundRFCMessageID = mailbox.provider === 'google' ? `<${randomUUID()}@${String(pendingDraft.sender).split('@')[1]}>` : undefined
+      const outboundRFCReferences = mailbox.provider === 'google' ? boundedRFCReferenceChain(messages.docs[0].rfcReferences, inboundRFCMessageID) : undefined
+      providerReply = { providerThreadID: String(thread.docs[0].providerConversationID), providerMessageID: String(messages.docs[0].providerMessageID), providerMailboxID: mailboxID, provider: mailbox.provider, providerTarget: target, ...(mailbox.provider === 'google' ? { providerRFCMessageID: inboundRFCMessageID, ...(messages.docs[0].rfcReferences ? { providerRFCReferences: String(messages.docs[0].rfcReferences) } : {}), outboundRFCMessageID, ...(outboundRFCReferences ? { outboundRFCReferences } : {}) } : {}), providerSubject: String(messages.docs[0].subject) }
+      persistedReplyThread = { id: String(thread.docs[0].id), mailboxID, provider: mailbox.provider, targetField: pendingApplication ? 'application' : 'lead', targetID: target.id }
     }
   }
   const draft = grant.envelope
     const delivered = await replyDelivery(payload, area, {
       sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body),
       ...(providerReply ? { threadID: String(draft.threadID), ...providerReply } : {}),
+      ...(providerReply?.outboundRFCMessageID ? { outboundRFCMessageID: providerReply.outboundRFCMessageID } : {}),
       ...(initialProvider ? { initialOutbound: true, outboundRFCMessageID: initialProvider.rfcMessageID } : {}),
       ...(attachments.length ? { attachments } : {}),
     })
@@ -72,6 +80,18 @@ async function deliverReply(payload: Payload, actorID: string, grantID: string, 
       if (delivered.provider !== initialProvider.provider || !('threadID' in delivered) || !delivered.threadID || !delivered.messageID) throw new Error('provider_malformed_response')
       const persistedThread = await payload.create({ collection: 'mail-threads', data: { [pendingApplication ? 'application' : 'lead']: target.id, mailbox: initialProvider.mailboxID, provider: initialProvider.provider, providerConversationID: delivered.threadID } as never, overrideAccess: true })
       await payload.create({ collection: 'mail-thread-messages', data: { thread: persistedThread.id, mailbox: initialProvider.mailboxID, [pendingApplication ? 'application' : 'lead']: target.id, providerMessageID: delivered.messageID, ...(initialProvider.rfcMessageID ? { rfcMessageID: initialProvider.rfcMessageID } : {}), direction: 'outbound', sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), receivedAt: new Date().toISOString(), attachmentMetadata: [] } as never, overrideAccess: true })
+    }
+    if (providerReply && persistedReplyThread) {
+      if (delivered.provider !== persistedReplyThread.provider || typeof delivered.messageID !== 'string' || !delivered.messageID) throw new Error('provider_malformed_response')
+      const recorded = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: persistedReplyThread.id } }, { mailbox: { equals: persistedReplyThread.mailboxID } }, { providerMessageID: { equals: delivered.messageID } }] }, limit: 1, depth: 0, overrideAccess: true })
+      if (!recorded.docs[0]) await payload.create({ collection: 'mail-thread-messages', data: { thread: persistedReplyThread.id, mailbox: persistedReplyThread.mailboxID, [persistedReplyThread.targetField]: persistedReplyThread.targetID, providerMessageID: delivered.messageID, ...(providerReply.outboundRFCMessageID ? { rfcMessageID: providerReply.outboundRFCMessageID } : {}), ...(providerReply.outboundRFCReferences ? { rfcReferences: providerReply.outboundRFCReferences } : {}), direction: 'outbound', sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), receivedAt: new Date().toISOString(), attachmentMetadata: [] } as never, overrideAccess: true })
+    }
+    if (smtpTimeline) {
+      if (delivered.provider !== 'smtp' || typeof delivered.messageID !== 'string' || !delivered.messageID) throw new Error('provider_malformed_response')
+      const existingThread = await payload.find({ collection: 'mail-threads', where: { and: [{ [smtpTimeline.targetField]: { equals: smtpTimeline.targetID } }, { mailbox: { equals: smtpTimeline.mailboxID } }, { provider: { equals: 'smtp' } }, { providerConversationID: { equals: smtpTimeline.draftThreadID } }] }, limit: 1, depth: 0, overrideAccess: true })
+      const persistedThread = existingThread.docs[0] ?? await payload.create({ collection: 'mail-threads', data: { [smtpTimeline.targetField]: smtpTimeline.targetID, mailbox: smtpTimeline.mailboxID, provider: 'smtp', providerConversationID: smtpTimeline.draftThreadID } as never, overrideAccess: true })
+      const recorded = await payload.find({ collection: 'mail-thread-messages', where: { and: [{ thread: { equals: persistedThread.id } }, { mailbox: { equals: smtpTimeline.mailboxID } }, { providerMessageID: { equals: delivered.messageID } }] }, limit: 1, depth: 0, overrideAccess: true })
+      if (!recorded.docs[0]) await payload.create({ collection: 'mail-thread-messages', data: { thread: persistedThread.id, mailbox: smtpTimeline.mailboxID, [smtpTimeline.targetField]: smtpTimeline.targetID, providerMessageID: delivered.messageID, direction: 'outbound', sender: String(draft.sender), recipient: String(draft.recipient), subject: String(draft.subject), body: String(draft.body), receivedAt: new Date().toISOString(), attachmentMetadata: [] } as never, overrideAccess: true })
     }
     await payload.update({ collection: 'mail-drafts', id: draftID, data: { state: 'sent' }, overrideAccess: true })
     await payload.create({ collection: 'audit-events', data: { event: 'mail.reply_sent', user: actorID, actor: actorID, detail: { draft: draftID, grant: grantID, provider: delivered.provider, messageID: delivered.messageID, ...(typeof draft.assistantClientIDHash === 'string' ? { clientIdHash: draft.assistantClientIDHash } : {}) } }, overrideAccess: true })
