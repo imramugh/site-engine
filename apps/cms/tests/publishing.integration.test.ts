@@ -167,6 +167,17 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect((await payload.count({ collection: 'publish-outbox', overrideAccess: true })).totalDocs).toBe(1)
   })
 
+  it('ENG-021 withdraws an already-published expired role after its original approver is disabled', async () => {
+    const current = await fixture('job-closure-disabled-approver')
+    const [job] = await installExpiredJobs(current)
+    await installPublishedBaseline(current)
+    await payload.update({ collection: 'users', id: current.reviewer.id, data: { disabled: true }, overrideAccess: true })
+    expect(await withPayloadTransaction(payload, req => dispatchExpiredJobClosures(payload, req, new Date('2030-01-02T03:04:05.000Z')))).toEqual({ enqueued: 1, deferred: 0, blocked: 0 })
+    expect(await payload.findByID({ collection: 'pages', id: job!.id, draft: true, overrideAccess: true })).toMatchObject({ status: 'archived' })
+    const audits = await payload.find({ collection: 'audit-events', where: { event: { equals: 'editorial.job_closed' } }, limit: 10, overrideAccess: true })
+    expect(audits.docs.find((audit) => (audit.detail as { page?: string } | undefined)?.page === job!.id)?.detail).toMatchObject({ executor: 'system', deadlineApprovedBy: current.reviewer.id, reason: 'VALID_THROUGH_ELAPSED' })
+  })
+
   it('ENG-021 does not let a historical failed outbox superseded by the active release block withdrawal', async () => {
     const current = await fixture('job-closure-historical-failure')
     await installExpiredJobs(current)

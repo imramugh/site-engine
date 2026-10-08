@@ -94,6 +94,9 @@ export async function dispatchExpiredJobClosures(payload: Payload, req: PayloadR
     for (const { page, validThrough } of closable) await auditOnce(payload, req, 'editorial.job_closure_blocked', { idempotencyKey: closureKey(page.id, validThrough, baseline), page: page.id, validThrough, release: baseline.releaseID, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence, reason: 'CLOSURE_CANDIDATE_INVALID' })
     return { enqueued: 0, deferred: 0, blocked: blocked + closable.length }
   }
+  // `approvedBy` records who approved the already-published deadline. It is
+  // retained as immutable deadline provenance, not treated as a fresh human
+  // approval for the system-enforced withdrawal.
   const approvedBy = idOf(baseline.snapshot.approvedBy)!
   const changeHash = hash(changes)
   const changeSet = await payload.create({ collection: 'change-sets', data: { name: `Automatic closure: ${closable.length} expired role${closable.length === 1 ? '' : 's'}`, actor: approvedBy, state: 'approved', revision: 0, changes, summary: `System withdrawal at ${now.toISOString()} from published release ${baseline.sequence}.` }, overrideAccess: true, req, context: { editorialInternal: true } })
@@ -105,7 +108,7 @@ export async function dispatchExpiredJobClosures(payload: Payload, req: PayloadR
     await payload.update({ collection: 'pages', id: page.id, data: { status: 'archived' }, draft: true, overrideAccess: true, req, context: { editorialInternal: true, archiveInternal: true } })
     const staleSets = (openSets.docs as unknown as RecordValue[]).filter((set) => Array.isArray(set.changes) && (set.changes as RecordValue[]).some((item) => item.collection === 'pages' && item.id === page.id))
     for (const set of staleSets) await payload.update({ collection: 'change-sets', id: String(set.id), data: { state: 'stale', staleAt: now.toISOString(), preview: null, quality: null }, overrideAccess: true, req, context: { editorialInternal: true } })
-    await payload.create({ collection: 'audit-events', data: { event: 'editorial.job_closed', detail: { idempotencyKey: closureKey(page.id, validThrough, baseline), batchKey, page: page.id, validThrough, release: baseline.releaseID, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence, changeSet: changeSet.id, snapshot: snapshot.id, outbox: outbox.id, approvedBy, reason: 'VALID_THROUGH_ELAPSED', staleChangeSets: staleSets.map((set) => set.id) } }, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: 'editorial.job_closed', detail: { idempotencyKey: closureKey(page.id, validThrough, baseline), batchKey, page: page.id, validThrough, release: baseline.releaseID, baselineSnapshot: baseline.snapshotID, baselineSequence: baseline.sequence, changeSet: changeSet.id, snapshot: snapshot.id, outbox: outbox.id, executor: 'system', deadlineApprovedBy: approvedBy, reason: 'VALID_THROUGH_ELAPSED', staleChangeSets: staleSets.map((set) => set.id) } }, overrideAccess: true, req })
   }
   return { enqueued: 1, deferred: 0, blocked }
 }
