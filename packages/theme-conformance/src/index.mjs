@@ -777,6 +777,14 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
                 // Playback above verifies the control's media source; removing
                 // the controls only for the screenshot makes its pixels stable.
                 video.removeAttribute("controls");
+                // Native caption placement also depends on the viewport's
+                // restored scroll offset. Check the loaded captions before
+                // excluding that browser-owned overlay from static pixels.
+                for (const track of video.textTracks) {
+                  if (track.kind !== "captions" && track.kind !== "subtitles") continue;
+                  if (!track.cues?.length) throw new Error("Video captions did not load.");
+                  track.mode = "hidden";
+                }
               }
             });
           }

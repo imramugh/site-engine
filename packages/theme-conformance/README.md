@@ -8,6 +8,6 @@ For a new or intentional visual baseline, use a caller-owned file: `--baseline-f
 
 Library callers use `runThemeConformance({ themePackage, artifactsDir, baselineFile, recordBaselines })`.
 
-Before each screenshot, the harness waits for fonts and rendering frames, then returns the viewport to the top and clears transient focus and pointer state. Keyboard and form behavior checks run before that capture reset.
+Before each screenshot, the harness waits for fonts and rendering frames, then returns the viewport to the top and clears transient focus and pointer state. Keyboard and form behavior checks run before that capture reset. The matrix also verifies video playback and loaded caption cues before hiding native controls and caption overlays for static capture; browser-owned overlays depend on viewport state and are not theme pixels.
 
 The harness contains no client assets, credentials, or checkout paths.
