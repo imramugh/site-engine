@@ -87,6 +87,28 @@ export async function stabilizeCaptureState(page) {
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
 }
+
+/**
+ * Give decoded video a compositor frame while it is visible before restoring
+ * the page to the top for a full-page capture. Chromium may otherwise defer
+ * painting video that starts below the viewport.
+ */
+export async function stabilizeVideoCaptureState(page) {
+  await page.evaluate(async () => {
+    const waitForCurrentData = (video) => new Promise((resolve, reject) => {
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return resolve();
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for video frame paint.")), 10_000);
+      const done = () => { clearTimeout(timer); resolve(); };
+      video.addEventListener("canplay", done, { once: true });
+      video.addEventListener("error", () => { clearTimeout(timer); reject(new Error("Video frame is unavailable for capture.")); }, { once: true });
+    });
+    for (const video of document.querySelectorAll("video")) {
+      video.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      await waitForCurrentData(video);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+  });
+}
 async function assertVisualBaselines(actual, { file, record, identity }) {
   if (!file) throw new Error(`No visual baseline is configured for ${identity.name}@${identity.themeVersion}. Pass baselineFile, or use recordBaselines with a caller-owned baselineFile.`);
   if (record) {
@@ -776,7 +798,11 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
                 if (video.currentTime <= 0 || video.paused)
                   throw new Error("Video did not play after canplay.");
                 video.pause();
-                video.currentTime = 0;
+                if (video.currentTime !== 0) {
+                  const seeked = waitFor(video, "seeked");
+                  video.currentTime = 0;
+                  await seeked;
+                }
                 // Native controls include a transient Chromium loading spinner.
                 // Playback above verifies the control's media source; removing
                 // the controls only for the screenshot makes its pixels stable.
@@ -791,6 +817,7 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
                 }
               }
             });
+            await stabilizeVideoCaptureState(page);
           }
           await page.addStyleTag({
             content:

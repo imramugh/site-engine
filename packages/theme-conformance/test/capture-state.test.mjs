@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { chromium } from '@playwright/test'
-import { stabilizeCaptureState } from '../src/index.mjs'
+import { stabilizeCaptureState, stabilizeVideoCaptureState } from '../src/index.mjs'
 
 const pageHTML = `<!doctype html><html><head><style>
   html { scroll-behavior: smooth; }
@@ -52,6 +53,60 @@ test('capture stabilization keeps skip-link navigation testable and removes focu
     const scrolledCapture = await captureFromState(page, 'scrolled-content-focused')
     assert.deepEqual(focusedSkipCapture, scrolledCapture)
     await context.close()
+  } finally {
+    await browser.close()
+    await new Promise((done) => server.close(done))
+  }
+})
+
+test('video capture stabilization paints a playable offscreen video in the full-page capture', async () => {
+  const [video, poster] = await Promise.all([
+    readFile(new URL('../harness/public/media/sample-video.webm', import.meta.url)),
+    readFile(new URL('../harness/public/media/sample-poster.svg', import.meta.url)),
+  ])
+  const server = createServer((request, response) => {
+    if (request.url === '/media/sample-video.webm') return response.writeHead(200, { 'content-type': 'video/webm' }).end(video)
+    if (request.url === '/media/sample-poster.svg') return response.writeHead(200, { 'content-type': 'image/svg+xml' }).end(poster)
+    response.end(`<!doctype html><style>
+    html { scroll-behavior: smooth; }
+    body { margin: 0; min-height: 2600px; background: #f5f7f9; }
+    video { display: block; margin-top: 1900px; width: 320px; height: 180px; }
+  </style><video controls muted poster="/media/sample-poster.svg"><source src="/media/sample-video.webm" type="video/webm"></video>`)
+  })
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  const port = server.address().port
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 } })
+    await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' })
+    const before = await page.locator('video').evaluate((video) => video.getBoundingClientRect().top)
+    assert.ok(before > 900)
+    await page.locator('video').evaluate(async (video) => {
+      const waitFor = (event) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 10_000)
+        video.addEventListener(event, () => { clearTimeout(timer); resolve() }, { once: true })
+      })
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) await waitFor('canplay')
+      await video.play()
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      video.pause()
+      if (video.currentTime !== 0) {
+        const seeked = waitFor('seeked')
+        video.currentTime = 0
+        await seeked
+      }
+      video.removeAttribute('controls')
+    })
+    await stabilizeVideoCaptureState(page)
+    const after = await page.locator('video').evaluate((video) => ({ top: video.getBoundingClientRect().top, width: video.clientWidth, height: video.clientHeight }))
+    assert.ok(after.top >= 0 && after.top < 900)
+    assert.deepEqual({ width: after.width, height: after.height }, { width: 320, height: 180 })
+    await stabilizeCaptureState(page)
+    assert.equal(await page.evaluate(() => scrollY), 0)
+    const visibleCapture = await page.screenshot({ fullPage: true })
+    await page.locator('video').evaluate((video) => { video.style.visibility = 'hidden' })
+    const hiddenCapture = await page.screenshot({ fullPage: true })
+    assert.notDeepEqual(visibleCapture, hiddenCapture)
   } finally {
     await browser.close()
     await new Promise((done) => server.close(done))
