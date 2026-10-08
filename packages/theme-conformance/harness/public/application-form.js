@@ -8,12 +8,13 @@
   const status = form.querySelector('#application-status');
   const summary = form.querySelector('[data-application-error-summary]');
   const errorList = form.querySelector('[data-application-error-list]');
+  const errorHeading = form.querySelector('[data-application-error-heading]');
   const submit = form.querySelector('button[type="submit"]');
   const resume = form.elements.namedItem('resume');
   const copy = (() => { try { return JSON.parse(form.dataset.applicationCopy || '{}'); } catch { return {}; } })();
   const fieldNames = { name: 'Full name', email: 'Email', telephone: 'Phone', linkedIn: copy.linkedInLabel || 'LinkedIn', coverLetter: copy.noteLabel || 'Note', resume: 'Resume', consent: 'Consent' };
   const upload = form.querySelector('[data-application-upload]'); const filename = form.querySelector('[data-application-upload-filename]'); const uploadLabel = form.querySelector('[data-application-upload-label]'); const uploadPrompt = uploadLabel?.textContent || 'Choose a file or drop it here';
-  let pending = false; let accepted = false; let retryFingerprint = ''; let retryKey = ''; const maxResumeBytes = 5_000_000; const emailFormat = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  let pending = false; let accepted = false; let retryFingerprint = ''; let retryKey = ''; let displayedErrors = []; const maxResumeBytes = 5_000_000; const emailFormat = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const field = (name) => form.elements.namedItem(name);
   const fieldError = (name) => form.querySelector(`[data-application-field-error="${name}"]`);
@@ -26,9 +27,14 @@
     if (summary) summary.hidden = true;
     if (errorList) errorList.replaceChildren();
   };
-  const showErrors = (errors, focus = true) => {
+  const renderErrors = (errors, focus = true) => {
     clearErrors();
     if (!errors.length || !summary || !errorList) return;
+    const fieldErrors = errors.filter(({ name }) => name !== 'form');
+    if (errorHeading) {
+      const neutralHeading = 'Check your application';
+      errorHeading.textContent = fieldErrors.length === 0 ? neutralHeading : fieldErrors.length === 1 ? (copy.errorSummarySingular || neutralHeading) : (copy.errorSummaryPlural || neutralHeading).replaceAll('{count}', String(fieldErrors.length));
+    }
     for (const { name, message } of errors) {
       const control = field(name); const detail = fieldError(name);
       if (control instanceof HTMLElement) control.setAttribute('aria-invalid', 'true');
@@ -37,7 +43,10 @@
       if (control instanceof HTMLElement) {
         const link = document.createElement('a');
         link.href = `#application-${name === 'linkedIn' ? 'linkedin' : name === 'coverLetter' ? 'cover-letter' : name}`;
-        link.textContent = `${fieldNames[name] || 'Application'}: ${message}`;
+        const label = document.createElement('span');
+        label.dataset.applicationErrorFieldLabel = '';
+        label.textContent = `${fieldNames[name] || 'Application'}: `;
+        link.append(label, document.createTextNode(message));
         link.addEventListener('click', (event) => { event.preventDefault(); control.focus(); });
         item.append(link);
       } else item.textContent = message;
@@ -45,6 +54,13 @@
     }
     summary.hidden = false;
     if (focus) summary.focus();
+  };
+  const showErrors = (errors, focus = true) => { displayedErrors = errors; renderErrors(displayedErrors, focus); };
+  const updateDisplayedField = (name, message) => {
+    if (!displayedErrors.length) { if (message) { displayedErrors = [{ name, message }]; renderErrors(displayedErrors, false); } return; }
+    displayedErrors = displayedErrors.filter((error) => error.name !== name && error.name !== 'form');
+    if (message) displayedErrors.push({ name, message });
+    renderErrors(displayedErrors, false);
   };
   const setFormError = (message) => showErrors([{ name: 'form', message }]);
   const setFilename = () => { const name = resume instanceof HTMLInputElement && resume.files?.[0] ? resume.files[0].name : ''; if (filename) filename.textContent = name; if (uploadLabel) uploadLabel.textContent = name || uploadPrompt; };
@@ -83,9 +99,9 @@
     return JSON.stringify(values);
   };
 
-  resume?.addEventListener('change', () => { setFilename(); const message = validResume(); if (message) showErrors([{ name: 'resume', message }], false); else clearErrors(); });
-  if (upload && resume instanceof HTMLInputElement) { upload.addEventListener('dragover', event => { if (!resume.disabled) { event.preventDefault(); upload.dataset.dragging = 'true'; } }); upload.addEventListener('dragleave', () => { delete upload.dataset.dragging; }); upload.addEventListener('drop', event => { event.preventDefault(); delete upload.dataset.dragging; if (resume.disabled || pending || accepted || !event.dataTransfer?.files?.length) return; if (event.dataTransfer.files.length !== 1) { showErrors([{ name: 'resume', message: 'Choose one resume file.' }], false); return; } resume.files = event.dataTransfer.files; resume.dispatchEvent(new Event('change', { bubbles: true })); }); }
-  form.addEventListener('input', () => { if (summary && !summary.hidden) clearErrors(); });
+  resume?.addEventListener('change', () => { setFilename(); updateDisplayedField('resume', validResume()); });
+  if (upload && resume instanceof HTMLInputElement) { upload.addEventListener('dragover', event => { if (!resume.disabled) { event.preventDefault(); upload.dataset.dragging = 'true'; } }); upload.addEventListener('dragleave', () => { delete upload.dataset.dragging; }); upload.addEventListener('drop', event => { event.preventDefault(); delete upload.dataset.dragging; if (resume.disabled || pending || accepted || !event.dataTransfer?.files?.length) return; if (event.dataTransfer.files.length !== 1) { updateDisplayedField('resume', 'Choose one resume file.'); return; } resume.files = event.dataTransfer.files; resume.dispatchEvent(new Event('change', { bubbles: true })); }); }
+  form.addEventListener('input', (event) => { const target = event.target; if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) updateDisplayedField(target.name); });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (accepted || pending) return;

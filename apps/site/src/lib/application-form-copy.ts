@@ -1,9 +1,9 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { resolve, relative, join } from 'node:path'
 
-export const neutralApplicationFormCopy = { linkedInLabel: 'LinkedIn', noteLabel: 'Note', consentLabel: 'I consent to the handling of this application.', submitLabel: 'Submit application', successMessage: 'Your application has been received.', nameRequired: 'Enter full name.', emailRequired: 'Enter email.', emailInvalid: 'Enter a valid email address.', resumeRequired: 'Choose a resume.', consentRequired: 'Confirm consent.' } as const
+export const neutralApplicationFormCopy = { linkedInLabel: 'LinkedIn', noteLabel: 'Note', consentLabel: 'I consent to the handling of this application.', submitLabel: 'Submit application', successMessage: 'Your application has been received.', nameRequired: 'Enter full name.', emailRequired: 'Enter email.', emailInvalid: 'Enter a valid email address.', resumeRequired: 'Choose a resume.', consentRequired: 'Confirm consent.', errorSummarySingular: 'Check your application', errorSummaryPlural: 'Check your application' } as const
 export type ApplicationFormCopy = { [K in keyof typeof neutralApplicationFormCopy]: string }
-const keys = new Set(['linkedInLabel', 'noteLabel', 'consentLabel', 'submitLabel', 'successMessage', 'nameRequired', 'emailRequired', 'emailInvalid', 'resumeRequired', 'consentRequired'])
+const keys = new Set(['linkedInLabel', 'noteLabel', 'consentLabel', 'submitLabel', 'successMessage', 'nameRequired', 'emailRequired', 'emailInvalid', 'resumeRequired', 'consentRequired', 'errorSummarySingular', 'errorSummaryPlural'])
 export function applicationFormCopy(root = process.env.SITE_THEME_COMPONENT_ROOT): ApplicationFormCopy {
   if (!root) return neutralApplicationFormCopy
   const trusted = realpathSync(resolve(root)); const file = join(trusted, 'application-form.json')

@@ -7,7 +7,7 @@ const copy = applicationFormCopy();
 <form class="application-form" data-application-form data-application-state="idle" data-application-copy={JSON.stringify(copy)} method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status application-error-summary">
   <input type="hidden" name="jobId" value={jobId} />
   <div class="application-form__error-summary" id="application-error-summary" data-application-error-summary role="alert" tabindex="-1" hidden>
-    <h3>Check your application</h3>
+    <h3 data-application-error-heading>Check your application</h3>
     <ul data-application-error-list></ul>
   </div>
   <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>

@@ -973,8 +973,12 @@ describe('static snapshot renderer', () => {
     const job = { ...snapshot.pages[0]!, id: 'abababab-abab-4bab-8bab-abababababab', slug: 'application-role', title: 'Application preview role', template: 'job' as const, blocks: [] as typeof snapshot.pages[0]['blocks'], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' } };
     snapshot.pages.push(job); section.pageIds.push(job.id);
     const input = await writeSnapshot(root, snapshot, 'application-preview.json');
+    const neutralBuild = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root });
+    const neutralMarkup = await readFile(join(neutralBuild.output, 'docs/application-role/index.html'), 'utf8');
+    expect(neutralMarkup).toContain('data-application-error-heading');
+    expect(neutralMarkup).toContain('Check your application');
     const themeComponents = await customThemeComponents(root);
-    await writeFile(join(themeComponents, 'application-form.json'), JSON.stringify({ schemaVersion: 1, nameRequired: 'Provide your full name.', emailInvalid: 'Provide a complete email address.' }));
+    await writeFile(join(themeComponents, 'application-form.json'), JSON.stringify({ schemaVersion: 1, nameRequired: 'Provide your full name.', emailInvalid: 'Provide a complete email address.', errorSummarySingular: 'Correct this <field>', errorSummaryPlural: 'Correct {count} <fields>' }));
     const browser = await chromium.launch();
     try {
       for (const basePath of ['/', BASE_PATH]) {
@@ -993,10 +997,16 @@ describe('static snapshot renderer', () => {
             await page.getByLabel(/Resume/).focus(); expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-resume');
             await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' });
             expect(await page.getByRole('alert').locator('a').count()).toBeGreaterThan(0);
+            expect(await page.locator('[data-application-error-heading]').textContent()).toBe('Correct 4 <fields>');
+            expect(await page.locator('[data-application-error-field-label]').first().textContent()).toBe('Full name: ');
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-error-summary');
             await page.getByRole('alert').getByRole('link', { name: /Full name/ }).click(); expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-name');
-            await page.getByLabel('Full name').fill('   '); await page.getByLabel('Email').fill('preview.applicant@example.test'); await button.click();
-            expect(await page.locator('[data-application-field-error="name"]').textContent()).toBe('Provide your full name.'); expect(applications).toBe(0);
+            await page.getByLabel('Full name').fill('Preview applicant');
+            expect(await page.locator('[data-application-error-heading]').textContent()).toBe('Correct 3 <fields>');
+            for (const name of ['email', 'resume', 'consent']) expect(await page.locator(`[data-application-field-error="${name}"]`).isVisible()).toBe(true);
+            await page.getByLabel('Full name').fill('   '); await page.getByLabel('Email').fill('preview.applicant@example.test');
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\npreview\n%%EOF') }); await page.getByLabel(/I consent/).check(); await button.click();
+            expect(await page.locator('[data-application-field-error="name"]').textContent()).toBe('Provide your full name.'); expect(await page.locator('[data-application-error-heading]').textContent()).toBe('Correct this <field>'); expect(applications).toBe(0);
             await page.getByLabel('Full name').fill('Preview applicant'); await page.getByLabel('Email').fill('person@example'); await button.click();
             expect(await page.locator('[data-application-field-error="email"]').textContent()).toBe('Provide a complete email address.'); expect(applications).toBe(0);
             await page.getByLabel('Email').fill('preview.applicant@example.test');
@@ -1005,10 +1015,14 @@ describe('static snapshot renderer', () => {
             await page.getByLabel(/Resume/).setInputFiles([]); expect(await page.locator('#application-resume').evaluate((input: HTMLInputElement) => ({ custom: input.validity.customError, missing: input.validity.valueMissing }))).toEqual({ custom: false, missing: true });
             await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); expect(await filename.textContent()).toBe('resume.pdf');
             await page.evaluate(() => { const drop = new DataTransfer(); drop.items.add(new File(['one'], 'one.pdf', { type: 'application/pdf' })); drop.items.add(new File(['two'], 'two.pdf', { type: 'application/pdf' })); document.querySelector('[data-application-upload]')?.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: drop })); }); expect(await filename.textContent()).toBe('resume.pdf'); expect(await page.locator('[data-application-field-error="resume"]').textContent()).toContain('Choose one resume file.'); await page.getByLabel(/I consent/).check();
-            await page.evaluate(() => { const original = crypto.subtle.digest.bind(crypto.subtle); (window as any).__digest = original; crypto.subtle.digest = (() => Promise.reject(new Error('synthetic digest rejection'))) as SubtleCrypto['digest']; }); await form.evaluate((element: HTMLFormElement) => element.requestSubmit()); await expect.poll(() => form.getAttribute('data-application-state')).toBe('idle'); expect(applications).toBe(0); expect(await button.isEnabled()).toBe(true); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.evaluate(() => { crypto.subtle.digest = (window as any).__digest; });
+            await page.evaluate(() => { const original = crypto.subtle.digest.bind(crypto.subtle); (window as any).__digest = original; crypto.subtle.digest = (() => Promise.reject(new Error('synthetic digest rejection'))) as SubtleCrypto['digest']; }); await form.evaluate((element: HTMLFormElement) => element.requestSubmit()); await expect.poll(() => form.getAttribute('data-application-state')).toBe('idle'); expect(applications).toBe(0); expect(await button.isEnabled()).toBe(true); await page.getByRole('alert').waitFor({ state: 'visible' }); expect(await page.locator('[data-application-error-heading]').textContent()).toBe('Check your application'); await page.evaluate(() => { crypto.subtle.digest = (window as any).__digest; });
             await form.evaluate((element: HTMLFormElement) => { element.requestSubmit(); element.requestSubmit(); });
             await page.waitForFunction(() => document.querySelector('[data-application-form]')?.getAttribute('data-application-state') === 'pending'); expect(await form.getAttribute('data-application-state')).toBe('pending'); await page.getByRole('alert').waitFor({ state: 'visible' }); expect(await page.getByRole('alert').locator('a').count()).toBe(0); expect(await page.getByRole('alert').textContent()).toContain('We could not submit your application.');
-            await button.click(); await expect.poll(() => applications).toBe(2); await expect.poll(() => form.getAttribute('data-application-state')).toBe('idle'); await page.getByLabel('Note (optional)').fill('A changed public application submission.'); await button.click();
+            await button.click(); await expect.poll(() => applications).toBe(2); await expect.poll(() => form.getAttribute('data-application-state')).toBe('idle');
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'too-large.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(5_000_001, 0) });
+            expect(await page.locator('[data-application-field-error="resume"]').textContent()).toContain('Choose a resume smaller than 5 MB.'); expect(await page.locator('[data-application-error-heading]').textContent()).toBe('Correct this <field>');
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\npreview\n%%EOF') });
+            await page.getByLabel('Note (optional)').fill('A changed public application submission.'); await button.click();
             await page.getByRole('status').filter({ hasText: 'Your application has been received.' }).waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(await form.getAttribute('data-application-state')).toBe('success'); expect(multipart.at(-1)).toContain('name="name"'); expect(multipart.at(-1)).toContain('Preview applicant'); expect(multipart.at(-1)).toContain('name="email"'); expect(multipart.at(-1)).toContain('name="jobId"'); expect(multipart.at(-1)).toContain('name="consent"'); expect(multipart.at(-1)).toContain('%PDF-1.7'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
           } else {
             expect(await button.isDisabled()).toBe(true);
