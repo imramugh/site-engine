@@ -152,7 +152,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
           {review.pageFields.length > 0 && <p><strong>Page fields:</strong> {review.pageFields.join(', ')}</p>}
           {review.otherChanges.length > 0 && <p>{review.otherChanges.length} other captured record{review.otherChanges.length === 1 ? '' : 's'} in this change set.</p>}
         </section>
-        <section className={styles.checks}><h2>Checks</h2>
+        <section className={styles.checks} tabIndex={0} aria-label="Quality checks"><h2>Checks</h2>
           {review.quality?.checks?.map((check) => <div className={styles.check} key={check.name}><strong data-status={check.status}>{check.status === 'passed' ? '✓' : '!'}</strong><span>{check.name}</span>{check.errors?.map((error, index) => <p role="alert" key={index}>{error.message}</p>)}</div>)}
           {report?.blockers?.map((item) => <p role="alert" key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}
           {Boolean(report?.warnings?.length) && <details className={styles.warningDetails}><summary>{report!.warnings!.length} advisory warning{report!.warnings!.length === 1 ? '' : 's'}</summary>{report!.warnings!.map((item) => <p key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}</details>}
