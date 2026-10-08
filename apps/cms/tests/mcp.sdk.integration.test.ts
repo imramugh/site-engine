@@ -282,7 +282,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]) })
     const currentContractBlockers = (structuredJson(pageAudit) as { blockers: Array<{ message: string }> }).blockers.map((item) => item.message)
     expect(currentContractBlockers).not.toEqual(expect.arrayContaining([expect.stringContaining('contract version')]))
-    expect(CONTRACT_VERSION).toBe('1.7.0')
+    expect(CONTRACT_VERSION).toBe('1.8.0')
     expect(structuredJson(stalePages)).toMatchObject({ source: 'current-editable-draft', items: expect.arrayContaining([expect.objectContaining({ id: qualityPage.id, reviewAgeDays: expect.any(Number) })]), page: 1, nextCursor: null })
     const staleFirst = structuredJson(await approverClient.client.callTool({ name: 'list_stale_pages', arguments: { limit: 1 } })) as { items: Array<{ id: string }>; nextCursor: string | null }
     expect(staleFirst.nextCursor).toBe('p:2')
