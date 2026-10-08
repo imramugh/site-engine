@@ -163,11 +163,11 @@ export function AdminNavigationToggle({ primary, site, displayName, email, provi
       || (item.label === 'Site' && (pathname === '/themes' || pathname.startsWith('/admin/collections/redirects') || pathname.startsWith('/admin/collections/site-settings')))
       || (item.href === '/integrations' && pathname === '/ai-jobs')
     const current = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(`${item.href}/`)) || grouped
-    return <a data-admin-nav-item key={item.href} href={item.href} aria-label={badge ? item.label : undefined} aria-description={badge ? `${badge} pending` : undefined} aria-current={current ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
+    return <a data-admin-nav-item key={item.href} href={item.href} aria-description={badge ? `${badge} pending` : undefined} aria-current={current ? 'page' : undefined} onClick={() => setOpen(false)}><NavIcon label={item.label} /><span>{item.label}</span>{badge ? <span data-admin-nav-badge aria-hidden="true">{badge}</span> : null}</a>
   }
 
   return <>
-    <button ref={button} className={styles.mobileMenu} data-testid="mobile-menu" type="button" aria-label={open ? 'Close navigation' : 'Open navigation'} aria-expanded={open} aria-controls={id} onClick={() => setOpen((current) => !current)}>
+    <button ref={button} className={styles.mobileMenu} data-testid="mobile-menu" type="button" aria-label={open ? 'Close navigation' : 'Menu: open navigation'} aria-expanded={open} aria-controls={id} onClick={() => setOpen((current) => !current)}>
       <span aria-hidden="true">{open ? '×' : '☰'}</span><span>{open ? 'Close' : 'Menu'}</span>
     </button>
     <div id={id} className={styles.navigationContents} data-admin-navigation hidden={!open}>
