@@ -15,6 +15,7 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
   const branding = await loadAdminBranding()
   const primary = navigationForRoles(roles)
   const site = navigationForRoles(roles, adminSiteNavigationItems)
+  const brandAccessibleName = branding.logoUrl ? branding.name : `${branding.initials} ${branding.name}`
   const displayName = user?.name || user?.email || 'Staff account'
   const acceptedRoles = roles.filter((role): role is AdminRole => ['owner', 'editor', 'approver', 'sales', 'hiring'].includes(role))
   const payload = await getPayload({ config })
@@ -24,10 +25,9 @@ export async function WorkspaceNavigation({ user }: { user?: WorkspaceUser | nul
     {branding.stylesheetUrl ? <link rel="stylesheet" href={branding.stylesheetUrl} /> : null}
     <SkipNavigation />
     <aside className={styles.adminSidebar} data-admin-sidebar aria-label="Workspace navigation" style={branding.tokens as CSSProperties}>
-      <a className={styles.adminBrand} data-admin-brand href="/admin">
-        {branding.logoUrl ? <img src={branding.logoUrl} alt="" /> : <span aria-hidden="true">{branding.initials}</span>}
-        <span className={styles.srOnly}>{branding.name}</span>
-        <strong aria-hidden="true">{branding.name}</strong>
+      <a className={styles.adminBrand} data-admin-brand href="/admin" aria-label={brandAccessibleName}>
+        {branding.logoUrl ? <img src={branding.logoUrl} alt="" /> : <span className={styles.brandInitials}>{`${branding.initials} `}</span>}
+        <strong>{branding.name}</strong>
       </a>
       <AdminNavigationToggle primary={primary} site={site} displayName={displayName} email={user?.email ?? ''} provider={user?.provider ?? null} roles={acceptedRoles} badges={badges} />
     </aside>

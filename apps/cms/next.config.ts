@@ -4,6 +4,10 @@ import { withPayload } from '@payloadcms/next/withPayload'
 const nextConfig: NextConfig = {
   output: 'standalone',
   outputFileTracingRoot: new URL('../..', import.meta.url).pathname,
+  // Releases compiler buffers after webpack while retaining Next's full type check.
+  experimental: {
+    webpackMemoryOptimizations: true,
+  },
 }
 
 const payloadConfig = withPayload(nextConfig)
