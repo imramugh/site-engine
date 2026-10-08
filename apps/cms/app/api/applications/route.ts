@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { getPayload } from 'payload'
 import { REST_GET } from '@payloadcms/next/routes'
 import config from '../../../payload.config'
-import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, removeResume, storeResume, validateResume } from '../../../src/applications'
+import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, normalizeApplicationNote, removeResume, storeResume, validateResume } from '../../../src/applications'
 import { isRetryableSQLiteError, sqliteBackpressureResponse } from '../../../src/sqlite'
 
 export const dynamic = 'force-dynamic'
@@ -23,8 +23,8 @@ export async function POST(request: Request) {
   if (!origin || request.headers.get('origin') !== origin) return Response.json({ error: 'forbidden_origin' }, { status: 403 })
   try {
     const form = await boundedForm(request)
-    const name = form.get('name'); const applicantEmail = form.get('email'); const coverLetter = form.get('coverLetter'); const consent = form.get('consent'); const jobId = form.get('jobId'); const resume = form.get('resume'); const key = form.get('idempotencyKey')
-    if (typeof name !== 'string' || name.length < 1 || name.length > 160 || typeof applicantEmail !== 'string' || applicantEmail.length > 254 || !email.test(applicantEmail) || typeof coverLetter !== 'string' || coverLetter.length < 1 || coverLetter.length > 10_000 || consent !== 'true' || typeof jobId !== 'string' || !id.test(jobId) || typeof key !== 'string' || !id.test(key) || !(resume instanceof File)) throw new Error('Invalid application.')
+    const name = form.get('name'); const applicantEmail = form.get('email'); const coverLetter = normalizeApplicationNote(form.get('coverLetter')); const consent = form.get('consent'); const jobId = form.get('jobId'); const resume = form.get('resume'); const key = form.get('idempotencyKey')
+    if (typeof name !== 'string' || name.length < 1 || name.length > 160 || typeof applicantEmail !== 'string' || applicantEmail.length > 254 || !email.test(applicantEmail) || consent !== 'true' || typeof jobId !== 'string' || !id.test(jobId) || typeof key !== 'string' || !id.test(key) || !(resume instanceof File)) throw new Error('Invalid application.')
     const telephone = normalizeApplicantTelephone(form.get('telephone')); const linkedIn = normalizeApplicantLinkedIn(form.get('linkedIn'))
     const bytes = Buffer.from(await resume.arrayBuffer()); validateResume({ data: bytes, mimetype: resume.type, size: bytes.length, name: resume.name })
     const payload = await getPayload({ config }); const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true }); const manifest = (releases.docs[0]?.snapshot as { manifest?: { pages?: Array<{ id: string; template: string; status: string; jobPosting?: { validThrough?: string } }> } } | undefined)?.manifest; const job = manifest?.pages?.find((page) => page.id === jobId)

@@ -2,17 +2,47 @@
 interface Props { jobId: string; enabled: boolean }
 const { jobId, enabled } = Astro.props;
 ---
-<form data-application-form method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status">
+<form class="application-form" data-application-form data-application-state="idle" method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status application-error-summary">
   <input type="hidden" name="jobId" value={jobId} />
-  <p><label for="application-name">Name <input id="application-name" name="name" required maxlength="160" autocomplete="name" disabled={!enabled} /></label></p>
-  <p><label for="application-email">Email <input id="application-email" name="email" type="email" required maxlength="254" autocomplete="email" disabled={!enabled} /></label></p>
-  <p><label for="application-telephone">Phone <span>(optional)</span> <input id="application-telephone" name="telephone" type="tel" maxlength="48" autocomplete="tel" disabled={!enabled} /></label></p>
-  <p><label for="application-linkedin">LinkedIn <span>(optional)</span> <input id="application-linkedin" name="linkedIn" type="url" inputmode="url" maxlength="500" autocomplete="url" placeholder="https://www.linkedin.com/in/…" disabled={!enabled} /></label></p>
-  <p><label for="application-cover-letter">Cover letter <textarea id="application-cover-letter" name="coverLetter" required maxlength="10000" disabled={!enabled}></textarea></label></p>
-  <p><label for="application-resume">Resume (PDF or DOCX, 5 MB maximum) <input id="application-resume" name="resume" type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx" required disabled={!enabled} /></label></p>
-  <p><label><input name="consent" type="checkbox" value="true" required disabled={!enabled} /> I consent to the handling of this application.</label></p>
-  <p id="application-status" role="status" aria-live="polite"></p>
-  <p data-application-error role="alert" hidden></p>
-  <button type="submit" disabled={!enabled}>Submit application</button>
+  <div class="application-form__error-summary" id="application-error-summary" data-application-error-summary role="alert" tabindex="-1" hidden>
+    <h3>Check your application</h3>
+    <ul data-application-error-list></ul>
+  </div>
+  <div class="application-form__field" data-application-field="name">
+    <label class="application-form__label" for="application-name">Full name</label>
+    <input class="application-form__control" id="application-name" name="name" required maxlength="160" autocomplete="name" aria-describedby="application-name-error" disabled={!enabled} />
+    <p class="application-form__field-error" id="application-name-error" data-application-field-error="name" hidden></p>
+  </div>
+  <div class="application-form__field" data-application-field="email">
+    <label class="application-form__label" for="application-email">Email</label>
+    <input class="application-form__control" id="application-email" name="email" type="email" required maxlength="254" autocomplete="email" aria-describedby="application-email-error" disabled={!enabled} />
+    <p class="application-form__field-error" id="application-email-error" data-application-field-error="email" hidden></p>
+  </div>
+  <div class="application-form__field" data-application-field="telephone">
+    <label class="application-form__label" for="application-telephone">Phone <span>(optional)</span></label>
+    <input class="application-form__control" id="application-telephone" name="telephone" type="tel" maxlength="48" autocomplete="tel" aria-describedby="application-telephone-error" disabled={!enabled} />
+    <p class="application-form__field-error" id="application-telephone-error" data-application-field-error="telephone" hidden></p>
+  </div>
+  <div class="application-form__field" data-application-field="linkedIn">
+    <label class="application-form__label" for="application-linkedin">LinkedIn <span>(optional)</span></label>
+    <input class="application-form__control" id="application-linkedin" name="linkedIn" type="url" inputmode="url" maxlength="500" autocomplete="url" placeholder="https://www.linkedin.com/in/…" aria-describedby="application-linkedin-error" disabled={!enabled} />
+    <p class="application-form__field-error" id="application-linkedin-error" data-application-field-error="linkedIn" hidden></p>
+  </div>
+  <div class="application-form__field" data-application-field="coverLetter">
+    <label class="application-form__label" for="application-cover-letter">Note <span>(optional)</span></label>
+    <textarea class="application-form__control" id="application-cover-letter" name="coverLetter" maxlength="10000" aria-describedby="application-cover-letter-error" disabled={!enabled}></textarea>
+    <p class="application-form__field-error" id="application-cover-letter-error" data-application-field-error="coverLetter" hidden></p>
+  </div>
+  <div class="application-form__field application-form__file-card" data-application-field="resume">
+    <label class="application-form__label" for="application-resume">Resume <span>(PDF or DOCX, 5 MB maximum)</span></label>
+    <input class="application-form__control" id="application-resume" name="resume" type="file" accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.docx" required aria-describedby="application-resume-error" disabled={!enabled} />
+    <p class="application-form__field-error" id="application-resume-error" data-application-field-error="resume" hidden></p>
+  </div>
+  <div class="application-form__field application-form__consent" data-application-field="consent">
+    <label class="application-form__label" for="application-consent"><input id="application-consent" name="consent" type="checkbox" value="true" required aria-describedby="application-consent-error" disabled={!enabled} /> I consent to the handling of this application.</label>
+    <p class="application-form__field-error" id="application-consent-error" data-application-field-error="consent" hidden></p>
+  </div>
+  <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>
+  <button class="application-form__submit" type="submit" disabled={!enabled}>Submit application</button>
 </form>
 {enabled && <script is:inline src="/application-form.js"></script>}
