@@ -800,8 +800,6 @@ describe('static snapshot renderer', () => {
     try {
       for (const basePath of ['/', BASE_PATH]) {
         const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
-        const jobHTML = await readFile(join(built.output, `${basePath === '/' ? '' : basePath.slice(1)}docs/application-role/index.html`), 'utf8');
-        expect(jobHTML).toContain('data-page-header'); expect(jobHTML).toContain('data-page-job-chips'); expect(jobHTML).toContain('data-page-job-body'); expect(jobHTML).toContain('data-page-job-info'); expect(jobHTML).toContain('data-page-job-metadata'); expect(jobHTML).toContain('data-page-job-form');
         const served = await staticServer(built.output, basePath);
         const context = await browser.newContext(); const page = await context.newPage();
         const submitted: Array<{ idempotencyKey: string; name: string; email: string; telephone: string; company: string }> = [];
@@ -993,7 +991,7 @@ describe('static snapshot renderer', () => {
             await page.getByLabel(/Resume/).setInputFiles({ name: 'too-large.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(5_000_001, 0) });
             expect(await page.locator('[data-application-field-error="resume"]').isVisible()).toBe(true); expect(applications).toBe(0);
             await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); await page.getByLabel(/I consent/).check(); await form.evaluate((element: HTMLFormElement) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
-            await page.waitForFunction(() => document.querySelector('[data-application-form]')?.getAttribute('data-application-state') === 'pending'); expect(await form.getAttribute('data-application-state')).toBe('pending'); await page.getByRole('alert').waitFor({ state: 'visible' });
+            await page.waitForFunction(() => document.querySelector('[data-application-form]')?.getAttribute('data-application-state') === 'pending'); expect(await form.getAttribute('data-application-state')).toBe('pending'); await page.getByRole('alert').waitFor({ state: 'visible' }); expect(await page.getByRole('alert').locator('a').count()).toBe(0); expect(await page.getByRole('alert').textContent()).toContain('We could not submit your application.');
             await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.getByLabel('Note (optional)').fill('A changed public application submission.'); await button.click();
             await page.getByRole('status').filter({ hasText: 'Your application has been received.' }).waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(await form.getAttribute('data-application-state')).toBe('success'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
           } else {

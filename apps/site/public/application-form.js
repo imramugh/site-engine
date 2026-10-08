@@ -31,14 +31,18 @@
       const control = field(name); const detail = fieldError(name);
       if (control instanceof HTMLElement) control.setAttribute('aria-invalid', 'true');
       if (detail) { detail.hidden = false; detail.textContent = message; }
-      const item = document.createElement('li'); const link = document.createElement('a');
-      link.href = `#application-${name === 'linkedIn' ? 'linkedin' : name === 'coverLetter' ? 'cover-letter' : name}`;
-      link.textContent = `${fieldNames[name] || 'Application'}: ${message}`;
-      link.addEventListener('click', (event) => { event.preventDefault(); if (control instanceof HTMLElement) control.focus(); });
-      item.append(link); errorList.append(item);
+      const item = document.createElement('li');
+      if (control instanceof HTMLElement) {
+        const link = document.createElement('a');
+        link.href = `#application-${name === 'linkedIn' ? 'linkedin' : name === 'coverLetter' ? 'cover-letter' : name}`;
+        link.textContent = `${fieldNames[name] || 'Application'}: ${message}`;
+        link.addEventListener('click', (event) => { event.preventDefault(); control.focus(); });
+        item.append(link);
+      } else item.textContent = message;
+      errorList.append(item);
     }
     summary.hidden = false;
-    if (focus) requestAnimationFrame(() => summary.focus());
+    if (focus) summary.focus();
   };
   const setFormError = (message) => showErrors([{ name: 'form', message }]);
   const setBusy = (busy) => {
@@ -80,7 +84,7 @@
     event.preventDefault();
     if (accepted) return;
     const errors = validationErrors();
-    if (errors.length) { form.reportValidity(); showErrors(errors); return; }
+    if (errors.length) { showErrors(errors); return; }
     clearErrors();
     const data = new FormData(form); const currentFingerprint = await fingerprint(data);
     if (currentFingerprint !== retryFingerprint) { retryFingerprint = currentFingerprint; retryKey = crypto.randomUUID(); }
