@@ -66,6 +66,8 @@ describe('ENG-002 site data semantic fixtures', () => {
     expect(PageSchema.safeParse({ ...page, lastReviewed: reviewed }).success).toBe(false)
     const jobPosting = { datePosted: reviewed, employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2026-02-02T00:00:00.000Z' }
     expect(JobPostingSchema.safeParse(jobPosting).success).toBe(true)
+    for (const workMode of ['ONSITE', 'HYBRID', 'REMOTE']) expect(JobPostingSchema.safeParse({ ...jobPosting, workMode }).success).toBe(true)
+    expect(JobPostingSchema.safeParse({ ...jobPosting, workMode: 'FLEXIBLE' }).success).toBe(false)
     expect(PageSchema.safeParse({ ...page, template: 'job', blocks: [], jobPosting }).success).toBe(true)
     expect(PageSchema.safeParse({ ...page, jobPosting }).success).toBe(false)
     const versioned = snapshot()
@@ -75,6 +77,13 @@ describe('ENG-002 site data semantic fixtures', () => {
     expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(false)
     versioned.settings.contractVersion = '1.4.0'
     expect(SiteSnapshotSchema.safeParse(versioned).success).toBe(true)
+    const workModeSnapshot = snapshot()
+    workModeSnapshot.settings.homepageId = undefined
+    workModeSnapshot.settings.sections[0]!.allowedTemplates.push('job')
+    workModeSnapshot.pages[0] = { ...page, template: 'job', blocks: [], jobPosting: { ...jobPosting, workMode: 'REMOTE' } }
+    expect(SiteSnapshotSchema.safeParse(workModeSnapshot).success).toBe(false)
+    workModeSnapshot.settings.contractVersion = '1.8.0'
+    expect(SiteSnapshotSchema.safeParse(workModeSnapshot).success).toBe(true)
   })
   it('validates settings drafts and rejects unsupported snapshot contracts', () => { const value = snapshot(); expect(SiteSettingsSchema.safeParse(value.settings).success).toBe(true); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale }).success).toBe(true); expect(SiteSnapshotSchema.safeParse(value).success).toBe(true); expect(SiteSettingsSchema.safeParse({ ...value.settings, contractVersion: '2.0.0' }).success).toBe(false); expect(SiteSettingsDraftSchema.safeParse({ siteName: value.settings.siteName, defaultLocale: value.settings.defaultLocale, rawCss: '#fff' }).success).toBe(false); value.settings.contractVersion = '2.0.0' as never; expect(SiteSnapshotSchema.safeParse(value).success).toBe(false) })
 

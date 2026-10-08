@@ -520,6 +520,7 @@ describe('static snapshot renderer', () => {
 
   it('escapes structured data and displays the same job metadata described by its schema', async () => {
     const snapshot = fixture('Safe metadata');
+    snapshot.settings.contractVersion = '1.8.0';
     const attack = '</script><img id="injected" src=x onerror=alert(1)>';
     snapshot.pages[0]!.title = attack;
     const section = snapshot.settings.sections[0]!;
@@ -530,7 +531,7 @@ describe('static snapshot renderer', () => {
       title: 'Example role', summary: 'Synthetic role details.', slug: 'safe-role', template: 'job', status: 'published',
       blocks: [{ id: '12345678-1234-4234-8234-123456789abd', type: 'richText', body: 'A complete visible synthetic role description.', hidden: false,
         appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }],
-      jobPosting: { datePosted: '2026-01-01T00:00:00.000Z', employmentType: 'FULL_TIME', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' },
+      jobPosting: { datePosted: '2026-01-01T00:00:00.000Z', employmentType: 'FULL_TIME', workMode: 'REMOTE', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' },
     });
     const built = await renderer.buildSnapshot({ input: await writeSnapshot(root, snapshot, 'safe-metadata.json'), publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root });
     const html = await readFile(join(built.output, 'index.html'), 'utf8');
@@ -541,7 +542,9 @@ describe('static snapshot renderer', () => {
     expect(html).not.toContain('<img id="injected"');
     const job = await readFile(join(built.output, 'docs/safe-role/index.html'), 'utf8');
     expect(job).toMatch(/<dt\b[^>]*>Location<\/dt><dd\b[^>]*>Example City, CA<\/dd>/);
+    expect(job).toMatch(/<dt\b[^>]*>Work mode<\/dt><dd\b[^>]*>Remote<\/dd>/);
     expect(job).toContain('full time');
+    expect(job).toContain('"jobLocationType":"TELECOMMUTE"');
     expect(job).toContain('"@type":"JobPosting"');
   }, 60_000);
 

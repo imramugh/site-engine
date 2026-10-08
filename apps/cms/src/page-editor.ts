@@ -288,9 +288,11 @@ async function preparePageEditorSave(input: {
   await payload.findByID({ collection: 'sections', id: sectionID, depth: 0, draft: true, user: actor as never, overrideAccess: false, req })
   const set = await payload.findByID({ collection: 'change-sets', id: save.changeSetID, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
   editableSet(set, actor, save.changeSetID)
-  if (desired.kicker || desired.lede || desired.lastReviewed) {
+  if (desired.kicker || desired.lede || desired.lastReviewed || desired.jobPosting?.workMode) {
     const previewContext = await previewThemeContext({ payload, changeSets: [set], initialBaseline: input.initialBaseline, req })
-    if (!['1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(previewContext.changeSetContractVersions[save.changeSetID] ?? '')) throw new Error('PAGE_METADATA_UNSUPPORTED')
+    const contractVersion = previewContext.changeSetContractVersions[save.changeSetID] ?? ''
+    if ((desired.kicker || desired.lede || desired.lastReviewed) && !['1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(contractVersion)) throw new Error('PAGE_METADATA_UNSUPPORTED')
+    if (desired.jobPosting?.workMode && contractVersion !== '1.8.0') throw new Error('JOB_WORK_MODE_UNSUPPORTED')
   }
   const current = pageEditorProjection(page)
   return { desired, page, set, current, currentHash: pageEditorHash(current), desiredHash: pageEditorHash(desired) }

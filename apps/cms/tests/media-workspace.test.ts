@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mediaWorkspace } from '../src/media-workspace'
+import { neutralFixture } from '@site-engine/contract/fixtures'
+import { mediaFocalContractVersion, mediaWorkspace } from '../src/media-workspace'
 
 const docs = Array.from({ length: 105 }, (_, index) => ({
   id: `asset-${index}`,
@@ -22,6 +23,25 @@ function fixture() {
 const user = { id: 'editor', roles: ['editor'] }
 
 describe('media workspace pagination', () => {
+  it('allows focal metadata for the current 1.8 preview contract while retaining the unsupported guard', async () => {
+    const activeContract = async (contractVersion: typeof neutralFixture.settings.contractVersion) => {
+      const manifest = structuredClone(neutralFixture)
+      manifest.settings.contractVersion = contractVersion
+      const payload = { find: vi.fn(async ({ collection }: { collection: string }) => {
+        expect(['published-releases', 'publish-outbox']).toContain(collection)
+        return { docs: [] }
+      }) }
+      return mediaFocalContractVersion(payload as never, {
+        manifest,
+        sequence: 0,
+        versions: { themeVersion: 'test-theme', engineVersion: 'test-engine', contractVersion },
+      })
+    }
+
+    await expect(activeContract('1.8.0')).resolves.toBe('1.4.0')
+    await expect(activeContract('1.3.0')).resolves.toBeNull()
+  })
+
   it('keeps later matches and complete filtered totals reachable without scanning pages for each asset', async () => {
     const payload = fixture()
     const later = await mediaWorkspace(payload as never, user, { q: 'later-match', page: 1, pageSize: 10 })

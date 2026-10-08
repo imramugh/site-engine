@@ -274,26 +274,44 @@ describe('local mail authorization transactions', () => {
     const mailbox = await completeMailboxOAuth(payload, 'google', state, 'code', owner.id, owner.sessionToken, async (url) => url.includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : url.endsWith('/profile') ? Response.json({ emailAddress: 'team@example.test' }) : Response.json({ sendAs: [{ sendAsEmail: 'team@example.test', verificationStatus: 'accepted' }] }))
     const lead = await payload.create({ collection: 'inquiries', data: { email: 'threaded@example.test', message: 'Threaded', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: randomUUID(), stage: 'new' }, overrideAccess: true })
     const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'google', providerConversationID: 'google-thread' }, overrideAccess: true })
-    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'google-message', rfcMessageID: '<google-message@example.test>', rfcReferences: '<root@example.test>', direction: 'inbound', sender: lead.email, recipient: 'team@example.test', subject: 'Reply', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
+    const longReferences = Array.from({ length: 9 }, (_, index) => `<${'a'.repeat(425)}${index}@example.test>`).join(' ')
+    await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, mailbox: mailbox.id, lead: lead.id, providerMessageID: 'google-message', rfcMessageID: '<google-message@example.test>', rfcReferences: longReferences, direction: 'inbound', sender: lead.email, recipient: 'team@example.test', subject: 'Reply', body: 'Original', receivedAt: new Date().toISOString(), attachmentMetadata: [] }, overrideAccess: true })
     await (payload as any).create({ collection: 'mailbox-area-mappings', data: { area: 'leads', mailbox: mailbox.id, senderAddress: 'team@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
     const draft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Reply', body: 'Approved body', threadID: 'google-thread' })
     const grant = await authorizeMailDraft(payload, owner, draft.id, future())
-    let sent: any
+    const sent: any[] = []
     setReplyDeliveryForTest((service, area, message) => sendAreaMail(service, area, message, async (url, init) => {
       if (url.includes('/token')) return Response.json({ access_token: 'access' })
       if (url.endsWith('/profile')) return Response.json({ emailAddress: 'team@example.test' })
       if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'team@example.test', verificationStatus: 'accepted' }] })
-      if (url.endsWith('/messages/send')) { sent = JSON.parse(String(init.body)); return Response.json({ id: 'sent-id', threadId: 'google-thread' }) }
+      if (url.endsWith('/messages/send')) { sent.push(JSON.parse(String(init.body))); return Response.json({ id: `sent-id-${sent.length}`, threadId: 'google-thread' }) }
       throw new Error(`unexpected ${url}`)
     }))
     try {
-      await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'google', messageID: 'sent-id' })
-      expect(sent.threadId).toBe('google-thread')
-      expect(Buffer.from(sent.raw, 'base64url').toString()).toContain('To: threaded@example.test\r\nFrom: team@example.test\r\nSubject: Reply')
-      expect(Buffer.from(sent.raw, 'base64url').toString()).toContain('In-Reply-To: <google-message@example.test>\r\nReferences: <root@example.test> <google-message@example.test>')
-      expect(Buffer.from(sent.raw, 'base64url').toString()).not.toContain('In-Reply-To: google-message')
+      await expect(sendReply(payload, owner, grant.id)).resolves.toEqual({ provider: 'google', messageID: 'sent-id-1' })
+      expect(sent[0].threadId).toBe('google-thread')
+      expect(Buffer.from(sent[0].raw, 'base64url').toString()).toContain('To: threaded@example.test\r\nFrom: team@example.test\r\nSubject: Reply')
+      const firstRaw = Buffer.from(sent[0].raw, 'base64url').toString(); const firstReferences = firstRaw.match(/\r\nReferences: ([^\r]+)\r\n/)?.[1]
+      expect(firstRaw).toContain('In-Reply-To: <google-message@example.test>')
+      expect(firstRaw).toContain('Message-ID: <')
+      expect(firstReferences).toContain('<google-message@example.test>')
+      expect(`References: ${firstReferences}\r\n`.length).toBeLessThanOrEqual(998)
       expect(await payload.findByID({ collection: 'mail-drafts', id: draft.id, depth: 0, overrideAccess: true })).toMatchObject({ state: 'sent' })
+      const timeline = await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, sort: 'receivedAt', limit: 10, depth: 0, overrideAccess: true })
+      expect(timeline.docs).toHaveLength(2)
+      expect(timeline.docs.at(-1)).toMatchObject({ providerMessageID: 'sent-id-1', direction: 'outbound', sender: 'team@example.test', recipient: 'threaded@example.test', subject: 'Reply', body: 'Approved body', rfcMessageID: expect.stringMatching(/^<[^>]+>$/), rfcReferences: firstReferences })
       await expect(sendReply(payload, owner, grant.id)).rejects.toThrow('authorization_not_usable')
+      expect((await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, limit: 10, depth: 0, overrideAccess: true })).docs).toHaveLength(2)
+      const firstOutbound = timeline.docs.at(-1)! as { rfcMessageID: string }
+      const nextDraft = await prepareReply(payload, 'lead', lead.id, owner.id, { sender: 'team@example.test', subject: 'Reply', body: 'Second approved body', threadID: 'google-thread' })
+      const nextGrant = await authorizeMailDraft(payload, owner, nextDraft.id, future())
+      await expect(sendReply(payload, owner, nextGrant.id)).resolves.toEqual({ provider: 'google', messageID: 'sent-id-2' })
+      const secondRaw = Buffer.from(sent[1].raw, 'base64url').toString()
+      expect(secondRaw).toContain(`In-Reply-To: ${firstOutbound.rfcMessageID}`)
+      const secondReferences = secondRaw.match(/\r\nReferences: ([^\r]+)\r\n/)?.[1]
+      expect(secondReferences).toContain(firstOutbound.rfcMessageID)
+      expect(`References: ${secondReferences}\r\n`.length).toBeLessThanOrEqual(998)
+      expect((await payload.find({ collection: 'mail-thread-messages', where: { thread: { equals: thread.id } }, limit: 10, depth: 0, overrideAccess: true })).docs).toHaveLength(3)
     } finally { setReplyDeliveryForTest() }
   })
   it('sends an approved initial Google message and binds only its returned provider thread', async () => {

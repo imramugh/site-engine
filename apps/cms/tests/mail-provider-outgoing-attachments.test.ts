@@ -33,7 +33,7 @@ test('creates a Graph reply draft, attaches exact bytes, then sends it', async (
     if (url.endsWith('/me/messages/reply-draft/send')) return new Response(null, { status: 202 })
     throw new Error(String(init.body))
   }, envelope.sender)
-  await expect(adapter.send('token', { ...envelope, replyMessageID: 'original-id', attachments: [attachment] })).resolves.toEqual({ accepted: true })
+  await expect(adapter.send('token', { ...envelope, replyMessageID: 'original-id', attachments: [attachment] })).resolves.toEqual({ accepted: true, id: 'reply-draft' })
   expect(urls).toEqual([
     'https://graph.microsoft.com/v1.0/me/messages/original-id/createReply',
     'https://graph.microsoft.com/v1.0/me/messages/reply-draft/attachments',

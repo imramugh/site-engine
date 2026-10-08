@@ -66,11 +66,11 @@ describe('Graph delta provider contracts', () => {
 })
 
 describe('provider-shaped threaded reads', () => {
-  it('uses Graph reply and permits opaque Graph identifiers', async () => {
-    let url = ''
-    const adapter = microsoftAdapter(async value => { url = value; return new Response(null, { status: 202 }) }, 'staff@example.test')
-    await adapter.send('token', { sender: 'staff@example.test', recipient: 'visitor@example.test', subject: 'Re', body: 'Reply', threadID: 'conversation-1', replyMessageID: 'AQMkAD+=/opaque' })
-    expect(url).toContain('/messages/AQMkAD%2B%3D%2Fopaque/reply')
+  it('creates and sends a Graph reply draft with a durable provider receipt', async () => {
+    const urls: string[] = []
+    const adapter = microsoftAdapter(async value => { urls.push(value); return value.endsWith('/createReply') ? Response.json({ id: 'reply-draft' }) : new Response(null, { status: 202 }) }, 'staff@example.test')
+    await expect(adapter.send('token', { sender: 'staff@example.test', recipient: 'visitor@example.test', subject: 'Re', body: 'Reply', threadID: 'conversation-1', replyMessageID: 'AQMkAD+=/opaque' })).resolves.toEqual({ accepted: true, id: 'reply-draft' })
+    expect(urls).toEqual(['https://graph.microsoft.com/v1.0/me/messages/AQMkAD%2B%3D%2Fopaque/createReply', 'https://graph.microsoft.com/v1.0/me/messages/reply-draft/send'])
   })
   it('normalizes Gmail MIME body, date and attachment metadata', async () => {
     const read = gmailThreadReader(async () => Response.json({ id: 't_1', messages: [{ id: 'm1', threadId: 't_1', internalDate: '1760000000000', payload: { headers: [{ name: 'From', value: 'Visitor <visitor@example.test>' }, { name: 'To', value: 'Staff <staff@example.test>' }, { name: 'Subject', value: 'Hello' }], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('Hello <b>world</b>').toString('base64url') } }, { mimeType: 'application/pdf', filename: 'cv.pdf', body: { attachmentId: 'a1', size: 12 } }] } }] }))

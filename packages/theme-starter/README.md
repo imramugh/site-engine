@@ -5,8 +5,8 @@ engine contract. It includes standard templates, blocks, appearance choices,
 motion hooks, and accessible layout components without private repositories,
 client copy, assets, credentials, or routes.
 
-The current manifest is **1.7.0**. Its renderer accepts every frozen public
-snapshot contract from 1.0.0 through 1.7.0. A 1.0.0 snapshot has no Hero
+The current manifest is **1.8.0**. Its renderer accepts every frozen public
+snapshot contract from 1.0.0 through 1.8.0. A 1.0.0 snapshot has no Hero
 secondary CTA or supporting panel; 1.1.0 introduced those fields, and later
 contracts add structured site, contact, inquiry, navigation, and crawler data
 that the host and starter render together. The 1.1.0 manifest remains a

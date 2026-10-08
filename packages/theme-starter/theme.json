@@ -1,7 +1,7 @@
 {
   "name": "starter",
-  "version": "1.7.0",
-  "contract": "1.7.0",
+  "version": "1.8.0",
+  "contract": "1.8.0",
   "entry": "./dist/index.js",
   "standardBlocks": ["hero", "incidentBar", "pillarGrid", "featureGrid", "splitList", "chipList", "testimonials", "faq", "callout", "relatedServices", "cta", "richText", "contact", "media", "imageText", "gallery", "logoStrip", "video"],
   "motion": {

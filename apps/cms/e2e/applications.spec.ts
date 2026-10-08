@@ -75,12 +75,17 @@ test('ENG-021 accepts a valid multipart application only for a published role an
 
   const hiring = await newPage(browser, 'hiring')
   expect((await hiring.page.request.get(resumeURL)).status()).toBe(200)
+  const hiringMinted = await hiring.page.request.post(`/api/hiring/applications/${created.body.id}/resume-link`, { headers: { origin: cmsOrigin } })
+  expect(hiringMinted.status()).toBe(200)
+  const hiringSignedURL = (await hiringMinted.json() as { url: string }).url
+  expect((await hiring.page.request.get(hiringSignedURL)).status()).toBe(200)
   expect((await hiring.page.request.get(signedURL)).status()).toBe(403)
   await hiring.context.close()
 
   for (const role of ['editor', 'sales'] as const) {
     const denied = await newPage(browser, role)
     expect((await denied.page.request.get(resumeURL)).status()).toBe(403)
+    expect((await denied.page.request.post(`/api/hiring/applications/${created.body.id}/resume-link`, { headers: { origin: cmsOrigin } })).status()).toBe(403)
     await denied.context.close()
   }
 })
@@ -136,6 +141,14 @@ test('ENG-021 lets Owner and Hiring work the protected application dashboard whi
     await expect(details.getByRole('link', { name: 'View profile' })).toHaveAttribute('href', longLinkedIn)
     await expect(session.page.getByRole('button', { name: 'Download resume' })).toBeVisible()
     if (role === 'owner') { await details.getByRole('button', { name: 'Interview' }).click(); await expect(details.getByRole('button', { name: 'Interview' })).toHaveAttribute('aria-pressed', 'true'); await session.page.addScriptTag({ path: axeSource }); expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]) }
+    if (role === 'hiring') {
+      await details.getByRole('button', { name: 'Offer' }).click()
+      await expect(details.getByRole('button', { name: 'Offer' })).toHaveAttribute('aria-pressed', 'true')
+      await session.page.reload()
+      await session.page.getByRole('button', { name: /Applications ·/ }).click()
+      await session.page.getByRole('button', { name: /Synthetic Applicant/ }).first().click()
+      await expect(session.page.getByRole('complementary', { name: 'Application details' }).getByRole('button', { name: 'Offer' })).toHaveAttribute('aria-pressed', 'true')
+    }
     await session.context.close()
   }
   for (const role of ['editor', 'sales'] as const) {

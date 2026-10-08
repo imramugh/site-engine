@@ -34,6 +34,21 @@ describe('ENG-012 public structured output', () => {
     expect(JSON.stringify(jobPosting)).not.toContain('A role summary that is not used as structured job detail.');
   });
 
+  it('maps only fully remote work mode to TELECOMMUTE', () => {
+    const snapshot = structuredClone(neutralFixture);
+    const section = snapshot.settings.sections[0]; section.allowedTemplates.push('job');
+    snapshot.settings.contractVersion = '1.8.0';
+    snapshot.pages.push({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sectionId: section.id, parentId: snapshot.pages[0].id, title: 'Example role', summary: 'A role summary.', slug: 'example-role', template: 'job', status: 'published', blocks: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'richText', body: 'The complete visible role description.', hidden: false, appearance }], jobPosting: { datePosted: '2026-01-01T00:00:00.000Z', employmentType: 'FULL_TIME', workMode: 'REMOTE', location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' } });
+    section.pageIds.push(snapshot.pages.at(-1)!.id);
+    const model = publicModel(snapshot, snapshot.settings.homepageId);
+    const job = model.routes.find((route) => route.page.template === 'job')!;
+    const schema = () => schemaForRoute(job, model, snapshot, 'https://public.example.test')['@graph'].find((item) => item['@type'] === 'JobPosting');
+    expect(schema()).toMatchObject({ jobLocationType: 'TELECOMMUTE' });
+    job.page.jobPosting!.workMode = 'HYBRID'; expect(schema()).not.toHaveProperty('jobLocationType');
+    job.page.jobPosting!.workMode = 'ONSITE'; expect(schema()).not.toHaveProperty('jobLocationType');
+    delete job.page.jobPosting!.workMode; expect(schema()).not.toHaveProperty('jobLocationType');
+  });
+
   it('uses the reviewed site description in llms.txt and organization profiles', () => {
     const snapshot = structuredClone(neutralFixture)
     snapshot.settings.contractVersion = '1.5.0'

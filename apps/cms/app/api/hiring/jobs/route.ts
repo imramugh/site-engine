@@ -14,6 +14,7 @@ type JobPage = {
   status: string
   jobPosting?: {
     employmentType?: string
+    workMode?: 'ONSITE' | 'HYBRID' | 'REMOTE'
     validThrough?: string
     location?: { addressLocality?: string; addressRegion?: string; addressCountry?: string }
   }
@@ -39,14 +40,19 @@ async function GETHandler(request: Request): Promise<Response> {
   const current = (currentResult.docs as unknown as JobPage[]).filter((page) => page.template === 'job' && page.sectionId === currentSectionID)
   const published = (manifest?.pages ?? []).filter((page) => page.template === 'job' && page.sectionId === publishedSectionID)
   const currentByID = new Map(current.map((page) => [page.id, page]))
+  const publishedByID = new Map(published.map((page) => [page.id, page]))
   const all = [...current, ...published.filter((page) => !currentByID.has(page.id))]
-  const publishedIDs = new Set(published.filter((page) => page.status === 'published').map((page) => page.id))
 
   const jobs = await Promise.all(all.map(async (page) => {
     const applicationCount = await payload.count({ collection: 'applications', where: { jobId: { equals: page.id } }, user, overrideAccess: false })
-    const expired = Boolean(page.jobPosting?.validThrough && new Date(page.jobPosting.validThrough).getTime() <= Date.now())
-    const status = page.status === 'archived' || expired ? 'closed' : publishedIDs.has(page.id) ? 'open' : 'draft'
-    return { id: page.id, title: page.title, status, applicationCount: applicationCount.totalDocs, employmentType: page.jobPosting?.employmentType, location: location(page), validThrough: page.jobPosting?.validThrough, ...(canPostRole ? { editHref: `/content-editor/${encodeURIComponent(page.id)}` } : {}) }
+    // Public availability is determined by the immutable published release.
+    // Keep draft metadata visible to staff, but a draft deadline extension
+    // cannot reopen an expired role before that revision is published.
+    const publishedPage = publishedByID.get(page.id)
+    const availability = publishedPage ?? page
+    const expired = Boolean(availability.jobPosting?.validThrough && new Date(availability.jobPosting.validThrough).getTime() <= Date.now())
+    const status = availability.status === 'archived' || expired ? 'closed' : publishedPage?.status === 'published' ? 'open' : 'draft'
+    return { id: page.id, title: page.title, status, applicationCount: applicationCount.totalDocs, employmentType: page.jobPosting?.employmentType, workMode: page.jobPosting?.workMode, location: location(page), validThrough: page.jobPosting?.validThrough, ...(canPostRole ? { editHref: `/content-editor/${encodeURIComponent(page.id)}` } : {}) }
   }))
   jobs.sort((left, right) => left.title.localeCompare(right.title))
   return Response.json({ jobs, canPostRole }, { headers: { 'Cache-Control': 'no-store' } })

@@ -73,7 +73,7 @@ function jobSchema(route: PublicRoute, origin: string, snapshot: SiteSnapshot): 
   const description = textBlocks(visible(route.page)).join('\n\n');
   if (route.page.template !== 'job' || !metadata || !description || (metadata.validThrough && new Date(metadata.validThrough) <= new Date())) return undefined;
   const canonical = absolute(origin, route.canonicalPath);
-  return { '@type': 'JobPosting', '@id': `${canonical}#job`, title: route.page.title, description, datePosted: metadata.datePosted, employmentType: metadata.employmentType, ...(metadata.validThrough ? { validThrough: metadata.validThrough } : {}), jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', ...metadata.location } }, hiringOrganization: { '@type': 'Organization', name: snapshot.settings.siteName, url: origin } };
+  return { '@type': 'JobPosting', '@id': `${canonical}#job`, title: route.page.title, description, datePosted: metadata.datePosted, employmentType: metadata.employmentType, ...(metadata.validThrough ? { validThrough: metadata.validThrough } : {}), ...(metadata.workMode === 'REMOTE' ? { jobLocationType: 'TELECOMMUTE' } : {}), jobLocation: { '@type': 'Place', address: { '@type': 'PostalAddress', ...metadata.location } }, hiringOrganization: { '@type': 'Organization', name: snapshot.settings.siteName, url: origin } };
 }
 
 export function schemaForRoute(route: PublicRoute, model: RouteModel, snapshot: SiteSnapshot, origin: string): Schema {

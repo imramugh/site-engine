@@ -20,13 +20,13 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const owner = await ownerPage(browser)
   const themeDraft = await owner.page.request.post('/api/themes', {
     headers: { origin, 'content-type': 'application/json' },
-    data: { id: 'search-browser-theme', version: '1.7.0', changeSetName: 'Search and AI 1.7 browser draft' },
+    data: { id: 'search-browser-theme', version: '1.8.0', changeSetName: 'Search and AI 1.8 browser draft' },
   })
   expect(themeDraft.status(), await themeDraft.text()).toBe(201)
 
   await owner.page.setViewportSize({ width: 1440, height: 1000 })
   await owner.page.goto('/site')
-  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.7 browser draft · open' })
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.8 browser draft · open' })
   await owner.page.getByLabel('Business name').fill('Search and AI browser site')
   await owner.page.getByText('Additional site settings', { exact: true }).click()
   const homepage = owner.page.getByLabel('Homepage')
@@ -40,7 +40,7 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   // Reload after establishing the reviewed Site baseline so the reference
   // screenshots show the workspace itself rather than a transient save notice.
   await owner.page.reload()
-  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.7 browser draft · open' })
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.8 browser draft · open' })
   await owner.page.getByRole('button', { name: 'Search and AI' }).click()
   const workspace = owner.page.locator('[data-site-search-ai]')
   await expect(workspace).toBeVisible()
@@ -92,7 +92,7 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as {
     sets: Array<{ id: string; name: string; state: string; changes: Array<{ collection: string }> }>
   }
-  const captured = sets.sets.find(item => item.name === 'Search and AI 1.7 browser draft')
+  const captured = sets.sets.find(item => item.name === 'Search and AI 1.8 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides']))
 

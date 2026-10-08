@@ -44,7 +44,7 @@ describe('ENG-006 page type metadata persistence', () => {
 
   it('persists supported job metadata and rejects it on another template', async () => {
     const parent = await section(['job', 'article'])
-    const jobPosting = { datePosted: '2026-10-01T00:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressRegion: 'Region', addressCountry: 'CA' }, validThrough: '2026-11-01T00:00:00.000Z' }
+    const jobPosting = { datePosted: '2026-10-01T00:00:00.000Z', employmentType: 'FULL_TIME' as const, workMode: 'HYBRID' as const, location: { addressLocality: 'Example City', addressRegion: 'Region', addressCountry: 'CA' }, validThrough: '2026-11-01T00:00:00.000Z' }
     const page = await payload.create({ collection: 'pages', data: { ...common(parent.id, 'job'), jobPosting }, overrideAccess: true, context: { editorialInternal: true } })
     expect(page).toMatchObject({ jobPosting })
     await expect(payload.create({ collection: 'pages', data: { ...common(parent.id, 'article'), jobPosting }, overrideAccess: true, context: { editorialInternal: true } })).rejects.toThrow(/jobPosting/)

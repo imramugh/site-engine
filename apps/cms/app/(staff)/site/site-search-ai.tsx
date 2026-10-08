@@ -34,7 +34,7 @@ export function SiteSearchAI({ settings, guide, busy, canSave, contractVersion, 
   }, [revisionKey])
   const policy = settings.crawlerPolicy ?? defaultPolicy
   const updatePolicy = (field: keyof typeof defaultPolicy, checked: boolean) => setSettings({ ...settings, crawlerPolicy: { ...policy, [field]: checked } })
-  const supported = contractVersion === '1.7.0'
+  const supported = contractVersion === '1.7.0' || contractVersion === '1.8.0'
 
   return <section className={styles.searchWorkspace} data-site-panel="search" data-site-search-ai>
     <form onSubmit={event => {
