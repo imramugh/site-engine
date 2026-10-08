@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 24.21.0
           package-manager-cache: false
-      - run: corepack enable && corepack prepare pnpm@12.8.1 --activate
+      - run: corepack enable && corepack prepare pnpm@12.10.1 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:packages
       - run: pnpm exec playwright install --with-deps chromium
@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: 24.21.0
           package-manager-cache: false
-      - run: corepack enable && corepack prepare pnpm@12.8.1 --activate
+      - run: corepack enable && corepack prepare pnpm@12.10.1 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm conformance:starter

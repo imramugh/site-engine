@@ -22,7 +22,7 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: {
-    command: `corepack pnpm@12.8.1 --filter @site-engine/site exec astro preview --ignore-lock --host 127.0.0.1 --port ${port}`,
+    command: `corepack pnpm@12.10.1 --filter @site-engine/site exec astro preview --ignore-lock --host 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

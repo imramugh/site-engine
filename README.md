@@ -13,15 +13,15 @@ An Apache-2.0 publishing engine under active development: an Astro static site, 
 
 ## Development
 
-Use Node **24.21.0** and pnpm **12.8.1**. Enable Corepack in your isolated Node installation, then run:
+Use Node **24.21.0** and pnpm **12.10.1**. Enable Corepack in your isolated Node installation, then run:
 
 ```sh
-corepack pnpm@12.8.1 install --frozen-lockfile
-corepack pnpm@12.8.1 check
-corepack pnpm@12.8.1 build
-corepack pnpm@12.8.1 exec playwright install --with-deps chromium firefox webkit
-corepack pnpm@12.8.1 test:e2e
-corepack pnpm@12.8.1 dev:site
+corepack pnpm@12.10.1 install --frozen-lockfile
+corepack pnpm@12.10.1 check
+corepack pnpm@12.10.1 build
+corepack pnpm@12.10.1 exec playwright install --with-deps chromium firefox webkit
+corepack pnpm@12.10.1 test:e2e
+corepack pnpm@12.10.1 dev:site
 ```
 
 `check` rebuilds shared packages before running type checks, unit tests, real SQLite permission tests, and boundary checks. Browser tests run Playwright and axe across three browser engines. `make check` validates repository metadata only. See [CMS setup](apps/cms/README.md) for migrations and runtime configuration.

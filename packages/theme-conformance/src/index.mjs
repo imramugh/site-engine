@@ -23,7 +23,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(root, "baselines.json");
 const require = createRequire(import.meta.url);
 const pnpm = (cwd, args) =>
-  execFile("corepack", ["pnpm@12.8.1", ...args], {
+  execFile("corepack", ["pnpm@12.10.1", ...args], {
     cwd,
     env: { ...process.env, npm_config_ignore_scripts: "true" },
     maxBuffer: 10_000_000,

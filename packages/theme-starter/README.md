@@ -31,8 +31,8 @@ declared contract version compatible and do not redefine standard blocks.
 ## Build and validate
 
 ```sh
-corepack pnpm@12.8.1 build:packages
-corepack pnpm@12.8.1 --filter @site-engine/theme-starter pack
+corepack pnpm@12.10.1 build:packages
+corepack pnpm@12.10.1 --filter @site-engine/theme-starter pack
 node packages/engine/dist/theme-package-cli.js /path/to/extracted-theme
 ```
 
@@ -52,10 +52,10 @@ widths, and retains screenshots and axe results under
 `artifacts/theme-starter-conformance`:
 
 ```sh
-corepack pnpm@12.8.1 conformance:starter
-corepack pnpm@12.8.1 exec vitest run packages/theme-starter/tests
-corepack pnpm@12.8.1 --filter @site-engine/site build
-corepack pnpm@12.8.1 exec playwright test apps/site/e2e/site.spec.ts --grep ENG-038
+corepack pnpm@12.10.1 conformance:starter
+corepack pnpm@12.10.1 exec vitest run packages/theme-starter/tests
+corepack pnpm@12.10.1 --filter @site-engine/site build
+corepack pnpm@12.10.1 exec playwright test apps/site/e2e/site.spec.ts --grep ENG-038
 ```
 
 The gate checks each deterministic screenshot against
@@ -64,7 +64,7 @@ an intentional visual change, regenerate the checksums and commit the updated
 baseline with:
 
 ```sh
-UPDATE_THEME_CONFORMANCE_BASELINES=1 corepack pnpm@12.8.1 conformance:starter
+UPDATE_THEME_CONFORMANCE_BASELINES=1 corepack pnpm@12.10.1 conformance:starter
 ```
 
 The browser fixture covers every standard block and template at desktop and

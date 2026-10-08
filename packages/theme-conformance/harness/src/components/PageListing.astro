@@ -1,0 +1,24 @@
+---
+type Item = { href: string; title: string; summary: string; template: string; meta?: string; businessCase?: boolean }
+const { id, kind, items } = Astro.props as { id: string; kind: 'articles' | 'jobs'; items: Item[] }
+const pageSize = 6
+---
+<section class="block" data-page-listing data-page-listing-id={id} data-page-listing-kind={kind} data-page-listing-page-size={pageSize}>
+  <div class="block__inner">
+    <h2>{kind === 'jobs' ? 'Roles' : 'Pages'}</h2>
+    <div data-page-listing-controls hidden>
+      <label>Filter <input type="search" data-page-listing-query aria-controls={`${id}-results`} /></label>
+      <button type="button" data-page-listing-reset hidden>Reset</button>
+      <p data-page-listing-count role="status" aria-live="polite"></p>
+    </div>
+    <div id={`${id}-results`} data-page-listing-results tabindex="-1">
+      <ul>{items.map((item) => <li data-page-listing-item data-page-template={item.template} data-business-case={item.businessCase ? 'true' : undefined} data-page-listing-search={`${item.title} ${item.summary} ${item.template} ${item.meta ?? ''}`}><a href={item.href}><span data-page-listing-title>{item.title}</span><p data-page-listing-summary>{item.summary}</p>{item.meta && <small data-page-listing-meta>{item.meta}</small>}</a></li>)}</ul>
+      <p data-page-listing-empty role="status" hidden={items.length > 0}>No matching pages.</p>
+    </div>
+    <nav aria-label="Listing pages" data-page-listing-pagination hidden></nav>
+  </div>
+</section>
+<script>
+  import { mountPageListings } from '../lib/page-listing.js'
+  mountPageListings(document, window)
+</script>
