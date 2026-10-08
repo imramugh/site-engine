@@ -973,10 +973,12 @@ describe('static snapshot renderer', () => {
     const job = { ...snapshot.pages[0]!, id: 'abababab-abab-4bab-8bab-abababababab', slug: 'application-role', title: 'Application preview role', template: 'job' as const, blocks: [] as typeof snapshot.pages[0]['blocks'], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' }, validThrough: '2099-01-01T00:00:00.000Z' } };
     snapshot.pages.push(job); section.pageIds.push(job.id);
     const input = await writeSnapshot(root, snapshot, 'application-preview.json');
+    const themeComponents = await customThemeComponents(root);
+    await writeFile(join(themeComponents, 'application-form.json'), JSON.stringify({ schemaVersion: 1, nameRequired: 'Provide your full name.', emailInvalid: 'Provide a complete email address.' }));
     const browser = await chromium.launch();
     try {
       for (const basePath of ['/', BASE_PATH]) {
-        const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
+        const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root, themeComponentsRoot: themeComponents });
         const served = await staticServer(built.output, basePath);
         const context = await browser.newContext(); const page = await context.newPage(); let applications = 0; const retryKeys: string[] = []; const multipart: string[] = [];
         await page.route('**/api/applications', async route => { applications += 1; const raw = route.request().postDataBuffer()?.toString() ?? ''; multipart.push(raw); const key = raw.match(/name="idempotencyKey"\r\n\r\n([^\r]+)/)?.[1]; if (key) retryKeys.push(key); if (applications === 1) { await new Promise(resolve => setTimeout(resolve, 500)); await route.abort('failed'); } else if (applications === 2) await route.abort('failed'); else await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb' }) }); });
@@ -993,7 +995,11 @@ describe('static snapshot renderer', () => {
             expect(await page.getByRole('alert').locator('a').count()).toBeGreaterThan(0);
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-error-summary');
             await page.getByRole('alert').getByRole('link', { name: /Full name/ }).click(); expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-name');
-            await page.getByLabel('Full name').fill('Preview applicant'); await page.getByLabel('Email').fill('preview.applicant@example.test');
+            await page.getByLabel('Full name').fill('   '); await page.getByLabel('Email').fill('preview.applicant@example.test'); await button.click();
+            expect(await page.locator('[data-application-field-error="name"]').textContent()).toBe('Provide your full name.'); expect(applications).toBe(0);
+            await page.getByLabel('Full name').fill('Preview applicant'); await page.getByLabel('Email').fill('person@example'); await button.click();
+            expect(await page.locator('[data-application-field-error="email"]').textContent()).toBe('Provide a complete email address.'); expect(applications).toBe(0);
+            await page.getByLabel('Email').fill('preview.applicant@example.test');
             await page.getByLabel(/Resume/).setInputFiles({ name: 'too-large.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(5_000_001, 0) });
             expect(await page.locator('[data-application-field-error="resume"]').isVisible()).toBe(true); expect(applications).toBe(0);
             await page.getByLabel(/Resume/).setInputFiles([]); expect(await page.locator('#application-resume').evaluate((input: HTMLInputElement) => ({ custom: input.validity.customError, missing: input.validity.valueMissing }))).toEqual({ custom: false, missing: true });

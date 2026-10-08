@@ -13,7 +13,7 @@
   const copy = (() => { try { return JSON.parse(form.dataset.applicationCopy || '{}'); } catch { return {}; } })();
   const fieldNames = { name: 'Full name', email: 'Email', telephone: 'Phone', linkedIn: copy.linkedInLabel || 'LinkedIn', coverLetter: copy.noteLabel || 'Note', resume: 'Resume', consent: 'Consent' };
   const upload = form.querySelector('[data-application-upload]'); const filename = form.querySelector('[data-application-upload-filename]'); const uploadLabel = form.querySelector('[data-application-upload-label]'); const uploadPrompt = uploadLabel?.textContent || 'Choose a file or drop it here';
-  let pending = false; let accepted = false; let retryFingerprint = ''; let retryKey = ''; const maxResumeBytes = 5_000_000;
+  let pending = false; let accepted = false; let retryFingerprint = ''; let retryKey = ''; const maxResumeBytes = 5_000_000; const emailFormat = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   const field = (name) => form.elements.namedItem(name);
   const fieldError = (name) => form.querySelector(`[data-application-field-error="${name}"]`);
@@ -61,9 +61,11 @@
   };
   const validationErrors = () => {
     const resumeMessage = validResume(); const errors = [];
+    const nameField = field('name'); if (nameField instanceof HTMLInputElement && !nameField.value.trim()) { errors.push({ name: 'name', message: copy.nameRequired || 'Enter full name.' }); }
+    const emailField = field('email'); if (emailField instanceof HTMLInputElement && emailField.value && !emailFormat.test(emailField.value)) { errors.push({ name: 'email', message: copy.emailInvalid || 'Enter a valid email address.' }); }
     for (const [name, label] of Object.entries(fieldNames)) {
       const control = field(name);
-      if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) || control.validity.valid) continue;
+      if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement) || control.validity.valid || (name === 'name' && !control.value.trim()) || (name === 'email' && control.value && !emailFormat.test(control.value))) continue;
       const message = name === 'resume' && resumeMessage ? resumeMessage : name === 'name' && control.validity.valueMissing ? (copy.nameRequired || control.validationMessage) : name === 'email' && control.validity.valueMissing ? (copy.emailRequired || control.validationMessage) : name === 'email' && control.validity.typeMismatch ? (copy.emailInvalid || control.validationMessage) : name === 'resume' && control.validity.valueMissing ? (copy.resumeRequired || control.validationMessage) : name === 'consent' && control.validity.valueMissing ? (copy.consentRequired || control.validationMessage) : control.validity.valueMissing ? `Enter ${label.toLowerCase()}.` : control.validationMessage;
       errors.push({ name, message });
     }

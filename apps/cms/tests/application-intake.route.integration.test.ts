@@ -56,3 +56,9 @@ test('accepts and idempotently preserves an empty optional note through the publ
   expect((await POST(request(closedJobID, randomUUID()))).status).toBe(400)
   expect((await payload.find({ collection: 'applications', overrideAccess: true, limit: 0 })).totalDocs).toBe(1)
 }, 60_000)
+
+test('rejects a whitespace-only applicant name without creating an application', async () => {
+  const form = new FormData(); form.set('name', '   '); form.set('email', 'blank-name@example.test'); form.set('consent', 'true'); form.set('jobId', jobID); form.set('idempotencyKey', randomUUID()); form.set('resume', new File([Buffer.from('%PDF-1.7\nresume\n%%EOF')], 'resume.pdf', { type: 'application/pdf' }))
+  expect((await POST(new Request('https://cms.example.test/api/applications', { method: 'POST', headers: { origin: 'https://cms.example.test' }, body: form }))).status).toBe(400)
+  expect((await payload.find({ collection: 'applications', where: { email: { equals: 'blank-name@example.test' } }, overrideAccess: true })).totalDocs).toBe(0)
+})
