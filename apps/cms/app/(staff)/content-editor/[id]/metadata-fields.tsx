@@ -19,6 +19,7 @@ type Props = {
   value: PageMetadataValue
   disabled?: boolean
   supportsServiceMetadata: boolean
+  supportsJobWorkMode: boolean
   onChange: (value: PageMetadataValue) => void
 }
 
@@ -47,6 +48,7 @@ export function MetadataFields({
   value,
   disabled = false,
   supportsServiceMetadata,
+  supportsJobWorkMode,
   onChange,
 }: Props) {
   const update = <Key extends keyof PageMetadataValue>(key: Key, next: PageMetadataValue[Key]) =>
@@ -107,7 +109,7 @@ export function MetadataFields({
       ) : null}
 
       {template === 'job' ? (
-        <JobPostingFields disabled={disabled} value={value.jobPosting} onChange={(jobPosting) => update('jobPosting', jobPosting)} />
+        <JobPostingFields disabled={disabled} supportsWorkMode={supportsJobWorkMode} value={value.jobPosting} onChange={(jobPosting) => update('jobPosting', jobPosting)} />
       ) : null}
     </div>
   )
@@ -162,7 +164,7 @@ function BusinessCaseForm({ value, disabled, onChange }: { value: NonNullable<Pa
   )
 }
 
-function JobPostingFields({ value, disabled, onChange }: { value?: Page['jobPosting']; disabled: boolean; onChange: (value?: Page['jobPosting']) => void }) {
+function JobPostingFields({ value, disabled, supportsWorkMode, onChange }: { value?: Page['jobPosting']; disabled: boolean; supportsWorkMode: boolean; onChange: (value?: Page['jobPosting']) => void }) {
   if (!value) return <button type="button" disabled={disabled} onClick={() => onChange(emptyJobPosting())}>Add job posting details</button>
   const update = <Key extends keyof NonNullable<Page['jobPosting']>>(key: Key, next: NonNullable<Page['jobPosting']>[Key]) => onChange({ ...value, [key]: next })
   const location = value.location
@@ -175,6 +177,13 @@ function JobPostingFields({ value, disabled, onChange }: { value?: Page['jobPost
         <select value={value.employmentType} onChange={(event) => update('employmentType', event.target.value as NonNullable<Page['jobPosting']>['employmentType'])}>
           <option value="FULL_TIME">Full time</option><option value="PART_TIME">Part time</option><option value="CONTRACTOR">Contractor</option><option value="TEMPORARY">Temporary</option><option value="INTERN">Intern</option><option value="OTHER">Other</option>
         </select>
+      </label>
+      <label>
+        Work mode
+        <select disabled={!supportsWorkMode} value={value.workMode ?? ''} onChange={(event) => update('workMode', event.target.value ? event.target.value as NonNullable<Page['jobPosting']>['workMode'] : undefined)}>
+          <option value="">Not specified</option><option value="ONSITE">On-site</option><option value="HYBRID">Hybrid</option><option value="REMOTE">Remote</option>
+        </select>
+        {!supportsWorkMode ? <span className={styles.hint}>Requires a theme compatible with content contract 1.8.0.</span> : null}
       </label>
       <label>City or locality<input maxLength={100} value={location.addressLocality} onChange={(event) => update('location', { ...location, addressLocality: event.target.value })} /></label>
       <label>Region<input maxLength={100} value={location.addressRegion ?? ''} onChange={(event) => update('location', { ...location, addressRegion: event.target.value || undefined })} /></label>

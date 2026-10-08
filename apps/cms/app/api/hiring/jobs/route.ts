@@ -14,6 +14,7 @@ type JobPage = {
   status: string
   jobPosting?: {
     employmentType?: string
+    workMode?: 'ONSITE' | 'HYBRID' | 'REMOTE'
     validThrough?: string
     location?: { addressLocality?: string; addressRegion?: string; addressCountry?: string }
   }
@@ -46,7 +47,7 @@ async function GETHandler(request: Request): Promise<Response> {
     const applicationCount = await payload.count({ collection: 'applications', where: { jobId: { equals: page.id } }, user, overrideAccess: false })
     const expired = Boolean(page.jobPosting?.validThrough && new Date(page.jobPosting.validThrough).getTime() <= Date.now())
     const status = page.status === 'archived' || expired ? 'closed' : publishedIDs.has(page.id) ? 'open' : 'draft'
-    return { id: page.id, title: page.title, status, applicationCount: applicationCount.totalDocs, employmentType: page.jobPosting?.employmentType, location: location(page), validThrough: page.jobPosting?.validThrough, ...(canPostRole ? { editHref: `/content-editor/${encodeURIComponent(page.id)}` } : {}) }
+    return { id: page.id, title: page.title, status, applicationCount: applicationCount.totalDocs, employmentType: page.jobPosting?.employmentType, workMode: page.jobPosting?.workMode, location: location(page), validThrough: page.jobPosting?.validThrough, ...(canPostRole ? { editHref: `/content-editor/${encodeURIComponent(page.id)}` } : {}) }
   }))
   jobs.sort((left, right) => left.title.localeCompare(right.title))
   return Response.json({ jobs, canPostRole }, { headers: { 'Cache-Control': 'no-store' } })

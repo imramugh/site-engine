@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.7.0' as const;
-export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', CONTRACT_VERSION] as const;
+export const CONTRACT_VERSION = '1.8.0' as const;
+export const SUPPORTED_CONTRACT_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0', CONTRACT_VERSION] as const;
 export const compatibleContractVersion = (candidate: string): candidate is typeof SUPPORTED_CONTRACT_VERSIONS[number] => (SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(candidate);
 export const ContractVersionSchema = z.enum(SUPPORTED_CONTRACT_VERSIONS);
 const id = z.string().uuid();
@@ -163,6 +163,7 @@ export const SectionPresets = {
 export const JobPostingSchema = z.object({
   datePosted: z.string().datetime(), employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY', 'INTERN', 'OTHER']),
   location: z.object({ addressLocality: safeText(100), addressRegion: safeText(100).optional(), addressCountry: z.string().regex(/^[A-Z]{2}$/) }).strict(),
+  workMode: z.enum(['ONSITE', 'HYBRID', 'REMOTE']).optional(),
   validThrough: z.string().datetime().optional(),
 }).strict().superRefine((job, ctx) => { if (job.validThrough && new Date(job.validThrough) <= new Date(job.datePosted)) ctx.addIssue({ code: 'custom', path: ['validThrough'], message: 'Job closing time must be after its posting time.' }); });
 export const BusinessCaseSchema = z.object({ client: safeText(160).optional(), anonymizedClient: safeText(160).optional(), industry: safeText(100), challenge: RichTextSchema.max(2_000), approach: RichTextSchema.max(2_000), outcome: RichTextSchema.max(2_000), services: z.array(safeText(100)).min(1).max(12), publicationDate: z.string().datetime() }).strict().superRefine((value, ctx) => { if (Boolean(value.client) === Boolean(value.anonymizedClient)) ctx.addIssue({ code: 'custom', path: ['client'], message: 'Provide either the client or an anonymized client.' }); });
@@ -290,10 +291,10 @@ export const SiteSnapshotSchema = z.object({
   if (snapshot.settings.homepageId && pages.get(snapshot.settings.homepageId)?.template !== 'landing') issue(['settings', 'homepageId'], 'Homepage must reference a landing page');
   const assets = new Map(snapshot.media.map((asset) => [asset.id, asset]));
   if (assets.size !== snapshot.media.length) issue(['media'], 'Media IDs must be unique');
-  const supports14 = ['1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion);
+  const supports14 = ['1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion);
   if (!supports14) snapshot.media.forEach((asset, index) => { if (asset.focalX !== undefined || asset.focalY !== undefined) issue(['media', index], 'Media focal points require contract version 1.4.0.'); });
   const site15Fields = ['legalName', 'logos', 'address', 'linkedIn', 'incident', 'navigation'] as const;
-  if (!['1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
+  if (!['1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion) && site15Fields.some((field) => snapshot.settings[field] !== undefined)) issue(['settings'], 'Extended site identity and navigation require contract version 1.5.0.');
   if (snapshot.settings.logos) Object.entries(snapshot.settings.logos).forEach(([field, asset]) => { if (!assets.has(asset.id)) issue(['settings', 'logos', field], 'Semantic logos must reference included media.'); });
   const navigation = snapshot.settings.navigation;
   const navigationRefs = [...(navigation?.header ?? []), ...(navigation?.footer.columns.flatMap(column => 'links' in column ? column.links : []) ?? []), ...(navigation?.footer.bottomLinks ?? [])];
@@ -302,11 +303,12 @@ export const SiteSnapshotSchema = z.object({
     if (column.kind === 'section-pillars' && !sections.has(column.sectionId)) issue(['settings', 'navigation', 'footer', 'columns', index, 'sectionId'], 'Generated navigation references an unknown section.');
   });
   const uses16Navigation = Boolean(navigation && (navigationRefs.some(reference => reference.kind === 'unavailable') || navigation.footer.bottomLinks || navigation.footer.columns.some(column => column.kind === 'section-pillars' || column.kind === 'contact')));
-  if (uses16Navigation && !['1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion)) issue(['settings', 'navigation'], 'Generated, contact, bottom, and unavailable navigation require contract version 1.6.0.');
-  if (snapshot.settings.crawlerPolicy !== undefined && snapshot.settings.contractVersion !== '1.7.0') issue(['settings', 'crawlerPolicy'], 'Reviewed crawler policy requires contract version 1.7.0.');
+  if (uses16Navigation && !['1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion)) issue(['settings', 'navigation'], 'Generated, contact, bottom, and unavailable navigation require contract version 1.6.0.');
+  if (snapshot.settings.crawlerPolicy !== undefined && !['1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion)) issue(['settings', 'crawlerPolicy'], 'Reviewed crawler policy requires contract version 1.7.0.');
   const siblingSlugs = new Set<string>();
   for (const [index, page] of snapshot.pages.entries()) {
     if (!supports14 && (page.kicker || page.lede || page.lastReviewed)) issue(['pages', index], 'Service introduction and last-reviewed metadata require contract version 1.4.0.');
+    if (page.jobPosting?.workMode !== undefined && snapshot.settings.contractVersion !== '1.8.0') issue(['pages', index, 'jobPosting', 'workMode'], 'Job work mode requires contract version 1.8.0.');
     const section = sections.get(page.sectionId);
     if (!section) issue(['pages', index, 'sectionId'], 'Page references an unknown section');
     else if (!section.allowedTemplates.includes(page.template)) issue(['pages', index, 'template'], 'Template is not allowed in this section');
@@ -330,9 +332,9 @@ export const SiteSnapshotSchema = z.object({
     }
     page.blocks.forEach((block, blockIndex) => {
       if (snapshot.settings.contractVersion === '1.0.0' && block.type === 'hero' && (block.secondaryCta || block.supportPanel)) issue(['pages', index, 'blocks', blockIndex], 'Hero secondary CTA and supporting panel require contract version 1.1.0.');
-      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
-      if (!['1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
-      if (!['1.5.0', '1.6.0', '1.7.0'].includes(snapshot.settings.contractVersion) && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
+      if (!['1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion) && requiresContract12(block)) issue(['pages', index, 'blocks', blockIndex], 'This optional structured content requires contract version 1.2.0.');
+      if (!['1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion) && requiresContract13(block)) issue(['pages', index, 'blocks', blockIndex], 'Contact details require contract version 1.3.0.');
+      if (!['1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(snapshot.settings.contractVersion) && requiresContract15(block)) issue(['pages', index, 'blocks', blockIndex], 'Inquiry presentation requires contract version 1.5.0.');
       const mediaReference = (assetId: string, field: string, mimePrefix: string) => {
         const asset = assets.get(assetId);
         if (!asset || !asset.mimeType.startsWith(mimePrefix)) issue(['pages', index, 'blocks', blockIndex, field], `Expected an existing ${mimePrefix} asset`);

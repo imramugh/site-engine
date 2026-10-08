@@ -16,9 +16,9 @@ describe('ENG-038 starter theme descriptor', () => {
     expect(starterTheme.motion.intentFallbacks).toEqual({ subtle: 'subtle', ambient: 'ambient', signature: 'signature' });
   });
   it('reports an omitted contract logo tone', () => expect(validateStarterTheme({ ...starterTheme, appearance: { ...starterTheme.appearance!, logoTones: ['default'] } })).toContain('Missing logo tone inverse'));
-  it('renders frozen contracts as well as the current 1.7 snapshot contract', () => {
+  it('renders frozen contracts as well as the current 1.8 snapshot contract', () => {
     expect(themeCanRender(neutralFixture)).toBe(true);
-    const current = structuredClone(neutralFixture); current.settings.contractVersion = '1.7.0';
+    const current = structuredClone(neutralFixture); current.settings.contractVersion = '1.8.0';
     expect(themeCanRender(current)).toBe(true);
   });
 });
