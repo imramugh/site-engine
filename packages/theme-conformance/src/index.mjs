@@ -286,13 +286,17 @@ function fixture(contractVersion = "1.7.0") {
     "highlight",
     "inverse",
   ];
-  const motionIntents = ["none", "subtle", "ambient", "signature"];
+  // The matrix remains neutral: it names no theme-specific preset and relies
+  // on the selected theme's declared intent fallback. Keep one signature
+  // moment per page so themes that enforce that contract can render the whole
+  // standard-block matrix without a fixture-only exception.
+  const ambientIntents = ["none", "subtle", "ambient"];
   page.blocks.forEach((item, index) => {
     item.appearance = {
       ...item.appearance,
       background: backgrounds[index % backgrounds.length],
       logoTone: index % 2 ? "inverse" : "default",
-      motionIntent: motionIntents[index % motionIntents.length],
+      motionIntent: index === 3 ? "signature" : ambientIntents[index % ambientIntents.length],
     };
   });
   return {

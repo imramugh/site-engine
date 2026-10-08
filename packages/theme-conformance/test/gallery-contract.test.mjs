@@ -15,6 +15,11 @@ test('gallery variations preserve the complete conformance fixture and valid uni
   assert.equal(galleryHash(original), before, 'Gallery generation must not mutate the conformance fixture.')
   assert.equal(galleryHash(fixture), galleryHash(createGalleryFixture(original, options)))
   assert.equal(new Set(fixture.pages.map(page => page.id)).size, fixture.pages.length)
+  const matrix = original.pages.find(page => page.slug === 'matrix')
+  assert.deepEqual(new Set(matrix.blocks.map(block => block.type)), new Set(Object.keys(BlockSchemas)), 'The neutral matrix retains every standard block type.')
+  assert.deepEqual(new Set(matrix.blocks.map(block => block.appearance.motionIntent)), new Set(['none', 'subtle', 'ambient', 'signature']))
+  assert(matrix.blocks.every(block => block.appearance.motionPreset === undefined), 'The neutral matrix relies on the installed theme’s declared fallback rather than naming a foreign preset.')
+  for (const page of original.pages) assert(page.blocks.filter(block => block.appearance.motionIntent === 'signature').length <= 1, `${page.slug} must contain no more than one signature motion.`)
   const variations = fixture.pages.filter(page => page.slug.startsWith('gallery-'))
   const blockIDs = variations.flatMap(page => page.blocks.map(block => block.id))
   assert.equal(new Set(blockIDs).size, blockIDs.length)
@@ -29,6 +34,11 @@ test('gallery variations preserve the complete conformance fixture and valid uni
   const motion = variations.find(page => page.slug === 'gallery-motion-subtle-faq')
   assert.equal(motion.blocks.find(block => block.type === 'faq').appearance.motionPreset, 'subtle')
   assert(motion.blocks.filter(block => block.type !== 'faq').every(block => block.appearance.motionIntent === 'none'))
+  for (const preset of options.presets) {
+    const page = variations.find(candidate => candidate.slug === `gallery-preset-${preset}`)
+    assert.equal(page.blocks.filter(block => block.appearance.motionPreset === preset).length, 1, `${preset} remains independently exercised.`)
+    assert(page.blocks.filter(block => block.appearance.motionIntent === 'signature').length <= 1, `${preset} variation must remain renderable by one-signature themes.`)
+  }
 })
 
 test('conformance fixtures use the candidate theme contract while retaining the legacy default', () => {
