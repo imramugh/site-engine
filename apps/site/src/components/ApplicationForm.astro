@@ -6,6 +6,7 @@ const copy = applicationFormCopy();
 ---
 <form class="application-form" data-application-form data-application-state="idle" data-application-copy={JSON.stringify(copy)} method="post" action="/api/applications" enctype="multipart/form-data" aria-describedby="application-status application-error-summary">
   <input type="hidden" name="jobId" value={jobId} />
+  <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>
   <div class="application-form__error-summary" id="application-error-summary" data-application-error-summary role="alert" tabindex="-1" hidden>
     <h3>Check your application</h3>
     <ul data-application-error-list></ul>
@@ -37,7 +38,7 @@ const copy = applicationFormCopy();
       <span class="application-form__upload-label" data-application-upload-label>Choose a file or drop it here</span>
       <span class="application-form__upload-hint" data-application-upload-hint>PDF or DOCX, 5 MB maximum</span>
     </label>
-    <p id="application-resume-filename" data-application-upload-filename aria-live="polite"></p>
+    <p class="application-form__upload-filename" id="application-resume-filename" data-application-upload-filename aria-live="polite"></p>
     <p class="application-form__field-error" id="application-resume-error" data-application-field-error="resume" hidden></p>
   </div>
   <div class="application-form__field" data-application-field="coverLetter">
@@ -49,7 +50,8 @@ const copy = applicationFormCopy();
     <label class="application-form__label" for="application-consent"><input id="application-consent" name="consent" type="checkbox" value="true" required aria-describedby="application-consent-error" disabled={!enabled} /> {copy.consentLabel}</label>
     <p class="application-form__field-error" id="application-consent-error" data-application-field-error="consent" hidden></p>
   </div>
-  <p class="application-form__status" id="application-status" role="status" aria-live="polite"></p>
-  <button class="application-form__submit" type="submit" disabled={!enabled}>{copy.submitLabel}</button>
+    <button class="application-form__submit" type="submit" disabled={!enabled}>{copy.submitLabel}</button>
 </form>
 {enabled && <script is:inline src="/application-form.js"></script>}
+
+<style>.application-form__upload-filename{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
