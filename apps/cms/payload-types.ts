@@ -1124,7 +1124,7 @@ export interface Application {
   email: string;
   telephone?: string | null;
   linkedIn?: string | null;
-  coverLetter: string;
+  coverLetter?: string | null;
   consent: boolean;
   jobId: string;
   resumeKey: string;

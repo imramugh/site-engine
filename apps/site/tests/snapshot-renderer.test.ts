@@ -976,16 +976,24 @@ describe('static snapshot renderer', () => {
         const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath, outputRoot: root });
         const served = await staticServer(built.output, basePath);
         const context = await browser.newContext(); const page = await context.newPage(); let applications = 0; const retryKeys: string[] = [];
-        await page.route('**/api/applications', async route => { applications += 1; const key = route.request().postDataBuffer()?.toString().match(/name="idempotencyKey"\r\n\r\n([^\r]+)/)?.[1]; if (key) retryKeys.push(key); if (applications < 3) await route.abort('failed'); else await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }) }); });
+        await page.route('**/api/applications', async route => { applications += 1; const key = route.request().postDataBuffer()?.toString().match(/name="idempotencyKey"\r\n\r\n([^\r]+)/)?.[1]; if (key) retryKeys.push(key); if (applications === 1) { await new Promise(resolve => setTimeout(resolve, 500)); await route.abort('failed'); } else if (applications === 2) await route.abort('failed'); else await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb' }) }); });
         try {
           await page.goto(`${served.origin}${basePath}docs/application-role/`, { waitUntil: 'networkidle' });
           const form = page.locator('[data-application-form]'); const button = page.getByRole('button', { name: 'Submit application' });
           if (basePath === '/') {
             expect(await button.isEnabled()).toBe(true);
-            await page.getByLabel('Name').fill('Preview applicant'); await page.getByLabel('Email').fill('preview.applicant@example.test'); await page.getByLabel('Cover letter').fill('A valid public application form submission.');
-            await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); await page.getByLabel(/I consent/).check(); await button.click();
-            await page.getByRole('alert').waitFor({ state: 'visible' }); await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.getByLabel('Cover letter').fill('A changed public application submission.'); await button.click();
-            await page.getByRole('status').filter({ hasText: 'Your application has been received.' }).waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
+            expect(await page.getByLabel('Note (optional)').getAttribute('required')).toBeNull();
+            await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' });
+            expect(await page.getByRole('alert').locator('a').count()).toBeGreaterThan(0);
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-error-summary');
+            await page.getByRole('alert').getByRole('link', { name: /Full name/ }).click(); expect(await page.evaluate(() => document.activeElement?.id)).toBe('application-name');
+            await page.getByLabel('Full name').fill('Preview applicant'); await page.getByLabel('Email').fill('preview.applicant@example.test');
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'too-large.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(5_000_001, 0) });
+            expect(await page.locator('[data-application-field-error="resume"]').isVisible()).toBe(true); expect(applications).toBe(0);
+            await page.getByLabel(/Resume/).setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\\npreview\\n%%EOF') }); await page.getByLabel(/I consent/).check(); await form.evaluate((element: HTMLFormElement) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+            await page.waitForFunction(() => document.querySelector('[data-application-form]')?.getAttribute('data-application-state') === 'pending'); expect(await form.getAttribute('data-application-state')).toBe('pending'); await page.getByRole('alert').waitFor({ state: 'visible' }); expect(await page.getByRole('alert').locator('a').count()).toBe(0); expect(await page.getByRole('alert').textContent()).toContain('We could not submit your application.');
+            await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); await page.getByLabel('Note (optional)').fill('A changed public application submission.'); await button.click();
+            await page.getByRole('status').filter({ hasText: 'Your application has been received.' }).waitFor({ state: 'visible' }); expect(await page.getByRole('status').textContent()).toBe('Your application has been received.'); expect(await form.getAttribute('data-application-state')).toBe('success'); expect(applications).toBe(3); expect(retryKeys).toHaveLength(3); expect(retryKeys[0]).toBe(retryKeys[1]); expect(retryKeys[2]).not.toBe(retryKeys[1]);
           } else {
             expect(await button.isDisabled()).toBe(true);
             await form.evaluate((element: HTMLFormElement) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));

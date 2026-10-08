@@ -31,6 +31,12 @@ export function normalizeApplicantLinkedIn(value: FormDataEntryValue | null): st
   return url.toString()
 }
 
+/** Preserve an intentionally blank optional applicant note while bounding stored input. */
+export function normalizeApplicationNote(value: FormDataEntryValue | null): string {
+  if (typeof value !== 'string' || value.length > 10_000) throw new Error('Invalid application note.')
+  return value
+}
+
 const immutableApplicationFields = ['name', 'email', 'telephone', 'linkedIn', 'coverLetter', 'consent', 'jobId', 'resumeKey', 'idempotencyKey'] as const
 export function preserveApplicationIntake<T extends Record<string, unknown>>(data: T, original: Record<string, unknown>): T {
   const next: Record<string, unknown> = { ...data }

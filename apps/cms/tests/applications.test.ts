@@ -1,6 +1,6 @@
 import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, preserveApplicationIntake, validateResume } from '../src/applications'
+import { normalizeApplicantLinkedIn, normalizeApplicantTelephone, normalizeApplicationNote, preserveApplicationIntake, validateResume } from '../src/applications'
 
 function docx(entries: Record<string, string>) {
   const locals: Buffer[] = []; const central: Buffer[] = []; let offset = 0
@@ -23,6 +23,13 @@ describe('application resume validation', () => {
 })
 
 describe('applicant contact validation', () => {
+  it('accepts an empty optional note while retaining the existing application-record shape', () => {
+    expect(normalizeApplicationNote('')).toBe('')
+    expect(normalizeApplicationNote('A short note.')).toBe('A short note.')
+    expect(() => normalizeApplicationNote(null)).toThrow('Invalid application note')
+    expect(() => normalizeApplicationNote('x'.repeat(10_001))).toThrow('Invalid application note')
+  })
+
   it('normalizes optional telephone and LinkedIn values and rejects unsafe input', () => {
     expect(normalizeApplicantTelephone(' +1 (416) 555-0198 ')).toBe('+1 (416) 555-0198')
     expect(normalizeApplicantTelephone('(416) 555-0199')).toBe('(416) 555-0199')
