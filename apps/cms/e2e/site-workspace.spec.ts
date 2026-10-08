@@ -267,6 +267,7 @@ test('Site workspace saves navigation for the installed 1.8 theme', async ({ bro
 
   await owner.page.goto('/site')
   await owner.page.getByLabel('Save changes to').selectOption({ label: 'Navigation 1.8 browser draft · open' })
+  await owner.page.getByLabel('Business name').fill('Synthetic navigation compatibility site')
   await owner.page.getByRole('button', { name: 'Navigation' }).click()
   const workspace = owner.page.locator('[data-site-navigation]')
   await expect(workspace).toBeVisible()
@@ -278,7 +279,8 @@ test('Site workspace saves navigation for the installed 1.8 theme', async ({ bro
   await item.getByLabel('Explanation').fill('This synthetic destination is intentionally unavailable.')
   const saved = owner.page.waitForResponse(response => response.url().endsWith('/api/site-workspace') && response.request().method() === 'POST')
   await owner.page.getByRole('button', { name: 'Save navigation' }).click()
-  expect((await saved).status()).toBe(200)
+  const savedResponse = await saved
+  expect(savedResponse.status(), await savedResponse.text()).toBe(200)
   const context = await owner.page.request.get('/api/site-workspace').then(response => response.json()) as { changeSets: Array<{ id: string; name: string; contractVersion: string | null }>; settings: { navigation: { header: Array<{ label: string; kind: string; reason?: string }> } } }
   expect(context.changeSets.find(set => set.name === 'Navigation 1.8 browser draft')?.contractVersion).toBe('1.8.0')
   expect(context.settings.navigation.header).toEqual(expect.arrayContaining([expect.objectContaining({ label: '1.8 browser navigation', kind: 'unavailable', reason: 'This synthetic destination is intentionally unavailable.' })]))
