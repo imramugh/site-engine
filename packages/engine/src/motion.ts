@@ -9,6 +9,17 @@ export type ResolvedMotionPreset = string | undefined;
 
 export const motionPreferenceKey = 'site-engine:motion';
 
+export type MotionRuntimeOptions = {
+  /**
+   * Theme shells may opt into one engine-owned controller by placing
+   * `data-motion-controller="engine"` on the document element. The marker is
+   * intentionally opt-in so the established public controller is unchanged.
+   */
+  themeController?: boolean;
+  /** Storage key supplied by an opted-in theme shell. */
+  storageKey?: string;
+};
+
 /**
  * An explicit visitor choice takes precedence over the operating-system setting.
  * The OS setting is used only until the visitor makes a choice.
@@ -64,9 +75,9 @@ type MotionWindow = Window & {
   IntersectionObserver?: typeof IntersectionObserver;
 };
 
-function savedMotionPreference(window: Window): MotionPreference | null {
+function savedMotionPreference(window: Window, storageKey: string): MotionPreference | null {
   try {
-    const value = window.localStorage.getItem(motionPreferenceKey);
+    const value = window.localStorage.getItem(storageKey);
     return value === 'reduce' || value === 'allow' ? value : null;
   } catch {
     return null;
@@ -93,16 +104,25 @@ function setEffectStill(effect: HTMLElement, still: boolean): void {
  * readable still. Video effects must declare a poster; the runtime pauses them
  * while reduced, off-screen, in a form, or in an urgent-contact region.
  */
-export function mountMotionRuntime(document: Document, window: Window): () => void {
+export function mountMotionRuntime(document: Document, window: Window, options: MotionRuntimeOptions = {}): () => void {
   const motionWindow = window as MotionWindow;
   const media = window.matchMedia?.('(prefers-reduced-motion: reduce)') as MotionMediaQuery | undefined;
-  let choice = savedMotionPreference(window);
+  const root = document.documentElement;
+  const themeController = options.themeController ?? (root.dataset.motionController === 'engine');
+  const storageKey = options.storageKey ?? (themeController ? root.dataset.motionStorageKey || motionPreferenceKey : motionPreferenceKey);
+  let choice = savedMotionPreference(window, storageKey);
   const effects = [...document.querySelectorAll<HTMLElement>('[data-motion-effect]')];
   const controls = [...document.querySelectorAll<HTMLElement>('[data-motion-toggle]')];
 
   const apply = () => {
-    const motion = effectiveMotion(choice, Boolean(media?.matches));
-    document.documentElement.dataset.motion = motion;
+    // The generic controller retains its historical visitor-choice precedence.
+    // A theme that opts into engine ownership instead treats an OS reduction as
+    // an accessibility ceiling: a saved allow cannot reactivate animation.
+    const motion = themeController && media?.matches
+      ? 'reduce'
+      : effectiveMotion(choice, Boolean(media?.matches));
+    root.dataset.motion = motion;
+    if (themeController) root.dataset.motionPreference = motion;
 
     for (const effect of effects) {
       const protectedContext = effect.closest('form, [data-urgent-contact]') !== null;
@@ -112,13 +132,14 @@ export function mountMotionRuntime(document: Document, window: Window): () => vo
 
     for (const control of controls) {
       control.setAttribute('aria-pressed', String(motion === 'reduce'));
+      if (themeController) control.textContent = motion === 'reduce' ? 'Allow motion' : 'Reduce motion';
     }
   };
 
   const toggle = () => {
     choice = document.documentElement.dataset.motion === 'reduce' ? 'allow' : 'reduce';
     try {
-      window.localStorage.setItem(motionPreferenceKey, choice);
+      window.localStorage.setItem(storageKey, choice);
     } catch {
       // Storage may be unavailable in privacy-restricted browsing contexts.
     }
@@ -153,5 +174,13 @@ export function mountMotionRuntime(document: Document, window: Window): () => vo
 
     // A torn-down enhancement must leave the page in the safe no-motion state.
     for (const effect of effects) setEffectStill(effect, true);
+    if (themeController) {
+      root.dataset.motion = 'reduce';
+      root.dataset.motionPreference = 'reduce';
+      for (const control of controls) {
+        control.setAttribute('aria-pressed', 'true');
+        control.textContent = 'Allow motion';
+      }
+    }
   };
 }

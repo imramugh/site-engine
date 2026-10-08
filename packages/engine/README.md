@@ -8,6 +8,15 @@ Use `data-motion-toggle` on the accessible footer control. The runtime stores a
 visitor's explicit `reduce` or `allow` choice when storage is available; that
 choice takes precedence over `prefers-reduced-motion`.
 
+Theme shells that need to share this controller with their own CSS can opt in
+with `<html data-motion-controller="engine" data-motion-storage-key="…">`.
+In that mode the engine is the sole owner of motion-toggle clicks and media
+preference changes. It mirrors the effective value to both `data-motion` and
+`data-motion-preference`, updates the button label and `aria-pressed`, and
+always gives an operating-system reduced-motion request priority over a saved
+`allow`. The optional storage-key attribute lets an existing theme retain its
+visitor preference without a second controller.
+
 For video and long-running animation, place the video inside a motion-effect
 element (or mark the video itself), provide a `poster`, and do not use
 `autoplay`. The runtime only pauses media. It never starts playback, so native
