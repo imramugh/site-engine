@@ -59,7 +59,7 @@ test('ENG-016 Owner configures visible AI draft routes with a reviewed vision mo
     for (const kind of ['summary', 'meta', 'faq', 'alt']) {
       const row = owner.page.locator(`[data-ai-job-default="${kind}"]`)
       const saved = owner.page.waitForResponse((response) => response.url().endsWith('/api/integrations') && response.request().method() === 'POST' && (response.request().postDataJSON() as { action?: string }).action === 'configure-ai-default')
-      await row.getByRole('combobox').selectOption('openai')
+      await row.getByLabel(`${kind} provider`).selectOption('openai')
       expect((await saved).status()).toBe(200)
       await expect(row).toContainText('gpt-4.1-mini')
     }
@@ -101,12 +101,13 @@ test('ENG-023 Owner routes each task only through configured reviewed models and
   const owner = await signedIn(browser)
   type RoutedDefault = { jobType: string; provider: string; model: string; fallbackProvider: string | null }
   const integrations = [
-    { id: 'openai', provider: 'openai', model: 'gpt-4.1-mini', fallbackProvider: null, monthlyCapMicroUsd: null, monthlyUsageMicroUsd: 0, usageMonth: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/openai', pricingAsOf: '2026-10-08T00:00:00.000Z', health: 'connected', testedAt: null, credentialConfigured: true, credentialHint: '••••openai' },
+    { id: 'openai', provider: 'openai', model: 'gpt-4.1-mini', fallbackProvider: 'anthropic', monthlyCapMicroUsd: null, monthlyUsageMicroUsd: 0, usageMonth: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/openai', pricingAsOf: '2026-10-08T00:00:00.000Z', health: 'connected', testedAt: null, credentialConfigured: true, credentialHint: '••••openai' },
     { id: 'anthropic', provider: 'anthropic', model: 'claude-reviewed', fallbackProvider: null, monthlyCapMicroUsd: null, monthlyUsageMicroUsd: 0, usageMonth: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/anthropic', pricingAsOf: '2026-10-08T00:00:00.000Z', health: 'connected', testedAt: null, credentialConfigured: true, credentialHint: '••••anthropic' },
     { id: 'openrouter', provider: 'openrouter', model: 'router-reviewed', fallbackProvider: null, monthlyCapMicroUsd: null, monthlyUsageMicroUsd: 0, usageMonth: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/openrouter', pricingAsOf: '2026-10-08T00:00:00.000Z', health: 'connected', testedAt: null, credentialConfigured: true, credentialHint: '••••router' },
   ]
   const defaults: RoutedDefault[] = [{ jobType: 'summary', provider: 'anthropic', model: 'claude-reviewed', fallbackProvider: 'openai' }]
   const requests: RoutedDefault[] = []
+  const credentialRequests: Array<{ provider?: string; fallbackProvider?: string | null }> = []
   let rejectNext = false
   await owner.page.route('**/api/integrations', async (route) => {
     if (route.request().method() === 'GET') {
@@ -114,6 +115,11 @@ test('ENG-023 Owner routes each task only through configured reviewed models and
       return
     }
     const body = route.request().postDataJSON() as { action?: string } & RoutedDefault
+    if (body.action === 'configure') {
+      credentialRequests.push({ provider: body.provider, fallbackProvider: body.fallbackProvider })
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ integration: integrations.find((item) => item.provider === body.provider) }) })
+      return
+    }
     if (body.action !== 'configure-ai-default') return route.continue()
     requests.push({ jobType: body.jobType, provider: body.provider, model: body.model, fallbackProvider: body.fallbackProvider })
     if (rejectNext) { await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'The selected fallback is unavailable.' }) }); return }
@@ -124,6 +130,17 @@ test('ENG-023 Owner routes each task only through configured reviewed models and
   })
   try {
     await owner.page.goto('/integrations?tab=ai')
+    const openAI = owner.page.locator('[data-provider="openai"]')
+    await openAI.getByRole('button', { name: 'Replace key' }).click()
+    await owner.page.getByLabel('Model').fill('gpt-4.1-mini')
+    await owner.page.getByLabel('Credential').fill('replacement-credential')
+    await owner.page.getByLabel('Input micro-USD per million tokens').fill('1')
+    await owner.page.getByLabel('Output micro-USD per million tokens').fill('1')
+    await owner.page.getByLabel('Reviewed pricing source').fill('https://prices.example.test/openai')
+    await owner.page.getByLabel('Pricing as of').fill('2026-10-08')
+    await owner.page.getByRole('button', { name: 'Save configuration' }).click()
+    await expect.poll(() => credentialRequests.length).toBe(1)
+    expect(credentialRequests[0]).toEqual({ provider: 'openai', fallbackProvider: 'anthropic' })
     const summary = owner.page.locator('[data-ai-job-default="summary"]')
     const leadReply = owner.page.locator('[data-ai-job-default="lead-reply"]')
     await expect(leadReply).toContainText('Lead reply')
