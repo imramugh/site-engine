@@ -24,7 +24,10 @@ async function currentRelease(page: Page): Promise<Locator> {
   await expect(row).toContainText('Reviewed changes')
   await expect(row.locator('ins')).toContainText('A current published summary that the reviewed rollback browser flow restores.')
   await expect(row.locator('del')).not.toHaveText('Previous values')
-  await expect(row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true })).toHaveAttribute('href', /^\/api\/auth\/preview\/evidence\/[0-9a-f-]+\/proposed$/)
+  const evidence = row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true })
+  await expect(evidence).toHaveAttribute('href', /^\/api\/auth\/preview\/evidence\/[0-9a-f-]+\/proposed$/)
+  const href = await evidence.getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
+  const image = await page.request.get(href); expect(image.status()).toBe(200); expect(image.headers()['content-type']).toContain('image/png'); expect((await image.body()).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]))
   return row
 }
 
@@ -98,6 +101,13 @@ test('ENG-010 allows an Approver to inspect Operations and prepare a selected ro
     await detail.getByRole('button', { name: 'Discard', exact: true }).click()
     expect((await discarded).status()).toBe(200)
   } finally { await session.context.close() }
+})
+
+test('ENG-022 denies screenshot evidence to editor and anonymous sessions', async ({ browser }) => {
+  const ownerSession = await owner(browser); const row = await currentRelease(ownerSession.page); const href = await row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true }).getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
+  const anonymous = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); expect((await anonymous.request.get(href)).status()).toBe(401)
+  const editor = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); await editor.addCookies([{ name: 'site_engine_session', value: 'synthetic-shell-editor-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' }]); expect((await editor.request.get(href)).status()).toBe(403)
+  await ownerSession.context.close(); await anonymous.close(); await editor.close()
 })
 
 test('ENG-022 Change log remains readable and accessible at desktop and mobile sizes', async ({ browser }) => {
