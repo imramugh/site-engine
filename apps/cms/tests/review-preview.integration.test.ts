@@ -278,6 +278,14 @@ describe('ENG-030 immutable review preview jobs', () => {
       await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(legacy.id), String(legacyLease!.leaseToken), { liveManifestHash: String(legacy.liveManifestHash), proposedManifestHash: String(legacy.proposedManifestHash), artifactDigest: digest }))
 
       process.env.PREVIEW_ENGINE_VERSION = 'engine-test-2'
+      await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: String(current.set.id) }))
+      const oldProof = (await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).quality as { proof: Record<string, unknown> }
+      const outboxBeforeStaleApproval = await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })
+      const staleApproval = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof: oldProof.proof }) }), { params: Promise.resolve({ action: 'approve' }) })
+      expect(staleApproval.status).toBe(409)
+      await expect(staleApproval.json()).resolves.toMatchObject({ error: expect.stringMatching(/prepare a fresh preview/i) })
+      expect((await payload.count({ collection: 'publish-outbox', where: { changeSet: { equals: current.set.id } }, overrideAccess: true })).totalDocs).toBe(outboxBeforeStaleApproval.totalDocs)
+
       const upgraded = await prepare(current)
       expect(upgraded.id).not.toBe(legacy.id)
       expect(upgraded.versionPins).toMatchObject({ engineVersion: 'engine-test-2' })
@@ -292,6 +300,8 @@ describe('ENG-030 immutable review preview jobs', () => {
       if (!approved.outboxID) throw new Error('Approved review must create a publish outbox item.')
       const outbox = await payload.findByID({ collection: 'publish-outbox', id: approved.outboxID, depth: 1, overrideAccess: true })
       expect((outbox.snapshot as { engineVersion: string }).engineVersion).toBe('engine-test-2')
+      process.env.PREVIEW_ENGINE_VERSION = 'engine-test-3'
+      await expect(withPayloadTransaction(payload, req => { req.headers = current.headers; return approveChangeSet({ payload, req, actor: current.reviewer, id: String(current.set.id), expectedRevision: 4, expectedChangeHash: changeSetHash(current.changes), includedChangeKeys: [`pages:${current.changes[0]!.id}`], previewContentHash: canonicalHash(upgraded.proposedManifest), versions: { ...versions, engineVersion: 'engine-test-2' }, initialBaseline: current.live }) })).resolves.toMatchObject({ outboxID: approved.outboxID })
     } finally {
       if (previous === undefined) delete process.env.PREVIEW_ENGINE_VERSION
       else process.env.PREVIEW_ENGINE_VERSION = previous

@@ -184,7 +184,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
     const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' })
     if (backpressure) return backpressure
     const text = message(error)
-    const status = /Authentication|required|role|required|Only the editor/i.test(text) ? 403 : 400
+    const status = /Authentication|required|role|required|Only the editor/i.test(text) ? 403 : /^The reviewed renderer version is stale\./.test(text) ? 409 : 400
     return Response.json({ error: text }, { status })
   }
 }
