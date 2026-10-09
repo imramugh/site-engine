@@ -13,6 +13,7 @@ RUN pnpm install --frozen-lockfile --filter @site-engine/site... \
   && pnpm --filter @site-engine/engine build \
   && pnpm --filter @site-engine/checks build \
   && pnpm --filter @site-engine/theme-starter build \
+  && pnpm --filter @site-engine/site exec playwright install --with-deps chromium \
   && mkdir -p /workspace/apps/site/.astro /artifacts \
   && chown -R 10001:10001 /workspace/apps/site/.astro /artifacts
 ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 PREVIEW_ARTIFACT_ROOT=/artifacts PUBLISH_ROLE=preview

@@ -304,6 +304,9 @@ importers:
 
   apps/site:
     dependencies:
+      '@playwright/test':
+        specifier: 1.64.0
+        version: 1.64.0
       '@site-engine/checks':
         specifier: workspace:^
         version: link:../../packages/checks

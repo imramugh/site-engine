@@ -848,6 +848,7 @@ export const PreviewRenderJobs: CollectionConfig = {
     { name: 'leaseExpiresAt', type: 'date', admin: { readOnly: true } },
     { name: 'completedAt', type: 'date', admin: { readOnly: true } },
     { name: 'artifactDigest', type: 'text', admin: { readOnly: true } },
+    { name: 'evidenceManifest', type: 'json', admin: { readOnly: true } },
     { name: 'errorCode', type: 'text', admin: { readOnly: true } },
     { name: 'renderDiagnostics', type: 'json', admin: { readOnly: true } },
   ],

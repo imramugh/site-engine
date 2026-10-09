@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SiteSnapshotSchema, compatibleContractVersion } from '@site-engine/contract';
@@ -9,6 +10,10 @@ import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const EVIDENCE_VIEWPORT = { width: 1440, height: 900 };
+const MAX_EVIDENCE_BYTES = 5 * 1024 * 1024;
+const evidenceName = 'evidence-manifest.json';
+const png = /^evidence\/(live|proposed)\.png$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const digest = /^[a-f0-9]{64}$/;
 const versions = ['engineVersion', 'themeVersion', 'contractVersion'];
@@ -100,18 +105,64 @@ async function verifyVariant(root, snapshot, pins) {
   return manifest;
 }
 
+function validEvidence(value, liveHash, proposedHash) {
+  if (!value || typeof value !== 'object' || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || value.route !== '/' || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
+  for (const variant of ['live', 'proposed']) {
+    const item = value.screenshots[variant];
+    if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES) throw new WorkerError('INVALID_ARTIFACT');
+  }
+  return value;
+}
+
 async function verifyPair(root, input) {
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
   const names = (await readdir(root)).sort();
-  if (canonical(names) !== canonical(['live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
+  if (canonical(names) !== canonical(['evidence', evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
   const live = await verifyVariant(join(root, 'live'), input.live, input.variantPins.live);
   const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.variantPins.proposed);
-  return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, artifactDigest: hash({ live, proposed }) };
+  const evidence = validEvidence(JSON.parse(await readFile(join(root, evidenceName), 'utf8')), live.snapshotContentHash, proposed.snapshotContentHash);
+  for (const variant of ['live', 'proposed']) {
+    const path = join(root, evidence.screenshots[variant].path); const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.size !== evidence.screenshots[variant].bytes || info.size > MAX_EVIDENCE_BYTES || bytesHash(await readFile(path)) !== evidence.screenshots[variant].sha256) throw new WorkerError('INVALID_ARTIFACT');
+  }
+  return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, evidenceManifest: evidence, artifactDigest: hash({ live, proposed, evidence }) };
+}
+
+export async function captureEvidence(pair, input, signal) {
+  const root = resolve(pair); let server;
+  const close = () => server && new Promise(done => server.close(done));
+  try {
+    server = createServer(async (request, response) => {
+      const raw = new URL(request.url ?? '/', 'http://loopback'); const clean = raw.pathname.replace(/^\/+/, '');
+      if (!request.headers.host || request.method !== 'GET' || /(?:^|\/)\.{1,2}(?:\/|$)|%|\\/.test(clean)) { response.writeHead(404).end(); return; }
+      const file = resolve(root, clean); if (!file.startsWith(`${root}/`)) { response.writeHead(404).end(); return; }
+      try { const stat = await lstat(file); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(); response.writeHead(200).end(await readFile(file)); } catch { response.writeHead(404).end(); }
+    });
+    await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
+    const port = server.address().port; const { chromium } = await import('@playwright/test'); const browser = await chromium.launch({ headless: true });
+    try { const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' });
+      await context.route('**/*', route => new URL(route.request().url()).origin === `http://127.0.0.1:${port}` ? route.continue() : route.abort());
+      const shots = {};
+      for (const variant of ['live', 'proposed']) { const page = await context.newPage(); await page.goto(`http://127.0.0.1:${port}/${variant}/`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES) throw new WorkerError('EVIDENCE_TOO_LARGE'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length }; }
+      await context.close(); const evidence = { version: 1, route: '/', viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
+    } finally { await browser.close(); }
+  } finally { await close(); }
+}
+
+async function purgeExpiredArtifacts(root) {
+  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30);
+  if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  const cutoff = Date.now() - days * 86_400_000; let removed = 0;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (removed >= 20 || !uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const target = join(root, entry.name); const info = await stat(target);
+    if (info.mtimeMs <= cutoff) { await rm(target, { recursive: true, force: false }); removed += 1; }
+  }
 }
 
 /** One claim is rendered serially. Lease loss cancels Astro and prevents completion. */
-export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, heartbeatMs = 10_000 }) {
+export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, capture = captureEvidence, signal, heartbeatMs = 10_000 }) {
   const input = claimInput(await api('claim', {}, signal), versionPins);
   if (!input) return false;
   verifyThemeSelection(input.live, registry); verifyThemeSelection(input.proposed, registry);
@@ -121,6 +172,7 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
   await mkdir(root, { recursive: true, mode: 0o700 });
   const rootInfo = await lstat(root);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT_ROOT');
+  await purgeExpiredArtifacts(root);
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
@@ -155,6 +207,7 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
         await verifyVariant(output, input[variant], input.variantPins[variant]);
         await rename(output, join(pair, variant));
       }
+      await capture(pair, input, controller.signal);
       evidence = await verifyPair(pair, input);
       if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
       await rename(pair, destination);

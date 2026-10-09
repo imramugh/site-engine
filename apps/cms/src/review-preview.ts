@@ -11,6 +11,8 @@ type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings
 export type PreviewBaseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
 const MAX_BODY_BYTES = 16 * 1024
+const evidenceDigest = /^[a-f0-9]{64}$/
+const validEvidenceManifest = (value: unknown, live: unknown, proposed: unknown) => { if (!value || typeof value !== 'object') throw new Error('Preview evidence is invalid.'); const manifest = value as Record<string, unknown>; const shots = manifest.screenshots as Record<string, unknown> | undefined; if (manifest.version !== 1 || manifest.route !== '/' || manifest.liveManifestHash !== live || manifest.proposedManifestHash !== proposed || !shots || typeof shots !== 'object') throw new Error('Preview evidence is invalid.'); for (const variant of ['live', 'proposed']) { const shot = shots[variant] as Record<string, unknown> | undefined; if (!shot || shot.path !== `evidence/${variant}.png` || !Number.isInteger(shot.bytes) || Number(shot.bytes) < 1 || Number(shot.bytes) > 5 * 1024 * 1024 || typeof shot.sha256 !== 'string' || !evidenceDigest.test(shot.sha256)) throw new Error('Preview evidence is invalid.'); } return structuredClone(manifest) }
 
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
@@ -182,7 +184,7 @@ export async function claimPreviewRenderJob(payload: Payload, req: PayloadReques
 
 function currentLease(job: { status?: string; leaseToken?: string | null; leaseExpiresAt?: string | null }, token: string, now: Date) { return job.status === 'processing' && job.leaseToken === token && job.leaseExpiresAt && new Date(job.leaseExpiresAt).getTime() > now.getTime() }
 export async function renewPreviewRenderLease(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, now = new Date(), leaseMilliseconds = 60_000) { requireTransaction(req, 'Preview renewal'); const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req }); if (!currentLease(job, leaseToken, now)) throw new Error('The preview lease is no longer current.'); return payload.update({ collection: 'preview-render-jobs', id, data: { leaseExpiresAt: new Date(now.getTime() + leaseMilliseconds).toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } }) }
-export async function completePreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, proof: { liveManifestHash: string; proposedManifestHash: string; artifactDigest: string }, now = new Date()) {
+export async function completePreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, proof: { liveManifestHash: string; proposedManifestHash: string; artifactDigest: string; evidenceManifest?: unknown }, now = new Date()) {
   requireTransaction(req, 'Preview completion')
   const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req })
   if (job.status === 'completed') {
@@ -190,7 +192,8 @@ export async function completePreviewRenderJob(payload: Payload, req: PayloadReq
     return job
   }
   if (!currentLease(job, leaseToken, now) || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || !/^[a-f0-9]{64}$/i.test(proof.artifactDigest)) throw new Error('Preview completion proof is invalid.')
-  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const evidenceManifest = proof.evidenceManifest === undefined ? undefined : validEvidenceManifest(proof.evidenceManifest, proof.liveManifestHash, proof.proposedManifestHash)
+  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, ...(evidenceManifest ? { evidenceManifest } : {}), renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true, req })
   const preview = set.preview as { jobID?: string; revision?: number; changeHash?: string; baselineSequence?: number; includedChangeKeys?: string[] } | undefined
   if (preview?.jobID === id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.baselineSequence === job.baselineSequence && Array.isArray(preview.includedChangeKeys) && keysEqual(preview.includedChangeKeys, job.includedChangeKeys as string[])) {
