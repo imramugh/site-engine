@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, utimes, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
-import { canonical, createPreviewAPI, hash, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
+import { canonical, createPreviewAPI, hash, purgeExpiredArtifacts, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
 import { buildSnapshot } from '../scripts/build-snapshot.mjs';
 import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
@@ -45,7 +45,7 @@ function themedClaim() {
   return { input, selection, registry: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }) };
 }
 
-async function alterIndex(result: { output: string }, suffix: string) { const file = join(result.output, 'index.html'); const value = Buffer.concat([await readFile(file), Buffer.from(suffix)]); await writeFile(file, value); const manifestPath = join(result.output, 'snapshot-manifest.json'); const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); manifest.files['index.html'] = createHash('sha256').update(value).digest('hex'); await writeFile(manifestPath, JSON.stringify(manifest)); return result; }
+async function alterIndex<T extends { output: string }>(result: T, suffix: string): Promise<T> { const file = join(result.output, 'index.html'); const value = Buffer.concat([await readFile(file), Buffer.from(suffix)]); await writeFile(file, value); const manifestPath = join(result.output, 'snapshot-manifest.json'); const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); manifest.files['index.html'] = createHash('sha256').update(value).digest('hex'); await writeFile(manifestPath, JSON.stringify(manifest)); return result; }
 
 const options = () => ({ artifactRoot: root, publicOrigin: 'https://example.test', versionPins: pins, signal: undefined });
 
@@ -245,6 +245,25 @@ describe('durable preview rendering worker', () => {
     const render = async (input: any) => alterIndex(await buildSnapshot(input), `<script>throw new Error('evidence test error')</script>`);
     await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('EVIDENCE_CAPTURE_FAILED');
   }, 60_000);
+
+  it('removes only verified expired screenshot bytes during an idle cleanup', async () => {
+    const artifact = join(root, id);
+    const contentHash = 'a'.repeat(64);
+    const screenshot = { path: 'evidence/proposed.png', sha256: contentHash, bytes: 3, route: '/', status: 200 };
+    await mkdir(join(artifact, 'evidence'), { recursive: true });
+    await mkdir(join(artifact, 'live'), { recursive: true });
+    await mkdir(join(artifact, 'proposed'), { recursive: true });
+    await writeFile(join(artifact, 'index.html'), 'retained review');
+    await writeFile(join(artifact, 'evidence', 'proposed.png'), 'png');
+    await writeFile(join(artifact, 'live', 'snapshot-manifest.json'), JSON.stringify({ snapshotContentHash: contentHash }));
+    await writeFile(join(artifact, 'proposed', 'snapshot-manifest.json'), JSON.stringify({ snapshotContentHash: contentHash }));
+    await writeFile(join(artifact, 'evidence-manifest.json'), JSON.stringify({ version: 1, state: 'available', jobID: id, route: '/', viewport: { width: 1440, height: 900 }, liveManifestHash: contentHash, proposedManifestHash: contentHash, screenshots: { live: { ...screenshot, path: 'evidence/live.png' }, proposed: screenshot } }));
+    const old = new Date(Date.now() - 31 * 86_400_000);
+    await utimes(artifact, old, old);
+    await purgeExpiredArtifacts(root);
+    expect(await readFile(join(artifact, 'index.html'), 'utf8')).toBe('retained review');
+    await expect(readFile(join(artifact, 'evidence', 'proposed.png'))).rejects.toThrow();
+  });
 });
 
 describe('private worker API boundary', () => {

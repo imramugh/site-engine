@@ -155,15 +155,36 @@ export async function captureEvidence(pair, input, signal) {
     await context.close(); const evidence = { version: 1, state: 'available', jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
   } finally { signal?.removeEventListener('abort', stop); await browser?.close(); if (server) await new Promise(done => server.close(done)); }
 }
-let lastEvidenceCleanup = 0;
-async function purgeExpiredArtifacts(root) {
-  if (Date.now() - lastEvidenceCleanup < 60 * 60_000) return; lastEvidenceCleanup = Date.now();
-  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30); if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
-  const cutoff = Date.now() - days * 86_400_000; let removed = 0;
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+const lastEvidenceCleanup = new Map();
+export async function purgeExpiredArtifacts(root) {
+  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30);
+  if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  const resolvedRoot = resolve(root);
+  const prior = lastEvidenceCleanup.get(resolvedRoot) ?? 0;
+  if (Date.now() - prior < 60 * 60_000) return;
+  const cutoff = Date.now() - days * 86_400_000;
+  let removed = 0;
+  for (const entry of await readdir(resolvedRoot, { withFileTypes: true })) {
     if (removed >= 20 || !uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
-    const target = join(root, entry.name); try { const manifest = JSON.parse(await readFile(join(target, evidenceName), 'utf8')); const info = await stat(target); if (!['available', 'unavailable'].includes(manifest?.state) || !manifest?.jobID || manifest.jobID !== entry.name || info.mtimeMs > cutoff) continue; const evidence = join(target, 'evidence'); const evidenceInfo = await lstat(evidence); if (!evidenceInfo.isDirectory() || evidenceInfo.isSymbolicLink()) continue; await rm(evidence, { recursive: true, force: false }); removed += 1; } catch { /* Active, partial, or unrecognized directories are never purged. */ }
+    const target = join(resolvedRoot, entry.name);
+    try {
+      const info = await stat(target);
+      if (info.mtimeMs > cutoff) continue;
+      const [manifest, live, proposed] = await Promise.all([
+        readFile(join(target, evidenceName), 'utf8').then(JSON.parse),
+        readFile(join(target, 'live', 'snapshot-manifest.json'), 'utf8').then(JSON.parse),
+        readFile(join(target, 'proposed', 'snapshot-manifest.json'), 'utf8').then(JSON.parse)
+      ]);
+      validEvidence(manifest, live.snapshotContentHash, proposed.snapshotContentHash, entry.name);
+      if (manifest.state !== 'available') continue;
+      const evidence = join(target, 'evidence');
+      const evidenceInfo = await lstat(evidence);
+      if (!evidenceInfo.isDirectory() || evidenceInfo.isSymbolicLink()) continue;
+      await rm(evidence, { recursive: true, force: false });
+      removed += 1;
+    } catch { /* Active, partial, or unrecognized directories are never purged. */ }
   }
+  lastEvidenceCleanup.set(resolvedRoot, Date.now());
 }
 
 /** One claim is rendered serially. Lease loss cancels Astro and prevents completion. */
