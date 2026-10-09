@@ -15,7 +15,7 @@ export default async function LoginPage() {
       <div className={styles.content}>
         <p className={styles.eyebrow}>Staff workspace</p>
         <h1 id="admin-login-heading">Staff sign in</h1>
-        <p className={styles.intro}>Use your work email and a current authenticator or recovery code.</p>
+        <p className={styles.intro}>Use your work email to access your workspace.</p>
         <EmergencyOwnerForm />
       </div>
     </section>
