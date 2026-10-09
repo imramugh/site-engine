@@ -207,6 +207,21 @@ describe('durable preview rendering worker', () => {
     expect(diagnostic).toMatchObject({ path: `structuredData.${claim().live.pages[0]!.id}`, pageId: claim().live.pages[0]!.id });
     expect(diagnostic.blockId).toBeUndefined();
   }, 60_000);
+
+  it('captures the selected non-root reviewed page, not system metadata', async () => {
+    const input = claim(); const second = structuredClone(input.proposed.pages[0]!); second.id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'; second.slug = 'reviewed-page'; second.title = 'Selected reviewed page'; input.live.pages.push(structuredClone(second)); input.proposed.pages.push(second); input.live.settings.sections[0]!.pageIds.push(second.id); input.proposed.settings.sections[0]!.pageIds.push(second.id); input.includedChangeKeys = [`pages:${second.id}`];
+    const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true);
+    const evidence = calls.find(item => item.action === 'complete').body.evidenceManifest;
+    expect(evidence.route).toContain('reviewed-page'); expect(evidence.screenshots.proposed.status).toBe(200);
+    expect(await readFile(join(root, id, 'proposed', 'general', 'reviewed-page', 'index.html'), 'utf8')).toContain('Selected reviewed page');
+  }, 60_000);
+
+  it('records an unavailable manifest without failing a review with no renderable selected page', async () => {
+    const input = claim(); input.includedChangeKeys = ['pages:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee']; const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true);
+    expect(calls.find(item => item.action === 'complete').body.evidenceManifest).toMatchObject({ state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE' });
+  }, 60_000);
 });
 
 describe('private worker API boundary', () => {
