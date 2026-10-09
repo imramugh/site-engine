@@ -808,7 +808,7 @@ describe('static snapshot renderer', () => {
         const submitted: Array<{ idempotencyKey: string; name: string; email: string; telephone: string; company: string }> = [];
         await page.route('**/api/inquiries', async route => {
           submitted.push(route.request().postDataJSON());
-          if (submitted.length === 1) await route.abort('failed');
+          if (submitted.length === 1) await route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ accepted: false, errors: { email: 'Enter an approved work email address.' } }) });
           else await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
         });
         try {
@@ -828,6 +828,12 @@ describe('static snapshot renderer', () => {
             expect(await form.locator('[name="company"]').getAttribute('maxlength')).toBe('160');
             expect(await form.locator('[name="message"]').getAttribute('maxlength')).toBe('5000');
             expect(await form.locator('[name="message"]').getAttribute('rows')).toBe('5');
+            await button.click();
+            const summary = form.locator('[data-inquiry-error-summary]');
+            await expect(summary).toBeVisible();
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-name');
+            await summary.getByRole('link', { name: 'Enter a valid email address.' }).click();
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-email');
             await form.locator('[name="name"]').fill('Retry visitor');
             await form.locator('[name="email"]').fill('retry@example.test');
             await form.locator('[name="telephone"]').fill('+1 555 0123');
@@ -836,10 +842,12 @@ describe('static snapshot renderer', () => {
             await form.locator('[name="consent"]').check();
             expect(await button.isEnabled()).toBe(true);
             await button.click();
-            await page.getByRole('alert').filter({ hasText: 'check your connection' }).waitFor();
+            await summary.getByRole('link', { name: 'Enter an approved work email address.' }).waitFor();
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-email');
             expect(await button.isEnabled()).toBe(true);
             await button.click();
             await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
+            await expect(summary).toBeHidden();
             expect(submitted).toHaveLength(2);
             expect(submitted[0]!.idempotencyKey).toBe(submitted[1]!.idempotencyKey);
             expect(submitted[0]).toMatchObject({ name: 'Retry visitor', email: 'retry@example.test', telephone: '+1 555 0123', company: 'Example Company' });
