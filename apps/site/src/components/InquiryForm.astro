@@ -15,7 +15,7 @@ const { enabled, formId, heading, headingId, topicLabel = 'Topic', topics = [{ v
   <p><label>Message <textarea id={`${formId}-message`} name="message" rows="5" maxlength="5000" required aria-describedby={`${formId}-message-error`} /></label><span id={`${formId}-message-error`} data-inquiry-field-error="message"></span></p>
   <p><label><input id={`${formId}-consent`} name="consent" type="checkbox" required aria-describedby={`${formId}-consent-error`} /> {consentLabel}</label><span id={`${formId}-consent-error`} data-inquiry-field-error="consent"></span></p>
   <button disabled data-inquiry-submit>Send inquiry</button>
-  <p data-inquiry-error aria-live="polite"></p>
+  <p data-inquiry-error aria-hidden="true" hidden></p>
   <p role="status" data-inquiry-status></p>
   <noscript><p>Enable JavaScript to send an inquiry.</p></noscript>
 </form>

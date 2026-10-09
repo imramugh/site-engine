@@ -808,7 +808,8 @@ describe('static snapshot renderer', () => {
         const submitted: Array<{ idempotencyKey: string; name: string; email: string; telephone: string; company: string }> = [];
         await page.route('**/api/inquiries', async route => {
           submitted.push(route.request().postDataJSON());
-          if (submitted.length === 1) await route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ accepted: false, errors: { email: 'Enter an approved work email address.' } }) });
+          if (submitted.length === 1) await route.abort('failed');
+          else if (submitted.length === 2) await route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ accepted: false, errors: { email: 'Enter an approved work email address.', 'unexpected"field': 'An unexpected field could not be checked.' } }) });
           else await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
         });
         try {
@@ -830,9 +831,10 @@ describe('static snapshot renderer', () => {
             expect(await form.locator('[name="message"]').getAttribute('rows')).toBe('5');
             await button.click();
             const summary = form.locator('[data-inquiry-error-summary]');
-            await expect(summary).toBeVisible();
+            expect(await summary.isVisible()).toBe(true);
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-name');
-            await summary.getByRole('link', { name: 'Enter a valid email address.' }).click();
+            const clientEmailLink = summary.getByRole('link', { name: 'Enter a valid email address.' });
+            await clientEmailLink.focus(); await clientEmailLink.press('Enter');
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-email');
             await form.locator('[name="name"]').fill('Retry visitor');
             await form.locator('[name="email"]').fill('retry@example.test');
@@ -842,14 +844,19 @@ describe('static snapshot renderer', () => {
             await form.locator('[name="consent"]').check();
             expect(await button.isEnabled()).toBe(true);
             await button.click();
+            await summary.getByText('Unable to send inquiry. Please check your connection and try again.').waitFor();
+            expect(await button.isEnabled()).toBe(true);
+            await button.click();
             await summary.getByRole('link', { name: 'Enter an approved work email address.' }).waitFor();
+            expect(await summary.getByText('An unexpected field could not be checked.').isVisible()).toBe(true);
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-email');
             expect(await button.isEnabled()).toBe(true);
             await button.click();
             await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
-            await expect(summary).toBeHidden();
-            expect(submitted).toHaveLength(2);
+            expect(await summary.isVisible()).toBe(false);
+            expect(submitted).toHaveLength(3);
             expect(submitted[0]!.idempotencyKey).toBe(submitted[1]!.idempotencyKey);
+            expect(submitted[1]!.idempotencyKey).toBe(submitted[2]!.idempotencyKey);
             expect(submitted[0]).toMatchObject({ name: 'Retry visitor', email: 'retry@example.test', telephone: '+1 555 0123', company: 'Example Company' });
             expect(await button.isDisabled()).toBe(true);
           } else {
@@ -874,6 +881,8 @@ describe('static snapshot renderer', () => {
     const html = await readFile(join(built.output, 'docs/multiple-inquiries/index.html'), 'utf8');
     const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]!);
     expect(ids).toHaveLength(new Set(ids).size);
+    expect(html).toContain('24242424-2424-4242-8242-242424242424-inquiry-name');
+    expect(html).toContain('25252525-2525-4252-8252-252525252525-inquiry-name');
     expect(html).toContain('24242424-2424-4242-8242-242424242424-inquiry-name-error');
     expect(html).toContain('25252525-2525-4252-8252-252525252525-inquiry-name-error');
   });
