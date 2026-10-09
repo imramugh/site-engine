@@ -24,7 +24,7 @@ async function currentRelease(page: Page): Promise<Locator> {
   await expect(row).toContainText('Reviewed changes')
   await expect(row.locator('ins')).toContainText('A current published summary that the reviewed rollback browser flow restores.')
   await expect(row.locator('del')).not.toHaveText('Previous values')
-  await expect(row.getByRole('link', { name: 'Open protected review evidence', exact: true })).toHaveAttribute('href', /^\/review\/[0-9a-f-]+$/)
+  await expect(row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true })).toHaveAttribute('href', /^\/api\/auth\/preview\/evidence\/[0-9a-f-]+\/proposed$/)
   return row
 }
 
