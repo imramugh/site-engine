@@ -106,7 +106,7 @@ async function verifyVariant(root, snapshot, pins) {
 }
 
 function validEvidence(value, liveHash, proposedHash) {
-  if (!value || typeof value !== 'object' || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || value.route !== '/' || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
+  if (!value || typeof value !== 'object' || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
   for (const variant of ['live', 'proposed']) {
     const item = value.screenshots[variant];
     if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES) throw new WorkerError('INVALID_ARTIFACT');
@@ -130,7 +130,11 @@ async function verifyPair(root, input) {
 }
 
 export async function captureEvidence(pair, input, signal) {
-  const root = resolve(pair); let server;
+  const root = resolve(pair); const liveFiles = await fileInventory(join(root, 'live')); const proposedFiles = await fileInventory(join(root, 'proposed'));
+  const changedHTML = Object.keys(proposedFiles).filter(path => path.endsWith('.html') && liveFiles[path] !== proposedFiles[path]).sort()[0] ?? 'index.html';
+  const route = changedHTML === 'index.html' ? '/' : `/${changedHTML.replace(/\/index\.html$/, '/').replace(/\.html$/, '')}`;
+  const target = changedHTML === 'index.html' ? '' : changedHTML;
+  let server;
   const close = () => server && new Promise(done => server.close(done));
   try {
     server = createServer(async (request, response) => {
@@ -144,8 +148,8 @@ export async function captureEvidence(pair, input, signal) {
     try { const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' });
       await context.route('**/*', route => new URL(route.request().url()).origin === `http://127.0.0.1:${port}` ? route.continue() : route.abort());
       const shots = {};
-      for (const variant of ['live', 'proposed']) { const page = await context.newPage(); await page.goto(`http://127.0.0.1:${port}/${variant}/`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES) throw new WorkerError('EVIDENCE_TOO_LARGE'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length }; }
-      await context.close(); const evidence = { version: 1, route: '/', viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
+      for (const variant of ['live', 'proposed']) { const page = await context.newPage(); await page.goto(`http://127.0.0.1:${port}/${variant}/${target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES) throw new WorkerError('EVIDENCE_TOO_LARGE'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length }; }
+      await context.close(); const evidence = { version: 1, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
     } finally { await browser.close(); }
   } finally { await close(); }
 }
