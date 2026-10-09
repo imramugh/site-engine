@@ -13,6 +13,21 @@ function greeting(): string {
   const hour = Number(new Intl.DateTimeFormat('en-CA', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Toronto' }).format(new Date()))
   return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 }
+function providerHealth(providers: Awaited<ReturnType<typeof getAdminDashboardData>>['providers']): { status: 'ready' | 'attention' | 'unknown'; text: string } {
+  if (!providers) return { status: 'unknown', text: 'Owner access required' }
+  if (!providers.configured) return { status: 'unknown', text: 'Not configured' }
+  if (providers.degraded) return { status: 'attention', text: `${providers.degraded} need${providers.degraded === 1 ? 's' : ''} attention` }
+  if (providers.unknown) return { status: 'unknown', text: `${providers.unknown} unverified` }
+  return { status: 'ready', text: `${providers.connected} of ${providers.configured} verified` }
+}
+function emailHealth(email: Awaited<ReturnType<typeof getAdminDashboardData>>['email']): { status: 'ready' | 'attention' | 'unknown'; text: string } {
+  if (!email) return { status: 'unknown', text: 'Owner access required' }
+  if (email.state === 'connected') return { status: 'ready', text: 'Connection verified' }
+  if (email.state === 'not-configured') return { status: 'unknown', text: 'Not configured' }
+  if (email.state === 'unknown') return { status: 'unknown', text: 'Not tested' }
+  if (email.state === 'revoked') return { status: 'attention', text: 'Credential revoked' }
+  return { status: 'attention', text: email.state === 'rejected' ? 'Connection rejected' : 'Connection unavailable' }
+}
 
 export async function AdminDashboard() {
   const payload = await getPayload({ config })
@@ -21,6 +36,13 @@ export async function AdminDashboard() {
   const reviews = data.pendingReviews
   const pageIssues = data.pages?.withIssues
   const has = (href: string) => data.shortcuts.some(link => link.href === href)
+  const latestJobNeedsAttention = Boolean(data.latestPublish && (!data.latestRelease || data.latestPublish.sequence >= data.latestRelease.sequence) && data.latestPublish.status !== 'completed')
+  const latestFailed = latestJobNeedsAttention && data.latestPublish?.status === 'failed'
+  const publishLabel = latestFailed ? 'Failed' : latestJobNeedsAttention && data.latestPublish?.status === 'processing' ? 'Publishing' : latestJobNeedsAttention && data.latestPublish?.status === 'pending' ? 'Queued' : data.latestRelease ? 'Published' : '—'
+  const publishNote = latestJobNeedsAttention ? `Latest job · #${data.latestPublish?.sequence}` : data.latestRelease ? date(data.latestRelease.activatedAt) : data.pages ? 'No published release yet' : 'Not available for this role'
+  const provider = providerHealth(data.providers)
+  const email = emailHealth(data.email)
+  const reviewNote = reviews?.stale ? `${reviews.stale} stale change set${reviews.stale === 1 ? '' : 's'} need${reviews.stale === 1 ? 's' : ''} updating` : reviews?.items[0] ? `Oldest: ${date(reviews.items[0].updatedAt)}` : reviews ? 'No reviews waiting' : 'Not available for this role'
   const summary = [reviews ? `${reviews.total} review${reviews.total === 1 ? '' : 's'} waiting` : '', data.leads ? `${data.leads.new} new lead${data.leads.new === 1 ? '' : 's'}${data.leads.urgent ? `, including ${data.leads.urgent} urgent` : ''}` : ''].filter(Boolean).join(' · ')
 
   return <main className={`admin-dashboard ${styles.dashboard}`} aria-labelledby="admin-dashboard-title">
@@ -30,16 +52,16 @@ export async function AdminDashboard() {
     </header>
     {data.message && <p data-dashboard-empty role={data.state === 'error' ? 'alert' : 'status'}>{data.message}</p>}
     <div data-dashboard-metrics aria-label="Dashboard summary">
-      <a href={has('/editorial') ? '/editorial' : undefined} data-dashboard-metric="reviews"><span data-metric-label>Reviews waiting</span><strong data-metric-value>{reviews?.total ?? '—'}</strong><small data-metric-note>{reviews?.items[0] ? `Oldest: ${date(reviews.items[0].updatedAt)}` : reviews ? 'No reviews waiting' : 'Not available for this role'}</small></a>
+      <a href={has('/editorial') ? '/editorial' : undefined} data-dashboard-metric="reviews"><span data-metric-label>Reviews waiting</span><strong data-metric-value>{reviews?.total ?? '—'}</strong><small data-metric-note>{reviewNote}</small></a>
       <a href={has('/leads') ? '/leads' : undefined} data-dashboard-metric="leads"><span data-metric-label>New leads</span><strong data-metric-value>{data.leads?.new ?? '—'}</strong><small data-metric-note>{data.leads ? `${data.leads.urgent} active incident${data.leads.urgent === 1 ? '' : 's'}` : 'Not available for this role'}</small></a>
       <a href={has('/content-tree') ? '/content-tree' : undefined} data-dashboard-metric="issues"><span data-metric-label>Pages with issues</span><strong data-metric-value>{pageIssues?.state === 'available' ? pageIssues.total : '—'}</strong><small data-metric-note>{pageIssues?.message ?? 'Not available for this role'}</small></a>
-      <a href={has('/operations') ? '/operations' : undefined} data-dashboard-metric="publish"><span data-metric-label>Last publish</span><strong data-metric-value>{data.latestRelease ? 'Published' : '—'}</strong><small data-metric-note>{data.latestRelease ? date(data.latestRelease.activatedAt) : data.pages ? 'No published release yet' : 'Not available for this role'}</small></a>
+      <a href={has('/operations') ? '/operations' : undefined} data-dashboard-metric="publish"><span data-metric-label>Last publish</span><strong data-metric-value>{publishLabel}</strong><small data-metric-note>{publishNote}</small></a>
     </div>
     <div data-dashboard-columns>
       <div data-dashboard-editorial-panels>
         <section data-dashboard-reviews aria-labelledby="dashboard-reviews-title">
-          <header data-dashboard-panel-header><h3 id="dashboard-reviews-title">Reviews waiting</h3>{has('/editorial') && <a href="/editorial">All reviews</a>}</header>
-          {reviews?.items.length ? reviews.items.map(review => <div data-dashboard-row key={review.id}><div><strong>{review.name}</strong><small>{review.changes} change{review.changes === 1 ? '' : 's'} · {date(review.updatedAt)}</small></div><div data-dashboard-review-controls><span data-dashboard-badge="waiting">Waiting</span><a data-dashboard-review-action href={`/editorial?changeSet=${encodeURIComponent(review.id)}`}>Review</a></div></div>) : <p data-dashboard-empty>{reviews ? 'No reviews are waiting. Submitted change sets will appear here.' : 'Reviews are not available for this role.'}</p>}
+          <header data-dashboard-panel-header><h3 id="dashboard-reviews-title">Reviews waiting</h3>{reviews?.stale ? <span data-dashboard-stale>{reviews.stale} stale</span> : null}{has('/editorial') && <a href="/editorial">All reviews</a>}</header>
+          {reviews?.items.length ? reviews.items.map(review => <div data-dashboard-row key={review.id}><div><strong>{review.name}</strong><small>{review.changes} change{review.changes === 1 ? '' : 's'} · {date(review.updatedAt)}</small></div><div data-dashboard-review-controls><span data-dashboard-badge={review.state === 'stale' ? 'stale' : 'waiting'}>{review.state === 'stale' ? 'Stale' : 'Waiting'}</span><a data-dashboard-review-action href={`/editorial?changeSet=${encodeURIComponent(review.id)}`}>{review.state === 'stale' ? 'Update' : 'Review'}</a></div></div>) : <p data-dashboard-empty>{reviews ? 'No reviews are waiting. Submitted change sets will appear here.' : 'Reviews are not available for this role.'}</p>}
         </section>
         <section data-dashboard-issues aria-labelledby="dashboard-issues-title">
           <header data-dashboard-panel-header><h3 id="dashboard-issues-title">Pages with issues</h3></header>
@@ -54,9 +76,9 @@ export async function AdminDashboard() {
         <section data-dashboard-site-status aria-labelledby="dashboard-status-title">
           <h3 id="dashboard-status-title">Site status</h3>
           <dl>
-            <div><dt>Latest release</dt><dd data-status={data.latestRelease ? 'ready' : 'unknown'}>{data.latestRelease ? `Published · ${data.latestRelease.sequence}` : 'Not recorded'}</dd></div>
-            <div><dt>Email delivery</dt><dd data-status="unknown">Not configured in CMS</dd></div>
-            <div><dt>AI providers</dt><dd data-status={data.providers?.connected ? 'ready' : 'unknown'}>{data.providers ? data.providers.configured ? `${data.providers.connected} of ${data.providers.configured} verified` : 'Not configured' : 'Owner access required'}</dd></div>
+            <div><dt>Latest release</dt><dd data-status={latestJobNeedsAttention ? 'attention' : data.latestRelease ? 'ready' : 'unknown'}>{latestFailed ? `Publish failed · ${data.latestPublish?.sequence}` : latestJobNeedsAttention ? `${publishLabel} · ${data.latestPublish?.sequence}` : data.latestRelease ? `Published · ${data.latestRelease.sequence}` : 'Not recorded'}</dd></div>
+            <div><dt>Email delivery</dt><dd data-status={email.status}>{email.text}</dd></div>
+            <div><dt>AI providers</dt><dd data-status={provider.status}>{provider.text}</dd></div>
             <div><dt>Backups</dt><dd data-status="unknown">Not reported to CMS</dd></div>
           </dl>
         </section>

@@ -13,11 +13,13 @@ export type DashboardLead = { id: string; name: string; company?: string; note: 
 export type AdminDashboardData = {
   state: 'ready' | 'unconfigured' | 'error'
   message?: string
-  pendingReviews?: { total: number; items: DashboardReview[] }
+  pendingReviews?: { total: number; stale: number; items: DashboardReview[] }
   pages?: { total: number; draft: number; readiness: { state: 'available' | 'not-run'; issues: number }; withIssues: { state: 'available' | 'unavailable'; total?: number; items: DashboardIssue[]; message: string } }
   leads?: { new: number; urgent: number; items: DashboardLead[] }
   latestRelease?: { sequence: number; activatedAt?: string }
-  providers?: { configured: number; connected: number; testedAt?: string }
+  latestPublish?: { id: string; sequence: number; status: 'pending' | 'processing' | 'failed' | 'completed'; updatedAt?: string }
+  providers?: { configured: number; connected: number; degraded: number; unknown: number; testedAt?: string }
+  email?: { state: 'not-configured' | 'unknown' | 'connected' | 'rejected' | 'unavailable' | 'revoked'; testedAt?: string }
   actions: DashboardShortcut[]
   shortcuts: DashboardShortcut[]
 }
@@ -86,9 +88,10 @@ export async function getAdminDashboardData(payload: DashboardPayload, actor: Ac
     const tasks: Promise<void>[] = []
     if (hasRole(user, editorialRoles)) tasks.push((async () => {
       const access = { user, overrideAccess: false, depth: 0 }
-      const [pending, submitted, total, drafts, releases] = await Promise.all([
+      const [pending, stale, submitted, total, drafts, releases] = await Promise.all([
         payload.count({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, ...access }),
-        payload.find({ collection: 'change-sets', where: { state: { equals: 'submitted' } }, sort: 'updatedAt', limit: 5, ...access }),
+        payload.count({ collection: 'change-sets', where: { state: { equals: 'stale' } }, ...access }),
+        payload.find({ collection: 'change-sets', where: { state: { in: ['submitted', 'stale'] } }, sort: 'updatedAt', limit: 5, ...access }),
         payload.count({ collection: 'pages', ...access }),
         payload.count({ collection: 'pages', where: { status: { equals: 'draft' } }, ...access }),
         payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, ...access }),
@@ -98,7 +101,7 @@ export async function getAdminDashboardData(payload: DashboardPayload, actor: Ac
       const manifest = snapshotID ? (await payload.find({ collection: 'publish-snapshots', where: { id: { equals: snapshotID } }, limit: 1, ...access })).docs[0]?.manifest : undefined
       const withIssues = pageIssues(manifest)
       const items = submitted.docs.map(reviewSummary)
-      result.pendingReviews = { total: pending.totalDocs, items }
+      result.pendingReviews = { total: pending.totalDocs, stale: stale.totalDocs, items }
       result.pages = { total: total.totalDocs, draft: drafts.totalDocs, withIssues, readiness: { state: items.some(item => item.readiness !== 'not-run') ? 'available' : 'not-run', issues: items.reduce((sum, item) => sum + item.issues, 0) } }
       if (release) result.latestRelease = { sequence: Number(release.sequence), activatedAt: release.activatedAt }
       if (!total.totalDocs && !release) { result.state = 'unconfigured'; result.message = 'No content pages or published release have been configured yet.' }
@@ -115,8 +118,23 @@ export async function getAdminDashboardData(payload: DashboardPayload, actor: Ac
       result.leads = { new: fresh.totalDocs, urgent: urgent.totalDocs, items: records.docs.map(record => ({ id: record.id, name: record.name?.trim() || record.email, company: record.company || undefined, note: record.nextAction?.trim() || (record.urgent ? 'Active incident · follow-up needed' : 'New inquiry · follow-up needed'), tag: record.urgent ? 'Urgent' : record.stage === 'new' ? 'New' : 'Follow up' })) }
     })())
     if (hasRole(user, ['owner'])) tasks.push((async () => {
-      const records = await payload.find({ collection: 'integration-configurations', limit: 20, depth: 0, overrideAccess: true, select: { provider: true, health: true, testedAt: true } })
-      result.providers = { configured: records.docs.filter(record => record.health !== 'revoked').length, connected: records.docs.filter(record => record.health === 'connected').length, testedAt: records.docs.map(record => record.testedAt).filter(Boolean).sort().at(-1) }
+      const [records, latest, mappings] = await Promise.all([
+        payload.find({ collection: 'integration-configurations', limit: 20, depth: 0, overrideAccess: true, select: { provider: true, health: true, testedAt: true } }),
+        payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true, select: { sequence: true, status: true, updatedAt: true } }),
+        payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true, select: { mailbox: true } }),
+      ])
+      const configured = records.docs.filter(record => record.health !== 'revoked')
+      result.providers = { configured: configured.length, connected: configured.filter(record => record.health === 'connected').length, degraded: configured.filter(record => record.health === 'unavailable' || record.health === 'rejected').length, unknown: configured.filter(record => record.health === 'unknown').length, testedAt: configured.map(record => record.testedAt).filter(Boolean).sort().at(-1) }
+      const job = latest.docs[0]
+      if (job && ['pending', 'processing', 'failed', 'completed'].includes(String(job.status))) result.latestPublish = { id: String(job.id), sequence: Number(job.sequence), status: job.status as NonNullable<AdminDashboardData['latestPublish']>['status'], updatedAt: job.updatedAt }
+      const mappedMailbox = mappings.docs[0]?.mailbox
+      const mailboxID = typeof mappedMailbox === 'string' ? mappedMailbox : mappedMailbox?.id
+      if (!mailboxID) result.email = { state: 'not-configured' }
+      else {
+        const mailbox = (await payload.find({ collection: 'mailbox-configurations', where: { id: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true, select: { health: true, testedAt: true } })).docs[0]
+        const state = String(mailbox?.health)
+        result.email = ['unknown', 'connected', 'rejected', 'unavailable', 'revoked'].includes(state) ? { state: state as NonNullable<AdminDashboardData['email']>['state'], testedAt: mailbox?.testedAt } : { state: 'unavailable' }
+      }
     })())
     await Promise.all(tasks)
     return result
