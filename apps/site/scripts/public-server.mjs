@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
+import { parse } from 'parse5';
 import { hasCurrentPublicRelease, publicArtifactFile, publicReleaseProof, verifyPublicArtifact } from './public-release.mjs';
 
 const mime = {
@@ -14,6 +16,49 @@ const hidden = (path) => path === 'snapshot-manifest.json'
   || path === 'redirects.json'
   || path.split('/').some((part) => part.startsWith('.'));
 const candidates = (path) => !path ? ['index.html'] : path.endsWith('/') ? [`${path}index.html`] : [path, `${path}/index.html`];
+const maxScriptHashHeaderLength = 6144;
+
+const javascriptTypes = new Set([
+  'application/ecmascript', 'application/javascript', 'application/x-ecmascript', 'application/x-javascript',
+  'text/ecmascript', 'text/javascript', 'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2',
+  'text/javascript1.3', 'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript',
+  'text/x-ecmascript', 'text/x-javascript',
+]);
+
+function attribute(node, name) {
+  return node.attrs?.find((entry) => entry.name === name)?.value;
+}
+
+function executableScript(node) {
+  if (attribute(node, 'src') !== undefined) return false;
+  const typeAttribute = attribute(node, 'type');
+  const declared = typeAttribute ?? attribute(node, 'language');
+  if (declared === undefined || !declared.trim()) return true;
+  const type = declared.trim().toLowerCase().split(';', 1)[0].trim();
+  return type === 'module' || javascriptTypes.has(type) || (typeAttribute === undefined && ['javascript', 'jscript', 'ecmascript', 'livescript'].includes(type));
+}
+
+function inlineScripts(node, output) {
+  for (const child of node.childNodes ?? []) {
+    // Template descendants are parsed but remain inert document fragments.
+    if (child.tagName === 'template') continue;
+    if (child.tagName === 'script' && executableScript(child)) {
+      output.push((child.childNodes ?? []).filter((entry) => entry.nodeName === '#text').map((entry) => entry.value ?? '').join(''));
+      continue;
+    }
+    inlineScripts(child, output);
+  }
+}
+
+/** Hash executable inline script text after HTML tokenization normalizes it. */
+export function publicScriptHashes(body) {
+  const hashes = new Set();
+  const scripts = [];
+  inlineScripts(parse(body.toString('utf8')), scripts);
+  for (const script of scripts) hashes.add(`'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`);
+  const value = [...hashes].sort().join(' ');
+  return value.length <= maxScriptHashHeaderLength ? value : undefined;
+}
 
 async function initialFile(initial, path) {
   if (!initial) throw new Error('No public release is active.');
@@ -52,22 +97,30 @@ function range(size, value) {
 
 async function sendFile(req, res, file, path, status = 200) {
   const info = await stat(file);
-  const selection = status === 200 ? range(info.size, req.headers.range) : undefined;
+  const contentType = mime[extname(file)] || 'application/octet-stream';
+  // Hash and serve the same in-memory HTML bytes. This avoids emitting a CSP
+  // hash for one file generation while streaming a later one after replacement.
+  const fullHtml = contentType.startsWith('text/html') && !path.startsWith('media/') && !req.headers.range ? await readFile(file) : undefined;
+  const size = fullHtml?.byteLength ?? info.size;
+  const selection = status === 200 ? range(size, req.headers.range) : undefined;
   if (status === 200 && req.headers.range && !selection) {
-    res.writeHead(416, { 'content-range': `bytes */${info.size}` }).end();
+    res.writeHead(416, { 'content-range': `bytes */${size}` }).end();
     return;
   }
   const start = selection?.start ?? 0;
-  const end = selection?.end ?? info.size - 1;
+  const end = selection?.end ?? size - 1;
+  const html = !selection ? fullHtml : undefined;
+  const scriptHashes = html ? publicScriptHashes(html) : undefined;
   res.writeHead(selection ? 206 : status, {
-    'content-type': mime[extname(file)] || 'application/octet-stream',
+    'content-type': contentType,
     'content-length': String(end - start + 1),
     'cache-control': /\.[a-f0-9]{8,}\./.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache',
     ...(status === 200 ? { 'accept-ranges': 'bytes' } : {}),
-    ...(selection ? { 'content-range': `bytes ${start}-${end}/${info.size}` } : {}),
+    ...(selection ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
+    ...(scriptHashes ? { 'x-public-script-hashes': scriptHashes } : {}),
   });
   if (req.method === 'HEAD') { res.end(); return; }
-  res.end((await readFile(file)).subarray(start, end + 1));
+  res.end((html ?? await readFile(file)).subarray(start, end + 1));
 }
 
 async function sendNotFound(req, res, releasesRoot, initialArtifactDir) {
