@@ -151,33 +151,30 @@ export async function captureEvidence(pair, input, signal) {
     const port = server.address().port; const { chromium } = await import('@playwright/test'); browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' }); let externalAttempt = false; await context.route('**/*', item => { if (new URL(item.request().url()).origin === `http://127.0.0.1:${port}`) return item.continue(); externalAttempt = true; return item.abort(); });
     const shots = {};
-    for (const variant of ['live', 'proposed']) { if (signal?.aborted) throw new WorkerError('BUILD_CANCELLED'); const page = await context.newPage(); const pageErrors = []; const resourceErrors = []; page.on('pageerror', error => pageErrors.push(error.message)); page.on('requestfailed', request => { if (new URL(request.url()).origin === `http://127.0.0.1:${port}`) resourceErrors.push(request.url()); }); const response = await page.goto(`http://127.0.0.1:${port}${prefix}${variant}/${targets[variant].target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const body = await page.locator('body').innerHTML(); if (!response?.ok() || !body.trim() || pageErrors.length || resourceErrors.length || externalAttempt) throw new WorkerError('EVIDENCE_CAPTURE_FAILED'); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES || data.subarray(0, 8).compare(Buffer.from([137,80,78,71,13,10,26,10])) !== 0) throw new WorkerError('EVIDENCE_INVALID'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length, route: targets[variant].route, status: targets[variant].status }; }
+    for (const variant of ['live', 'proposed']) { if (signal?.aborted) throw new WorkerError('BUILD_CANCELLED'); const page = await context.newPage(); const pageErrors = []; const resourceErrors = []; const httpErrors = []; page.on('response', response => { if (new URL(response.url()).origin === `http://127.0.0.1:${port}` && response.status() >= 400) httpErrors.push(response.url()); }); page.on('pageerror', error => pageErrors.push(error.message)); page.on('requestfailed', request => { if (new URL(request.url()).origin === `http://127.0.0.1:${port}`) resourceErrors.push(request.url()); }); const response = await page.goto(`http://127.0.0.1:${port}${prefix}${variant}/${targets[variant].target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const body = await page.locator('body').innerHTML(); if (!response?.ok() || !body.trim() || pageErrors.length || resourceErrors.length || httpErrors.length || externalAttempt) throw new WorkerError('EVIDENCE_CAPTURE_FAILED'); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES || data.subarray(0, 8).compare(Buffer.from([137,80,78,71,13,10,26,10])) !== 0) throw new WorkerError('EVIDENCE_INVALID'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length, route: targets[variant].route, status: targets[variant].status }; }
     await context.close(); const evidence = { version: 1, state: 'available', jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
   } finally { await browser?.close(); if (server) await new Promise(done => server.close(done)); }
 }
+let lastEvidenceCleanup = 0;
 async function purgeExpiredArtifacts(root) {
-  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30);
-  if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  if (Date.now() - lastEvidenceCleanup < 60 * 60_000) return; lastEvidenceCleanup = Date.now();
+  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30); if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
   const cutoff = Date.now() - days * 86_400_000; let removed = 0;
   for (const entry of await readdir(root, { withFileTypes: true })) {
     if (removed >= 20 || !uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
-    const target = join(root, entry.name); const info = await stat(target);
-    if (info.mtimeMs <= cutoff) { await rm(target, { recursive: true, force: false }); removed += 1; }
+    const target = join(root, entry.name); try { const manifest = JSON.parse(await readFile(join(target, evidenceName), 'utf8')); const info = await stat(target); if (!['available', 'unavailable'].includes(manifest?.state) || !manifest?.jobID || manifest.jobID !== entry.name || info.mtimeMs > cutoff) continue; const evidence = join(target, 'evidence'); const evidenceInfo = await lstat(evidence); if (!evidenceInfo.isDirectory() || evidenceInfo.isSymbolicLink()) continue; await rm(evidence, { recursive: true, force: false }); removed += 1; } catch { /* Active, partial, or unrecognized directories are never purged. */ }
   }
 }
 
 /** One claim is rendered serially. Lease loss cancels Astro and prevents completion. */
 export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, capture = captureEvidence, signal, heartbeatMs = 10_000 }) {
+  const root = resolve(artifactRoot); await mkdir(root, { recursive: true, mode: 0o700 }); const rootInfo = await lstat(root); if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT_ROOT'); await purgeExpiredArtifacts(root);
   const input = claimInput(await api('claim', {}, signal), versionPins);
   if (!input) return false;
   verifyThemeSelection(input.live, registry); verifyThemeSelection(input.proposed, registry);
   const identity = { id: input.job.id, leaseToken: input.job.leaseToken };
   const origin = normalizePublicOrigin(publicOrigin);
-  const root = resolve(artifactRoot);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const rootInfo = await lstat(root);
-  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT_ROOT');
-  await purgeExpiredArtifacts(root);
+
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
