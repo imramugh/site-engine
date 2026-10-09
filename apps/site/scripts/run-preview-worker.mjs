@@ -105,8 +105,8 @@ async function verifyVariant(root, snapshot, pins) {
   return manifest;
 }
 
-function validEvidence(value, liveHash, proposedHash) {
-  if (!value || typeof value !== 'object' || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
+function validEvidence(value, liveHash, proposedHash, jobID) {
+  if (!value || typeof value !== 'object' || canonical(Object.keys(value).sort()) !== canonical(['jobID', 'liveManifestHash', 'proposedManifestHash', 'route', 'screenshots', 'version', 'viewport']) || value.jobID !== jobID || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
   for (const variant of ['live', 'proposed']) {
     const item = value.screenshots[variant];
     if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES) throw new WorkerError('INVALID_ARTIFACT');
@@ -121,8 +121,9 @@ async function verifyPair(root, input) {
   if (canonical(names) !== canonical(['evidence', evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
   const live = await verifyVariant(join(root, 'live'), input.live, input.variantPins.live);
   const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.variantPins.proposed);
-  const evidence = validEvidence(JSON.parse(await readFile(join(root, evidenceName), 'utf8')), live.snapshotContentHash, proposed.snapshotContentHash);
+  const evidence = validEvidence(JSON.parse(await readFile(join(root, evidenceName), 'utf8')), live.snapshotContentHash, proposed.snapshotContentHash, input.job.id);
   for (const variant of ['live', 'proposed']) {
+    const evidenceDir = join(root, 'evidence'); const directory = await lstat(evidenceDir); if (!directory.isDirectory() || directory.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
     const path = join(root, evidence.screenshots[variant].path); const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink() || info.size !== evidence.screenshots[variant].bytes || info.size > MAX_EVIDENCE_BYTES || bytesHash(await readFile(path)) !== evidence.screenshots[variant].sha256) throw new WorkerError('INVALID_ARTIFACT');
   }
@@ -133,27 +134,24 @@ export async function captureEvidence(pair, input, signal) {
   const root = resolve(pair); const liveFiles = await fileInventory(join(root, 'live')); const proposedFiles = await fileInventory(join(root, 'proposed'));
   const changedHTML = Object.keys(proposedFiles).filter(path => path.endsWith('.html') && liveFiles[path] !== proposedFiles[path]).sort()[0] ?? 'index.html';
   const route = changedHTML === 'index.html' ? '/' : `/${changedHTML.replace(/\/index\.html$/, '/').replace(/\.html$/, '')}`;
-  const target = changedHTML === 'index.html' ? '' : changedHTML;
-  let server;
-  const close = () => server && new Promise(done => server.close(done));
+  const target = changedHTML; const prefix = `/preview/changes/${input.job.id}/`; const mime = path => path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : path.endsWith('.png') ? 'image/png' : path.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream';
+  let server; let browser;
   try {
+    await mkdir(join(root, 'evidence'), { mode: 0o700 });
     server = createServer(async (request, response) => {
-      const raw = new URL(request.url ?? '/', 'http://loopback'); const clean = raw.pathname.replace(/^\/+/, '');
-      if (!request.headers.host || request.method !== 'GET' || /(?:^|\/)\.{1,2}(?:\/|$)|%|\\/.test(clean)) { response.writeHead(404).end(); return; }
-      const file = resolve(root, clean); if (!file.startsWith(`${root}/`)) { response.writeHead(404).end(); return; }
-      try { const stat = await lstat(file); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(); response.writeHead(200).end(await readFile(file)); } catch { response.writeHead(404).end(); }
+      const raw = new URL(request.url ?? '/', 'http://loopback'); if (request.method !== 'GET' || !raw.pathname.startsWith(prefix) || /%|\\/.test(raw.pathname)) return response.writeHead(404).end();
+      const remainder = raw.pathname.slice(prefix.length); const match = /^(live|proposed)(?:\/(.*))?$/.exec(remainder); if (!match || /(?:^|\/)\.{1,2}(?:\/|$)/.test(match[2] ?? '')) return response.writeHead(404).end();
+      const variant = match[1]; const relative = !match[2] || match[2].endsWith('/') ? `${match[2] ?? ''}index.html` : match[2]; const file = resolve(root, variant, relative);
+      if (!file.startsWith(`${root}/${variant}/`)) return response.writeHead(404).end(); try { const info = await lstat(file); if (!info.isFile() || info.isSymbolicLink()) throw Error(); response.writeHead(200, { 'Content-Type': mime(file) }).end(await readFile(file)); } catch { response.writeHead(404).end(); }
     });
     await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
-    const port = server.address().port; const { chromium } = await import('@playwright/test'); const browser = await chromium.launch({ headless: true });
-    try { const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' });
-      await context.route('**/*', route => new URL(route.request().url()).origin === `http://127.0.0.1:${port}` ? route.continue() : route.abort());
-      const shots = {};
-      for (const variant of ['live', 'proposed']) { const page = await context.newPage(); await page.goto(`http://127.0.0.1:${port}/${variant}/${target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES) throw new WorkerError('EVIDENCE_TOO_LARGE'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length }; }
-      await context.close(); const evidence = { version: 1, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
-    } finally { await browser.close(); }
-  } finally { await close(); }
+    const port = server.address().port; const { chromium } = await import('@playwright/test'); browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' }); await context.route('**/*', item => new URL(item.request().url()).origin === `http://127.0.0.1:${port}` ? item.continue() : item.abort());
+    const shots = {};
+    for (const variant of ['live', 'proposed']) { if (signal?.aborted) throw new WorkerError('BUILD_CANCELLED'); const page = await context.newPage();  const response = await page.goto(`http://127.0.0.1:${port}${prefix}${variant}/${target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const body = await page.locator('body').innerHTML(); if (!response?.ok() || !body.trim()) throw new WorkerError('EVIDENCE_CAPTURE_FAILED'); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES || data.subarray(0, 8).compare(Buffer.from([137,80,78,71,13,10,26,10])) !== 0) throw new WorkerError('EVIDENCE_INVALID'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length }; }
+    await context.close(); const evidence = { version: 1, jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
+  } finally { await browser?.close(); if (server) await new Promise(done => server.close(done)); }
 }
-
 async function purgeExpiredArtifacts(root) {
   const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30);
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');

@@ -60,7 +60,8 @@ describe('durable preview rendering worker', () => {
     await expect(runPreviewOnce({ ...options(), api })).rejects.toThrow('BUILD_FAILED');
     const files = await readdir(root);
     expect(files).toEqual([id]);
-    expect(await readdir(join(root, id))).toEqual(['live', 'proposed']);
+    expect(await readdir(join(root, id))).toEqual(['evidence', 'evidence-manifest.json', 'live', 'proposed']);
+    const evidence = JSON.parse(await readFile(join(root, id, 'evidence-manifest.json'), 'utf8')); expect(evidence.route).toBe('/404'); expect((await readFile(join(root, id, 'evidence', 'proposed.png'))).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
     const html = await readFile(join(root, id, 'proposed', 'index.html'), 'utf8');
     expect(html).toContain('Proposed worker heading');
     expect(html).toContain(`/preview/changes/${id}/proposed/`);
@@ -72,7 +73,7 @@ describe('durable preview rendering worker', () => {
     const proof = calls.filter(call => call.action === 'complete').at(-1)!.body;
     expect(proof).toMatchObject({ id, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed) });
     expect(proof.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
-    await writeFile(join(root, id, 'proposed', 'index.html'), 'tampered output');
+    await writeFile(join(root, id, 'evidence', 'proposed.png'), 'tampered output');
     await expect(runPreviewOnce({ ...options(), api, render: neverRender })).rejects.toThrow('INVALID_ARTIFACT');
     expect(calls.filter(call => call.action === 'complete')).toHaveLength(2);
   }, 60_000);
