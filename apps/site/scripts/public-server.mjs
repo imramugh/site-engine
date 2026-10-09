@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
@@ -14,6 +15,20 @@ const hidden = (path) => path === 'snapshot-manifest.json'
   || path === 'redirects.json'
   || path.split('/').some((part) => part.startsWith('.'));
 const candidates = (path) => !path ? ['index.html'] : path.endsWith('/') ? [`${path}index.html`] : [path, `${path}/index.html`];
+const maxScriptHashHeaderLength = 6144;
+
+/** Hash raw executable inline script text exactly as the HTML parser receives it. */
+export function publicScriptHashes(body) {
+  const hashes = new Set();
+  const scripts = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+  for (const match of body.toString('utf8').matchAll(scripts)) {
+    const attributes = match[1];
+    if (/\bsrc\s*=|\btype\s*=\s*(["'])application\/ld\+json\1/i.test(attributes)) continue;
+    hashes.add(`'sha256-${createHash('sha256').update(match[2], 'utf8').digest('base64')}'`);
+  }
+  const value = [...hashes].sort().join(' ');
+  return value.length <= maxScriptHashHeaderLength ? value : undefined;
+}
 
 async function initialFile(initial, path) {
   if (!initial) throw new Error('No public release is active.');
@@ -52,6 +67,7 @@ function range(size, value) {
 
 async function sendFile(req, res, file, path, status = 200) {
   const info = await stat(file);
+  const contentType = mime[extname(file)] || 'application/octet-stream';
   const selection = status === 200 ? range(info.size, req.headers.range) : undefined;
   if (status === 200 && req.headers.range && !selection) {
     res.writeHead(416, { 'content-range': `bytes */${info.size}` }).end();
@@ -59,15 +75,18 @@ async function sendFile(req, res, file, path, status = 200) {
   }
   const start = selection?.start ?? 0;
   const end = selection?.end ?? info.size - 1;
+  const html = contentType.startsWith('text/html') && !selection ? await readFile(file) : undefined;
+  const scriptHashes = html ? publicScriptHashes(html) : undefined;
   res.writeHead(selection ? 206 : status, {
-    'content-type': mime[extname(file)] || 'application/octet-stream',
+    'content-type': contentType,
     'content-length': String(end - start + 1),
     'cache-control': /\.[a-f0-9]{8,}\./.test(path) ? 'public, max-age=31536000, immutable' : 'no-cache',
     ...(status === 200 ? { 'accept-ranges': 'bytes' } : {}),
     ...(selection ? { 'content-range': `bytes ${start}-${end}/${info.size}` } : {}),
+    ...(scriptHashes ? { 'x-public-script-hashes': scriptHashes } : {}),
   });
   if (req.method === 'HEAD') { res.end(); return; }
-  res.end((await readFile(file)).subarray(start, end + 1));
+  res.end((html ?? await readFile(file)).subarray(start, end + 1));
 }
 
 async function sendNotFound(req, res, releasesRoot, initialArtifactDir) {

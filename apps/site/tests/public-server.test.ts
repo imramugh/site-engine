@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createPublicServer } from '../scripts/public-server.mjs';
+import { createPublicServer, publicScriptHashes } from '../scripts/public-server.mjs';
 import { activatePublicRelease } from '../scripts/public-release.mjs';
 
 const roots: string[] = []; const pins = { contentHash: 'h', themeVersion: '1.0.0', engineVersion: '1.0.0', contractVersion: '1.0.0' }; const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -32,5 +32,23 @@ it('fails closed when the artifact 404 page is missing or no longer matches its 
     const head = await fetch(`${origin}/missing`, { method: 'HEAD' }); expect(head.status).toBe(503); expect(await head.text()).toBe('');
     await rm(join(initial, '404.html'));
     expect((await fetch(`${origin}/still-missing`)).status).toBe(503);
+  } finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
+});
+
+it('derives bounded CSP hashes only from raw executable inline HTML scripts', async () => {
+  const html = '<script>window.first = 1</script><script src="/app.js"></script><script type="application/ld+json">{"x":1}</script><script>window.first = 1</script>';
+  const expected = `'sha256-${createHash('sha256').update('window.first = 1').digest('base64')}'`;
+  expect(publicScriptHashes(Buffer.from(html))).toBe(expected);
+  expect(publicScriptHashes(Buffer.from('<script>const close = "\\x3c/script>"</script>'))).toBe(`'sha256-${createHash('sha256').update('const close = "\\x3c/script>"').digest('base64')}'`);
+});
+
+it('sends script hashes on HTML GET and HEAD, never media or ranged responses', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'public-')); roots.push(root); const html = '<!doctype html><script>window.allowed = true</script>'; const initial = await artifact(root, 'initial', { 'index.html': html, 'media/evil.svg': '<svg><script>window.bad=true</script></svg>' }); const server = createPublicServer({ releasesRoot: join(root, 'releases'), initialArtifactDir: initial }); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address() as { port: number }; const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    const expected = `'sha256-${createHash('sha256').update('window.allowed = true').digest('base64')}'`;
+    expect((await fetch(origin)).headers.get('x-public-script-hashes')).toBe(expected);
+    expect((await fetch(origin, { method: 'HEAD' })).headers.get('x-public-script-hashes')).toBe(expected);
+    expect((await fetch(`${origin}/media/evil.svg`)).headers.get('x-public-script-hashes')).toBeNull();
+    expect((await fetch(origin, { headers: { range: 'bytes=0-2' } })).headers.get('x-public-script-hashes')).toBeNull();
   } finally { await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); }
 });
