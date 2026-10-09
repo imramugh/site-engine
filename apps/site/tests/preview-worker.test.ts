@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -43,6 +44,8 @@ function themedClaim() {
   input.proposed.settings.theme = selection;
   return { input, selection, registry: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }) };
 }
+
+async function alterIndex(result: { output: string }, suffix: string) { const file = join(result.output, 'index.html'); const value = Buffer.concat([await readFile(file), Buffer.from(suffix)]); await writeFile(file, value); const manifestPath = join(result.output, 'snapshot-manifest.json'); const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); manifest.files['index.html'] = createHash('sha256').update(value).digest('hex'); await writeFile(manifestPath, JSON.stringify(manifest)); return result; }
 
 const options = () => ({ artifactRoot: root, publicOrigin: 'https://example.test', versionPins: pins, signal: undefined });
 
@@ -221,6 +224,26 @@ describe('durable preview rendering worker', () => {
     const input = claim(); input.includedChangeKeys = ['pages:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee']; const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
     await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true);
     expect(calls.find(item => item.action === 'complete').body.evidenceManifest).toMatchObject({ state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE' });
+  }, 60_000);
+
+  it('captures a removed non-root page as live content and proposed 404 evidence', async () => {
+    const input = claim(); const page = structuredClone(input.live.pages[0]!); page.id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'; page.slug = 'removed-page'; page.title = 'Removed reviewed page'; input.live.pages.push(page); input.live.settings.sections[0]!.pageIds.push(page.id); input.includedChangeKeys = [`pages:${page.id}`];
+    const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true); const evidence = calls.find(item => item.action === 'complete').body.evidenceManifest;
+    expect(evidence.screenshots.live).toMatchObject({ route: '/general/removed-page', status: 200 }); expect(evidence.screenshots.proposed).toMatchObject({ route: '/general/removed-page', status: 404 }); expect(await readFile(join(root, id, 'live', 'general', 'removed-page', 'index.html'), 'utf8')).toContain('Removed reviewed page');
+  }, 60_000);
+
+  it('blocks external resource attempts before any outbound server receives them', async () => {
+    let hits = 0; const server = createServer((_request, response) => { hits++; response.end('unexpected') }); servers.push(server); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address(); if (!address || typeof address === 'string') throw Error();
+    const api = async (action: string) => action === 'claim' ? claim() : { ok: true };
+    const render = async (input: any) => alterIndex(await buildSnapshot(input), `<img src=\"http://127.0.0.1:${address.port}/probe\">`);
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('EVIDENCE_CAPTURE_FAILED'); expect(hits).toBe(0);
+  }, 60_000);
+
+  it('rejects a capture whose reviewed page throws JavaScript', async () => {
+    const api = async (action: string) => action === 'claim' ? claim() : { ok: true };
+    const render = async (input: any) => alterIndex(await buildSnapshot(input), `<script>throw new Error('evidence test error')</script>`);
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('EVIDENCE_CAPTURE_FAILED');
   }, 60_000);
 });
 
