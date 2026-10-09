@@ -9,6 +9,7 @@ import { transitionChangeSet } from '../src/editorial'
 import { withPayloadTransaction } from '../src/auth-transaction'
 import { enqueueDueFollowUps } from '../src/follow-up-notifications'
 import { configureIntegration, testIntegrationConnection } from '../src/integration-configuration'
+import { monitorIntegrationHealth } from '../src/integration-health-monitor'
 import { retryPublishJob } from '../src/publishing'
 import { dispatchOneNotification } from '../src/notification-dispatch'
 
@@ -98,7 +99,7 @@ test('ENG-022 persists and safely delivers notification intents from every produ
   const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/eng022', pricingAsOf: '2026-10-05T00:00:00.000Z' }
   await configureIntegration(payload, { provider: 'openrouter', model: 'provider/model', credential: 'matrix-provider-credential', fallbackProvider: null, pricing, actor: owner.id })
   await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-05T12:00:00.000Z') }, async () => ({ ok: true, code: 'connected' }))
-  await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-05T13:00:00.000Z') }, async () => ({ ok: false, code: 'unavailable' }))
+  expect(await monitorIntegrationHealth(payload, new Date('2026-10-05T12:05:00.000Z'), async ({ provider }) => provider === 'openrouter' ? ({ ok: false, code: 'unavailable' }) : ({ ok: true, code: 'connected' }))).toBeGreaterThanOrEqual(1)
 
   const publishSet = await payload.create({ collection: 'change-sets', data: { name: 'Matrix publish failure', actor: owner.id, state: 'approved', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: 'a'.repeat(64), changeSet: publishSet.id, reviewRevision: 1, changeHash: 'b'.repeat(64), manifest: {}, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', approvedBy: owner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
@@ -125,6 +126,8 @@ test('ENG-022 persists and safely delivers notification intents from every produ
   const salesMessages = messages.slice(before).filter(message => message.includes('To: matrix-sales@example.test'))
   expect(salesMessages).toHaveLength(1)
   expect(salesMessages[0]).toContain('Event: follow-ups-due')
+  expect(messages.slice(before).filter(message => message.includes('To: matrix-sales@example.test') && message.includes('Event: new-lead'))).toHaveLength(0)
+  expect(messages.slice(before).filter(message => message.includes('To: matrix-owner@example.test') && message.includes('Event: active-incident-lead'))).toHaveLength(1)
 
   const deliveries = await payload.find({ collection: 'notification-deliveries', limit: 100, pagination: false, depth: 0, overrideAccess: true })
   expect(deliveries.docs.some(item => (item.recipient as { id?: string })?.id === sales.id && item.state === 'failed' && item.failureCode === 'recipient-no-longer-eligible')).toBe(true)
