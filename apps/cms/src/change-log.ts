@@ -88,7 +88,7 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const actor=record(item.actor),event=String(item.event),view=presentation(event,{...detail,actor:relationID(item.actor)},typeof set?.name==='string'?set.name:undefined)
     const changes=Array.isArray(set?.changes)?set.changes as Array<Record<string,unknown>>:[]
     const diff=reviewedDiff(changes)
-    const preview=record(set?.preview),job=typeof preview.jobID==='string'?previewByID.get(preview.jobID):undefined
+    const preview=record(set?.preview),eventPreviewID=typeof detail.previewJobID==='string'?detail.previewJobID:undefined,job=eventPreviewID?previewByID.get(eventPreviewID):typeof preview.jobID==='string'?previewByID.get(preview.jobID):undefined
     const evidenceManifest=record(job?.evidenceManifest), screenshotState=evidenceManifest.state
     const evidence=job&&set&&job.status==='completed'&&typeof job.artifactDigest==='string'&&screenshotState==='available'
       ? { label:'Open immutable screenshot evidence',href:`/api/auth/preview/evidence/${encodeURIComponent(String(job.id))}/proposed` }
