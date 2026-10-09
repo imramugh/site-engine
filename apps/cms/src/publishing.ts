@@ -306,6 +306,9 @@ export async function approveChangeSet(input: { payload: Payload; req: PayloadRe
     if (!scheduledFor || approvedBy !== reviewer.id || String(schedule.scheduledFor) !== scheduledFor || !source || typeof source !== 'object' || source.contentHash !== previewContentHash || source.themeVersion !== versions.themeVersion || source.engineVersion !== versions.engineVersion || source.contractVersion !== versions.contractVersion || proof?.idempotencyKey !== idempotencyKey || proof?.changeHash !== expectedChangeHash || proof?.reviewRevision !== expectedRevision || !Array.isArray(proof?.includedChangeKeys) || !keysEqual(proof.includedChangeKeys.filter((key): key is string => typeof key === 'string'), includedChangeKeys)) throw new Error('The idempotent approval request no longer matches its persisted snapshot.')
     return { snapshotID: idOf(source), scheduledPublicationID: schedule.id, idempotencyKey, scheduledFor }
   }
+  const configuredEngineVersion = process.env.PREVIEW_ENGINE_VERSION
+  if (configuredEngineVersion !== undefined && !configuredEngineVersion.trim()) throw new Error('PREVIEW_ENGINE_VERSION must not be blank when configured.')
+  if (configuredEngineVersion !== undefined && versions.engineVersion !== configuredEngineVersion) throw new Error('The reviewed renderer version is stale. Prepare a fresh preview before approval.')
   let set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as unknown as Record<string, unknown>
   set = await markStaleIfNeeded(payload, set, req)
   const changes = Array.isArray(set.changes) ? set.changes as Change[] : []

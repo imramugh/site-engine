@@ -68,9 +68,15 @@ export async function currentPreviewBaseline(payload: Payload, req?: PayloadRequ
 function previewVersions(live: PreviewBaseline, proposed: SiteSnapshot, base: PreviewBaseline): PreviewVersions {
   const themeVersion = proposed.settings.theme?.version ?? base.versions.themeVersion
   const liveThemeVersion = live.manifest.settings.theme?.version ?? live.versions.themeVersion
+  // Preview workers render both immutable content variants with the currently
+  // deployed renderer. A published baseline can legitimately predate an engine
+  // rollout, so inheriting its engine pin would make a new review claim
+  // unroutable to the configured worker.
+  const configuredEngineVersion = process.env.PREVIEW_ENGINE_VERSION
+  if (configuredEngineVersion !== undefined && !configuredEngineVersion.trim()) throw new Error('PREVIEW_ENGINE_VERSION must not be blank when configured.')
   return {
     themeVersion,
-    engineVersion: base.versions.engineVersion,
+    engineVersion: configuredEngineVersion ?? base.versions.engineVersion,
     contractVersion: proposed.settings.contractVersion,
     ...(liveThemeVersion === themeVersion ? {} : { liveThemeVersion }),
     ...(live.manifest.settings.contractVersion === proposed.settings.contractVersion ? {} : { liveContractVersion: live.manifest.settings.contractVersion }),
