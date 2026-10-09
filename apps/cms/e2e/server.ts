@@ -510,7 +510,7 @@ async function seed(): Promise<void> {
   }
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(publishedBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: publishedBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
-  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, completedAt: new Date().toISOString(), completionEvidence: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
 
   const currentOperationsManifest = structuredClone(publishedBaseline)
@@ -721,6 +721,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             live: job.liveManifest,
             proposed: job.proposedManifest,
             basePaths: { live: 'live', proposed: 'proposed' },
+            includedChangeKeys: job.includedChangeKeys,
             versionPins: job.versionPins,
           }
         }
@@ -730,6 +731,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             liveManifestHash: String(body.liveManifestHash),
             proposedManifestHash: String(body.proposedManifestHash),
             artifactDigest: String(body.artifactDigest),
+            evidenceManifest: body.evidenceManifest,
           }))
         }
         throw new Error('Unsupported preview worker action.')
@@ -745,7 +747,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && request.url === '/__e2e/warning-only-review') {
     void (async () => {
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // Review approval uses the publish queue head as its exact baseline, so
+      // the fixture must derive its immutable inputs from that same snapshot.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { id?: string; sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot !== 'object' || typeof snapshot.id !== 'string') throw new Error('Published review baseline is missing.')
@@ -770,9 +774,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim warning-only review job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
-        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest), evidenceManifest: body.evidenceManifest }))
         throw new Error('Unsupported warning-only worker action.')
       }
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
@@ -783,7 +787,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && request.url === '/__e2e/eng031-business-case') {
     void (async () => {
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // This synthetic review has to be based on the same queue-head snapshot
+      // that the approval service will verify.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published business-case review baseline is missing.')
@@ -810,9 +816,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim business-case review job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
-        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest), evidenceManifest: body.evidenceManifest }))
         throw new Error('Unsupported ENG-031 preview worker action.')
       }
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
@@ -873,7 +879,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'POST' && request.url === '/__e2e/failed-preview-review') {
     void (async () => {
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // Keep the failed preview bound to the active queue baseline too; the
+      // review endpoint rejects diagnostics tied to a stale snapshot.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published diagnostic baseline is missing.')
@@ -887,7 +895,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim structured-data diagnostic job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
         if (action === 'fail') return withPayloadTransaction(payload, inner => failPreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), String(body.errorCode), undefined, body.diagnostics))
         throw new Error('Unsupported failed-preview worker action.')
@@ -1298,11 +1306,13 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const mediaAsset = mediaAssets.docs[0]
       if (!mediaAsset) throw new Error('Gallery fixture media asset is missing.')
       if (!manifest.media.some((asset) => asset.id === mediaAsset.id)) manifest.media.push(snapshotMediaReference(mediaAsset as Parameters<typeof snapshotMediaReference>[0]) as never)
-      const sequence = Number(release.sequence) + 1
+      const newestOutbox = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })
+      const sequence = Math.max(Number(release.sequence) + 1, Number(newestOutbox.docs[0]?.sequence ?? 0) + 1)
       const changeSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery theme fixture', state: 'published', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
       const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', manifest, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, approvedBy: typeof source.approvedBy === 'string' ? source.approvedBy : localOwnerID!, baselineSequence: Number(release.sequence) }, overrideAccess: true, context: { editorialInternal: true } })
-      const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `scoped-block-gallery-theme:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
-      const installed = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'synthetic-gallery-theme', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+      const artifact: VerifiedArtifact = { digest: 'c'.repeat(64), sourceContentHash: String(snapshot.contentHash), themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }
+      const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `scoped-block-gallery-theme:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', includedChangeKeys: [], status: 'completed', attempts: 1, completedAt: new Date().toISOString(), completionEvidence: artifact, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+      const installed = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact }, overrideAccess: true, context: { editorialInternal: true } })
       const fixtureSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery recipe', state: 'open', actor: galleryOwnerID!, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
       galleryThemeFixture = { releaseID: String(installed.id), outboxID: String(outbox.id), changeSetID: String(fixtureSet.id) }
       return { installed: true }

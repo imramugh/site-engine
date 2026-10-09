@@ -39,7 +39,7 @@ test('ENG-022 serves exact operational counts and server-side audit filters to a
   expect(body.summary.pendingReviews).toBeGreaterThanOrEqual(1)
   expect(body.summary.urgentOrNewLeads).toBeGreaterThanOrEqual(2)
   expect(body.summary.latestRelease.sequence).toBeGreaterThanOrEqual(1)
-  expect(body.summary.latestPublishFailure).toMatchObject({ errorCode: 'synthetic_publish_failure' })
+  expect(body.summary.latestPublishFailure).toMatchObject({ errorCode: 'SYNTHETIC_FAILURE' })
   expect(body.summary.latestPublishFailure.sequence).toBeGreaterThanOrEqual(4)
   expect(body.summary.queue.pending).toBeGreaterThanOrEqual(52)
   expect(body.summary.queue.processing).toBeGreaterThanOrEqual(1)
