@@ -1,7 +1,13 @@
 import type { CSSProperties } from 'react'
+import type { Metadata } from 'next'
 import { loadAdminBranding } from '../../../../src/admin-branding'
 import { EmergencyOwnerForm } from './emergency-owner-form'
 import styles from './login.module.css'
+
+export async function generateMetadata(): Promise<Metadata> {
+  const branding = await loadAdminBranding()
+  return { title: `Staff sign in | ${branding.name}`, robots: { index: false, follow: false } }
+}
 
 export default async function LoginPage() {
   const branding = await loadAdminBranding()

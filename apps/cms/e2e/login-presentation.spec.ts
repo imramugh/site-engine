@@ -13,6 +13,7 @@ for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/admin/login')
     await expect(page.locator('[data-admin-login]')).toBeVisible()
+    await expect(page).toHaveTitle(/^Staff sign in \| /)
     await expect(page.getByRole('heading', { name: 'Staff sign in', exact: true })).toHaveCount(1)
     await expect(page.getByRole('heading', { name: 'Authenticator sign-in' })).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
