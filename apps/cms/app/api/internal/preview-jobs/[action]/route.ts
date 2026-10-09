@@ -23,6 +23,6 @@ export async function POST(request: Request, context: { params: Promise<{ action
     })
     if (action !== 'claim') return Response.json({ job: result }, { headers: noStore })
     if (!result) return Response.json({ job: null }, { headers: noStore })
-    return Response.json({ job: { id: result.id, leaseToken: result.leaseToken, leaseExpiresAt: result.leaseExpiresAt }, live: result.liveManifest, proposed: result.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: result.versionPins }, { headers: noStore })
+    return Response.json({ job: { id: result.id, leaseToken: result.leaseToken, leaseExpiresAt: result.leaseExpiresAt }, live: result.liveManifest, proposed: result.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: result.includedChangeKeys, versionPins: result.versionPins }, { headers: noStore })
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, noStore) ?? Response.json({ error: error instanceof Error ? error.message : 'Worker request failed.' }, { status: 400, headers: noStore }) }
 }

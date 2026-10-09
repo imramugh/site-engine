@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SiteSnapshotSchema, compatibleContractVersion } from '@site-engine/contract';
+import { deriveRoutes } from '@site-engine/engine';
 import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
@@ -30,15 +31,15 @@ class WorkerError extends Error {
 
 function claimInput(value, expectedVersions) {
   if (value?.job === null) return null;
-  const { job, live, proposed, basePaths, versionPins } = value ?? {};
+  const { job, live, proposed, basePaths, versionPins, includedChangeKeys } = value ?? {};
   if (!uuid.test(job?.id ?? '') || !/^[A-Za-z0-9_-]{16,256}$/.test(job?.leaseToken ?? '')
     || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now()
-    || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed'
+    || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed' || !Array.isArray(includedChangeKeys) || !includedChangeKeys.every(key => typeof key === 'string')
     || versions.some(key => typeof versionPins?.[key] !== 'string')
     || versionPins.engineVersion !== expectedVersions.engineVersion || !compatibleContractVersion(versionPins.contractVersion)) {
     throw new WorkerError('INVALID_CLAIM');
   }
-  const input = { job, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
+  const input = { job, includedChangeKeys, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
   const liveContractVersion = versionPins.liveContractVersion ?? versionPins.contractVersion;
   if (input.proposed.settings.contractVersion !== versionPins.contractVersion || input.live.settings.contractVersion !== liveContractVersion) throw new WorkerError('INVALID_CLAIM');
   const selectedVersion = snapshot => snapshot.settings.theme?.version;
@@ -131,10 +132,11 @@ async function verifyPair(root, input) {
 }
 
 export async function captureEvidence(pair, input, signal) {
-  const root = resolve(pair); const liveFiles = await fileInventory(join(root, 'live')); const proposedFiles = await fileInventory(join(root, 'proposed'));
-  const changedHTML = Object.keys(proposedFiles).filter(path => path.endsWith('.html') && liveFiles[path] !== proposedFiles[path]).sort()[0] ?? 'index.html';
-  const route = changedHTML === 'index.html' ? '/' : `/${changedHTML.replace(/\/index\.html$/, '/').replace(/\.html$/, '')}`;
-  const target = changedHTML; const prefix = `/preview/changes/${input.job.id}/`; const mime = path => path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : path.endsWith('.png') ? 'image/png' : path.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream';
+  const root = resolve(pair); const pageIDs = input.includedChangeKeys.filter(key => key.startsWith('pages:')).map(key => key.slice(6)).sort();
+  const proposedRoutes = deriveRoutes(input.proposed, input.proposed.settings.homepageId).routes; const liveRoutes = deriveRoutes(input.live, input.live.settings.homepageId).routes;
+  const selected = pageIDs.length ? proposedRoutes.find(candidate => pageIDs.includes(candidate.page.id)) : proposedRoutes.find(candidate => candidate.page.id === input.proposed.settings.homepageId);
+  if (!selected || selected.page.status !== 'published') throw new WorkerError('EVIDENCE_UNAVAILABLE');
+  const route = selected.path; const target = route === '/' ? 'index.html' : `${route.slice(1).replace(/\/$/, '')}/index.html`; const prefix = `/preview/changes/${input.job.id}/`; const mime = path => path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : path.endsWith('.png') ? 'image/png' : path.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream';
   let server; let browser;
   try {
     await mkdir(join(root, 'evidence'), { mode: 0o700 });

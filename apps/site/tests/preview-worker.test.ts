@@ -34,7 +34,7 @@ function claim() {
   proposed.pages[0]!.title = 'Proposed worker page';
   const hero = proposed.pages[0]!.blocks[0]!;
   if (hero.type === 'hero') hero.heading = 'Proposed worker heading';
-  return { job: { id, leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live, proposed, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins };
+  return { includedChangeKeys: [`pages:${proposed.pages[0]!.id}`], job: { id, leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live, proposed, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins };
 }
 
 function themedClaim() {
@@ -61,7 +61,7 @@ describe('durable preview rendering worker', () => {
     const files = await readdir(root);
     expect(files).toEqual([id]);
     expect(await readdir(join(root, id))).toEqual(['evidence', 'evidence-manifest.json', 'live', 'proposed']);
-    const evidence = JSON.parse(await readFile(join(root, id, 'evidence-manifest.json'), 'utf8')); expect(evidence.route).toBe('/404'); expect((await readFile(join(root, id, 'evidence', 'proposed.png'))).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
+    const evidence = JSON.parse(await readFile(join(root, id, 'evidence-manifest.json'), 'utf8')); expect(evidence.route).toBe('/'); expect((await readFile(join(root, id, 'evidence', 'proposed.png'))).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
     const html = await readFile(join(root, id, 'proposed', 'index.html'), 'utf8');
     expect(html).toContain('Proposed worker heading');
     expect(html).toContain(`/preview/changes/${id}/proposed/`);
