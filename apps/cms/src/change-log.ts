@@ -89,9 +89,10 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const changes=Array.isArray(set?.changes)?set.changes as Array<Record<string,unknown>>:[]
     const diff=reviewedDiff(changes)
     const preview=record(set?.preview),job=typeof preview.jobID==='string'?previewByID.get(preview.jobID):undefined
-    const evidence=job&&set&&preview.status==='ready'&&preview.jobID===job.id&&job.status==='completed'&&typeof job.artifactDigest==='string'&&job.evidenceManifest&&Number(set.revision)===Number(job.reviewRevision)&&Number(preview.revision)===Number(job.reviewRevision)&&preview.changeHash===job.changeHash&&changeSetHash(changes as never[])===job.changeHash&&preview.liveManifestHash===job.liveManifestHash&&preview.proposedManifestHash===job.proposedManifestHash
+    const evidenceManifest=record(job?.evidenceManifest), screenshotState=evidenceManifest.state
+    const evidence=job&&set&&job.status==='completed'&&typeof job.artifactDigest==='string'&&screenshotState==='available'
       ? { label:'Open immutable screenshot evidence',href:`/api/auth/preview/evidence/${encodeURIComponent(String(job.id))}/proposed` }
-      : null
+      : screenshotState==='unavailable' ? { label:'Screenshot evidence unavailable',href:'' } : null
     const release=setID?releaseBySet.get(setID):undefined; let approved:Record<string,unknown>[]=[];let supportNote=''
     if(release&&set){try{approved=selectedChanges(set as unknown as Record<string,unknown>,record(release.outbox))}catch(error){supportNote=error instanceof Error?error.message:'Rollback is unavailable.'}}
     const canRollback=Boolean(release&&Number(release.sequence)>1&&!supportNote)

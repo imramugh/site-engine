@@ -416,7 +416,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
                           )}
                         </div>
                         <aside>
-                          {row.evidence && <a href={row.evidence.href}>{row.evidence.label}</a>}
+                          {row.evidence && (row.evidence.href ? <a href={row.evidence.href}>{row.evidence.label}</a> : <span>{row.evidence.label}</span>)}
                           {row.rollback && (
                             <>
                               <label>
