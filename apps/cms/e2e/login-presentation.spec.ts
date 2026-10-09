@@ -34,6 +34,8 @@ for (const width of [1440, 390, 320]) {
     expect((await code.boundingBox())!.y).toBeGreaterThan((await email.boundingBox())!.y + (await email.boundingBox())!.height)
     await expect(code).toHaveAttribute('aria-describedby', 'emergency-code-help')
     await expect(page.locator('#emergency-code-help')).toBeVisible()
+    expect(await page.locator('#emergency-code-help').evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(14)
+    expect(await page.locator('h1').evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(28)
     await page.addScriptTag({ path: axeSource })
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, {
       runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] },
