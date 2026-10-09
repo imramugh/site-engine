@@ -106,7 +106,7 @@ test('ENG-010 allows an Approver to inspect Operations and prepare a selected ro
 test('ENG-022 denies screenshot evidence to editor and anonymous sessions', async ({ browser }) => {
   const ownerSession = await owner(browser); const row = await currentRelease(ownerSession.page); const href = await row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true }).getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
   const anonymous = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); expect((await anonymous.request.get(href)).status()).toBe(401)
-  const editor = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); await editor.addCookies([{ name: 'site_engine_session', value: 'synthetic-shell-editor-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' }]); expect((await editor.request.get(href)).status()).toBe(403)
+  const editor = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); await editor.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-shell-editor-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const }))); expect((await editor.request.get(href)).status()).toBe(403)
   await ownerSession.context.close(); await anonymous.close(); await editor.close()
 })
 
