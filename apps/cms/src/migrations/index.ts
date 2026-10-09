@@ -60,7 +60,6 @@ import * as migration_20261005_191000_mail_replies from './20261005_191000_mail_
 import * as migration_20261005_200000_notification_delivery from './20261005_200000_notification_delivery';
 
 export const migrations = [
-  { up: migration_20261009_121000_preview_evidence_manifest.up, down: migration_20261009_121000_preview_evidence_manifest.down, name: '20261009_121000_preview_evidence_manifest' },
   {
     up: migration_20261003_032726_initial_foundation.up,
     down: migration_20261003_032726_initial_foundation.down,
@@ -300,4 +299,5 @@ export const migrations = [
   { up: migration_20261006_009000_crm_private_records.up, down: migration_20261006_009000_crm_private_records.down, name: '20261006_009000_crm_private_records' },
   { up: migration_20261006_010000_ai_job_defaults.up, down: migration_20261006_010000_ai_job_defaults.down, name: '20261006_010000_ai_job_defaults' },
   { up: migration_20261007_010000_local_staff_auth.up, down: migration_20261007_010000_local_staff_auth.down, name: '20261007_010000_local_staff_auth' },
+  { up: migration_20261009_121000_preview_evidence_manifest.up, down: migration_20261009_121000_preview_evidence_manifest.down, name: '20261009_121000_preview_evidence_manifest' },
 ];
