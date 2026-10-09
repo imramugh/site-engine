@@ -107,22 +107,22 @@ async function verifyVariant(root, snapshot, pins) {
 }
 
 function validEvidence(value, liveHash, proposedHash, jobID) {
-  if (!value || typeof value !== 'object' || canonical(Object.keys(value).sort()) !== canonical(['jobID', 'liveManifestHash', 'proposedManifestHash', 'route', 'screenshots', 'version', 'viewport']) || value.jobID !== jobID || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
-  for (const variant of ['live', 'proposed']) {
-    const item = value.screenshots[variant];
-    if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES) throw new WorkerError('INVALID_ARTIFACT');
-  }
+  if (!value || typeof value !== 'object' || value.jobID !== jobID || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || !['available', 'unavailable'].includes(value.state)) throw new WorkerError('INVALID_ARTIFACT');
+  if (value.state === 'unavailable') { if (Object.keys(value).sort().join(',') !== 'jobID,liveManifestHash,proposedManifestHash,reason,state,version' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.reason)) throw new WorkerError('INVALID_ARTIFACT'); return value; }
+  if (canonical(Object.keys(value).sort()) !== canonical(['jobID', 'liveManifestHash', 'proposedManifestHash', 'route', 'screenshots', 'state', 'version', 'viewport']) || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
+  for (const variant of ['live', 'proposed']) { const item = value.screenshots[variant]; if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES || ![200, 404].includes(item.status) || typeof item.route !== 'string') throw new WorkerError('INVALID_ARTIFACT'); }
   return value;
 }
-
 async function verifyPair(root, input) {
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
   const names = (await readdir(root)).sort();
-  if (canonical(names) !== canonical(['evidence', evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
+  if (!canonical(names).startsWith('[')) throw new WorkerError('INVALID_ARTIFACT');
   const live = await verifyVariant(join(root, 'live'), input.live, input.variantPins.live);
   const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.variantPins.proposed);
   const evidence = validEvidence(JSON.parse(await readFile(join(root, evidenceName), 'utf8')), live.snapshotContentHash, proposed.snapshotContentHash, input.job.id);
+  if (evidence.state === 'unavailable') { if (canonical(names) !== canonical([evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT'); return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, evidenceManifest: evidence, artifactDigest: hash({ live, proposed, evidence }) }; }
+  if (canonical(names) !== canonical(['evidence', evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
   for (const variant of ['live', 'proposed']) {
     const evidenceDir = join(root, 'evidence'); const directory = await lstat(evidenceDir); if (!directory.isDirectory() || directory.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
     const path = join(root, evidence.screenshots[variant].path); const info = await lstat(path);
@@ -136,7 +136,7 @@ export async function captureEvidence(pair, input, signal) {
   const selectedID = pageIDs[0]; const proposedRoutes = deriveRoutes(input.proposed, input.proposed.settings.homepageId).routes; const liveRoutes = deriveRoutes(input.live, input.live.settings.homepageId).routes;
   const proposedSelected = selectedID ? proposedRoutes.find(candidate => candidate.page.id === selectedID) : proposedRoutes.find(candidate => candidate.page.id === input.proposed.settings.homepageId);
   const liveSelected = selectedID ? liveRoutes.find(candidate => candidate.page.id === selectedID) : liveRoutes.find(candidate => candidate.page.id === input.live.settings.homepageId);
-  if (!proposedSelected && !liveSelected) throw new WorkerError('EVIDENCE_UNAVAILABLE');
+  if (!proposedSelected && !liveSelected) { const evidence = { version: 1, state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE', jobID: input.job.id, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed) }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence; }
   const route = proposedSelected?.path ?? liveSelected.path; const targets = Object.fromEntries(['live', 'proposed'].map(variant => { const selected = variant === 'live' ? liveSelected : proposedSelected; return [variant, selected ? { target: selected.path === '/' ? 'index.html' : `${selected.path.slice(1).replace(/\/$/, '')}/index.html`, route: selected.path, status: 200 } : { target: '404.html', route: route, status: 404 }]; })); const prefix = `/preview/changes/${input.job.id}/`; const mime = path => path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : path.endsWith('.png') ? 'image/png' : path.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream';
   let server; let browser;
   try {
@@ -152,7 +152,7 @@ export async function captureEvidence(pair, input, signal) {
     const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' }); await context.route('**/*', item => new URL(item.request().url()).origin === `http://127.0.0.1:${port}` ? item.continue() : item.abort());
     const shots = {};
     for (const variant of ['live', 'proposed']) { if (signal?.aborted) throw new WorkerError('BUILD_CANCELLED'); const page = await context.newPage();  const response = await page.goto(`http://127.0.0.1:${port}${prefix}${variant}/${targets[variant].target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const body = await page.locator('body').innerHTML(); if (!response?.ok() || !body.trim()) throw new WorkerError('EVIDENCE_CAPTURE_FAILED'); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES || data.subarray(0, 8).compare(Buffer.from([137,80,78,71,13,10,26,10])) !== 0) throw new WorkerError('EVIDENCE_INVALID'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length, route: targets[variant].route, status: targets[variant].status }; }
-    await context.close(); const evidence = { version: 1, jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
+    await context.close(); const evidence = { version: 1, state: 'available', jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
   } finally { await browser?.close(); if (server) await new Promise(done => server.close(done)); }
 }
 async function purgeExpiredArtifacts(root) {
