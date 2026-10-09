@@ -4,6 +4,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { buildCandidate, canonicalHash, changeSetHash } from './publishing'
 import { markStaleIfNeeded } from './editorial'
+import { validatePreviewEvidence } from './preview-evidence'
 
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
@@ -11,8 +12,6 @@ type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings
 export type PreviewBaseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
 const MAX_BODY_BYTES = 16 * 1024
-const evidenceDigest = /^[a-f0-9]{64}$/
-const validEvidenceManifest = (value: unknown, live: unknown, proposed: unknown, jobID: string) => { if (!value || typeof value !== 'object') throw new Error('Preview evidence is invalid.'); const manifest = value as Record<string, unknown>; if (manifest.version !== 1 || manifest.jobID !== jobID || manifest.liveManifestHash !== live || manifest.proposedManifestHash !== proposed || !['available', 'unavailable'].includes(String(manifest.state))) throw new Error('Preview evidence is invalid.'); if (manifest.state === 'unavailable') { if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(String(manifest.reason))) throw new Error('Preview evidence is invalid.'); return structuredClone(manifest) } const shots = manifest.screenshots as Record<string, unknown> | undefined; if (typeof manifest.route !== 'string' || !manifest.route.startsWith('/') || !shots || typeof shots !== 'object') throw new Error('Preview evidence is invalid.'); for (const variant of ['live', 'proposed']) { const shot = shots[variant] as Record<string, unknown> | undefined; if (!shot || shot.path !== `evidence/${variant}.png` || !Number.isInteger(shot.bytes) || Number(shot.bytes) < 1 || Number(shot.bytes) > 5 * 1024 * 1024 || typeof shot.sha256 !== 'string' || !evidenceDigest.test(shot.sha256) || ![200, 404].includes(Number(shot.status)) || typeof shot.route !== 'string') throw new Error('Preview evidence is invalid.'); } return structuredClone(manifest) }
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
 const versionsEqual = (left: unknown, right: PreviewVersions) => Boolean(left && typeof left === 'object' && (left as PreviewVersions).themeVersion === right.themeVersion && (left as PreviewVersions).engineVersion === right.engineVersion && (left as PreviewVersions).contractVersion === right.contractVersion && ((left as PreviewVersions).liveThemeVersion ?? (left as PreviewVersions).themeVersion) === (right.liveThemeVersion ?? right.themeVersion) && ((left as PreviewVersions).liveContractVersion ?? (left as PreviewVersions).contractVersion) === (right.liveContractVersion ?? right.contractVersion))
@@ -187,11 +186,11 @@ export async function completePreviewRenderJob(payload: Payload, req: PayloadReq
   requireTransaction(req, 'Preview completion')
   const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req })
   if (job.status === 'completed') {
-    if (job.artifactDigest !== proof.artifactDigest || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash) throw new Error('Preview completion proof is invalid.')
+    if (job.artifactDigest !== proof.artifactDigest || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || (job.evidenceManifest != null && canonicalHash(job.evidenceManifest) !== canonicalHash(proof.evidenceManifest))) throw new Error('Preview completion proof is invalid.')
     return job
   }
   if (!currentLease(job, leaseToken, now) || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || !/^[a-f0-9]{64}$/i.test(proof.artifactDigest)) throw new Error('Preview completion proof is invalid.')
-  const evidenceManifest = proof.evidenceManifest === undefined ? undefined : validEvidenceManifest(proof.evidenceManifest, proof.liveManifestHash, proof.proposedManifestHash, id)
+  const evidenceManifest = validatePreviewEvidence(proof.evidenceManifest, { id, liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash })
   const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, ...(evidenceManifest ? { evidenceManifest } : {}), renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true, req })
   const preview = set.preview as { jobID?: string; revision?: number; changeHash?: string; baselineSequence?: number; includedChangeKeys?: string[] } | undefined

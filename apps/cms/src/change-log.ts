@@ -6,6 +6,7 @@ import type { CapturedChange } from './editorial'
 import { fieldDiffs } from './field-diffs'
 import { SiteSnapshotSchema } from '@site-engine/contract'
 import { changeSetHash } from './publishing'
+import { previewEvidenceExpiresAt, validatePreviewEvidence } from './preview-evidence'
 
 type Actor = { id: string; name?: string | null; email?: string | null; roles?: Role[] | null; disabled?: boolean | null }
 const relationID=(value:unknown)=>typeof value==='string'?value:value&&typeof value==='object'&&'id'in value?String((value as {id:unknown}).id):undefined
@@ -74,10 +75,11 @@ const selectedChanges = (set: Record<string, unknown> | undefined, outbox: Recor
 
 export async function projectChangeLog(payload:Payload,events:Array<Record<string,any>>){
   const changeSetIDs=[...new Set(events.flatMap(item=>{const id=relationID(record(item.detail).changeSet);return id?[id]:[]}))]
+  const previewIDs=[...new Set(events.flatMap(item=>typeof record(item.detail).previewJobID==='string'?[String(record(item.detail).previewJobID)]:[]))]
   const [sets,releases,previewJobs]=await Promise.all([
     changeSetIDs.length?payload.find({collection:'change-sets',where:{id:{in:changeSetIDs}},limit:200,depth:0,overrideAccess:true}):Promise.resolve({docs:[]}),
     payload.find({collection:'published-releases',sort:'-sequence',limit:200,depth:2,overrideAccess:true}),
-    changeSetIDs.length?payload.find({collection:'preview-render-jobs',where:{changeSet:{in:changeSetIDs}},sort:'-completedAt',limit:200,depth:0,overrideAccess:true}):Promise.resolve({docs:[]}),
+    previewIDs.length?payload.find({collection:'preview-render-jobs',where:{id:{in:previewIDs}},limit:Math.max(200,previewIDs.length),depth:0,overrideAccess:true}):Promise.resolve({docs:[]}),
   ])
   const bySet=new Map(sets.docs.map(set=>[String(set.id),set]))
   const previewByID=new Map((previewJobs.docs as Array<Record<string,unknown>>).map(job=>[String(job.id),job]))
@@ -88,11 +90,18 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const actor=record(item.actor),event=String(item.event),view=presentation(event,{...detail,actor:relationID(item.actor)},typeof set?.name==='string'?set.name:undefined)
     const changes=Array.isArray(set?.changes)?set.changes as Array<Record<string,unknown>>:[]
     const diff=reviewedDiff(changes)
-    const preview=record(set?.preview),eventPreviewID=typeof detail.previewJobID==='string'?detail.previewJobID:undefined,job=eventPreviewID?previewByID.get(eventPreviewID):typeof preview.jobID==='string'?previewByID.get(preview.jobID):undefined
-    const evidenceManifest=record(job?.evidenceManifest), screenshotState=evidenceManifest.state
-    const evidence=job&&set&&job.status==='completed'&&typeof job.artifactDigest==='string'&&screenshotState==='available'
-      ? { label:'Open immutable screenshot evidence',href:`/api/auth/preview/evidence/${encodeURIComponent(String(job.id))}/proposed` }
-      : screenshotState==='unavailable' ? { label:'Screenshot evidence unavailable',href:'' } : null
+    const eventPreviewID=typeof detail.previewJobID==='string'?detail.previewJobID:undefined
+    const job=eventPreviewID?previewByID.get(eventPreviewID):undefined
+    let evidence: { label: string; href: string; beforeHref?: string } | null = null
+    if (job && relationID(job.changeSet) === setID && job.status === 'completed' && typeof job.artifactDigest === 'string') {
+      try {
+        const manifest = validatePreviewEvidence(job.evidenceManifest, { id: String(job.id), liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash })
+        const expiry = previewEvidenceExpiresAt(job.completedAt)
+        evidence = manifest.state === 'available' && Number.isFinite(expiry) && expiry > Date.now()
+          ? { label: 'Open immutable screenshot evidence', href: `/api/auth/preview/evidence/${encodeURIComponent(String(job.id))}/proposed`, beforeHref: `/api/auth/preview/evidence/${encodeURIComponent(String(job.id))}/live` }
+          : { label: manifest.state === 'available' ? 'Screenshot evidence expired' : 'Screenshot evidence unavailable', href: '' }
+      } catch { /* Legacy or malformed records must not point at a different review. */ }
+    }
     const release=setID?releaseBySet.get(setID):undefined; let approved:Record<string,unknown>[]=[];let supportNote=''
     if(release&&set){try{approved=selectedChanges(set as unknown as Record<string,unknown>,record(release.outbox))}catch(error){supportNote=error instanceof Error?error.message:'Rollback is unavailable.'}}
     const canRollback=Boolean(release&&Number(release.sequence)>1&&!supportNote)

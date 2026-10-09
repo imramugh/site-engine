@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -104,9 +104,18 @@ describe('immutable screenshot evidence endpoint', () => {
     const route = await import('../app/api/auth/preview/evidence/[jobID]/[variant]/route.js'); const call = (headers: Headers) => route.GET(new Request('http://cms.test/api/auth/preview/evidence', { headers }), { params: Promise.resolve({ jobID: String(job.id), variant: 'proposed' }) })
     expect((await call(current.headers)).status).toBe(200); expect((await call(await reviewHeaders('owner'))).status).toBe(200); expect((await call(await reviewHeaders('editor'))).status).toBe(403); expect((await call(new Headers())).status).toBe(401)
     await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { completedAt: new Date(Date.now() - 31 * 86_400_000).toISOString() }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(404); await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { completedAt: new Date().toISOString() }, overrideAccess: true, context: { editorialInternal: true } }); writeFileSync(join(root, String(job.id), 'evidence', 'proposed.png'), Buffer.from('tampered')); expect((await call(current.headers)).status).toBe(404)
+    writeFileSync(join(root, String(job.id), 'evidence', 'proposed.png'), bytes)
     await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: { ...manifest, jobID: '00000000-0000-4000-8000-000000000000' } }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(404)
     await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: { ...manifest, proposedManifestHash: 'b'.repeat(64) } }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(404)
     await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: { version: 1, state: 'unavailable', jobID: String(job.id), reason: 'SELECTED_PAGE_NOT_RENDERABLE', liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash) }, completedAt: new Date().toISOString() }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(404)
-    rmSync(root, { recursive: true, force: true }); delete process.env.PREVIEW_ARTIFACT_ROOT
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: { ...manifest, version: 2 } }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(404)
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: manifest }, overrideAccess: true, context: { editorialInternal: true } }); expect((await call(current.headers)).status).toBe(200)
+    const evidencePath = join(root, String(job.id), 'evidence'), moved = join(root, 'other-evidence')
+    renameSync(evidencePath, moved); symlinkSync(moved, evidencePath, 'dir')
+    expect((await call(current.headers)).status).toBe(404)
+    unlinkSync(evidencePath); renameSync(moved, evidencePath)
+    const linkRoot = join(root, 'root-alias'); symlinkSync(root, linkRoot, 'dir'); process.env.PREVIEW_ARTIFACT_ROOT = linkRoot
+    expect((await call(current.headers)).status).toBe(404); delete process.env.PREVIEW_ARTIFACT_ROOT
+    rmSync(root, { recursive: true, force: true })
   })
 })

@@ -11,7 +11,7 @@ type Row = {
   status: string;
   source: string;
   category: string;
-  evidence: null | { label: string; href: string };
+  evidence: null | { label: string; href: string; beforeHref?: string };
   diff: null | {
     label: string;
     entries: Array<{
@@ -416,6 +416,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
                           )}
                         </div>
                         <aside>
+                          {row.evidence?.beforeHref && <a href={row.evidence.beforeHref}>Open before screenshot</a>}
                           {row.evidence && (row.evidence.href ? <a href={row.evidence.href}>{row.evidence.label}</a> : <span>{row.evidence.label}</span>)}
                           {row.rollback && (
                             <>
