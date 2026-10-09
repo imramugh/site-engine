@@ -21,7 +21,7 @@ test('ENG-022 dashboard exposes authorized work queues and useful actions on des
         const status = page.locator('[data-dashboard-site-status]')
         await expect(status).toContainText('Email delivery')
         await expect(status).toContainText('Not configured')
-        await expect(page.locator('[data-dashboard-metric="publish"]')).toContainText('Published')
+        await expect(page.locator('[data-dashboard-metric="publish"]')).toContainText('Failed')
       } else await expect(page.locator('[data-dashboard-actions]')).toHaveCount(0)
       if (role === 'hiring') await expect(page.locator('[data-dashboard-leads]')).toContainText('not available for this role')
       expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false)

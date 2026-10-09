@@ -1504,6 +1504,15 @@ export interface PreviewRenderJob {
   leaseExpiresAt?: string | null;
   completedAt?: string | null;
   artifactDigest?: string | null;
+  evidenceManifest?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
   errorCode?: string | null;
   renderDiagnostics?:
     | {
@@ -2707,6 +2716,7 @@ export interface PreviewRenderJobsSelect<T extends boolean = true> {
   leaseExpiresAt?: T;
   completedAt?: T;
   artifactDigest?: T;
+  evidenceManifest?: T;
   errorCode?: T;
   renderDiagnostics?: T;
   updatedAt?: T;

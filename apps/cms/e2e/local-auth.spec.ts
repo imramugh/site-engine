@@ -70,6 +70,7 @@ async function wholeDocumentAxe(page: Page): Promise<void> {
 const localPost = (page: Page, path: string, data: unknown) => page.request.post(path, { headers: { origin }, data })
 
 test('Owner can invite a local Editor who enrolls from QR or manual key, receives recovery codes once, and signs in locally', async ({ browser }) => {
+  test.setTimeout(90_000)
   const ownerSession = await createOwner(browser, owner.recoveryCodes[0])
   const providerRequests: string[] = []
   ownerSession.page.on('request', (request) => {

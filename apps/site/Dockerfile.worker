@@ -1,5 +1,6 @@
 FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 WORKDIR /workspace
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN corepack enable && corepack prepare pnpm@12.10.1 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY patches ./patches
@@ -13,6 +14,8 @@ RUN pnpm install --frozen-lockfile --filter @site-engine/site... \
   && pnpm --filter @site-engine/engine build \
   && pnpm --filter @site-engine/checks build \
   && pnpm --filter @site-engine/theme-starter build \
+  && pnpm --filter @site-engine/site exec playwright install --with-deps chromium \
+  && chmod -R a+rX /opt/playwright \
   && mkdir -p /workspace/apps/site/.astro /artifacts \
   && chown -R 10001:10001 /workspace/apps/site/.astro /artifacts
 ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 PREVIEW_ARTIFACT_ROOT=/artifacts PUBLISH_ROLE=preview

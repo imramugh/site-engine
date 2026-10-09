@@ -24,6 +24,20 @@ async function currentRelease(page: Page): Promise<Locator> {
   await expect(row).toContainText('Reviewed changes')
   await expect(row.locator('ins')).toContainText('A current published summary that the reviewed rollback browser flow restores.')
   await expect(row.locator('del')).not.toHaveText('Previous values')
+  const links = [
+    row.getByRole('link', { name: 'Open before screenshot', exact: true }),
+    row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true }),
+  ]
+  for (const [index, evidence] of links.entries()) {
+    await expect(evidence).toHaveAttribute('href', new RegExp(`^\\/api\\/auth\\/preview\\/evidence\\/[0-9a-f-]+\\/${index ? 'proposed' : 'live'}$`))
+    const href = await evidence.getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
+    const imagePage = await page.context().newPage()
+    const image = await imagePage.goto(href)
+    expect(image?.status()).toBe(200); expect(image?.headers()['content-type']).toContain('image/png')
+    await expect(imagePage.locator('img')).toHaveAttribute('src', new RegExp(`${href}$`))
+    await expect(imagePage.locator('img')).toHaveJSProperty('naturalWidth', 1)
+    await imagePage.close()
+  }
   return row
 }
 
@@ -97,6 +111,13 @@ test('ENG-010 allows an Approver to inspect Operations and prepare a selected ro
     await detail.getByRole('button', { name: 'Discard', exact: true }).click()
     expect((await discarded).status()).toBe(200)
   } finally { await session.context.close() }
+})
+
+test('ENG-022 denies screenshot evidence to editor and anonymous sessions', async ({ browser }) => {
+  const ownerSession = await owner(browser); const row = await currentRelease(ownerSession.page); const href = await row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true }).getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
+  const anonymous = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); expect((await anonymous.request.get(href)).status()).toBe(401)
+  const editor = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true }); await editor.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-shell-editor-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const }))); expect((await editor.request.get(href)).status()).toBe(403)
+  await ownerSession.context.close(); await anonymous.close(); await editor.close()
 })
 
 test('ENG-022 Change log remains readable and accessible at desktop and mobile sizes', async ({ browser }) => {

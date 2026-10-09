@@ -120,8 +120,8 @@ test('ENG-008 makes an editor select an explicit stale-draft resolution in the b
   const created = await page.evaluate(async () => {
     const pageID = '12345678-1234-4234-8234-1234567890ab'
     await fetch(`/api/pages/${pageID}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Editor proposed title' }) })
-    const sets = await (await fetch('/api/editorial/list')).json() as { sets: Array<{ id: string; changes?: Array<{ collection: string; id: string }> }> }
-    const set = sets.sets.find((item) => item.changes?.some((change) => change.collection === 'pages' && change.id === pageID))!
+    const sets = await (await fetch('/api/editorial/list')).json() as { sets: Array<{ id: string; state: string; presentation?: { actorLabel?: string }; changes?: Array<{ collection: string; id: string }> }> }
+    const set = sets.sets.find((item) => item.state === 'open' && item.presentation?.actorLabel === 'You' && item.changes?.some((change) => change.collection === 'pages' && change.id === pageID))!
     const submitted = await fetch('/api/editorial/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id }) })
     if (!submitted.ok) throw new Error(await submitted.text())
     return { pageID, changeSetID: set.id }
@@ -132,7 +132,9 @@ test('ENG-008 makes an editor select an explicit stale-draft resolution in the b
   expect(await otherPage.evaluate(async (id) => (await fetch(`/api/pages/${id}?draft=true`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Owner current title', summary: 'Owner current summary survives the editor reapplying its title.' }) })).status, created.pageID)).toBe(200)
   await other.close()
   await page.goto(`/editorial?changeSet=${created.changeSetID}`)
-  await expect(page.locator('[data-editorial-detail] [data-editorial-state="stale"]')).toBeVisible()
+  // The complete suite has just exercised several durable queue workflows;
+  // wait for the review list fetch to settle before asserting stale state.
+  await expect(page.locator('[data-editorial-detail] [data-editorial-state="stale"]')).toBeVisible({ timeout: 15_000 })
   const conflicts = page.locator('[data-editorial-conflicts]')
   await expect(conflicts).toContainText('Original')
   await expect(conflicts).toContainText('Proposed')
@@ -325,17 +327,12 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await excludedSection.uncheck()
   await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
   await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
-  const workerHeaders = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
-  const claimed = await reviewer.request.post('/api/internal/preview-jobs/claim', { headers: workerHeaders, data: {} })
-  expect(claimed.ok(), await claimed.text()).toBeTruthy()
-  const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
-  const hash = async (value: unknown) => await reviewer.evaluate(async (input) => {
-    const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item)
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input)))
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  }, value)
-  const completed = await reviewer.request.post('/api/internal/preview-jobs/complete', { headers: workerHeaders, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'b'.repeat(64) } })
+  // The fixture runs the same preview worker used by a normal review.  That
+  // worker emits the immutable, job-bound screenshot evidence manifest rather
+  // than fabricating a completion callback from the browser.
+  const completed = await reviewer.request.post('/__e2e/direct-preview-worker')
   expect(completed.ok(), await completed.text()).toBeTruthy()
+  expect(await completed.json()).toMatchObject({ status: 'completed' })
   await expect(reviewer.getByRole('status').filter({ hasText: 'Private comparison is ready for review.' })).toContainText('ready for review', { timeout: 10_000 })
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
@@ -462,10 +459,11 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
   await signInLocalOwner(owner, scheduleOwnerRecoveryCode, scheduleOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
   await owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"]`).click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
-  const headers = { authorization: 'Bearer synthetic-preview-worker-token-long-enough-for-browser-tests', 'content-type': 'application/json' }
-  const claimed = await owner.request.post('/api/internal/preview-jobs/claim', { headers, data: {} }); const claim = await claimed.json() as { job: { id: string; leaseToken: string }; live: unknown; proposed: unknown }
-  const hash = async (value: unknown) => owner.evaluate(async (input) => { const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(',')}]` : item && typeof item === 'object' ? `{${Object.entries(item as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`).join(',')}}` : JSON.stringify(item); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(input))); return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') }, value)
-  expect((await owner.request.post('/api/internal/preview-jobs/complete', { headers, data: { id: claim.job.id, leaseToken: claim.job.leaseToken, liveManifestHash: await hash(claim.live), proposedManifestHash: await hash(claim.proposed), artifactDigest: 'c'.repeat(64) } })).ok()).toBeTruthy()
+  // Keep this schedule fixture on the renderer path so preview completion
+  // includes real, immutable screenshot evidence for the claimed job.
+  const rendered = await owner.request.post('/__e2e/direct-preview-worker')
+  expect(rendered.ok(), await rendered.text()).toBeTruthy()
+  expect(await rendered.json()).toMatchObject({ status: 'completed' })
   await expect(owner.getByRole('button', { name: 'Run readiness checks' })).toBeVisible({ timeout: 10_000 }); await owner.getByRole('button', { name: 'Run readiness checks' }).click()
   const beforeSchedule = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }
   const future = '2031-01-02T03:04'; await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()

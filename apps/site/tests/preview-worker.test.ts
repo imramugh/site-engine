@@ -1,11 +1,12 @@
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, utimes, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { neutralFixture } from '@site-engine/contract/fixtures';
-import { canonical, createPreviewAPI, hash, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
+import { canonical, createPreviewAPI, hash, purgeExpiredArtifacts, runPreviewOnce } from '../scripts/run-preview-worker.mjs';
 import { buildSnapshot } from '../scripts/build-snapshot.mjs';
 import { getInstalledTheme, parseThemeRegistry } from '../scripts/theme-registry.mjs';
 
@@ -34,7 +35,7 @@ function claim() {
   proposed.pages[0]!.title = 'Proposed worker page';
   const hero = proposed.pages[0]!.blocks[0]!;
   if (hero.type === 'hero') hero.heading = 'Proposed worker heading';
-  return { job: { id, leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live, proposed, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins };
+  return { includedChangeKeys: [`pages:${proposed.pages[0]!.id}`], job: { id, leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }, live, proposed, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: pins };
 }
 
 function themedClaim() {
@@ -43,6 +44,8 @@ function themedClaim() {
   input.proposed.settings.theme = selection;
   return { input, selection, registry: parseThemeRegistry({ themes: [{ manifest: themeManifest, installedAt: '2026-10-03T00:00:00.000Z' }] }) };
 }
+
+async function alterIndex<T extends { output: string }>(result: T, suffix: string): Promise<T> { const file = join(result.output, 'index.html'); const value = Buffer.concat([await readFile(file), Buffer.from(suffix)]); await writeFile(file, value); const manifestPath = join(result.output, 'snapshot-manifest.json'); const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); manifest.files['index.html'] = createHash('sha256').update(value).digest('hex'); await writeFile(manifestPath, JSON.stringify(manifest)); return result; }
 
 const options = () => ({ artifactRoot: root, publicOrigin: 'https://example.test', versionPins: pins, signal: undefined });
 
@@ -60,7 +63,8 @@ describe('durable preview rendering worker', () => {
     await expect(runPreviewOnce({ ...options(), api })).rejects.toThrow('BUILD_FAILED');
     const files = await readdir(root);
     expect(files).toEqual([id]);
-    expect(await readdir(join(root, id))).toEqual(['live', 'proposed']);
+    expect(await readdir(join(root, id))).toEqual(['evidence', 'evidence-manifest.json', 'live', 'proposed']);
+    const evidence = JSON.parse(await readFile(join(root, id, 'evidence-manifest.json'), 'utf8')); expect(evidence.route).toBe('/'); expect((await readFile(join(root, id, 'evidence', 'proposed.png'))).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
     const html = await readFile(join(root, id, 'proposed', 'index.html'), 'utf8');
     expect(html).toContain('Proposed worker heading');
     expect(html).toContain(`/preview/changes/${id}/proposed/`);
@@ -72,7 +76,7 @@ describe('durable preview rendering worker', () => {
     const proof = calls.filter(call => call.action === 'complete').at(-1)!.body;
     expect(proof).toMatchObject({ id, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed) });
     expect(proof.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
-    await writeFile(join(root, id, 'proposed', 'index.html'), 'tampered output');
+    await writeFile(join(root, id, 'evidence', 'proposed.png'), 'tampered output');
     await expect(runPreviewOnce({ ...options(), api, render: neverRender })).rejects.toThrow('INVALID_ARTIFACT');
     expect(calls.filter(call => call.action === 'complete')).toHaveLength(2);
   }, 60_000);
@@ -206,6 +210,60 @@ describe('durable preview rendering worker', () => {
     expect(diagnostic).toMatchObject({ path: `structuredData.${claim().live.pages[0]!.id}`, pageId: claim().live.pages[0]!.id });
     expect(diagnostic.blockId).toBeUndefined();
   }, 60_000);
+
+  it('captures the selected non-root reviewed page, not system metadata', async () => {
+    const input = claim(); const second = structuredClone(input.proposed.pages[0]!); second.id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'; second.slug = 'reviewed-page'; second.title = 'Selected reviewed page'; input.live.pages.push(structuredClone(second)); input.proposed.pages.push(second); input.live.settings.sections[0]!.pageIds.push(second.id); input.proposed.settings.sections[0]!.pageIds.push(second.id); input.includedChangeKeys = [`pages:${second.id}`];
+    const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true);
+    const evidence = calls.find(item => item.action === 'complete').body.evidenceManifest;
+    expect(evidence.route).toContain('reviewed-page'); expect(evidence.screenshots.proposed.status).toBe(200);
+    expect(await readFile(join(root, id, 'proposed', 'general', 'reviewed-page', 'index.html'), 'utf8')).toContain('Selected reviewed page');
+  }, 60_000);
+
+  it('records an unavailable manifest without failing a review with no renderable selected page', async () => {
+    const input = claim(); input.includedChangeKeys = ['pages:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee']; const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true);
+    expect(calls.find(item => item.action === 'complete').body.evidenceManifest).toMatchObject({ state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE' });
+  }, 60_000);
+
+  it('captures a removed non-root page as live content and proposed 404 evidence', async () => {
+    const input = claim(); const page = structuredClone(input.live.pages[0]!); page.id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'; page.slug = 'removed-page'; page.title = 'Removed reviewed page'; input.live.pages.push(page); input.live.settings.sections[0]!.pageIds.push(page.id); input.includedChangeKeys = [`pages:${page.id}`];
+    const calls: any[] = []; const api = async (action: string, body: any = {}) => { calls.push({ action, body }); return action === 'claim' ? input : { ok: true }; };
+    await expect(runPreviewOnce({ ...options(), api })).resolves.toBe(true); const evidence = calls.find(item => item.action === 'complete').body.evidenceManifest;
+    expect(evidence.screenshots.live).toMatchObject({ route: '/general/removed-page', status: 200 }); expect(evidence.screenshots.proposed).toMatchObject({ route: '/general/removed-page', status: 404 }); expect(await readFile(join(root, id, 'live', 'general', 'removed-page', 'index.html'), 'utf8')).toContain('Removed reviewed page');
+  }, 60_000);
+
+  it('blocks external resource attempts before any outbound server receives them', async () => {
+    let hits = 0; const server = createServer((_request, response) => { hits++; response.end('unexpected') }); servers.push(server); await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const address = server.address(); if (!address || typeof address === 'string') throw Error();
+    const api = async (action: string) => action === 'claim' ? claim() : { ok: true };
+    const render = async (input: any) => alterIndex(await buildSnapshot(input), `<img src=\"http://127.0.0.1:${address.port}/probe\">`);
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('EVIDENCE_CAPTURE_FAILED'); expect(hits).toBe(0);
+  }, 60_000);
+
+  it('rejects a capture whose reviewed page throws JavaScript', async () => {
+    const api = async (action: string) => action === 'claim' ? claim() : { ok: true };
+    const render = async (input: any) => alterIndex(await buildSnapshot(input), `<script>throw new Error('evidence test error')</script>`);
+    await expect(runPreviewOnce({ ...options(), api, render })).rejects.toThrow('EVIDENCE_CAPTURE_FAILED');
+  }, 60_000);
+
+  it('removes only verified expired screenshot bytes during an idle cleanup', async () => {
+    const artifact = join(root, id);
+    const contentHash = 'a'.repeat(64);
+    const screenshot = { path: 'evidence/proposed.png', sha256: contentHash, bytes: 3, route: '/', status: 200 };
+    await mkdir(join(artifact, 'evidence'), { recursive: true });
+    await mkdir(join(artifact, 'live'), { recursive: true });
+    await mkdir(join(artifact, 'proposed'), { recursive: true });
+    await writeFile(join(artifact, 'index.html'), 'retained review');
+    await writeFile(join(artifact, 'evidence', 'proposed.png'), 'png');
+    await writeFile(join(artifact, 'live', 'snapshot-manifest.json'), JSON.stringify({ snapshotContentHash: contentHash }));
+    await writeFile(join(artifact, 'proposed', 'snapshot-manifest.json'), JSON.stringify({ snapshotContentHash: contentHash }));
+    await writeFile(join(artifact, 'evidence-manifest.json'), JSON.stringify({ version: 1, state: 'available', jobID: id, route: '/', viewport: { width: 1440, height: 900 }, liveManifestHash: contentHash, proposedManifestHash: contentHash, screenshots: { live: { ...screenshot, path: 'evidence/live.png' }, proposed: screenshot } }));
+    const old = new Date(Date.now() - 31 * 86_400_000);
+    await utimes(artifact, old, old);
+    await purgeExpiredArtifacts(root);
+    expect(await readFile(join(artifact, 'index.html'), 'utf8')).toBe('retained review');
+    await expect(readFile(join(artifact, 'evidence', 'proposed.png'))).rejects.toThrow();
+  });
 });
 
 describe('private worker API boundary', () => {

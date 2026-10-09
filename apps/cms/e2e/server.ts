@@ -2,7 +2,7 @@ import { createServer as createHTTPServer, request as requestUpstream, type Inco
 import { createServer } from 'node:https'
 import { createServer as createSMTPServer } from 'node:net'
 import { once } from 'node:events'
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -136,6 +136,7 @@ const initialPreviewBaseline = join(temporaryDirectory, 'initial-preview-baselin
 const themeRegistry = join(temporaryDirectory, 'theme-registry.json')
 const galleryBrowserThemeManifestPath = join(temporaryDirectory, 'gallery-browser-theme-manifest.json')
 const previewArtifacts = join(temporaryDirectory, 'preview-artifacts')
+process.env.PREVIEW_ARTIFACT_ROOT = previewArtifacts
 const publishArtifacts = join(temporaryDirectory, 'eng010-publish-artifacts')
 const publishReleases = join(temporaryDirectory, 'eng010-publish-releases')
 const publishSecret = 'synthetic-eng010-webhook-secret-at-least-32-bytes'
@@ -509,7 +510,7 @@ async function seed(): Promise<void> {
   }
   const baselineChangeSet = await payload.create({ collection: 'change-sets', data: { id: applicationChangeSetID, name: 'Synthetic published application baseline', state: 'published', revision: 1, changes: [], quality: { checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
   const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(publishedBaseline), changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', manifest: publishedBaseline, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: localOwner.id, baselineSequence: 0 }, overrideAccess: true, context: { editorialInternal: true } })
-  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+  const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-application-baseline', sequence: 1, snapshot: snapshot.id, changeSet: baselineChangeSet.id, reviewRevision: 1, changeHash: 'synthetic-application-baseline', includedChangeKeys: [], status: 'completed', attempts: 1, completedAt: new Date().toISOString(), completionEvidence: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'a'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
 
   const currentOperationsManifest = structuredClone(publishedBaseline)
@@ -526,7 +527,17 @@ async function seed(): Promise<void> {
   const operationsSnapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(currentOperationsManifest), changeSet: operationsPublishedSet.id, reviewRevision: 1, changeHash: canonicalHash(operationsPublishedSet.changes), manifest: currentOperationsManifest, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, approvedBy: operationsOwner.id, baselineSequence: 1 }, overrideAccess: true, context: { editorialInternal: true } })
   const operationsOutbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-change-log-current-release', sequence: 56, snapshot: operationsSnapshot.id, changeSet: operationsPublishedSet.id, reviewRevision: 1, changeHash: canonicalHash(operationsPublishedSet.changes), includedChangeKeys: [`pages:${currentOperationsManifest.pages[0]!.id}`], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'published-releases', data: { outbox: operationsOutbox.id, sequence: 56, snapshot: operationsSnapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'b'.repeat(64), sourceContentHash: operationsSnapshot.contentHash, themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION!, checks: [{ name: 'synthetic-baseline', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
-  await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', actor: operationsOwner.id, detail: { changeSet: operationsPublishedSet.id, snapshot: operationsSnapshot.id } }, overrideAccess: true })
+  const operationsPreviewHash = canonicalHash(operationsPublishedSet.changes)
+  const operationsPreview = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: operationsPublishedSet.id, reviewRevision: 1, changeHash: operationsPreviewHash, includedChangeKeys: [`pages:${currentOperationsManifest.pages[0]!.id}`], baselineSnapshot: snapshot.id, baselineSequence: 1, liveSnapshot: snapshot.id, liveSequence: 1, liveManifest: publishedBaseline, proposedManifest: currentOperationsManifest, liveManifestHash: canonicalHash(publishedBaseline), proposedManifestHash: canonicalHash(currentOperationsManifest), versionPins: { themeVersion: process.env.PREVIEW_THEME_VERSION!, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: process.env.PREVIEW_CONTRACT_VERSION! }, status: 'completed', completedAt: new Date().toISOString(), attempts: 1, artifactDigest: 'c'.repeat(64) }, overrideAccess: true, context: { editorialInternal: true } })
+  const evidenceBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL6+wAAAABJRU5ErkJggg==', 'base64'); const evidenceHash = createHash('sha256').update(evidenceBytes).digest('hex')
+  const evidenceDirectory = join(previewArtifacts, String(operationsPreview.id), 'evidence'); mkdirSync(evidenceDirectory, { recursive: true }); writeFileSync(join(evidenceDirectory, 'proposed.png'), evidenceBytes); writeFileSync(join(evidenceDirectory, 'live.png'), evidenceBytes)
+  await payload.update({ collection: 'preview-render-jobs', id: operationsPreview.id, data: { evidenceManifest: { version: 1, state: 'available', jobID: String(operationsPreview.id), route: '/', viewport: { width: 1440, height: 900 }, liveManifestHash: canonicalHash(publishedBaseline), proposedManifestHash: canonicalHash(currentOperationsManifest), screenshots: { live: { path: 'evidence/live.png', bytes: evidenceBytes.length, sha256: evidenceHash, route: '/', status: 200 }, proposed: { path: 'evidence/proposed.png', bytes: evidenceBytes.length, sha256: evidenceHash, route: '/', status: 200 } } } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.update({ collection: 'change-sets', id: operationsPublishedSet.id, data: { preview: { status: 'ready', jobID: operationsPreview.id, revision: 1, changeHash: operationsPreviewHash, includedChangeKeys: [`pages:${currentOperationsManifest.pages[0]!.id}`], liveManifestHash: canonicalHash(publishedBaseline), proposedManifestHash: canonicalHash(currentOperationsManifest) } }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'audit-events', data: { event: 'editorial.change_set_approved', actor: operationsOwner.id, detail: { changeSet: operationsPublishedSet.id, snapshot: operationsSnapshot.id, previewJobID: operationsPreview.id } }, overrideAccess: true })
+
+  await payload.create({ collection: 'change-sets', data: { name: 'Stale dashboard review', actor: operationsOwner.id, state: 'stale', revision: 2, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
+  await payload.create({ collection: 'integration-configurations', data: { provider: 'openrouter', model: 'dashboard-fixture', encryptedCredential: 'synthetic-dashboard-credential', credentialFingerprint: 'dashboard-fixture', health: 'unavailable', testedAt: new Date().toISOString() }, overrideAccess: true })
+  await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'synthetic-dashboard-latest-failure', sequence: 57, snapshot: operationsSnapshot.id, changeSet: operationsPublishedSet.id, reviewRevision: 1, changeHash: canonicalHash(operationsPublishedSet.changes), includedChangeKeys: [], status: 'failed', attempts: 1, errorCode: 'SYNTHETIC_FAILURE', correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
 
   const submitted = await payload.create({ collection: 'change-sets', data: { name: 'Synthetic pending operational review', state: 'submitted', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
   await payload.create({ collection: 'inquiries', data: { email: 'new-lead.synthetic@example.test', message: 'A synthetic new lead.', topic: 'general', sourcePage: '/synthetic', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'synthetic-operations-new', stage: 'new', urgent: false }, overrideAccess: true })
@@ -710,6 +721,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             live: job.liveManifest,
             proposed: job.proposedManifest,
             basePaths: { live: 'live', proposed: 'proposed' },
+            includedChangeKeys: job.includedChangeKeys,
             versionPins: job.versionPins,
           }
         }
@@ -719,6 +731,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
             liveManifestHash: String(body.liveManifestHash),
             proposedManifestHash: String(body.proposedManifestHash),
             artifactDigest: String(body.artifactDigest),
+            evidenceManifest: body.evidenceManifest,
           }))
         }
         throw new Error('Unsupported preview worker action.')
@@ -734,7 +747,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && request.url === '/__e2e/warning-only-review') {
     void (async () => {
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // Review approval uses the publish queue head as its exact baseline, so
+      // the fixture must derive its immutable inputs from that same snapshot.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { id?: string; sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot !== 'object' || typeof snapshot.id !== 'string') throw new Error('Published review baseline is missing.')
@@ -759,9 +774,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim warning-only review job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
-        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest), evidenceManifest: body.evidenceManifest }))
         throw new Error('Unsupported warning-only worker action.')
       }
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
@@ -772,7 +787,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && request.url === '/__e2e/eng031-business-case') {
     void (async () => {
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // This synthetic review has to be based on the same queue-head snapshot
+      // that the approval service will verify.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published business-case review baseline is missing.')
@@ -799,9 +816,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim business-case review job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
-        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest) }))
+        if (action === 'complete') return withPayloadTransaction(payload, inner => completePreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), { liveManifestHash: String(body.liveManifestHash), proposedManifestHash: String(body.proposedManifestHash), artifactDigest: String(body.artifactDigest), evidenceManifest: body.evidenceManifest }))
         throw new Error('Unsupported ENG-031 preview worker action.')
       }
       await runPreviewOnce({ api, artifactRoot: previewArtifacts, publicOrigin: cmsOrigin, versionPins, registry: previewThemeRegistry, heartbeatMs: 60_000, signal: undefined })
@@ -862,7 +879,9 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   if (request.method === 'POST' && request.url === '/__e2e/failed-preview-review') {
     void (async () => {
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
-      const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      // Keep the failed preview bound to the active queue baseline too; the
+      // review endpoint rejects diagnostics tied to a stale snapshot.
+      const releases = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
       const release = releases.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot.id !== 'string') throw new Error('Published diagnostic baseline is missing.')
@@ -876,7 +895,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim structured-data diagnostic job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {
-        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, versionPins: job.versionPins }
+        if (action === 'claim') return { job: { id: job.id, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, live: job.liveManifest, proposed: job.proposedManifest, basePaths: { live: 'live', proposed: 'proposed' }, includedChangeKeys: job.includedChangeKeys, versionPins: job.versionPins }
         if (action === 'renew') return { ok: true }
         if (action === 'fail') return withPayloadTransaction(payload, inner => failPreviewRenderJob(payload, inner, String(body.id), String(body.leaseToken), String(body.errorCode), undefined, body.diagnostics))
         throw new Error('Unsupported failed-preview worker action.')
@@ -1082,7 +1101,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const target = await payload.find({ collection: 'publish-outbox', where: { changeSet: { equals: changeSetID } }, sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })
       if (!target.docs[0]) throw new Error('ENG-010 fixture could not find the approved outbox job.')
       const suspended = await payload.find({ collection: 'publish-outbox', where: { and: [{ status: { in: ['pending', 'processing'] } }, { id: { not_equals: target.docs[0].id } }] }, pagination: false, limit: 100, depth: 0, overrideAccess: true })
-      await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: 'completed', leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, context: { editorialInternal: true } })))
+      await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: 'completed' }, overrideAccess: true, context: { editorialInternal: true } })))
       const api = async (action: string, body: Record<string, unknown> = {}) => withPayloadTransaction(payload, async req => {
         if (action === 'claim') {
           const job = await claimNextPublishJob(payload, req, new Date(clock))
@@ -1126,6 +1145,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
           await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
           try {
             const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea, clearMailboxArea } = await import('../src/mailboxes.js'); const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
+      const { defaultNotificationPreferences } = await import('../src/notification-settings.js')
             const actor = claim.immutableContext.approvedBy; const mailbox = await configureSMTPMailbox(payload, { name: 'ENG-010 SMTP', primaryAddress: 'notices@example.test', aliases: [], host: '127.0.0.1', port: (server.address() as { port: number }).port, security: 'starttls', username: 'eng010', password: 'eng010-password' }, actor)
             const priorMapping = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true }) as any
             try {
@@ -1155,6 +1175,75 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         await Promise.all(suspended.docs.map(job => payload.update({ collection: 'publish-outbox', id: job.id, data: { status: job.status, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt, nextAttemptAt: job.nextAttemptAt }, overrideAccess: true, context: { editorialInternal: true } })))
       }
     })().catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG-010 fixture failed.') })
+    return
+  }
+  if (request.method === 'POST' && new URL(request.url ?? '/', cmsOrigin).pathname === '/__e2e/eng022-notifications') {
+    void (async () => {
+      const { configureSMTPMailbox, testSMTPMailbox, setMailboxArea, clearMailboxArea } = await import('../src/mailboxes.js')
+      const { configureIntegration, testIntegrationConnection } = await import('../src/integration-configuration.js')
+      const { createAcceptedInquiry, validateInquiry } = await import('../src/inquiries.js')
+      const { dispatchOneNotification } = await import('../src/notification-dispatch.js')
+      const { defaultNotificationPreferences } = await import('../src/notification-settings.js')
+      const owner = (await payload.find({ collection: 'users', where: { email: { equals: 'operations-owner.synthetic@example.test' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0]
+      if (!owner) throw new Error('ENG-022 notification fixture owner is missing.')
+      const integration = (await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'openrouter' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as any
+      if (!integration) throw new Error('ENG-022 notification fixture integration is missing.')
+      const priorMapping = (await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: 'notifications' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as any
+      const preference = (await payload.find({ collection: 'notification-preferences', where: { key: { equals: 'active' } }, limit: 1, depth: 0, overrideAccess: true })).docs[0] as any
+      const priorEvents = preference?.events
+      const notificationEvents = structuredClone(priorEvents ?? defaultNotificationPreferences).map((item: any) => item.kind === 'active-incident-lead' ? { ...item, recipients: ['owner'], channels: ['email'] } : item)
+      const priorIntegration = { model: integration.model, encryptedCredential: integration.encryptedCredential, credentialFingerprint: integration.credentialFingerprint, fallbackProvider: integration.fallbackProvider, health: integration.health, testedAt: integration.testedAt, monthlyCapMicroUsd: integration.monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: integration.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: integration.outputMicroUsdPerMillionTokens, pricingSource: integration.pricingSource, pricingAsOf: integration.pricingAsOf }
+      const before = await payload.find({ collection: 'notification-outbox', limit: 0, pagination: false, depth: 0, overrideAccess: true }) as any
+      const known = new Set(before.docs.map((item: any) => String(item.id)))
+      const priorAvailability = before.docs.filter((item: any) => item.state === 'queued').map((item: any) => ({ id: String(item.id), state: item.state, availableAt: item.availableAt, leaseToken: item.leaseToken ?? null, leaseExpiresAt: item.leaseExpiresAt ?? null }))
+      const messages: string[] = []
+      const smtp = createSMTPServer(socket => { let buffer = ''; let data = false; socket.write('220 eng022 ESMTP\r\n'); socket.on('data', chunk => { buffer += chunk.toString('utf8'); while (true) { if (data) { const end = buffer.indexOf('\r\n.\r\n'); if (end < 0) return; messages.push(buffer.slice(0, end)); buffer = buffer.slice(end + 5); data = false; socket.write('250 queued\r\n'); continue } const end = buffer.indexOf('\r\n'); if (end < 0) return; const line = buffer.slice(0, end); buffer = buffer.slice(end + 2); if (/^EHLO /i.test(line)) socket.write('250-eng022\r\n250 AUTH PLAIN\r\n'); else if (/^AUTH PLAIN /i.test(line)) socket.write('235 authenticated\r\n'); else if (/^(MAIL FROM|RCPT TO):/i.test(line)) socket.write('250 accepted\r\n'); else if (/^DATA$/i.test(line)) { data = true; socket.write('354 continue\r\n') } else if (/^QUIT$/i.test(line)) { socket.write('221 bye\r\n'); socket.end() } else socket.write('250 ok\r\n') } }) })
+      await new Promise<void>(done => smtp.listen(0, '127.0.0.1', done))
+      let mailbox: any
+      let urgentID: string | undefined
+      let owned: any[] = []
+      try {
+        if (preference) await payload.update({ collection: 'notification-preferences', id: preference.id, data: { events: notificationEvents }, overrideAccess: true })
+        else await payload.create({ collection: 'notification-preferences', data: { key: 'active', events: notificationEvents, updatedBy: owner.id }, draft: false, overrideAccess: true })
+        mailbox = await configureSMTPMailbox(payload, { name: 'ENG-022 browser notification sink', primaryAddress: 'notifications@example.test', aliases: [], host: '127.0.0.1', port: (smtp.address() as { port: number }).port, security: 'starttls', username: 'eng022', password: 'eng022-password' }, owner.id)
+        await testSMTPMailbox(payload, mailbox.id, owner.id)
+        await setMailboxArea(payload, { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notifications@example.test' }, owner.id)
+        await Promise.all(priorAvailability.map((item: { id: string; availableAt: string }) => payload.update({ collection: 'notification-outbox', id: item.id, data: { state: 'failed', availableAt: '2100-01-01T00:00:00.000Z' }, overrideAccess: true })))
+        await configureIntegration(payload, { provider: 'openrouter', model: 'browser-notification-model', credential: 'eng022-browser-credential', fallbackProvider: null, pricing: { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 1, pricingSource: 'https://prices.example.test/eng022-browser', pricingAsOf: '2026-10-09T00:00:00.000Z' }, actor: owner.id })
+        await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-09T00:00:00.000Z') }, async () => ({ ok: true, code: 'connected' }))
+        await testIntegrationConnection(payload, { provider: 'openrouter', actor: owner.id, now: new Date('2026-10-09T01:00:00.000Z') }, async () => ({ ok: false, code: 'unavailable' }))
+        const urgent = validateInquiry({ email: `eng022-urgent-${randomUUID()}@example.test`, message: 'Browser fixture private incident text.', topic: 'active-incident', sourcePage: '/fixture', consent: true, idempotencyKey: `eng022-urgent-${randomUUID()}` }).input
+        if (!urgent) throw new Error('ENG-022 urgent fixture is invalid.')
+        const created = await createAcceptedInquiry(payload, urgent)
+        if ('suppressed' in created) throw new Error('ENG-022 urgent fixture was suppressed.')
+        urgentID = String(created.inquiry.id)
+        const pending = await payload.find({ collection: 'notification-outbox', limit: 200, pagination: false, depth: 0, overrideAccess: true }) as any
+        owned = pending.docs.filter((item: any) => !known.has(String(item.id)) && ['publish-or-integration-failed', 'active-incident-lead'].includes(String(item.kind)))
+        if (owned.length !== 2) throw new Error('ENG-022 fixture did not create exactly two notification intents.')
+        for (const item of owned) await payload.update({ collection: 'notification-outbox', id: item.id, data: { availableAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true })
+        for (let attempt = 0; attempt < 100; attempt += 1) if (!await dispatchOneNotification(payload, new Date('2026-10-09T02:00:00.000Z'))) break
+        const complete = await payload.find({ collection: 'notification-outbox', where: { id: { in: owned.map((item: any) => item.id) } }, limit: 10, pagination: false, depth: 0, overrideAccess: true }) as any
+        const decoded = messages.map(message => message.replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/gi, (_all, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))))
+        const result = Object.fromEntries(await Promise.all(complete.docs.map(async (item: any) => {
+          const message = decoded.find(value => value.includes(`Reference: ${item.id}`)) ?? ''
+          const deliveries = await payload.find({ collection: 'notification-deliveries', where: { outbox: { equals: item.id } }, limit: 20, pagination: false, depth: 0, overrideAccess: true }) as any
+          const ownerDelivered = deliveries.docs.some((delivery: any) => delivery.state === 'delivered' && String(delivery.recipient?.email ?? '').toLowerCase() === 'operations-owner.synthetic@example.test')
+          return [item.kind, { id: item.id, state: item.state, ownerDelivered, minimal: message.includes('An operations event requires review.') && message.includes(`Open: ${cmsOrigin}/operations`) && !message.includes('Browser fixture private incident text.') }]
+        })))
+        json(response, { integration: { ...result['publish-or-integration-failed'], adminURL: `${cmsOrigin}/operations` }, urgent: result['active-incident-lead'] })
+      } finally {
+        await Promise.all(owned.flatMap(item => [payload.delete({ collection: 'notification-deliveries', where: { outbox: { equals: item.id } }, overrideAccess: true }).catch(() => undefined), payload.delete({ collection: 'notification-outbox', id: item.id, overrideAccess: true }).catch(() => undefined)]))
+        if (urgentID) await payload.delete({ collection: 'inquiries', id: urgentID, overrideAccess: true }).catch(() => undefined)
+        if (preference) await payload.update({ collection: 'notification-preferences', id: preference.id, data: { events: priorEvents }, overrideAccess: true }).catch(() => undefined)
+        else { const createdPreference = await payload.find({ collection: 'notification-preferences', where: { key: { equals: 'active' } }, limit: 1, depth: 0, overrideAccess: true }).catch(() => ({ docs: [] })); if (createdPreference.docs[0]) await payload.delete({ collection: 'notification-preferences', id: createdPreference.docs[0].id, overrideAccess: true }).catch(() => undefined) }
+        await payload.update({ collection: 'integration-configurations', id: integration.id, data: priorIntegration, overrideAccess: true })
+        if (priorMapping) await setMailboxArea(payload, { area: 'notifications', mailbox: String(priorMapping.mailbox?.id ?? priorMapping.mailbox), senderAddress: String(priorMapping.senderAddress) }, owner.id)
+        else await clearMailboxArea(payload, 'notifications', owner.id)
+        await Promise.all(priorAvailability.map((item: { id: string; state: 'queued'; availableAt: string; leaseToken: string | null; leaseExpiresAt: string | null }) => payload.update({ collection: 'notification-outbox', id: item.id, data: { state: item.state, availableAt: item.availableAt }, overrideAccess: true }).catch(() => undefined)))
+        if (mailbox) await payload.delete({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true })
+        await new Promise<void>(done => smtp.close(() => done()))
+      }
+    })().catch(error => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'Unable to run ENG-022 notification fixture.') })
     return
   }
   if (request.method === 'POST' && new URL(request.url ?? '/', cmsOrigin).pathname === '/__e2e/eng010-publish/cleanup') {
@@ -1217,11 +1306,13 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const mediaAsset = mediaAssets.docs[0]
       if (!mediaAsset) throw new Error('Gallery fixture media asset is missing.')
       if (!manifest.media.some((asset) => asset.id === mediaAsset.id)) manifest.media.push(snapshotMediaReference(mediaAsset as Parameters<typeof snapshotMediaReference>[0]) as never)
-      const sequence = Number(release.sequence) + 1
+      const newestOutbox = await payload.find({ collection: 'publish-outbox', sort: '-sequence', limit: 1, depth: 0, overrideAccess: true })
+      const sequence = Math.max(Number(release.sequence) + 1, Number(newestOutbox.docs[0]?.sequence ?? 0) + 1)
       const changeSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery theme fixture', state: 'published', revision: 1, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
       const snapshot = await payload.create({ collection: 'publish-snapshots', data: { contentHash: canonicalHash(manifest), changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', manifest, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, approvedBy: typeof source.approvedBy === 'string' ? source.approvedBy : localOwnerID!, baselineSequence: Number(release.sequence) }, overrideAccess: true, context: { editorialInternal: true } })
-      const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `scoped-block-gallery-theme:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', includedChangeKeys: [], status: 'completed', attempts: 1, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
-      const installed = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'synthetic-gallery-theme', status: 'passed' }] } }, overrideAccess: true, context: { editorialInternal: true } })
+      const artifact: VerifiedArtifact = { digest: 'c'.repeat(64), sourceContentHash: String(snapshot.contentHash), themeVersion: galleryBrowserThemeManifest.version, engineVersion: process.env.PREVIEW_ENGINE_VERSION!, contractVersion: galleryBrowserThemeManifest.contract, checks: [{ name: 'artifact-integrity', status: 'passed' }, { name: 'public-health', status: 'passed' }] }
+      const outbox = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: `scoped-block-gallery-theme:${randomUUID()}`, sequence, snapshot: snapshot.id, changeSet: changeSet.id, reviewRevision: 1, changeHash: 'scoped-block-gallery-theme', includedChangeKeys: [], status: 'completed', attempts: 1, completedAt: new Date().toISOString(), completionEvidence: artifact, correlationID: randomUUID() }, overrideAccess: true, context: { editorialInternal: true } })
+      const installed = await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence, snapshot: snapshot.id, activatedAt: new Date().toISOString(), healthEvidence: { status: 'healthy' }, artifact }, overrideAccess: true, context: { editorialInternal: true } })
       const fixtureSet = await payload.create({ collection: 'change-sets', data: { name: 'Scoped block gallery recipe', state: 'open', actor: galleryOwnerID!, revision: 0, changes: [] }, overrideAccess: true, context: { editorialInternal: true } })
       galleryThemeFixture = { releaseID: String(installed.id), outboxID: String(outbox.id), changeSetID: String(fixtureSet.id) }
       return { installed: true }

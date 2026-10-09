@@ -46,4 +46,27 @@ describe('change-log source, category and page filters', () => {
     expect(rows[0].diff!.entries).toContainEqual(expect.objectContaining({ field: 'Title', before: before.title, after: 'Revised readable title' }))
     expect(JSON.stringify(rows)).not.toContain('secret-value')
   })
+  it('binds screenshot links to the approved historical job and fails closed for legacy or expired evidence', async () => {
+    const before = structuredClone(neutralFixture.pages[0]!)
+    const after = { ...before, title: 'Evidence-ready title' }
+    const changes = [{ collection: 'pages', id: before.id, before, after, beforeHash: canonicalHash(before), afterHash: canonicalHash(after) }]
+    const set = await payload.create({ collection: 'change-sets', data: { name: 'Protected evidence fixture', actor: owner.id, state: 'submitted', revision: 4, changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const changeHash = canonicalHash(changes)
+    const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: set.id, reviewRevision: 4, changeHash, includedChangeKeys: [`pages:${before.id}`], baselineSequence: 0, liveSequence: 0, liveManifest: neutralFixture, proposedManifest: neutralFixture, liveManifestHash: canonicalHash(neutralFixture), proposedManifestHash: canonicalHash(neutralFixture), versionPins: { themeVersion: 'test', engineVersion: 'test', contractVersion: neutralFixture.settings.contractVersion }, status: 'completed', attempts: 1, artifactDigest: 'e'.repeat(64) }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'change-sets', id: set.id, data: { preview: { status: 'ready', jobID: job.id, revision: 4, changeHash, liveManifestHash: canonicalHash(neutralFixture), proposedManifestHash: canonicalHash(neutralFixture) } }, overrideAccess: true, context: { editorialInternal: true } })
+    const event = { id: randomUUID(), event: 'editorial.change_set_approved', createdAt: new Date().toISOString(), actor: owner.id, detail: { changeSet: set.id, previewJobID: job.id } }
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: null }])
+    const shot = { bytes: 100, sha256: 'a'.repeat(64), route: '/', status: 200 }
+    const manifest = { version: 1, state: 'available', jobID: job.id, liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash, route: '/', viewport: { width: 1440, height: 900 }, screenshots: { live: { ...shot, path: 'evidence/live.png' }, proposed: { ...shot, path: 'evidence/proposed.png' } } }
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { evidenceManifest: manifest, completedAt: new Date().toISOString() }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: { href: `/api/auth/preview/evidence/${job.id}/proposed`, beforeHref: `/api/auth/preview/evidence/${job.id}/live` } }])
+    // A later review selection cannot replace an earlier approval's evidence.
+    await payload.update({ collection: 'change-sets', id: set.id, data: { revision: 5, preview: { status: 'pending', jobID: randomUUID() } }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: { href: `/api/auth/preview/evidence/${job.id}/proposed` } }])
+    await expect(service.projectChangeLog(payload, [{ ...event, detail: { changeSet: set.id } }])).resolves.toMatchObject([{ evidence: null }])
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { completedAt: new Date(Date.now() - 31 * 86400000).toISOString() }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: { label: 'Screenshot evidence expired', href: '' } }])
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { status: 'failed' }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: null }])
+  })
 })

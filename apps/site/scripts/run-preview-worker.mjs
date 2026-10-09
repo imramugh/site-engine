@@ -1,14 +1,20 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SiteSnapshotSchema, compatibleContractVersion } from '@site-engine/contract';
+import { deriveRoutes } from '@site-engine/engine';
 import { buildSnapshot } from './build-snapshot.mjs';
 import { loadRenderer } from './renderer-adapter.mjs';
 import { loadThemeRegistry, verifyThemeSelection } from './theme-registry.mjs';
 import { normalizePublicOrigin } from '../site-config.mjs';
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const EVIDENCE_VIEWPORT = { width: 1440, height: 900 };
+const MAX_EVIDENCE_BYTES = 5 * 1024 * 1024;
+const evidenceName = 'evidence-manifest.json';
+const png = /^evidence\/(live|proposed)\.png$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const digest = /^[a-f0-9]{64}$/;
 const versions = ['engineVersion', 'themeVersion', 'contractVersion'];
@@ -25,15 +31,15 @@ class WorkerError extends Error {
 
 function claimInput(value, expectedVersions) {
   if (value?.job === null) return null;
-  const { job, live, proposed, basePaths, versionPins } = value ?? {};
+  const { job, live, proposed, basePaths, versionPins, includedChangeKeys } = value ?? {};
   if (!uuid.test(job?.id ?? '') || !/^[A-Za-z0-9_-]{16,256}$/.test(job?.leaseToken ?? '')
     || !Number.isFinite(Date.parse(job?.leaseExpiresAt)) || Date.parse(job.leaseExpiresAt) <= Date.now()
-    || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed'
+    || basePaths?.live !== 'live' || basePaths?.proposed !== 'proposed' || !Array.isArray(includedChangeKeys) || !includedChangeKeys.every(key => typeof key === 'string')
     || versions.some(key => typeof versionPins?.[key] !== 'string')
     || versionPins.engineVersion !== expectedVersions.engineVersion || !compatibleContractVersion(versionPins.contractVersion)) {
     throw new WorkerError('INVALID_CLAIM');
   }
-  const input = { job, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
+  const input = { job, includedChangeKeys, live: SiteSnapshotSchema.parse(live), proposed: SiteSnapshotSchema.parse(proposed), versionPins };
   const liveContractVersion = versionPins.liveContractVersion ?? versionPins.contractVersion;
   if (input.proposed.settings.contractVersion !== versionPins.contractVersion || input.live.settings.contractVersion !== liveContractVersion) throw new WorkerError('INVALID_CLAIM');
   const selectedVersion = snapshot => snapshot.settings.theme?.version;
@@ -100,27 +106,96 @@ async function verifyVariant(root, snapshot, pins) {
   return manifest;
 }
 
+function validEvidence(value, liveHash, proposedHash, jobID) {
+  if (!value || typeof value !== 'object' || value.jobID !== jobID || value.version !== 1 || value.liveManifestHash !== liveHash || value.proposedManifestHash !== proposedHash || !['available', 'unavailable'].includes(value.state)) throw new WorkerError('INVALID_ARTIFACT');
+  if (value.state === 'unavailable') { if (Object.keys(value).sort().join(',') !== 'jobID,liveManifestHash,proposedManifestHash,reason,state,version' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.reason)) throw new WorkerError('INVALID_ARTIFACT'); return value; }
+  if (canonical(Object.keys(value).sort()) !== canonical(['jobID', 'liveManifestHash', 'proposedManifestHash', 'route', 'screenshots', 'state', 'version', 'viewport']) || typeof value.route !== 'string' || !value.route.startsWith('/') || value.route.includes('..') || canonical(value.viewport) !== canonical(EVIDENCE_VIEWPORT) || !value.screenshots || typeof value.screenshots !== 'object') throw new WorkerError('INVALID_ARTIFACT');
+  for (const variant of ['live', 'proposed']) { const item = value.screenshots[variant]; if (!item || typeof item !== 'object' || item.path !== `evidence/${variant}.png` || !digest.test(item.sha256) || !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_EVIDENCE_BYTES || ![200, 404].includes(item.status) || typeof item.route !== 'string') throw new WorkerError('INVALID_ARTIFACT'); }
+  return value;
+}
 async function verifyPair(root, input) {
   const info = await lstat(root);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
   const names = (await readdir(root)).sort();
-  if (canonical(names) !== canonical(['live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
+  if (!canonical(names).startsWith('[')) throw new WorkerError('INVALID_ARTIFACT');
   const live = await verifyVariant(join(root, 'live'), input.live, input.variantPins.live);
   const proposed = await verifyVariant(join(root, 'proposed'), input.proposed, input.variantPins.proposed);
-  return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, artifactDigest: hash({ live, proposed }) };
+  const evidence = validEvidence(JSON.parse(await readFile(join(root, evidenceName), 'utf8')), live.snapshotContentHash, proposed.snapshotContentHash, input.job.id);
+  if (evidence.state === 'unavailable') { if (canonical(names) !== canonical([evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT'); return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, evidenceManifest: evidence, artifactDigest: hash({ live, proposed, evidence }) }; }
+  if (canonical(names) !== canonical(['evidence', evidenceName, 'live', 'proposed'])) throw new WorkerError('INVALID_ARTIFACT');
+  for (const variant of ['live', 'proposed']) {
+    const evidenceDir = join(root, 'evidence'); const directory = await lstat(evidenceDir); if (!directory.isDirectory() || directory.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT');
+    const path = join(root, evidence.screenshots[variant].path); const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.size !== evidence.screenshots[variant].bytes || info.size > MAX_EVIDENCE_BYTES || bytesHash(await readFile(path)) !== evidence.screenshots[variant].sha256) throw new WorkerError('INVALID_ARTIFACT');
+  }
+  return { liveManifestHash: live.snapshotContentHash, proposedManifestHash: proposed.snapshotContentHash, evidenceManifest: evidence, artifactDigest: hash({ live, proposed, evidence }) };
+}
+
+export async function captureEvidence(pair, input, signal) {
+  const root = resolve(pair); const pageIDs = input.includedChangeKeys.filter(key => key.startsWith('pages:')).map(key => key.slice(6)).sort();
+  const selectedID = pageIDs[0]; const proposedRoutes = deriveRoutes(input.proposed, input.proposed.settings.homepageId).routes; const liveRoutes = deriveRoutes(input.live, input.live.settings.homepageId).routes;
+  const proposedSelected = selectedID ? proposedRoutes.find(candidate => candidate.page.id === selectedID) : proposedRoutes.find(candidate => candidate.page.id === input.proposed.settings.homepageId);
+  const liveSelected = selectedID ? liveRoutes.find(candidate => candidate.page.id === selectedID) : liveRoutes.find(candidate => candidate.page.id === input.live.settings.homepageId);
+  if (!proposedSelected && !liveSelected) { const evidence = { version: 1, state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE', jobID: input.job.id, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed) }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence; }
+  const route = proposedSelected?.path ?? liveSelected.path; const targets = Object.fromEntries(['live', 'proposed'].map(variant => { const selected = variant === 'live' ? liveSelected : proposedSelected; return [variant, selected ? { target: selected.path === '/' ? 'index.html' : `${selected.path.slice(1).replace(/\/$/, '')}/index.html`, route: selected.path, status: 200 } : { target: '404.html', route: route, status: 404 }]; })); const prefix = `/preview/changes/${input.job.id}/`; const mime = path => path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : path.endsWith('.svg') ? 'image/svg+xml' : path.endsWith('.png') ? 'image/png' : path.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream';
+  let server; let browser; const stop = () => { void browser?.close(); if (server) server.close(); }; signal?.addEventListener('abort', stop, { once: true });
+  try {
+    await mkdir(join(root, 'evidence'), { mode: 0o700 });
+    server = createServer(async (request, response) => {
+      const raw = new URL(request.url ?? '/', 'http://loopback'); if (request.method !== 'GET' || !raw.pathname.startsWith(prefix) || /%|\\/.test(raw.pathname)) return response.writeHead(404).end();
+      const remainder = raw.pathname.slice(prefix.length); const match = /^(live|proposed)(?:\/(.*))?$/.exec(remainder); if (!match || /(?:^|\/)\.{1,2}(?:\/|$)/.test(match[2] ?? '')) return response.writeHead(404).end();
+      const variant = match[1]; const relative = !match[2] || match[2].endsWith('/') ? `${match[2] ?? ''}index.html` : match[2]; const file = resolve(root, variant, relative);
+      if (!file.startsWith(`${root}/${variant}/`)) return response.writeHead(404).end(); try { const info = await lstat(file); if (!info.isFile() || info.isSymbolicLink()) throw Error(); response.writeHead(200, { 'Content-Type': mime(file) }).end(await readFile(file)); } catch { response.writeHead(404).end(); }
+    });
+    await new Promise((done, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', done); });
+    const port = server.address().port; const { chromium } = await import('@playwright/test'); browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: EVIDENCE_VIEWPORT, reducedMotion: 'reduce', serviceWorkers: 'block' }); let externalAttempt = false; await context.route('**/*', item => { if (new URL(item.request().url()).origin === `http://127.0.0.1:${port}`) return item.continue(); externalAttempt = true; return item.abort(); });
+    const shots = {};
+    for (const variant of ['live', 'proposed']) { if (signal?.aborted) throw new WorkerError('BUILD_CANCELLED'); const page = await context.newPage(); const pageErrors = []; const resourceErrors = []; const httpErrors = []; page.on('response', response => { if (new URL(response.url()).origin === `http://127.0.0.1:${port}` && response.status() >= 400) httpErrors.push(response.url()); }); page.on('pageerror', error => pageErrors.push(error.message)); page.on('requestfailed', request => { if (new URL(request.url()).origin === `http://127.0.0.1:${port}`) resourceErrors.push(request.url()); }); const response = await page.goto(`http://127.0.0.1:${port}${prefix}${variant}/${targets[variant].target}`, { waitUntil: 'networkidle', timeout: 30_000 }); await page.evaluate(async () => { await document.fonts.ready; }); const body = await page.locator('body').innerHTML(); if (!response?.ok() || !body.trim() || pageErrors.length || resourceErrors.length || httpErrors.length || externalAttempt) throw new WorkerError('EVIDENCE_CAPTURE_FAILED'); const data = await page.screenshot({ type: 'png' }); await page.close(); if (data.length > MAX_EVIDENCE_BYTES || data.subarray(0, 8).compare(Buffer.from([137,80,78,71,13,10,26,10])) !== 0) throw new WorkerError('EVIDENCE_INVALID'); const path = `evidence/${variant}.png`; await writeFile(join(root, path), data, { mode: 0o600 }); shots[variant] = { path, sha256: bytesHash(data), bytes: data.length, route: targets[variant].route, status: targets[variant].status }; }
+    await context.close(); const evidence = { version: 1, state: 'available', jobID: input.job.id, route, viewport: EVIDENCE_VIEWPORT, liveManifestHash: hash(input.live), proposedManifestHash: hash(input.proposed), screenshots: shots }; await writeFile(join(root, evidenceName), canonical(evidence), { mode: 0o600 }); return evidence;
+  } finally { signal?.removeEventListener('abort', stop); await browser?.close(); if (server) await new Promise(done => server.close(done)); }
+}
+const lastEvidenceCleanup = new Map();
+export async function purgeExpiredArtifacts(root) {
+  const days = Number(process.env.PREVIEW_EVIDENCE_RETENTION_DAYS ?? 30);
+  if (!Number.isInteger(days) || days < 1 || days > 365) throw new WorkerError('INVALID_WORKER_CONFIGURATION');
+  const resolvedRoot = resolve(root);
+  const prior = lastEvidenceCleanup.get(resolvedRoot) ?? 0;
+  if (Date.now() - prior < 60 * 60_000) return;
+  const cutoff = Date.now() - days * 86_400_000;
+  let removed = 0;
+  for (const entry of await readdir(resolvedRoot, { withFileTypes: true })) {
+    if (removed >= 20 || !uuid.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const target = join(resolvedRoot, entry.name);
+    try {
+      const info = await stat(target);
+      if (info.mtimeMs > cutoff) continue;
+      const [manifest, live, proposed] = await Promise.all([
+        readFile(join(target, evidenceName), 'utf8').then(JSON.parse),
+        readFile(join(target, 'live', 'snapshot-manifest.json'), 'utf8').then(JSON.parse),
+        readFile(join(target, 'proposed', 'snapshot-manifest.json'), 'utf8').then(JSON.parse)
+      ]);
+      validEvidence(manifest, live.snapshotContentHash, proposed.snapshotContentHash, entry.name);
+      if (manifest.state !== 'available') continue;
+      const evidence = join(target, 'evidence');
+      const evidenceInfo = await lstat(evidence);
+      if (!evidenceInfo.isDirectory() || evidenceInfo.isSymbolicLink()) continue;
+      await rm(evidence, { recursive: true, force: false });
+      removed += 1;
+    } catch { /* Active, partial, or unrecognized directories are never purged. */ }
+  }
+  lastEvidenceCleanup.set(resolvedRoot, Date.now());
 }
 
 /** One claim is rendered serially. Lease loss cancels Astro and prevents completion. */
-export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, signal, heartbeatMs = 10_000 }) {
+export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionPins, registry = new Map(), render = buildSnapshot, capture = captureEvidence, signal, heartbeatMs = 10_000 }) {
+  const root = resolve(artifactRoot); await mkdir(root, { recursive: true, mode: 0o700 }); const rootInfo = await lstat(root); if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT_ROOT'); await purgeExpiredArtifacts(root);
   const input = claimInput(await api('claim', {}, signal), versionPins);
   if (!input) return false;
   verifyThemeSelection(input.live, registry); verifyThemeSelection(input.proposed, registry);
   const identity = { id: input.job.id, leaseToken: input.job.leaseToken };
   const origin = normalizePublicOrigin(publicOrigin);
-  const root = resolve(artifactRoot);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const rootInfo = await lstat(root);
-  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new WorkerError('INVALID_ARTIFACT_ROOT');
+
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
@@ -155,6 +230,7 @@ export async function runPreviewOnce({ api, artifactRoot, publicOrigin, versionP
         await verifyVariant(output, input[variant], input.variantPins[variant]);
         await rename(output, join(pair, variant));
       }
+      await capture(pair, input, controller.signal);
       evidence = await verifyPair(pair, input);
       if (controller.signal.aborted) throw new WorkerError(leaseLost ? 'LEASE_LOST' : 'BUILD_CANCELLED');
       await rename(pair, destination);

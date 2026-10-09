@@ -4,6 +4,7 @@ import type { Payload, PayloadRequest } from 'payload'
 import { SiteSnapshotSchema, type SiteSnapshot } from '@site-engine/contract'
 import { buildCandidate, canonicalHash, changeSetHash } from './publishing'
 import { markStaleIfNeeded } from './editorial'
+import { validatePreviewEvidence } from './preview-evidence'
 
 type Versions = { themeVersion: string; engineVersion: string; contractVersion: string }
 type PreviewVersions = Versions & { liveThemeVersion?: string; liveContractVersion?: string }
@@ -11,7 +12,6 @@ type Change = { collection: 'pages' | 'sections' | 'redirects' | 'theme-settings
 export type PreviewBaseline = { manifest: SiteSnapshot; snapshotID?: string; sequence: number; versions: Versions }
 const MAX_ATTEMPTS = 3
 const MAX_BODY_BYTES = 16 * 1024
-
 const idOf = (value: unknown) => typeof value === 'string' ? value : value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
 const keysEqual = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
 const versionsEqual = (left: unknown, right: PreviewVersions) => Boolean(left && typeof left === 'object' && (left as PreviewVersions).themeVersion === right.themeVersion && (left as PreviewVersions).engineVersion === right.engineVersion && (left as PreviewVersions).contractVersion === right.contractVersion && ((left as PreviewVersions).liveThemeVersion ?? (left as PreviewVersions).themeVersion) === (right.liveThemeVersion ?? right.themeVersion) && ((left as PreviewVersions).liveContractVersion ?? (left as PreviewVersions).contractVersion) === (right.liveContractVersion ?? right.contractVersion))
@@ -182,15 +182,16 @@ export async function claimPreviewRenderJob(payload: Payload, req: PayloadReques
 
 function currentLease(job: { status?: string; leaseToken?: string | null; leaseExpiresAt?: string | null }, token: string, now: Date) { return job.status === 'processing' && job.leaseToken === token && job.leaseExpiresAt && new Date(job.leaseExpiresAt).getTime() > now.getTime() }
 export async function renewPreviewRenderLease(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, now = new Date(), leaseMilliseconds = 60_000) { requireTransaction(req, 'Preview renewal'); const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req }); if (!currentLease(job, leaseToken, now)) throw new Error('The preview lease is no longer current.'); return payload.update({ collection: 'preview-render-jobs', id, data: { leaseExpiresAt: new Date(now.getTime() + leaseMilliseconds).toISOString() }, overrideAccess: true, req, context: { editorialInternal: true } }) }
-export async function completePreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, proof: { liveManifestHash: string; proposedManifestHash: string; artifactDigest: string }, now = new Date()) {
+export async function completePreviewRenderJob(payload: Payload, req: PayloadRequest, id: string, leaseToken: string, proof: { liveManifestHash: string; proposedManifestHash: string; artifactDigest: string; evidenceManifest?: unknown }, now = new Date()) {
   requireTransaction(req, 'Preview completion')
   const job = await payload.findByID({ collection: 'preview-render-jobs', id, depth: 0, overrideAccess: true, req })
   if (job.status === 'completed') {
-    if (job.artifactDigest !== proof.artifactDigest || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash) throw new Error('Preview completion proof is invalid.')
+    if (job.artifactDigest !== proof.artifactDigest || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || (job.evidenceManifest != null && canonicalHash(job.evidenceManifest) !== canonicalHash(proof.evidenceManifest))) throw new Error('Preview completion proof is invalid.')
     return job
   }
   if (!currentLease(job, leaseToken, now) || proof.liveManifestHash !== job.liveManifestHash || proof.proposedManifestHash !== job.proposedManifestHash || !/^[a-f0-9]{64}$/i.test(proof.artifactDigest)) throw new Error('Preview completion proof is invalid.')
-  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
+  const evidenceManifest = validatePreviewEvidence(proof.evidenceManifest, { id, liveManifestHash: job.liveManifestHash, proposedManifestHash: job.proposedManifestHash })
+  const completed = await payload.update({ collection: 'preview-render-jobs', id, data: { status: 'completed', completedAt: now.toISOString(), artifactDigest: proof.artifactDigest, ...(evidenceManifest ? { evidenceManifest } : {}), renderDiagnostics: null, leaseToken: null, leaseExpiresAt: null }, overrideAccess: true, req, context: { editorialInternal: true } })
   const set = await payload.findByID({ collection: 'change-sets', id: String(job.changeSet), depth: 0, overrideAccess: true, req })
   const preview = set.preview as { jobID?: string; revision?: number; changeHash?: string; baselineSequence?: number; includedChangeKeys?: string[] } | undefined
   if (preview?.jobID === id && preview.revision === job.reviewRevision && preview.changeHash === job.changeHash && preview.baselineSequence === job.baselineSequence && Array.isArray(preview.includedChangeKeys) && keysEqual(preview.includedChangeKeys, job.includedChangeKeys as string[])) {

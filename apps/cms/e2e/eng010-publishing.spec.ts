@@ -41,7 +41,15 @@ test('ENG-010 publishes an approved snapshot, retains it after terminal failure,
     const recovered = await session.page.request.post(`/__e2e/eng010-publish/success?changeSet=${failedSet}`)
     expect(recovered.status(), await recovered.text()).toBe(200)
     expect(await recovered.json()).toMatchObject({ claim: { id: body.claim.id, changeSetID: failedSet }, job: { status: 'completed' }, health: { jobID: body.claim.id } })
-    await page.reload()
+    // The fixture closes its temporary publish receiver immediately after the
+    // retry. Chromium can surface a transient network-change during that
+    // handoff, so reload the protected operations page once more if needed.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { await page.reload(); break }
+      catch (error) {
+        if (attempt === 1 || !(error instanceof Error) || !error.message.includes('ERR_NETWORK_CHANGED')) throw error
+      }
+    }
     await expect(page.locator('[data-release-history-row]').filter({ has: page.locator(`a[href="/operations?publish=${body.claim.id}"]`) })).toContainText('Deployed')
     await owner.close()
   } finally { if (jobs.length) { const cleanup = await session.page.request.post('/__e2e/eng010-publish/cleanup?' + jobs.map(job => `job=${encodeURIComponent(job)}`).join('&')); expect(cleanup.ok(), await cleanup.text()).toBe(true) } await session.context.close() }

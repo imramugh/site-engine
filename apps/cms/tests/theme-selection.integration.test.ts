@@ -102,7 +102,7 @@ describe('ENG-035 owner-controlled frozen theme selection', () => {
     expect((await payload.find({ collection: 'published-releases', overrideAccess: true })).totalDocs).toBe(1)
 
     const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
-    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease?.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'b'.repeat(64) }))
+    await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease?.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: 'b'.repeat(64), evidenceManifest: { version: 1, state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE', jobID: String(job.id), liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash) } }))
     await withPayloadTransaction(payload, req => runReviewQuality({ payload, req, id: set.id }))
     const token = newOpaqueToken(); const now = new Date().toISOString()
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
