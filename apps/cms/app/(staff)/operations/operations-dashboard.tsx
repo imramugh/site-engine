@@ -11,6 +11,7 @@ type Row = {
   status: string;
   source: string;
   category: string;
+  evidence: null | { label: string; href: string };
   diff: null | {
     label: string;
     entries: Array<{
@@ -415,6 +416,7 @@ export function OperationsDashboard({ children }: { children?: ReactNode }) {
                           )}
                         </div>
                         <aside>
+                          {row.evidence && <a href={row.evidence.href}>{row.evidence.label}</a>}
                           {row.rollback && (
                             <>
                               <label>

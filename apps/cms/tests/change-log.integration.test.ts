@@ -46,4 +46,17 @@ describe('change-log source, category and page filters', () => {
     expect(rows[0].diff!.entries).toContainEqual(expect.objectContaining({ field: 'Title', before: before.title, after: 'Revised readable title' }))
     expect(JSON.stringify(rows)).not.toContain('secret-value')
   })
+  it('links only an immutable completed preview that still matches the reviewed change set', async () => {
+    const before = structuredClone(neutralFixture.pages[0]!)
+    const after = { ...before, title: 'Evidence-ready title' }
+    const changes = [{ collection: 'pages', id: before.id, before, after, beforeHash: canonicalHash(before), afterHash: canonicalHash(after) }]
+    const set = await payload.create({ collection: 'change-sets', data: { name: 'Protected evidence fixture', actor: owner.id, state: 'submitted', revision: 4, changes }, overrideAccess: true, context: { editorialInternal: true } })
+    const changeHash = canonicalHash(changes)
+    const job = await payload.create({ collection: 'preview-render-jobs', data: { changeSet: set.id, reviewRevision: 4, changeHash, includedChangeKeys: [`pages:${before.id}`], baselineSequence: 0, liveSequence: 0, liveManifest: neutralFixture, proposedManifest: neutralFixture, liveManifestHash: canonicalHash(neutralFixture), proposedManifestHash: canonicalHash(neutralFixture), versionPins: { themeVersion: 'test', engineVersion: 'test', contractVersion: neutralFixture.settings.contractVersion }, status: 'completed', attempts: 1, artifactDigest: 'e'.repeat(64) }, overrideAccess: true, context: { editorialInternal: true } })
+    await payload.update({ collection: 'change-sets', id: set.id, data: { preview: { status: 'ready', jobID: job.id, revision: 4, changeHash, liveManifestHash: canonicalHash(neutralFixture), proposedManifestHash: canonicalHash(neutralFixture) } }, overrideAccess: true, context: { editorialInternal: true } })
+    const event = { id: randomUUID(), event: 'editorial.change_set_submitted', createdAt: new Date().toISOString(), actor: owner.id, detail: { changeSet: set.id } }
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: { label: 'Open protected review evidence', href: `/review/${set.id}` } }])
+    await payload.update({ collection: 'preview-render-jobs', id: job.id, data: { status: 'failed' }, overrideAccess: true, context: { editorialInternal: true } })
+    await expect(service.projectChangeLog(payload, [event])).resolves.toMatchObject([{ evidence: null }])
+  })
 })

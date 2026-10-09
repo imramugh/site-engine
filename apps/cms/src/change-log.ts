@@ -5,6 +5,7 @@ import { captureReviewedRollback } from './reviewed-rollback'
 import type { CapturedChange } from './editorial'
 import { fieldDiffs } from './field-diffs'
 import { SiteSnapshotSchema } from '@site-engine/contract'
+import { changeSetHash } from './publishing'
 
 type Actor = { id: string; name?: string | null; email?: string | null; roles?: Role[] | null; disabled?: boolean | null }
 const relationID=(value:unknown)=>typeof value==='string'?value:value&&typeof value==='object'&&'id'in value?String((value as {id:unknown}).id):undefined
@@ -73,11 +74,13 @@ const selectedChanges = (set: Record<string, unknown> | undefined, outbox: Recor
 
 export async function projectChangeLog(payload:Payload,events:Array<Record<string,any>>){
   const changeSetIDs=[...new Set(events.flatMap(item=>{const id=relationID(record(item.detail).changeSet);return id?[id]:[]}))]
-  const [sets,releases]=await Promise.all([
+  const [sets,releases,previewJobs]=await Promise.all([
     changeSetIDs.length?payload.find({collection:'change-sets',where:{id:{in:changeSetIDs}},limit:200,depth:0,overrideAccess:true}):Promise.resolve({docs:[]}),
     payload.find({collection:'published-releases',sort:'-sequence',limit:200,depth:2,overrideAccess:true}),
+    changeSetIDs.length?payload.find({collection:'preview-render-jobs',where:{changeSet:{in:changeSetIDs}},sort:'-completedAt',limit:200,depth:0,overrideAccess:true}):Promise.resolve({docs:[]}),
   ])
   const bySet=new Map(sets.docs.map(set=>[String(set.id),set]))
+  const previewByID=new Map((previewJobs.docs as Array<Record<string,unknown>>).map(job=>[String(job.id),job]))
   const releaseBySet=new Map<string,any>()
   for(const release of releases.docs){const outbox=record(release.outbox);const id=relationID(outbox.changeSet);if(id)releaseBySet.set(id,release)}
   return events.map(item=>{
@@ -85,10 +88,14 @@ export async function projectChangeLog(payload:Payload,events:Array<Record<strin
     const actor=record(item.actor),event=String(item.event),view=presentation(event,{...detail,actor:relationID(item.actor)},typeof set?.name==='string'?set.name:undefined)
     const changes=Array.isArray(set?.changes)?set.changes as Array<Record<string,unknown>>:[]
     const diff=reviewedDiff(changes)
+    const preview=record(set?.preview),job=typeof preview.jobID==='string'?previewByID.get(preview.jobID):undefined
+    const evidence=job&&set&&preview.status==='ready'&&preview.jobID===job.id&&job.status==='completed'&&typeof job.artifactDigest==='string'&&Number(set.revision)===Number(job.reviewRevision)&&Number(preview.revision)===Number(job.reviewRevision)&&preview.changeHash===job.changeHash&&changeSetHash(changes as never[])===job.changeHash&&preview.liveManifestHash===job.liveManifestHash&&preview.proposedManifestHash===job.proposedManifestHash
+      ? { label:'Open protected review evidence',href:`/review/${encodeURIComponent(setID!)}` }
+      : null
     const release=setID?releaseBySet.get(setID):undefined; let approved:Record<string,unknown>[]=[];let supportNote=''
     if(release&&set){try{approved=selectedChanges(set as unknown as Record<string,unknown>,record(release.outbox))}catch(error){supportNote=error instanceof Error?error.message:'Rollback is unavailable.'}}
     const canRollback=Boolean(release&&Number(release.sequence)>1&&!supportNote)
-    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:diff?`${changes.length} ${changes.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':supportNote||'No earlier release is available.',changes:approved.map(change=>({key:rollbackKey(change),label:`${words(String(change.collection))} · ${String(record(change.after).title??record(change.before).title??change.id)}`}))}:null}
+    return{id:String(item.id),event,createdAt:String(item.createdAt),who:typeof actor.name==='string'?actor.name:typeof actor.email==='string'?actor.email:view.source==='assistant'?'Connected assistant':'System',via:view.source==='assistant'?(event.startsWith('mcp.')?'MCP':'Admin assistant'):relationID(item.actor)?'Admin':'Automated process',...view,detail:diff?`${changes.length} ${changes.length===1?'record':'records'} changed`:set?.name??'Activity recorded',diff,evidence,rollback:release?{releaseID:String(release.id),sequence:Number(release.sequence),enabled:canRollback,note:canRollback?'Creates a draft change set for review. Nothing publishes automatically.':supportNote||'No earlier release is available.',changes:approved.map(change=>({key:rollbackKey(change),label:`${words(String(change.collection))} · ${String(record(change.after).title??record(change.before).title??change.id)}`}))}:null}
   })
 }
 
