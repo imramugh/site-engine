@@ -24,10 +24,20 @@ async function currentRelease(page: Page): Promise<Locator> {
   await expect(row).toContainText('Reviewed changes')
   await expect(row.locator('ins')).toContainText('A current published summary that the reviewed rollback browser flow restores.')
   await expect(row.locator('del')).not.toHaveText('Previous values')
-  const evidence = row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true })
-  await expect(evidence).toHaveAttribute('href', /^\/api\/auth\/preview\/evidence\/[0-9a-f-]+\/proposed$/)
-  const href = await evidence.getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
-  const image = await page.request.get(href); expect(image.status()).toBe(200); expect(image.headers()['content-type']).toContain('image/png'); expect((await image.body()).subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]))
+  const links = [
+    row.getByRole('link', { name: 'Open before screenshot', exact: true }),
+    row.getByRole('link', { name: 'Open immutable screenshot evidence', exact: true }),
+  ]
+  for (const [index, evidence] of links.entries()) {
+    await expect(evidence).toHaveAttribute('href', new RegExp(`^\\/api\\/auth\\/preview\\/evidence\\/[0-9a-f-]+\\/${index ? 'proposed' : 'live'}$`))
+    const href = await evidence.getAttribute('href'); if (!href) throw new Error('Missing evidence link.')
+    const imagePage = await page.context().newPage()
+    const image = await imagePage.goto(href)
+    expect(image?.status()).toBe(200); expect(image?.headers()['content-type']).toContain('image/png')
+    await expect(imagePage.locator('img')).toHaveAttribute('src', new RegExp(`${href}$`))
+    await expect(imagePage.locator('img')).toHaveJSProperty('naturalWidth', 1)
+    await imagePage.close()
+  }
   return row
 }
 
