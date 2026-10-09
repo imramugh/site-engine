@@ -105,5 +105,8 @@ const { enabled, formId, heading, headingId, topicLabel = 'Topic', topics = [{ v
   });
 </script>
 <style>
-  [data-inquiry-error-summary] a { display: inline-flex; align-items: center; min-height: 24px; line-height: 1.5; }
+  /* Error-summary links are created by the client validation script, so they
+     do not receive this component's Astro scope class. Scope the static
+     summary container while leaving its dynamic link descendants global. */
+  [data-inquiry-error-summary] :global(a) { display: inline-flex; align-items: center; min-height: 24px; line-height: 1.5; }
 </style>

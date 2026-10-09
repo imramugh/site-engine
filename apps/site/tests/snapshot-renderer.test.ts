@@ -841,8 +841,17 @@ describe('static snapshot renderer', () => {
             const summary = form.locator('[data-inquiry-error-summary]');
             expect(await summary.isVisible()).toBe(true);
             await assertInquiryAxe();
+            const summaryTargetSizeViolations = await summary.evaluate(async (element) => {
+              const axe = (window as typeof window & { axe: { run: (context: Element, options: unknown) => Promise<{ violations: unknown[] }> } }).axe;
+              return (await axe.run(element, { runOnly: { type: 'rule', values: ['target-size'] } })).violations;
+            });
+            expect(summaryTargetSizeViolations).toEqual([]);
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-name');
             const clientEmailLink = summary.getByRole('link', { name: 'Enter a valid email address.' });
+            expect(await clientEmailLink.evaluate((link) => {
+              const style = getComputedStyle(link);
+              return { display: style.display, minHeight: style.minHeight, height: link.getBoundingClientRect().height };
+            })).toEqual({ display: 'inline-flex', minHeight: '24px', height: 24 });
             await clientEmailLink.focus(); await clientEmailLink.press('Enter');
             expect(await page.evaluate(() => document.activeElement?.id)).toBe('12345678-1234-4234-8234-123456789abe-inquiry-email');
             await form.locator('[name="name"]').fill('Retry visitor');
