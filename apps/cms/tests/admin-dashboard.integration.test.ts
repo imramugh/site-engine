@@ -39,9 +39,11 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
     const activatedAt = '2026-10-04T12:00:00.000Z'
     await payload.create({ collection: 'published-releases', data: { outbox: outbox.id, sequence: 1, snapshot: snapshot.id, activatedAt, healthEvidence: { status: 'healthy' }, artifact: { digest: 'c'.repeat(64), sourceContentHash: snapshot.contentHash, themeVersion: '1.0.0', engineVersion: 'test', contractVersion: '1.0.0', checks: [] } }, overrideAccess: true, context: { editorialInternal: true } })
     const failed = await payload.create({ collection: 'publish-outbox', data: { idempotencyKey: 'dashboard-failed-outbox-key', sequence: 2, snapshot: snapshot.id, changeSet: set.id, reviewRevision: 1, changeHash: 'b'.repeat(64), includedChangeKeys: [], status: 'failed', attempts: 3, errorCode: 'BUILD_TIMEOUT', correlationID: 'dashboard-failed-correlation' }, overrideAccess: true, context: { editorialInternal: true } })
+    const mailbox = await payload.create({ collection: 'mailbox-configurations', data: { name: 'Dashboard notification mailbox', provider: 'smtp', primaryAddress: 'notices@example.test', aliases: [], verifiedAliases: [], host: 'smtp.example.test', port: 587, security: 'starttls', username: 'notices', encryptedCredential: 'generic-test-credential', credentialRevision: 'dashboard-mailbox', health: 'connected', testedAt: activatedAt }, overrideAccess: true, context: { mailboxInternal: true } })
+    await payload.create({ collection: 'mailbox-area-mappings', data: { area: 'notifications', mailbox: mailbox.id, senderAddress: 'notices@example.test' }, overrideAccess: true, context: { mailboxInternal: true } })
 
     const result = await getAdminDashboardData(observedPayload([]), owner)
-    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 2, stale: 1 }, pages: { readiness: { state: 'available', issues: 0 }, withIssues: { state: 'available' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt }, latestPublish: { id: failed.id, sequence: 2, status: 'failed' } })
+    expect(result).toMatchObject({ state: 'ready', pendingReviews: { total: 2, stale: 1 }, pages: { readiness: { state: 'available', issues: 0 }, withIssues: { state: 'available' } }, leads: { new: 2, urgent: 1 }, latestRelease: { sequence: 1, activatedAt }, latestPublish: { id: failed.id, sequence: 2, status: 'failed' }, email: { state: 'connected', testedAt: activatedAt } })
     expect(result.pendingReviews?.items.find((item) => item.name === 'Ready for review')).toMatchObject({ readiness: 'not-run', issues: 0 })
     expect(result.pendingReviews?.items.find((item) => item.name === 'Blocked review')).toMatchObject({ readiness: 'blocked', issues: 0 })
     expect(result.pendingReviews?.items.find((item) => item.name === 'Stale review')).toMatchObject({ state: 'stale' })
@@ -49,6 +51,8 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
     expect(JSON.stringify(result.leads)).not.toContain('active incident needs attention')
     expect(result.actions.map((item) => item.href)).toContain('/integrations')
     expect(result.shortcuts.map((item) => item.href)).toContain('/leads')
+    await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'revoked' }, overrideAccess: true, context: { mailboxInternal: true } })
+    expect((await getAdminDashboardData(observedPayload([]), owner)).email).toMatchObject({ state: 'revoked' })
   })
 
   it('does not query or return private lead data for an editor or approver', async () => {
@@ -62,6 +66,8 @@ describe('ENG-022 dashboard aggregates (ENG-006 access controls)', () => {
       expect(result.providers).toBeUndefined()
       expect(collections).not.toContain('inquiries')
       expect(collections).not.toContain('integration-configurations')
+      expect(collections).not.toContain('mailbox-configurations')
+      expect(collections).not.toContain('mailbox-area-mappings')
       expect(result.shortcuts.map((item) => item.href)).not.toContain('/leads')
       expect(result.shortcuts.map((item) => item.href)).not.toContain('/applications')
     }

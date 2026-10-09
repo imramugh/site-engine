@@ -20,6 +20,14 @@ function providerHealth(providers: Awaited<ReturnType<typeof getAdminDashboardDa
   if (providers.unknown) return { status: 'unknown', text: `${providers.unknown} unverified` }
   return { status: 'ready', text: `${providers.connected} of ${providers.configured} verified` }
 }
+function emailHealth(email: Awaited<ReturnType<typeof getAdminDashboardData>>['email']): { status: 'ready' | 'attention' | 'unknown'; text: string } {
+  if (!email) return { status: 'unknown', text: 'Owner access required' }
+  if (email.state === 'connected') return { status: 'ready', text: 'Connection verified' }
+  if (email.state === 'not-configured') return { status: 'unknown', text: 'Not configured' }
+  if (email.state === 'unknown') return { status: 'unknown', text: 'Not tested' }
+  if (email.state === 'revoked') return { status: 'attention', text: 'Credential revoked' }
+  return { status: 'attention', text: email.state === 'rejected' ? 'Connection rejected' : 'Connection unavailable' }
+}
 
 export async function AdminDashboard() {
   const payload = await getPayload({ config })
@@ -33,6 +41,8 @@ export async function AdminDashboard() {
   const publishLabel = latestFailed ? 'Failed' : latestJobNeedsAttention && data.latestPublish?.status === 'processing' ? 'Publishing' : latestJobNeedsAttention && data.latestPublish?.status === 'pending' ? 'Queued' : data.latestRelease ? 'Published' : '—'
   const publishNote = latestJobNeedsAttention ? `Latest job · #${data.latestPublish?.sequence}` : data.latestRelease ? date(data.latestRelease.activatedAt) : data.pages ? 'No published release yet' : 'Not available for this role'
   const provider = providerHealth(data.providers)
+  const email = emailHealth(data.email)
+  const reviewNote = reviews?.stale ? `${reviews.stale} stale change set${reviews.stale === 1 ? '' : 's'} need${reviews.stale === 1 ? 's' : ''} updating` : reviews?.items[0] ? `Oldest: ${date(reviews.items[0].updatedAt)}` : reviews ? 'No reviews waiting' : 'Not available for this role'
   const summary = [reviews ? `${reviews.total} review${reviews.total === 1 ? '' : 's'} waiting` : '', data.leads ? `${data.leads.new} new lead${data.leads.new === 1 ? '' : 's'}${data.leads.urgent ? `, including ${data.leads.urgent} urgent` : ''}` : ''].filter(Boolean).join(' · ')
 
   return <main className={`admin-dashboard ${styles.dashboard}`} aria-labelledby="admin-dashboard-title">
@@ -42,7 +52,7 @@ export async function AdminDashboard() {
     </header>
     {data.message && <p data-dashboard-empty role={data.state === 'error' ? 'alert' : 'status'}>{data.message}</p>}
     <div data-dashboard-metrics aria-label="Dashboard summary">
-      <a href={has('/editorial') ? '/editorial' : undefined} data-dashboard-metric="reviews"><span data-metric-label>Reviews waiting</span><strong data-metric-value>{reviews?.total ?? '—'}</strong><small data-metric-note>{reviews?.items[0] ? `Oldest: ${date(reviews.items[0].updatedAt)}` : reviews ? 'No reviews waiting' : 'Not available for this role'}</small></a>
+      <a href={has('/editorial') ? '/editorial' : undefined} data-dashboard-metric="reviews"><span data-metric-label>Reviews waiting</span><strong data-metric-value>{reviews?.total ?? '—'}</strong><small data-metric-note>{reviewNote}</small></a>
       <a href={has('/leads') ? '/leads' : undefined} data-dashboard-metric="leads"><span data-metric-label>New leads</span><strong data-metric-value>{data.leads?.new ?? '—'}</strong><small data-metric-note>{data.leads ? `${data.leads.urgent} active incident${data.leads.urgent === 1 ? '' : 's'}` : 'Not available for this role'}</small></a>
       <a href={has('/content-tree') ? '/content-tree' : undefined} data-dashboard-metric="issues"><span data-metric-label>Pages with issues</span><strong data-metric-value>{pageIssues?.state === 'available' ? pageIssues.total : '—'}</strong><small data-metric-note>{pageIssues?.message ?? 'Not available for this role'}</small></a>
       <a href={has('/operations') ? '/operations' : undefined} data-dashboard-metric="publish"><span data-metric-label>Last publish</span><strong data-metric-value>{publishLabel}</strong><small data-metric-note>{publishNote}</small></a>
@@ -67,7 +77,7 @@ export async function AdminDashboard() {
           <h3 id="dashboard-status-title">Site status</h3>
           <dl>
             <div><dt>Latest release</dt><dd data-status={latestJobNeedsAttention ? 'attention' : data.latestRelease ? 'ready' : 'unknown'}>{latestFailed ? `Publish failed · ${data.latestPublish?.sequence}` : latestJobNeedsAttention ? `${publishLabel} · ${data.latestPublish?.sequence}` : data.latestRelease ? `Published · ${data.latestRelease.sequence}` : 'Not recorded'}</dd></div>
-            <div><dt>Email delivery</dt><dd data-status="unknown">Not configured in CMS</dd></div>
+            <div><dt>Email delivery</dt><dd data-status={email.status}>{email.text}</dd></div>
             <div><dt>AI providers</dt><dd data-status={provider.status}>{provider.text}</dd></div>
             <div><dt>Backups</dt><dd data-status="unknown">Not reported to CMS</dd></div>
           </dl>
