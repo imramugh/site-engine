@@ -237,7 +237,7 @@ export async function buildSnapshot({ input, publicOrigin, basePath = '/', outpu
       const prefix = normalizedBase === '/' ? '' : normalizedBase.replace(/\/$/, '');
       const source = join(staged, 'media', symbol.filename);
       const icon = async (filename, size) => writeFile(join(staged, filename), await sharp(source).resize({ width: size, height: size, fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).png().toBuffer());
-      await Promise.all([icon('apple-touch-icon.png', 180), icon('icon-192.png', 192), icon('icon-512.png', 512)]);
+      await Promise.all([icon('apple-touch-icon.png', 180), icon('icon-192.png', 192), icon('icon-512.png', 512), icon('social-avatar.png', 512)]);
       await writeFile(join(staged, 'site.webmanifest'), JSON.stringify({ name: snapshot.settings.siteName, short_name: snapshot.settings.siteName, icons: [{ src: `${prefix}/icon-192.png`, type: 'image/png', sizes: '192x192' }, { src: `${prefix}/icon-512.png`, type: 'image/png', sizes: '512x512' }] }));
     }
     await writeIndexNowVerificationFile({ output: staged });
