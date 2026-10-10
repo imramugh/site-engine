@@ -109,21 +109,54 @@ export async function stabilizeVideoCaptureState(page) {
     }
   });
 }
-async function assertVisualBaselines(actual, { file, record, identity }) {
+const sha256Pattern = /^[a-f0-9]{64}$/;
+
+/** Validates caller-owned screenshot references without weakening exact comparison. */
+export function validateVisualBaseline(value, identity) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Visual baseline must be an object.");
+  if (value.identity && JSON.stringify(value.identity) !== JSON.stringify(identity)) throw new Error(`Visual baseline identity does not match ${identity.name}@${identity.themeVersion}.`);
+  const screenshots = value.screenshots || value;
+  if (!screenshots || typeof screenshots !== "object" || Array.isArray(screenshots)) throw new Error("Visual baseline screenshots must be an object.");
+  for (const [filename, hash] of Object.entries(screenshots)) {
+    if (typeof hash !== "string" || !sha256Pattern.test(hash)) throw new Error(`Visual baseline primary hash for ${filename} must be a lowercase SHA-256.`);
+  }
+  const variants = value.reviewedRasterVariants;
+  if (variants === undefined) return { screenshots, variants: {} };
+  if (!variants || typeof variants !== "object" || Array.isArray(variants)) throw new Error("reviewedRasterVariants must be an object keyed by screenshot filename.");
+  for (const [filename, entries] of Object.entries(variants)) {
+    if (!(filename in screenshots)) throw new Error(`reviewedRasterVariants names unknown screenshot ${filename}.`);
+    if (!Array.isArray(entries) || entries.length === 0) throw new Error(`reviewedRasterVariants for ${filename} must be a non-empty array.`);
+    const seen = new Set();
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) || Object.keys(entry).some((key) => !["sha256", "reason", "evidence"].includes(key))) throw new Error(`reviewedRasterVariants for ${filename} contains an invalid entry.`);
+      if (typeof entry.sha256 !== "string" || !sha256Pattern.test(entry.sha256)) throw new Error(`reviewedRasterVariants for ${filename} requires a lowercase SHA-256.`);
+      if (entry.sha256 === screenshots[filename]) throw new Error(`reviewedRasterVariants for ${filename} must not repeat the primary hash.`);
+      if (seen.has(entry.sha256)) throw new Error(`reviewedRasterVariants for ${filename} must not repeat a hash.`);
+      if (typeof entry.reason !== "string" || !entry.reason.trim() || typeof entry.evidence !== "string" || !entry.evidence.trim()) throw new Error(`reviewedRasterVariants for ${filename} requires non-empty reason and evidence.`);
+      seen.add(entry.sha256);
+    }
+  }
+  return { screenshots, variants };
+}
+
+export async function assertVisualBaselines(actual, { file, record, identity }) {
   if (!file) throw new Error(`No visual baseline is configured for ${identity.name}@${identity.themeVersion}. Pass baselineFile, or use recordBaselines with a caller-owned baselineFile.`);
   if (record) {
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, `${JSON.stringify({ identity, screenshots: actual }, null, 2)}\n`);
-    return;
+    return { matchedVariants: [] };
   }
-  const expected = JSON.parse(await readFile(file, "utf8"));
-  const screenshots = expected.screenshots || expected;
-  if (expected.identity && JSON.stringify(expected.identity) !== JSON.stringify(identity)) throw new Error(`Visual baseline identity does not match ${identity.name}@${identity.themeVersion}.`);
-  if (JSON.stringify(actual) !== JSON.stringify(screenshots)) {
-    throw new Error(
-      `Visual baseline changed. Review artifacts/theme-starter-conformance and run UPDATE_THEME_CONFORMANCE_BASELINES=1 pnpm conformance:starter to accept an intentional change.`,
-    );
+  const { screenshots, variants } = validateVisualBaseline(JSON.parse(await readFile(file, "utf8")), identity);
+  const actualNames = Object.keys(actual);
+  if (actualNames.length !== Object.keys(screenshots).length || actualNames.some((filename) => !(filename in screenshots))) throw new Error("Visual baseline screenshot names changed.");
+  const matchedVariants = [];
+  for (const filename of actualNames) {
+    if (actual[filename] === screenshots[filename]) continue;
+    const matched = variants[filename]?.find((entry) => entry.sha256 === actual[filename]);
+    if (!matched) throw new Error(`Visual baseline changed for ${filename}. Review artifacts/theme-starter-conformance and run UPDATE_THEME_CONFORMANCE_BASELINES=1 pnpm conformance:starter to accept an intentional change.`);
+    matchedVariants.push({ filename, sha256: matched.sha256, reason: matched.reason, evidence: matched.evidence });
   }
+  return { matchedVariants };
 }
 
 /**
@@ -860,8 +893,8 @@ export async function runThemeConformance({ themePackage = "@site-engine/theme-s
           );
           await context.close();
         }
-      await assertVisualBaselines(screenshots, { file: selectedBaseline, record: recordBaselines, identity });
-      await writeFile(join(evidence, "conformance-report.json"), `${JSON.stringify({ identity, blocks: blocks.length, cases: paths.length * 2, baselineFile: selectedBaseline }, null, 2)}\n`);
+      const visualBaseline = await assertVisualBaselines(screenshots, { file: selectedBaseline, record: recordBaselines, identity });
+      await writeFile(join(evidence, "conformance-report.json"), `${JSON.stringify({ identity, blocks: blocks.length, cases: paths.length * 2, baselineFile: selectedBaseline, visualBaseline }, null, 2)}\n`);
     } finally {
       await browser.close();
       await new Promise((done) => server.close(done));
