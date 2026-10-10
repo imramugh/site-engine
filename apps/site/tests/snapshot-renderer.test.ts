@@ -593,7 +593,8 @@ describe('static snapshot renderer', () => {
       for (const logo of semanticLogos) expect(await readFile(join(built.output, 'media', logo.filename), 'utf8')).toBe(await readFile(join(source, logo.filename), 'utf8'));
       const manifest = JSON.parse(await readFile(join(built.output, 'site.webmanifest'), 'utf8'));
       expect(manifest.icons).toEqual([{ src: `${BASE_PATH}icon-192.png`, type: 'image/png', sizes: '192x192' }, { src: `${BASE_PATH}icon-512.png`, type: 'image/png', sizes: '512x512' }]);
-      for (const [filename, size] of [['apple-touch-icon.png', 180], ['icon-192.png', 192], ['icon-512.png', 512]] as const) expect(await sharp(await readFile(join(built.output, filename))).metadata()).toMatchObject({ format: 'png', width: size, height: size });
+      for (const [filename, size] of [['apple-touch-icon.png', 180], ['icon-192.png', 192], ['icon-512.png', 512], ['social-avatar.png', 512]] as const) expect(await sharp(await readFile(join(built.output, filename))).metadata()).toMatchObject({ format: 'png', width: size, height: size });
+      expect(await readFile(join(built.output, "social-avatar.png"))).toEqual(await readFile(join(built.output, "icon-512.png")));
       const html = await readFile(join(built.output, 'index.html'), 'utf8');
       expect(html).toContain(`rel="icon" type="image/svg+xml" href="${BASE_PATH}media/symbol-light.svg"`);
       expect(html).toContain(`rel="apple-touch-icon" sizes="180x180" href="${BASE_PATH}apple-touch-icon.png"`);
