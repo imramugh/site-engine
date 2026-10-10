@@ -1,54 +1,47 @@
 ---
 import { crawlerMode } from '../lib/crawler-config.js';
 import { renderBase } from '../lib/snapshot.js';
+import { parseAnalyticsConfig } from '@site-engine/engine/analytics';
 interface Props { path: string }
 const { path } = Astro.props;
-const configured = process.env.PUBLIC_ANALYTICS_ENDPOINT;
 const preview = crawlerMode(process.env.SITE_BASE_PATH ?? renderBase) === 'preview';
-let endpoint: string | undefined;
-if (configured && !preview) {
-  try { const parsed = new URL(configured); if (parsed.protocol === 'https:' && !parsed.username && !parsed.password) endpoint = parsed.href; } catch { /* Invalid deployment configuration leaves collection disabled. */ }
-}
+const analytics = preview ? undefined : parseAnalyticsConfig({ endpoint: process.env.PUBLIC_ANALYTICS_ENDPOINT, events: process.env.PUBLIC_ANALYTICS_EVENTS_JSON, navigationPaths: process.env.PUBLIC_ANALYTICS_NAVIGATION_PATHS_JSON, primaryCtaPaths: process.env.PUBLIC_ANALYTICS_PRIMARY_CTA_PATHS_JSON });
 const consentRequired = process.env.PUBLIC_ANALYTICS_CONSENT_REQUIRED !== 'false';
 ---
-{endpoint && <section data-analytics-consent data-endpoint={endpoint} data-path={path} data-consent-required={String(consentRequired)} aria-label="Optional measurement">
+{analytics && <section data-analytics-consent data-endpoint={analytics.endpoint} data-path={path} data-events={JSON.stringify(analytics.events)} data-navigation-paths={JSON.stringify(analytics.navigationPaths)} data-primary-cta-paths={JSON.stringify(analytics.primaryCtaPaths)} data-consent-required={String(consentRequired)} aria-label="Optional measurement">
   <p data-analytics-consent-status>Optional measurement is off.</p>
   <button type="button" data-analytics-grant>Allow optional measurement</button>
   <button type="button" data-analytics-revoke>Disable optional measurement</button>
 </section>}
 <script>
+  import { analyticsConsentStorageKey, classifyAttribution, classifyConversion, createAnalyticsPayload, isApprovedNavigation, isApprovedPrimaryCta, isPhoneLink, parseAnalyticsConfig, type AnalyticsEvent } from '@site-engine/engine/analytics';
   type Consent = 'granted' | 'revoked' | undefined;
   type HookWindow = Window & typeof globalThis & { siteAnalyticsConsent?: { grant: () => void; revoke: () => void } };
   const root = document.querySelector<HTMLElement>('[data-analytics-consent]');
   if (root) {
-    const endpoint = root.dataset.endpoint!;
     const path = root.dataset.path!;
+    const config = parseAnalyticsConfig({ endpoint: root.dataset.endpoint, events: root.dataset.events, navigationPaths: root.dataset.navigationPaths, primaryCtaPaths: root.dataset.primaryCtaPaths });
+    if (!config) throw new Error('Invalid analytics configuration');
     const consentRequired = root.dataset.consentRequired === 'true';
-    const allowed = new Set(['page_view', 'primary_cta', 'navigation', 'phone_tap', 'form_accepted', 'form_failed']);
-    const storageKey = 'site-analytics-consent';
+    const allowed = new Set<AnalyticsEvent>(config.events);
+    const storageKey = analyticsConsentStorageKey(config.endpoint);
     const readConsent = (): Consent => { try { const value = localStorage.getItem(storageKey); return value === 'granted' || value === 'revoked' ? value : undefined; } catch { return undefined; } };
     let currentConsent = readConsent();
     const writeConsent = (value: Exclude<Consent, undefined>) => { currentConsent = value; try { localStorage.setItem(storageKey, value); } catch { /* The in-memory value remains authoritative for this page. */ } };
     const allowedByConsent = () => currentConsent === 'revoked' ? false : currentConsent === 'granted' || !consentRequired;
-    const attribution = () => {
-      const source = new URLSearchParams(location.search).get('utm_source')?.toLowerCase();
-      if (source && /google|bing|duckduckgo|search/.test(source)) return 'search';
-      if (source && /chatgpt|perplexity|claude|copilot|ai/.test(source)) return 'ai_assistant';
-      if (source) return 'campaign';
-      if (!document.referrer) return 'direct';
-      try { const host = new URL(document.referrer).hostname; return /google|bing|duckduckgo/.test(host) ? 'search' : /chatgpt|perplexity|claude|copilot/.test(host) ? 'ai_assistant' : 'referral'; } catch { return 'direct'; }
-    };
-    const emit = (event: string, detail: Record<string, string> = {}) => { if (!allowed.has(event) || !allowedByConsent()) return; void fetch(endpoint, { method: 'POST', keepalive: true, credentials: 'omit', referrerPolicy: 'no-referrer', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event, path, attribution: attribution(), ...detail }) }).catch(() => undefined); };
+    const attribution = () => classifyAttribution({ search: location.search, referrer: document.referrer, currentOrigin: location.origin });
+    const emit = (event: AnalyticsEvent, form?: 'inquiry' | 'application') => { if (!allowed.has(event) || !allowedByConsent()) return; const payload = createAnalyticsPayload(event, path, attribution(), form); if (!payload) return; void fetch(config.endpoint, { method: 'POST', keepalive: true, credentials: 'omit', referrerPolicy: 'no-referrer', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined); };
     const status = root.querySelector<HTMLElement>('[data-analytics-consent-status]')!;
     const refresh = () => { status.textContent = allowedByConsent() ? 'Optional measurement is on.' : 'Optional measurement is off.'; };
-    const grant = () => { if (allowedByConsent()) return; writeConsent('granted'); refresh(); emit('page_view'); };
+    const grant = () => { const wasAllowed = allowedByConsent(); if (currentConsent === 'granted') return; writeConsent('granted'); refresh(); if (!wasAllowed) emit('page_view'); };
     const revoke = () => { writeConsent('revoked'); refresh(); };
     (window as HookWindow).siteAnalyticsConsent = { grant, revoke };
     root.querySelector<HTMLElement>('[data-analytics-grant]')!.addEventListener('click', grant);
     root.querySelector<HTMLElement>('[data-analytics-revoke]')!.addEventListener('click', revoke);
     window.addEventListener('analytics-consent-revoked', revoke);
-    document.addEventListener('click', (event) => { const link = (event.target as Element | null)?.closest('a'); if (!link) return; if (link.matches('[data-primary-cta]')) emit('primary_cta'); else if (link.href.startsWith('tel:')) emit('phone_tap'); else if (link.closest('nav') && link.origin === location.origin) emit('navigation'); });
-    window.addEventListener('site-conversion', (event: Event) => { const detail = (event as CustomEvent<{ accepted?: boolean; form?: string }>).detail; emit(detail?.accepted ? 'form_accepted' : 'form_failed', { form: detail?.form === 'application' ? 'application' : 'inquiry' }); });
+    window.addEventListener('storage', (event) => { if (event.key === storageKey || event.key === null) { currentConsent = readConsent(); refresh(); } });
+    document.addEventListener('click', (event) => { if (!(event.target instanceof Element)) return; const link = event.target.closest<HTMLAnchorElement>('a'); if (!link) return; if (isPhoneLink(link.protocol)) emit('phone_tap'); else if (isApprovedPrimaryCta({ sameOrigin: link.origin === location.origin, markedPrimary: link.matches('[data-primary-cta]'), pathname: link.pathname, config })) emit('primary_cta'); else if (isApprovedNavigation({ sameOrigin: link.origin === location.origin, inNavigation: link.closest('nav') !== null, pathname: link.pathname, config })) emit('navigation'); });
+    window.addEventListener('site-conversion', (event: Event) => { const conversion = classifyConversion((event as CustomEvent<unknown>).detail); if (conversion) emit(conversion.event, conversion.form); });
     refresh(); if (allowedByConsent()) emit('page_view');
   }
 </script>

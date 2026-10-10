@@ -908,17 +908,18 @@ describe('static snapshot renderer', () => {
     expect(html).toContain('25252525-2525-4252-8252-252525252525-inquiry-name-error');
   });
 
-  it('keeps analytics disabled until consent, sends allowlisted CTA, navigation, phone and form outcomes, and stops after revocation', async () => {
+  it('keeps analytics disabled until consent, sends configured allowlisted events and stops after revocation', async () => {
     const snapshot = fixture('Analytics'); snapshot.settings.sections[0]!.allowedTemplates.push('standard');
     const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
     snapshot.pages.push(inquiry); snapshot.settings.sections[0]!.pageIds.push(inquiry.id);
-    const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events' } }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
+    const input = await writeSnapshot(root, snapshot, 'analytics.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events', navigationPaths: ['/'] } }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = [];
     let inquiries = 0;
     await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); }); await page.route('**/api/inquiries', async route => { inquiries += 1; await route.fulfill(inquiries === 1 ? { status: 422, contentType: 'application/json', body: JSON.stringify({ errors: { name: 'Enter a valid name.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
     try {
       await page.goto(`${served.origin}/`); await page.locator('[data-primary-cta]').click(); expect(events).toEqual([]);
       await page.getByRole('button', { name: 'Allow optional measurement' }).click(); await expect.poll(() => events.some((item: any) => item.event === 'page_view')).toBe(true);
-      await page.goto(`${served.origin}/docs/analytics-inquiry/?utm_source=search-test`);
+      const grantedPageViews = events.filter((item: any) => item.event === 'page_view').length; await page.reload({ waitUntil: 'networkidle' }); await expect.poll(() => events.filter((item: any) => item.event === 'page_view').length).toBe(grantedPageViews + 1);
+      await page.goto(`${served.origin}/docs/analytics-inquiry/?utm_source=google`);
       await page.getByLabel('Name').fill('Analytics visitor'); await page.getByLabel('Work email').fill('analytics@example.test'); await page.getByLabel('Message').fill('This must never be sent to analytics.'); await page.getByLabel(/I consent/).check();
       const submit = page.locator('[data-inquiry-form] button');
       await submit.click(); await page.getByRole('alert').filter({ hasText: 'Enter a valid name.' }).waitFor();
@@ -929,12 +930,53 @@ describe('static snapshot renderer', () => {
       await page.evaluate(() => { const phone = document.createElement('a'); phone.href = 'tel:+15550100'; phone.textContent = 'Call'; document.body.append(phone); });
       await page.locator('a[href="tel:+15550100"]').click({ noWaitAfter: true });
       await expect.poll(() => ['form_failed', 'form_accepted', 'navigation', 'primary_cta', 'phone_tap'].every(event => events.some((item: any) => item.event === event))).toBe(true);
-      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'page_view', attribution: 'search' }), expect.objectContaining({ event: 'form_failed', form: 'inquiry' }), expect.objectContaining({ event: 'form_accepted', form: 'inquiry' }), expect.objectContaining({ event: 'navigation' }), expect.objectContaining({ event: 'primary_cta' }), expect.objectContaining({ event: 'phone_tap' })])); expect(JSON.stringify(events)).not.toMatch(/message|email|This must never be sent|search-test/);
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'page_view', attribution: 'search' }), expect.objectContaining({ event: 'form_failed', form: 'inquiry' }), expect.objectContaining({ event: 'form_accepted', form: 'inquiry' }), expect.objectContaining({ event: 'navigation' }), expect.objectContaining({ event: 'primary_cta' }), expect.objectContaining({ event: 'phone_tap' })])); expect(JSON.stringify(events)).not.toMatch(/message|email|This must never be sent|google/);
       const count = events.length;
       await page.getByRole('button', { name: 'Disable optional measurement' }).click();
       await page.evaluate(() => window.dispatchEvent(new CustomEvent('site-conversion', { detail: { form: 'inquiry', accepted: false } })));
       await page.waitForTimeout(100); expect(events).toHaveLength(count);
+      await page.reload({ waitUntil: 'networkidle' }); await page.waitForTimeout(100); expect(events).toHaveLength(count);
     } finally { await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+  }, 120_000);
+
+  it('records inquiry and application outcomes with exact anonymous payloads', async () => {
+    const snapshot = fixture('Analytics conversions'); snapshot.settings.sections[0]!.allowedTemplates.push('standard', 'job');
+    const inquiry = { ...snapshot.pages[0]!, id: 'abababab-1234-4abc-8abc-abababababab', slug: 'analytics-inquiry', template: 'standard' as const, blocks: [{ id: 'abababab-2222-4abc-8abc-abababababab', type: 'contact' as const, heading: 'Contact', body: 'Synthetic analytics contact form.', inquiryForm: true, hidden: false, appearance: { background: 'default' as const, width: 'content' as const, spacing: 'default' as const, motionIntent: 'none' as const, logoTone: 'default' as const } }] };
+    const job = { ...snapshot.pages[0]!, id: 'abababab-3333-4abc-8abc-abababababab', slug: 'analytics-role', title: 'Analytics role', template: 'job' as const, blocks: [] as typeof snapshot.pages[0]['blocks'], jobPosting: { datePosted: '2026-10-01T12:00:00.000Z', employmentType: 'FULL_TIME' as const, location: { addressLocality: 'Example City', addressCountry: 'CA' } } };
+    snapshot.pages.push(inquiry, job); snapshot.settings.sections[0]!.pageIds.push(inquiry.id, job.id);
+    const input = await writeSnapshot(root, snapshot, 'analytics-conversions.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events', events: ['form_accepted', 'form_failed'] } }); const served = await staticServer(built.output, '/', { 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://analytics.example.test" }); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: Array<Record<string, unknown>> = [];
+    let inquiryRequests = 0; let applicationRequests = 0;
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); });
+    await page.route('**/api/inquiries', async route => { inquiryRequests += 1; await route.fulfill(inquiryRequests === 1 ? { status: 422, contentType: 'application/json', body: JSON.stringify({ errors: { name: 'Enter a valid name.' } }) } : { status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true }) }); });
+    await page.route('**/api/applications', async route => { applicationRequests += 1; await route.fulfill(applicationRequests === 1 ? { status: 500, contentType: 'application/json', body: '{}' } : { status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb' }) }); });
+    try {
+      await page.goto(`${served.origin}/docs/analytics-inquiry/`); await page.getByRole('button', { name: 'Allow optional measurement' }).click();
+      await page.addScriptTag({ path: createRequire(import.meta.url).resolve('axe-core/axe.min.js') });
+      expect(await page.evaluate(async () => (await (window as typeof window & { axe: { run: (context: string, options: unknown) => Promise<{ violations: unknown[] }> } }).axe.run('[data-analytics-consent]', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]);
+      await page.getByLabel('Name').fill('Inquiry person'); await page.getByLabel('Work email').fill('inquiry.person@example.test'); await page.getByLabel('Message').fill('Private inquiry message.'); await page.getByLabel(/I consent/).check();
+      const inquirySubmit = page.locator('[data-inquiry-form] button'); await inquirySubmit.click(); await page.getByRole('alert').waitFor(); await inquirySubmit.click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
+      await page.goto(`${served.origin}/docs/analytics-role/`); await page.getByLabel('Full name').fill('Applicant person'); await page.getByLabel('Email').fill('applicant.person@example.test'); await page.getByLabel(/Resume/).setInputFiles({ name: 'private-resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF private resume') }); await page.getByLabel(/I consent/).check();
+      const applicationSubmit = page.getByRole('button', { name: 'Submit application' }); await applicationSubmit.click(); await page.getByRole('alert').waitFor(); await applicationSubmit.click(); await page.getByRole('status').filter({ hasText: 'received' }).waitFor();
+      await expect.poll(() => events.length).toBe(4);
+      expect(events).toEqual(expect.arrayContaining([{ event: 'form_failed', path: '/docs/analytics-inquiry', attribution: 'direct', form: 'inquiry' }, { event: 'form_accepted', path: '/docs/analytics-inquiry', attribution: 'direct', form: 'inquiry' }, { event: 'form_failed', path: '/docs/analytics-role', attribution: 'direct', form: 'application' }, { event: 'form_accepted', path: '/docs/analytics-role', attribution: 'direct', form: 'application' }]));
+      for (const event of events) expect(Object.keys(event).sort()).toEqual(['attribution', 'event', 'form', 'path']);
+      expect(JSON.stringify(events)).not.toMatch(/Inquiry person|inquiry\.person|Private inquiry|Applicant person|applicant\.person|private-resume|%PDF/);
+    } finally { await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
+  }, 120_000);
+
+  it('fails closed for invalid configuration and preview builds', async () => {
+    const snapshot = fixture('Analytics disabled'); const input = await writeSnapshot(root, snapshot, 'analytics-disabled.json');
+    const invalid = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events', events: ['not-an-event'] } });
+    const preview = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, basePath: BASE_PATH, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events' } });
+    const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: unknown[] = []; const invalidServer = await staticServer(invalid.output, '/'); const previewServer = await staticServer(preview.output, BASE_PATH);
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); });
+    try { await page.goto(`${invalidServer.origin}/`); expect(await page.locator('[data-analytics-consent]').count()).toBe(0); await page.goto(`${previewServer.origin}${BASE_PATH}`); expect(await page.locator('[data-analytics-consent]').count()).toBe(0); expect(events).toEqual([]); } finally { await context.close(); await browser.close(); invalidServer.server.closeAllConnections(); invalidServer.server.close(); previewServer.server.closeAllConnections(); previewServer.server.close(); }
+  }, 120_000);
+
+  it('filters events, excludes unapproved navigation, and accepts configured unmarked primary CTAs', async () => {
+    const snapshot = fixture('Analytics filtering'); const input = await writeSnapshot(root, snapshot, 'analytics-filtering.json'); const built = await renderer.buildSnapshot({ input, publicOrigin: PUBLIC_ORIGIN, outputRoot: root, analytics: { endpoint: 'https://analytics.example.test/events', events: ['primary_cta'], primaryCtaPaths: ['/docs'] } }); const served = await staticServer(built.output, '/'); const browser = await chromium.launch(); const context = await browser.newContext(); const page = await context.newPage(); const events: Array<Record<string, unknown>> = [];
+    await page.route('https://analytics.example.test/events', async route => { events.push(route.request().postDataJSON()); await route.fulfill({ status: 204 }); });
+    try { await page.goto(`${served.origin}/`); await page.getByRole('button', { name: 'Allow optional measurement' }).click(); await page.evaluate(() => { const cta = document.createElement('a'); cta.href = '/docs'; cta.textContent = 'Configured CTA'; cta.addEventListener('click', event => event.preventDefault()); document.body.append(cta); const nav = document.createElement('nav'); nav.innerHTML = '<a href="/unapproved">Unapproved navigation</a>'; nav.querySelector('a')!.addEventListener('click', event => event.preventDefault()); document.body.append(nav); }); await page.getByRole('link', { name: 'Configured CTA' }).click(); await page.getByRole('link', { name: 'Unapproved navigation' }).click(); await expect.poll(() => events.length).toBe(1); expect(events[0]).toEqual({ event: 'primary_cta', path: '/', attribution: 'direct' }); } finally { await context.close(); await browser.close(); served.server.closeAllConnections(); served.server.close(); }
   }, 120_000);
 
   it('keeps consent decisions effective for the current page when browser storage is unavailable', async () => {
