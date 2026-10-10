@@ -6,6 +6,8 @@ Run `site-engine-theme-conformance @scope/theme --artifacts-dir artifacts/theme 
 
 For a new or intentional visual baseline, use a caller-owned file: `--baseline-file baselines/theme.json --record-baselines`. Recording never writes into the installed package. The bundled starter has a read-only default baseline; every other theme must supply its own baseline file.
 
+A reviewed baseline may add `reviewedRasterVariants` keyed by an existing screenshot filename. Each entry must contain an exact lowercase SHA-256 plus non-empty `reason` and `evidence`; it is accepted only for that named capture and is reported in `conformance-report.json`. The primary `screenshots` hash remains required and unchanged. Unknown filenames, duplicate or primary hashes, malformed hashes, and missing review fields fail the run.
+
 Library callers use `runThemeConformance({ themePackage, artifactsDir, baselineFile, recordBaselines })`.
 
 Before each screenshot, the harness waits for fonts and rendering frames, then returns the viewport to the top and clears transient focus and pointer state. Keyboard and form behavior checks run before that capture reset. The matrix also verifies video playback and loaded caption cues before hiding native controls and caption overlays for static capture; browser-owned overlays depend on viewport state and are not theme pixels.
