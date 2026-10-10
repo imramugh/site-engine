@@ -183,6 +183,10 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
       else environment.PUBLIC_ANALYTICS_ENDPOINT = analytics.endpoint;
       if (analytics.consentRequired === undefined) delete environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED;
       else environment.PUBLIC_ANALYTICS_CONSENT_REQUIRED = String(analytics.consentRequired);
+      for (const [option, variable] of Object.entries({ events: 'PUBLIC_ANALYTICS_EVENTS_JSON', navigationPaths: 'PUBLIC_ANALYTICS_NAVIGATION_PATHS_JSON', primaryCtaPaths: 'PUBLIC_ANALYTICS_PRIMARY_CTA_PATHS_JSON' })) {
+        if (analytics[option] === undefined) delete environment[variable];
+        else environment[variable] = JSON.stringify(analytics[option]);
+      }
     }
     const child = spawn(process.execPath, ['node_modules/astro/bin/astro.mjs', 'build'], { cwd: renderRoot, detached: process.platform !== 'win32', env: { ...environment, SITE_THEME_COMPONENT_ROOT: themeComponents, ...(themeMotionPath ? { SITE_THEME_MOTION_PATH: themeMotionPath } : {}), SITE_SNAPSHOT_PATH: frozen, SITE_PUBLIC_ORIGIN: publicOrigin, SITE_BASE_PATH: basePath, SITE_PUBLIC_DEMO: 'false', SITE_REVIEW_COMPARISON: isReviewComparisonBase(basePath) ? 'true' : 'false', SITE_OUTPUT_DIR: staged, SITE_CACHE_DIR: join(staged, '..', 'cache') }, stdio: 'inherit' });
     const stop = () => { terminate(child, 'SIGTERM'); forceTimer ??= setTimeout(() => terminate(child, 'SIGKILL'), 5_000); };
@@ -195,7 +199,7 @@ async function runAstro({ frozen, publicOrigin, basePath, staged, timeoutMs, sig
     child.once('exit', (code, exitSignal) => { cleanup(); if (aborted) reject(new Error('Astro build was cancelled.')); else if (timedOut) reject(new Error(`Astro build timed out after ${timeoutMs}ms (${exitSignal ?? code ?? 'unknown'}).`)); else code === 0 ? resolve() : reject(new Error(`Astro build exited ${code}`)); });
   });
 }
-/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, themeManifest?: unknown, themeSelection?: unknown, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean } }} options */
+/** @param {{ input: string, publicOrigin: string, basePath?: string, outputRoot: string, timeoutMs?: number, signal?: AbortSignal, themeComponentsRoot?: string, themeManifest?: unknown, themeSelection?: unknown, versionPins?: { themeVersion: string, engineVersion: string, contractVersion?: string }, analytics?: { endpoint?: string, consentRequired?: boolean, events?: string[], navigationPaths?: string[], primaryCtaPaths?: string[] } }} options */
 export async function buildSnapshot({ input, publicOrigin, basePath = '/', outputRoot, timeoutMs = 120_000, signal, themeComponentsRoot, themeManifest, themeSelection, versionPins, analytics }) {
   if (signal?.aborted) throw new Error('Astro build was cancelled.');
   if (!input || !publicOrigin || !outputRoot) throw new Error('input, publicOrigin, and outputRoot are required.');

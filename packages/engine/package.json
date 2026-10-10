@@ -1,6 +1,6 @@
 {
   "name": "@site-engine/engine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -11,6 +11,10 @@
     "./motion": {
       "types": "./dist/motion.d.ts",
       "import": "./dist/motion.js"
+    },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "import": "./dist/analytics.js"
     },
     "./theme-registry": {
       "types": "./dist/theme-registry.d.ts",
