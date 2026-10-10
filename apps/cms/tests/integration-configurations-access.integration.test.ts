@@ -173,4 +173,61 @@ describe('ENG-023 integration configuration access', () => {
       expect(calls).toBe(1)
     } finally { globalThis.fetch = originalFetch }
   })
+
+  it("rejects self-fallback configuration requests before writing state and accepts distinct fallbacks", async () => {
+    const owner = await payload.create({ collection: "users", data: { email: "fallback-route-owner@example.test", name: "Fallback route owner", roles: ["owner"] }, overrideAccess: true })
+    const session = await freshSession(owner.id)
+    const editor = await payload.create({ collection: "users", data: { email: "fallback-route-editor@example.test", name: "Fallback route editor", roles: ["editor"] }, overrideAccess: true })
+    const editorSession = await freshSession(editor.id)
+    const request = (body: Record<string, unknown>) => integrationRoute.POST(new Request("http://cms.test/api/integrations", { method: "POST", headers: { origin: "http://cms.test", cookie: session, "content-type": "application/json" }, body: JSON.stringify(body) }))
+    const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: "https://prices.example.test/review", pricingAsOf: "2026-10-04T00:00:00.000Z" }
+    await configureIntegration(payload, { provider: "anthropic", model: "fallback-model", credential: "fallback-route-secret", fallbackProvider: null, pricing, actor: owner.id })
+    const before = {
+      configurations: JSON.stringify((await payload.find({ collection: "integration-configurations", sort: "provider", overrideAccess: true })).docs),
+      defaults: JSON.stringify((await payload.find({ collection: "ai-job-defaults", sort: "jobType", overrideAccess: true })).docs),
+      jobs: (await payload.count({ collection: "configured-ai-jobs", overrideAccess: true })).totalDocs,
+      audits: (await payload.count({ collection: "audit-events", overrideAccess: true })).totalDocs,
+    }
+    const configure = { action: "configure", provider: "google-gemini", model: "route-model", credential: "route-secret", fallbackProvider: "google-gemini", ...pricing }
+    const aiDefault = { action: "configure-ai-default", provider: "anthropic", model: "fallback-model", jobType: "summary", fallbackProvider: "anthropic" }
+    expect((await request(configure)).status).toBe(400)
+    expect((await request(aiDefault)).status).toBe(400)
+    const denied = await integrationRoute.POST(new Request("http://cms.test/api/integrations", { method: "POST", headers: { origin: "http://cms.test", cookie: editorSession, "content-type": "application/json" }, body: JSON.stringify({ ...configure, fallbackProvider: "anthropic" }) }))
+    expect(denied.status).toBe(403)
+    expect(JSON.stringify((await payload.find({ collection: "integration-configurations", sort: "provider", overrideAccess: true })).docs)).toBe(before.configurations)
+    expect(JSON.stringify((await payload.find({ collection: "ai-job-defaults", sort: "jobType", overrideAccess: true })).docs)).toBe(before.defaults)
+    expect((await payload.count({ collection: "configured-ai-jobs", overrideAccess: true })).totalDocs).toBe(before.jobs)
+    expect((await payload.count({ collection: "audit-events", overrideAccess: true })).totalDocs).toBe(before.audits)
+    await expect(configureIntegration(payload, { ...configure, pricing } as never)).rejects.toThrow("INTEGRATION_FALLBACK_SELF")
+    expect((await payload.count({ collection: "audit-events", overrideAccess: true })).totalDocs).toBe(before.audits)
+    const valid = await request({ ...configure, fallbackProvider: "anthropic" })
+    expect([200, 201]).toContain(valid.status)
+    const configured = (await payload.find({ collection: "integration-configurations", where: { provider: { equals: "google-gemini" } }, limit: 1, overrideAccess: true })).docs[0]!
+    expect(configured).toMatchObject({ provider: "google-gemini", fallbackProvider: "anthropic" })
+    const routed = await request({ ...aiDefault, provider: "google-gemini", model: "route-model", fallbackProvider: "anthropic" })
+    expect(routed.status).toBe(200)
+    await expect(routed.json()).resolves.toMatchObject({ aiJobDefault: { provider: "google-gemini", fallbackProvider: "anthropic" } })
+  })
+
+  it("records redacted credential rotation and revocation audit metadata", async () => {
+    const owner = await payload.create({ collection: "users", data: { email: "credential-audit-owner@example.test", name: "Credential audit owner", roles: ["owner"] }, overrideAccess: true })
+    const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: "https://prices.example.test/review", pricingAsOf: "2026-10-04T00:00:00.000Z" }
+    const secret = "credential-lifecycle-secret"
+    const configured = await configureIntegration(payload, { provider: "openai", model: "credential-audit-model", credential: secret, fallbackProvider: null, pricing, actor: owner.id })
+    const rotation = (await payload.find({ collection: "audit-events", where: { event: { equals: "integration.credential_rotated" } }, sort: "-createdAt", limit: 1, overrideAccess: true })).docs[0]!
+    expect(rotation).toMatchObject({ event: "integration.credential_rotated", actor: { id: owner.id }, detail: { provider: "openai" } })
+    expect(Number.isFinite(Date.parse(rotation.createdAt))).toBe(true)
+    const rotationDetail = JSON.stringify(rotation.detail)
+    expect(rotationDetail).not.toContain(secret)
+    expect(rotationDetail).not.toContain(String(configured.saved.encryptedCredential))
+    expect(rotationDetail).not.toContain(String(configured.saved.credentialFingerprint))
+    await revokeIntegration(payload, { provider: "openai", actor: owner.id })
+    const revocation = (await payload.find({ collection: "audit-events", where: { event: { equals: "integration.credential_revoked" } }, sort: "-createdAt", limit: 1, overrideAccess: true })).docs[0]!
+    expect(revocation).toMatchObject({ event: "integration.credential_revoked", actor: { id: owner.id }, detail: { provider: "openai" } })
+    expect(Number.isFinite(Date.parse(revocation.createdAt))).toBe(true)
+    const revocationDetail = JSON.stringify(revocation.detail)
+    expect(revocationDetail).not.toContain(secret)
+    expect(revocationDetail).not.toContain(String(configured.saved.encryptedCredential))
+    expect(revocationDetail).not.toContain(String(configured.saved.credentialFingerprint))
+  })
 })
