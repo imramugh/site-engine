@@ -39,14 +39,13 @@ export function EmergencyOwnerForm() {
     }
   }
 
-  return <section aria-labelledby="emergency-owner-heading">
-    <h2 id="emergency-owner-heading">Authenticator sign-in</h2>
-    <p>Use your work email with a current authenticator or recovery code.</p>
+  return <section data-login-form aria-label="Authenticator sign-in">
     <form onSubmit={submit}>
       <label htmlFor="emergency-email">Work email</label>
       <input id="emergency-email" data-testid="local-auth-email" name="email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} disabled={pending} />
       <label htmlFor="emergency-code">Authenticator or recovery code</label>
-      <input id="emergency-code" data-testid="local-auth-code" name="code" type="password" autoComplete="one-time-code" required maxLength={128} pattern="[A-Za-z0-9_-]{6,128}" value={code} onChange={(event) => setCode(event.target.value)} disabled={pending} />
+      <input id="emergency-code" data-testid="local-auth-code" name="code" type="password" autoComplete="one-time-code" required maxLength={128} pattern="[A-Za-z0-9_-]{6,128}" aria-describedby="emergency-code-help" value={code} onChange={(event) => setCode(event.target.value)} disabled={pending} />
+      <p id="emergency-code-help">Enter the code from your authenticator app, or use a recovery code.</p>
       <button type="submit" disabled={pending} data-testid="emergency-sign-in" data-local-auth-sign-in style={{ minHeight: 44, minWidth: 44 }}>
         {pending ? 'Signing in…' : 'Sign in'}
       </button>

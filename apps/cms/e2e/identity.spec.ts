@@ -523,7 +523,10 @@ test('ENG-019 exposes accessible public validation and queues an urgent inquiry'
 
 test('the login page offers only local authentication and retired staff OIDC routes return gone', async ({ page }) => {
   await page.goto('/admin/login')
-  await expect(page.getByText('Use your work email and a code from your authenticator app.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Staff sign in', exact: true })).toBeVisible()
+  await expect(page.getByLabel('Work email')).toBeVisible()
+  await expect(page.getByLabel('Authenticator or recovery code')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: /Google|Microsoft/ })).toHaveCount(0)
   for (const provider of ['google', 'microsoft']) {
     const retired = await page.request.get(`/api/auth/${provider}`)
