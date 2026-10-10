@@ -7,6 +7,7 @@ const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(
 const digest = (value: unknown) => createHash('sha256').update(stable(value)).digest('hex')
 export type JobInput = { provider: IntegrationProvider; model?: string; fallbackProvider?: IntegrationProvider | null; input: string; imageDataUrl?: string; maxOutputTokens: number; idempotencyKey: string }
 export async function enqueueConfiguredAIJob(payload: Payload, actor: string, input: JobInput) {
+  if (input.fallbackProvider === input.provider) throw new Error('AI_JOB_UNAVAILABLE')
   const request = { provider: input.provider, model: input.model ?? null, fallbackProvider: input.fallbackProvider ?? null, input: input.input, imageDataUrl: input.imageDataUrl ?? null, maxOutputTokens: input.maxOutputTokens }
   const requestDigest = digest(request)
   for (let attempt = 0; attempt < 8; attempt += 1) try { return await withPayloadTransaction(payload, async req => {

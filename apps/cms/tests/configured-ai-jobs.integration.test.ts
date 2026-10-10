@@ -58,6 +58,12 @@ describe('configured AI jobs Owner route', () => {
 })
 
 describe('configured AI job enqueue safety', () => {
+  it("rejects a self fallback before creating a job or audit event", async () => {
+    await expect(enqueueConfiguredAIJob(payload, ownerID, { ...input, fallbackProvider: "openai" })).rejects.toThrow("AI_JOB_UNAVAILABLE")
+    expect((await payload.count({ collection: "configured-ai-jobs", overrideAccess: true })).totalDocs).toBe(0)
+    expect((await payload.count({ collection: "audit-events", overrideAccess: true })).totalDocs).toBe(0)
+  })
+
   it('fails closed for a missing fallback and preserves immutable intent fields', async () => {
     await expect(enqueueConfiguredAIJob(payload, ownerID, { ...input, fallbackProvider: 'anthropic' })).rejects.toThrow('AI_JOB_UNAVAILABLE')
     const created = await enqueueConfiguredAIJob(payload, ownerID, input)

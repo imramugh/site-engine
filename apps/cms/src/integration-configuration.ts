@@ -21,6 +21,7 @@ export class IntegrationConfigurationStaleError extends Error { constructor() { 
 
 export type PricingConfiguration = { monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: number; outputMicroUsdPerMillionTokens: number; pricingSource: string; pricingAsOf: string }
 export async function configureIntegration(payload: PayloadLike, input: { provider: IntegrationProvider; model: string; credential: string; fallbackProvider: IntegrationProvider | null; pricing: PricingConfiguration; actor?: string }, auditWrite: AuditWrite = defaultAuditWrite) {
+  if (input.fallbackProvider === input.provider) throw new Error('INTEGRATION_FALLBACK_SELF')
   const data = { provider: input.provider, model: input.model, fallbackProvider: input.fallbackProvider, ...input.pricing, encryptedCredential: encryptCredential(input.credential, input.provider), credentialFingerprint: credentialFingerprint(input.credential), health: 'unknown' as const, testedAt: null }
   return withPayloadTransaction(payload, async (req) => {
     const existing = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: input.provider } }, limit: 1, depth: 0, overrideAccess: true, req })
