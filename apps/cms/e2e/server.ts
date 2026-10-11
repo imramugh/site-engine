@@ -38,11 +38,13 @@ const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
+process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compatible.eng027.example.test'
 const eng016AIRoutingFixtures = [
   { provider: 'openai', model: 'gpt-4.1-mini', pricingSource: 'https://prices.example.test/vision-review' },
   { provider: 'anthropic', model: 'claude-reviewed', pricingSource: 'https://prices.example.test/routing-fallback-review' },
 ] as const
 const eng016AIRoutingJobTypes = new Set(['summary', 'meta', 'faq', 'alt', 'lead-reply'])
+const eng027AdapterProviders = ['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const
 const issuerOrigin = `https://127.0.0.1:${e2ePort + 1}`
 const clientID = 'synthetic-browser-client'
 const clientSecret = 'synthetic-browser-secret'
@@ -575,6 +577,43 @@ async function seed(): Promise<void> {
 }
 
 function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
+  if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/eng027-adapters-run') {
+    void (async () => {
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { jobID?: unknown }
+      if (typeof body.jobID !== 'string') return { error: 'missing_job' }
+      const queued = await payload.find({ collection: 'configured-ai-jobs', where: { state: { equals: 'queued' } }, limit: 2, depth: 0, overrideAccess: true })
+      if (queued.docs.length !== 1 || queued.docs[0]?.id !== body.jobID) return { error: 'fixture_not_isolated' }
+      const expected = await payload.findByID({ collection: 'configured-ai-jobs', id: body.jobID, depth: 0, overrideAccess: true }) as { fallbackProvider?: unknown }
+      if (!eng027AdapterProviders.includes(expected.fallbackProvider as typeof eng027AdapterProviders[number])) return { error: 'unexpected_job' }
+      const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { in: eng027AdapterProviders as unknown as string[] } }, limit: 8, depth: 0, overrideAccess: true })
+      const models = new Map((configured.docs as Array<{ provider?: unknown; model?: unknown }>)
+        .filter((item): item is { provider: typeof eng027AdapterProviders[number]; model: string } => eng027AdapterProviders.includes(item.provider as typeof eng027AdapterProviders[number]) && typeof item.model === 'string')
+        .map(item => [item.model, item.provider]))
+      const calls: string[] = []
+      const { claimAndExecuteConfiguredAIJob } = await import('../src/configured-ai-job-execution.js')
+      await claimAndExecuteConfiguredAIJob(payload, {
+        transport: async (providerRequest) => {
+          const raw = await providerRequest.clone().json().catch(() => ({})) as { model?: unknown }
+          const model = typeof raw.model === 'string' ? raw.model : decodeURIComponent(providerRequest.url.match(/\/model\/([^/]+)\//)?.[1] ?? '')
+          const provider = models.get(model)
+          if (!provider) return new Response('unavailable', { status: 503 })
+          calls.push(provider)
+          if (provider !== expected.fallbackProvider) return new Response('unavailable', { status: 503 })
+          if (provider === 'azure-openai') return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'ENG027 fallback completed' }] }], usage: { input_tokens: 12, output_tokens: 5 } })
+          if (provider === 'amazon-bedrock') return Response.json({ output: { message: { content: [{ text: 'ENG027 fallback completed' }] } }, usage: { inputTokens: 12, outputTokens: 5 } })
+          return Response.json({ choices: [{ message: { content: 'ENG027 fallback completed' } }], usage: { prompt_tokens: 12, completion_tokens: 5 } })
+        },
+      })
+      const job = await payload.findByID({ collection: 'configured-ai-jobs', id: body.jobID, depth: 0, overrideAccess: true }) as { id?: unknown; state?: unknown; usedProvider?: unknown; fallbackUsed?: unknown }
+      return { job: { id: job.id, state: job.state, usedProvider: job.usedProvider, fallbackUsed: job.fallbackUsed }, calls }
+    })().then(value => json(response, value)).catch(error => {
+      response.writeHead(500)
+      response.end(error instanceof Error ? error.message : 'Unable to run ENG-027 adapter fixture.')
+    })
+    return
+  }
   if (request.method === 'POST' && request.url?.split('?')[0] === '/__e2e/eng016-ai-routing-cleanup') {
     void (async () => {
       const configurations = await Promise.all(eng016AIRoutingFixtures.map(async (fixture) => {

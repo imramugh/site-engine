@@ -120,7 +120,7 @@ test('ENG-023 provider configuration keeps dialog, rejection, reauthentication, 
     await owner.page.getByRole('navigation', { name: 'Site', exact: true }).getByRole('link', { name: 'Integrations' }).click()
     await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
     await expect(owner.page.getByRole('tab')).toHaveCount(5)
-    await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(4)
+    await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(8)
 
     await owner.page.getByRole('tab', { name: 'AI providers' }).focus()
     await owner.page.keyboard.press('ArrowRight')
@@ -208,8 +208,8 @@ test('ENG-023 provider configuration keeps dialog, rejection, reauthentication, 
 test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', async ({ browser }, testInfo) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations')
-  const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(4)
-  const tops = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top))); expect(new Set(tops).size).toBe(1)
+  const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(8)
+  const tops = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top))); expect(new Set(tops).size).toBe(2)
   if (process.env.CMS_PRIVATE_BRAND === '1') {
     await owner.page.evaluate(() => document.fonts.ready)
     expect(await owner.page.locator('link[href*="admin-branding.css"]').count()).toBe(1)
