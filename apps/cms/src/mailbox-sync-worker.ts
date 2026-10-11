@@ -38,7 +38,7 @@ async function runCycle(payload: any, dependencies: CycleDependencies, now: numb
     const update = (data: Record<string, unknown>) => payload.update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } }] }, data, overrideAccess: true, context: { mailboxInternal: true } })
     try {
       const result = await dependencies.sync(payload, mailbox.id, undefined, controller.signal)
-      await update({ inboundLastSyncedAt: new Date(now).toISOString(), inboundNextAttemptAt: new Date(now + 1_000).toISOString(), inboundFailureCount: 0, inboundLastError: null })
+      await update({ inboundLastSyncedAt: new Date(now).toISOString(), inboundNextAttemptAt: new Date(now + 3 * 60_000).toISOString(), inboundFailureCount: 0, inboundLastError: null })
       return { mailbox: mailbox.id, processed: result.processed }
     } catch {
       const failures = Math.min(Number(mailbox.inboundFailureCount ?? 0) + 1, 8)

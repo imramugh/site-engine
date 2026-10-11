@@ -7,6 +7,6 @@ export const MailboxNotifications: CollectionConfig = {
     { name: 'mailbox', type: 'relationship', relationTo: 'mailbox-configurations', required: true, unique: true }, { name: 'provider', type: 'select', options: ['microsoft', 'google'], required: true },
     { name: 'credentialRevision', type: 'text', required: true, maxLength: 32 }, { name: 'subscriptionID', type: 'text', maxLength: 500 }, { name: 'clientStateHash', type: 'text', maxLength: 64 },
     { name: 'resource', type: 'text', maxLength: 500 }, { name: 'topic', type: 'text', maxLength: 500 }, { name: 'expiresAt', type: 'date' },
-    { name: 'status', type: 'select', required: true, options: ['pending', 'active', 'expired', 'revoked', 'failed'] }, { name: 'lastNotificationAt', type: 'date' }, { name: 'lastRenewedAt', type: 'date' }, { name: 'failureCode', type: 'text', maxLength: 80 }, { name: 'replayKey', type: 'text', maxLength: 128 },
+    { name: 'status', type: 'select', required: true, options: ['pending', 'active', 'expired', 'revoked', 'failed'] }, { name: 'renewFailureCount', type: 'number', required: true, defaultValue: 0, min: 0 }, { name: 'nextRenewAttemptAt', type: 'date' }, { name: 'lastNotificationAt', type: 'date' }, { name: 'lastRenewedAt', type: 'date' }, { name: 'failureCode', type: 'text', maxLength: 80 }, { name: 'replayKey', type: 'text', maxLength: 128 },
   ],
 }
