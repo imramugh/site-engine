@@ -437,9 +437,8 @@ test('ENG-020 receives a Microsoft provider notification, polls the mailbox, and
   try {
     const fixtureResponse = await page.request.post(origin + '/__e2e/eng020-microsoft-delivery')
     expect(fixtureResponse.ok(), await fixtureResponse.text()).toBe(true)
-    const fixture = await fixtureResponse.json() as { matched: string; unmatched: string }
-    await page.goto('/leads')
-    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const fixture = await fixtureResponse.json() as { lead: string; matched: string; unmatched: string }
+    await page.goto('/leads?lead=' + encodeURIComponent(fixture.lead))
     const timeline = page.getByRole('region', { name: 'Mail timeline' })
     await expect(timeline).toContainText(fixture.matched)
     await expect(timeline).toContainText('Delivered through notification and poll.')

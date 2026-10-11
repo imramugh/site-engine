@@ -669,25 +669,28 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const provider = async (url: string) => {
         if (url.includes('/token')) return Response.json({ access_token: 'eng020-access', refresh_token: 'eng020-refresh' })
         if (url.includes('/delta')) {
-          const sent = url.includes('sentitems')
+          const parsed = new URL(url)
+          const sent = parsed.pathname.includes('sentitems')
           return Response.json({ value: sent ? [] : [
-            { id: 'eng020-matched-message', conversationId: 'eng020-matched-conversation', from: { emailAddress: { address: 'notes-a.synthetic@example.test' } }, toRecipients: [{ emailAddress: { address: 'eng020-microsoft@example.test' } }], subject: 'Delivered Microsoft reply', body: { content: 'Delivered through notification and poll.' }, receivedDateTime: '2026-10-11T00:00:00.000Z' },
-            { id: 'eng020-unmatched-message', conversationId: 'eng020-unmatched-conversation', from: { emailAddress: { address: 'notes-a.synthetic@example.test' } }, toRecipients: [{ emailAddress: { address: 'eng020-microsoft@example.test' } }], subject: 'Unmatched Microsoft reply', body: 'Must not appear without adoption.', receivedDateTime: '2026-10-11T00:01:00.000Z' },
-          ], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=eng020' })
+            { id: 'eng020-matched-message', conversationId: 'eng020-matched-conversation', from: { emailAddress: { address: 'eng020-delivery-' + mailbox.id + '@example.test' } }, toRecipients: [{ emailAddress: { address: 'eng020-microsoft@example.test' } }], subject: 'Delivered Microsoft reply', body: { content: 'Delivered through notification and poll.' }, receivedDateTime: '2026-10-11T00:00:00.000Z' },
+            { id: 'eng020-unmatched-message', conversationId: 'eng020-unmatched-conversation', from: { emailAddress: { address: 'eng020-delivery-' + mailbox.id + '@example.test' } }, toRecipients: [{ emailAddress: { address: 'eng020-microsoft@example.test' } }], subject: 'Unmatched Microsoft reply', body: 'Must not appear without adoption.', receivedDateTime: '2026-10-11T00:01:00.000Z' },
+          ], '@odata.deltaLink': parsed.origin + parsed.pathname + '?$deltatoken=eng020' })
         }
         return Response.json({ mail: 'eng020-microsoft@example.test' })
       }
       const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'eng020-code', localOwnerID!, leadSessionTokens.owner, provider)
-      await payload.create({ collection: 'mail-threads', data: { lead: firstEditableLeadID!, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'eng020-matched-conversation' }, overrideAccess: true })
+      const lead = await payload.create({ collection: 'inquiries', data: { name: 'ENG020 delivered Microsoft lead', email: 'eng020-delivery-' + mailbox.id + '@example.test', message: 'Dedicated provider delivery fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'eng020-delivery-' + mailbox.id, stage: 'new' }, overrideAccess: true })
+      await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'eng020-matched-conversation' }, overrideAccess: true })
       const clientState = 'eng020-notification-client-state'
       await payload.create({ collection: 'mailbox-notifications' as never, data: { mailbox: mailbox.id, provider: 'microsoft', credentialRevision: notificationCredentialRevision(mailbox), subscriptionID: 'eng020-subscription', clientStateHash: createHash('sha256').update(clientState).digest('hex'), resource: '/me/messages', expiresAt: new Date(Date.now() + 3600000).toISOString(), status: 'active', lastRenewedAt: new Date().toISOString() } as never, overrideAccess: true, context: { mailboxInternal: true } })
       const notice = await receiveMicrosoftNotification(payload, new Request(cmsOrigin + '/api/email-workspace/notifications/microsoft', { method: 'POST', body: JSON.stringify({ value: [{ subscriptionId: 'eng020-subscription', clientState, id: 'eng020-notification' }] }) }))
       if (notice.status !== 202) throw new Error('ENG020 notification receiver rejected fixture')
       const all = await payload.find({ collection: 'mailbox-configurations', where: { provider: { in: ['microsoft', 'google'] } }, pagination: false, depth: 0, overrideAccess: true })
       for (const item of all.docs) if (item.id !== mailbox.id) await payload.update({ collection: 'mailbox-configurations', id: item.id, data: { inboundNextAttemptAt: new Date(Date.now() + 3600000).toISOString() }, overrideAccess: true, context: { mailboxInternal: true } })
+      await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundNextAttemptAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true, context: { mailboxInternal: true } })
       const cycle = await runMailboxSyncCycle(payload, { sync: syncMailboxInbound, fetcher: provider }, Date.now())
-      if (cycle.mailbox !== mailbox.id || cycle.processed !== 2) throw new Error('ENG020 provider delivery fixture did not poll both messages')
-      json(response, { lead: firstEditableLeadID, matched: 'Delivered Microsoft reply', unmatched: 'Unmatched Microsoft reply' })
+      if (cycle.mailbox !== mailbox.id || cycle.processed !== 2) throw new Error('ENG020 provider delivery fixture did not poll both messages ' + JSON.stringify(cycle))
+      json(response, { lead: lead.id, matched: 'Delivered Microsoft reply', unmatched: 'Unmatched Microsoft reply' })
     })().catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG020 fixture failed') })
     return
   }
