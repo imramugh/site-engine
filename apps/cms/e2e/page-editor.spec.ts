@@ -1,3 +1,4 @@
+import { installAxe } from './axe'
 import {
   expect,
   test,
@@ -5,9 +6,7 @@ import {
   type Page,
   type TestInfo,
 } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const pageID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe'
 const metadataArticleID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbba3'
@@ -373,7 +372,7 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   expect((await anonymous.request.get(previewURL!)).status()).toBe(401)
   await anonymous.close()
 
-  await editor.page.addScriptTag({ path: axeSource })
+  await installAxe(editor.page)
   expect(
     await editor.page.evaluate(
       async () =>
@@ -557,7 +556,7 @@ test('ENG-006 persists service, article, business-case, and job metadata through
   await services.pressSequentially('Advisory, Strategy')
   await expect(services).toHaveValue('Advisory, Strategy')
   await editor.page.getByLabel('Case publication date').fill('2026-09-30')
-  await editor.page.addScriptTag({ path: axeSource })
+  await installAxe(editor.page)
   const metadataViolations = await editor.page.evaluate(async () =>
     // @ts-expect-error axe is injected for browser accessibility verification.
     (await window.axe.run('main')).violations.map((violation) => ({

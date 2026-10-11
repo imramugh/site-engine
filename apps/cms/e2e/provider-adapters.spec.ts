@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const adapters = ['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const
 type Adapter = typeof adapters[number]
 
@@ -32,7 +31,7 @@ async function configure(page: Page, provider: Adapter, fallbackProvider: Adapte
 }
 
 async function axe(page: Page, selector = 'main') {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async root => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(root, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations, selector)).toEqual([])
 }
 

@@ -1,3 +1,4 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
@@ -10,7 +11,7 @@ async function signedIn(browser: Browser, role: keyof typeof tokens) {
 }
 
 async function axe(page: Page) {
-  await page.addScriptTag({ url: '/__e2e/axe.js' })
+  await installAxe(page)
   return page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)
 }
 

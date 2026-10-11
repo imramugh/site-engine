@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 type EditorialRole = 'owner' | 'editor' | 'approver'
 
@@ -12,8 +11,8 @@ async function pageFor(browser: Browser, role: 'owner' | 'sales' | 'hiring') {
   return { context, page: await context.newPage() }
 }
 
-async function installAxe(page: Page) {
-  await page.addScriptTag({ path: axeSource })
+async function axeViolations(page: Page) {
+  await installAxe(page)
   return page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run()).violations)
 }
 
@@ -25,7 +24,7 @@ async function shellPageFor(browser: Browser, role: EditorialRole) {
 }
 
 async function expectFullDocumentAxePass(page: Page) {
-  const violations = await installAxe(page)
+  const violations = await axeViolations(page)
   expect(violations.map(({ id, impact, nodes }) => ({
     id,
     impact,
@@ -65,7 +64,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await owner.page.locator('[data-admin-account-button]').click()
   await expect(owner.page.getByRole('menuitem', { name: 'Sign out', exact: true })).toHaveAttribute('type', 'button')
   await owner.page.screenshot({ path: 'artifacts/playwright-cms/admin-shell-1440.png', fullPage: true })
-  expect(await installAxe(owner.page)).toEqual([])
+  expect(await axeViolations(owner.page)).toEqual([])
 
   await owner.page.setViewportSize({ width: 390, height: 844 })
   const menu = owner.page.getByTestId('mobile-menu')
@@ -85,7 +84,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await expect(menu).toBeFocused()
   await owner.page.screenshot({ path: 'artifacts/playwright-cms/admin-shell-390.png', fullPage: true })
   await menu.click()
-  expect(await installAxe(owner.page)).toEqual([])
+  expect(await axeViolations(owner.page)).toEqual([])
   await owner.context.close()
 
   const sales = await pageFor(browser, 'sales')

@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 const jobID = '66666666-6666-4666-8666-666666666666'
 const draftJobID = '99999999-9999-4999-8999-999999999999'
@@ -140,7 +139,7 @@ test('ENG-021 lets Owner and Hiring work the protected application dashboard whi
     await expect(details.getByRole('link', { name: '(416) 555-0199' })).toHaveAttribute('href', 'tel:4165550199')
     await expect(details.getByRole('link', { name: 'View profile' })).toHaveAttribute('href', longLinkedIn)
     await expect(session.page.getByRole('button', { name: 'Download resume' })).toBeVisible()
-    if (role === 'owner') { await details.getByRole('button', { name: 'Interview' }).click(); await expect(details.getByRole('button', { name: 'Interview' })).toHaveAttribute('aria-pressed', 'true'); await session.page.addScriptTag({ path: axeSource }); expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]) }
+    if (role === 'owner') { await details.getByRole('button', { name: 'Interview' }).click(); await expect(details.getByRole('button', { name: 'Interview' })).toHaveAttribute('aria-pressed', 'true'); await installAxe(session.page); expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]) }
     if (role === 'hiring') {
       await details.getByRole('button', { name: 'Offer' }).click()
       await expect(details.getByRole('button', { name: 'Offer' })).toHaveAttribute('aria-pressed', 'true')
@@ -187,7 +186,7 @@ test('ENG-021 starts a real job draft through the normal content editor and rend
     const scroll = owner.page.getByLabel('Roles table, scroll horizontally for more columns', { exact: true }); await scroll.focus(); await scroll.press('End')
     await scroll.evaluate(element => { element.scrollLeft = element.scrollWidth })
     await expect(owner.page.getByRole('link', { name: 'Edit role', exact: true }).first()).toBeInViewport()
-    await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+    await installAxe(owner.page); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     await owner.page.screenshot({ path: testInfo.outputPath(`careers-roles-${width}.png`), fullPage: true })
   }
   await owner.page.setViewportSize({ width: 1440, height: 1050 })
@@ -199,7 +198,7 @@ test('ENG-021 starts a real job draft through the normal content editor and rend
   const desktopBox = await desktopDetail.boundingBox()
   expect(desktopBox?.width).toBeGreaterThanOrEqual(320)
   expect(desktopBox?.width).toBeLessThanOrEqual(360)
-  await owner.page.addScriptTag({ path: axeSource })
+  await installAxe(owner.page)
   expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('careers-1440.png'), fullPage: true })
 

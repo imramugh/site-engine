@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 const ownerEmail = 'owner.synthetic@example.test'
 const ownerRecoveryCode = 'synthetic-owner-recovery-code-01'
@@ -188,7 +187,7 @@ test('ENG-002 rejects an editor draft block with an undeclared appearance value 
   const unavailableBlock = recipeableUnavailable.first()
   await expect(unavailableBlock).toContainText('Allowed on:')
   await expect(unavailableBlock.getByRole('button', { name: /^\+ Add to recipe/ })).toBeDisabled()
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 
   const isolatedSet = await page.evaluate(async () => {
@@ -313,7 +312,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   await expect(reviewer.locator('[data-editorial-queue-item]').filter({ hasText: 'Synthetic published application baseline' })).toBeVisible()
   await expect(reviewer.locator('[data-editorial-queue-item] [data-editorial-state="open"]')).toHaveCount(0)
   await reviewer.getByRole('button', { name: /Pending/ }).click()
-  await reviewer.addScriptTag({ path: axeSource })
+  await installAxe(reviewer)
   expect(await reviewer.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   const submittedQueueItem = reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`)
   await expect(submittedQueueItem.locator('[data-review-context]')).toContainText('Synthetic Editor · Source not recorded · 1 page')

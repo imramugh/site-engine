@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 async function ownerContext(browser: Browser, token: string) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -62,7 +61,7 @@ test('ENG-031 schedules an approved business case and keeps an invalidated appro
       await schedules.getByText('Technical details', { exact: true }).click()
       await expect(schedules).toContainText('Dispatch status: APPROVAL_AUTHORITY_REVOKED')
       expect(await observer.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
-      await observer.page.addScriptTag({ path: axeSource })
+      await installAxe(observer.page)
       expect(await observer.page.evaluate(async () => (await (window as any).axe.run('main')).violations)).toEqual([])
     }
   } finally {

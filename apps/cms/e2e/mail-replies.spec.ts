@@ -1,10 +1,9 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axe = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const mcpStructured = <T>(result: unknown) => ((result as { structuredContent?: T; toolResult?: { structuredContent?: T } }).structuredContent ?? (result as { toolResult?: { structuredContent?: T } }).toolResult?.structuredContent) as T
 const mcpResult = <T>(result: unknown) => mcpStructured<T>(result) ?? JSON.parse(((result as { content?: Array<{ text?: string }>; toolResult?: { content?: Array<{ text?: string }> } }).content ?? (result as { toolResult?: { content?: Array<{ text?: string }> } }).toolResult?.content)?.find(item => item.text)?.text ?? '{}') as T
 
@@ -52,7 +51,7 @@ test('ENG-020/033 reviews the persisted envelope, reconfirms edits, and cannot r
     await expect(reply.getByRole('status')).toHaveText('Reply sent.')
     await expect(reply.getByRole('button', { name: 'Send confirmed reply' })).toHaveCount(0)
     expect(requests).toEqual(['prepare', 'authorize', 'cancel', 'prepare', 'authorize', 'send'])
-    await page.addScriptTag({ path: axe })
+    await installAxe(page)
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
   } finally { await context.close() }
 })

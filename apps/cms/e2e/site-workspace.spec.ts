@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 
 async function session(browser: Browser, token: string) {
@@ -10,7 +9,7 @@ async function session(browser: Browser, token: string) {
   return { context, page: await context.newPage() }
 }
 async function axe(page: Page) {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 

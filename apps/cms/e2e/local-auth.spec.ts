@@ -1,10 +1,9 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { TOTP } from 'otpauth'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const issuerOrigin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300) + 1}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const owner = { email: 'local-auth-owner.synthetic@example.test', recoveryCodes: ['synthetic-local-auth-owner-code-01', 'synthetic-local-auth-owner-code-02'] }
 
 type Invitation = { id: string; inviteURL: string }
@@ -58,12 +57,12 @@ function invalidEnrollmentCode(uri: string): string {
 }
 
 async function axe(page: Page): Promise<void> {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 
 async function wholeDocumentAxe(page: Page): Promise<void> {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 
