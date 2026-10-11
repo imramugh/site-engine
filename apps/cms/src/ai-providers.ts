@@ -40,7 +40,7 @@ const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.fre
 export function supportsVisionInput(provider: IntegrationProvider, model: string, settings?: ProviderSettings): boolean {
   if (provider === 'openai') return Number.isSafeInteger(visionInputTokenUpperBounds[model])
   if (!['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'].includes(provider)) return false
-  return Boolean(settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT)
+  return Boolean(settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && Number.isSafeInteger(settings.imageInputTokenLimit) && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT)
 }
 export function supportsProductionVisionInput(provider: IntegrationProvider, model: string, settings?: ProviderSettings): boolean { return provider === 'openai' ? (model === 'gpt-4.1-mini' || model === 'gpt-4.1-mini-2025-04-14') : supportsVisionInput(provider, model, settings) }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
@@ -82,7 +82,7 @@ function reservedInputTokens(provider: IntegrationProvider, model: string, input
   const body = adapterRequest(provider, '', model, input, maxOutputTokens, undefined, settings)?.body ?? requestBody(provider, model, input, maxOutputTokens)
   const serialized = Buffer.byteLength(JSON.stringify(body), 'utf8')
   if (!imageDataUrl) return serialized
-  const visual = provider === 'openai' && supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT ? settings.imageInputTokenLimit : undefined
+  const visual = provider === 'openai' && supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && Number.isSafeInteger(settings.imageInputTokenLimit) && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT ? settings.imageInputTokenLimit : undefined
   return visual !== undefined && Number.isSafeInteger(serialized + visual) ? serialized + visual : undefined
 }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal, settings?: ProviderSettings): Request {

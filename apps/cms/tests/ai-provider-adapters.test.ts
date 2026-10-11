@@ -57,4 +57,18 @@ describe('ENG-027 provider adapters', () => {
     expect(selected).toBe('8.8.8.8')
     await expect(pinnedCompatibleFetch(new Request('https://compat.example.test/api'), { resolve: async () => [{ address: '127.0.0.1', family: 4 }] })).rejects.toThrow('compatible_endpoint_unsafe')
   })
+  it('rejects unsupported Bedrock image MIME before transport', async () => {
+    let calls = 0
+    await expect(invokeProvider('amazon-bedrock', 'secret', 'model', 'p', 1, async () => { calls++; return Response.json({}) }, 1_000, 'data:image/gif;base64,AA==', settings['amazon-bedrock'])).resolves.toEqual({ outcome: 'unavailable' })
+    expect(calls).toBe(0)
+  })
+  it('does not open a pinned connection after cancellation or mixed DNS answers', async () => {
+    const controller = new AbortController(); let calls = 0
+    const waiting = pinnedCompatibleFetch(new Request('https://compat.example.test/api', { signal: controller.signal }), { resolve: async () => { await new Promise(resolve => setTimeout(resolve, 5)); return [{ address: '8.8.8.8', family: 4 }] }, request: async () => { calls++; return Response.json({}) } })
+    controller.abort()
+    await expect(waiting).rejects.toThrow('aborted')
+    await expect(pinnedCompatibleFetch(new Request('https://compat.example.test/api'), { resolve: async () => [{ address: '8.8.8.8', family: 4 }, { address: '::ffff:127.0.0.1', family: 6 }], request: async () => { calls++; return Response.json({}) } })).rejects.toThrow('compatible_endpoint_unsafe')
+    expect(calls).toBe(0)
+  })
+
 })

@@ -32,6 +32,10 @@ const chatBody = (model: string, input: string, maxOutputTokens: number, image?:
   max_tokens: maxOutputTokens,
   messages: [{ role: 'user', content: image ? [{ type: 'text', text: input }, { type: 'image_url', image_url: { url: image } }] : input }],
 })
+function bedrockImage(image: string): Record<string, unknown> | undefined {
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image)
+  return match ? { image: { format: match[1] === 'jpeg' ? 'jpeg' : match[1], source: { bytes: match[2] } } } : undefined
+}
 const responseBody = (model: string, input: string, maxOutputTokens: number, image?: string) => ({
   model,
   max_output_tokens: maxOutputTokens,
@@ -43,8 +47,10 @@ export function adapterRequest(provider: IntegrationProvider, credential: string
   try { settings = normalizeProviderSettings(provider, rawSettings) } catch { return undefined }
   if (provider === 'azure-openai') return { url: `${settings.endpoint}/responses`, headers: { 'api-key': credential, 'content-type': 'application/json' }, body: responseBody(model, input, maxOutputTokens, image) }
   if (provider === 'amazon-bedrock') {
+    const parsedImage = image ? bedrockImage(image) : undefined
+    if (image && !parsedImage) return undefined
     const suffix = settings.region?.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com'
-    return { url: `https://bedrock-runtime.${settings.region}.${suffix}/model/${encodeURIComponent(model)}/converse`, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: { messages: [{ role: 'user', content: [{ text: input }, ...(image ? [{ image: { format: 'webp', source: { bytes: image.split(',', 2)[1] } } }] : [])] }], inferenceConfig: { maxTokens: maxOutputTokens } } }
+    return { url: `https://bedrock-runtime.${settings.region}.${suffix}/model/${encodeURIComponent(model)}/converse`, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: { messages: [{ role: 'user', content: [{ text: input }, ...(parsedImage ? [parsedImage] : [])] }], inferenceConfig: { maxTokens: maxOutputTokens } } }
   }
   if (provider === 'mistral') return { url: 'https://api.mistral.ai/v1/chat/completions', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: chatBody(model, input, maxOutputTokens, image) }
   if (provider === 'openai-compatible') {
@@ -94,16 +100,22 @@ export async function pinnedCompatibleFetch(request: Request, dependencies: Pinn
   if (!addresses.length || addresses.some(item => !publicAddress(item.address))) throw new Error('compatible_endpoint_unsafe')
   if (request.signal.aborted) throw new Error('aborted')
   const body = Buffer.from(await request.arrayBuffer())
+  if (request.signal.aborted) throw new Error('aborted')
   const options = { method: request.method, headers: Object.fromEntries(request.headers), autoSelectFamily: false, lookup: (_host: string, _options: unknown, callback: (error: Error | null, address: string, family: number) => void) => callback(null, addresses[0]!.address, addresses[0]!.family), servername: url.hostname } as import('node:https').RequestOptions & { autoSelectFamily: boolean }
   if (dependencies.request) return dependencies.request(url, options, body)
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(url, options, incoming => {
+      if ((incoming.statusCode ?? 500) >= 300 && (incoming.statusCode ?? 500) < 400) { incoming.destroy(); req.destroy(); reject(new Error('compatible_redirect_rejected')); return }
       const chunks: Buffer[] = []; let size = 0
       incoming.on('data', chunk => { size += chunk.length; if (size > 1_048_576) req.destroy(new Error('compatible_response_too_large')); else chunks.push(Buffer.from(chunk)) })
+      incoming.once('error', reject)
       incoming.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode ?? 502, headers: incoming.headers as HeadersInit })))
     })
-    req.once('error', reject)
-    if (request.signal) request.signal.addEventListener('abort', () => req.destroy(new Error('aborted')), { once: true })
+    const abort = () => req.destroy(new Error('aborted'))
+    req.once('error', error => { request.signal.removeEventListener('abort', abort); reject(error) })
+    req.once('close', () => request.signal.removeEventListener('abort', abort))
+    if (request.signal.aborted) { abort(); return }
+    request.signal.addEventListener('abort', abort, { once: true })
     req.end(body)
   })
 }
