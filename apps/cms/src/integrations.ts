@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import type { ProviderSettings } from './provider-settings'
-import { adapterMetadataURL, pinnedCompatibleFetch } from './ai-provider-adapters'
+import { adapterMetadataURL, isConfigurableAdapter, pinnedCompatibleFetch } from './ai-provider-adapters'
 
 export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
@@ -50,6 +50,7 @@ export async function testConnection(input: { provider: IntegrationProvider; enc
 
 function endpoint(provider: IntegrationProvider, model: string, credential: string, settings?: ProviderSettings): { url: string; headers: Record<string, string> } | undefined {
   const adapterURL = adapterMetadataURL(provider, model, settings); if (adapterURL) return { url: adapterURL, headers: provider === 'azure-openai' ? { 'api-key': credential } : { authorization: 'Bearer ' + credential } }
+  if (isConfigurableAdapter(provider)) return undefined
   const encodedModel = encodeURIComponent(model)
   if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }

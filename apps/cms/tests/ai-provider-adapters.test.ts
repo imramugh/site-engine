@@ -34,14 +34,22 @@ describe('ENG-027 provider adapters', () => {
     await expect(invokeProvider('openai-compatible', 'secret', 'model', 'prompt', 1, async () => Response.json({}), 1_000, undefined, { endpoint: 'https://not-allowed.example', imageInput: false })).resolves.toEqual({ outcome: 'unavailable' })
     await expect(invokeProvider('mistral', 'secret', 'model', 'prompt', 1, async () => Response.json({}), 1_000, undefined, { imageInput: true, imageInputTokenLimit: 0 })).resolves.toEqual({ outcome: 'unavailable' })
   })
+  it.each(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const)('does not contact any fallback endpoint for invalid %s settings', async provider => {
+    let calls = 0
+    await expect(invokeProvider(provider, 'secret', 'model', 'prompt', 1, async () => { calls++; return Response.json({}) }, 1_000, undefined, {})).resolves.toEqual({ outcome: 'unavailable' })
+    expect(calls).toBe(0)
+  })
   it('keeps Azure settings idempotent and compatible base paths', () => {
     const azure = normalizeProviderSettings('azure-openai', settings['azure-openai'])
     expect(normalizeProviderSettings('azure-openai', azure)).toEqual(azure)
     process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compat.example.test'
     expect(adapterRequest('openai-compatible', 'secret', 'model', 'p', 1, undefined, settings['openai-compatible'])?.url).toBe('https://compat.example.test/api/v1/chat/completions')
   })
-  it('uses Bedrock inference-profile metadata when selected', () => {
+  it('uses correct Bedrock foundation and inference-profile metadata routes', () => {
     expect(adapterMetadataURL('amazon-bedrock', 'us.anthropic.claude-3', settings['amazon-bedrock'])).toContain('/inference-profiles/us.anthropic.claude-3')
+    expect(adapterMetadataURL('amazon-bedrock', 'arn:aws:bedrock:us-east-1::foundation-model/x', settings['amazon-bedrock'])).toContain('/foundation-models/')
+    expect(adapterMetadataURL('amazon-bedrock', 'arn:aws:bedrock:us-east-1:123:inference-profile/x', settings['amazon-bedrock'])).toContain('/inference-profiles/')
+    expect(adapterMetadataURL('amazon-bedrock', 'arn:aws:bedrock:us-east-1:123:agent/x', settings['amazon-bedrock'])).toBeUndefined()
   })
   it('pins a public resolved compatible address and rejects private DNS answers', async () => {
     let selected: string | undefined

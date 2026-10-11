@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { decryptCredential, type IntegrationProvider } from './integrations'
-import { adapterOutput, adapterRequest, pinnedCompatibleFetch } from './ai-provider-adapters'
+import { adapterOutput, adapterRequest, isConfigurableAdapter, pinnedCompatibleFetch } from './ai-provider-adapters'
 import { MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT, normalizeProviderSettings, type ProviderSettings } from './provider-settings'
 import { withPayloadTransaction } from './auth-transaction'
 
@@ -87,6 +87,7 @@ function reservedInputTokens(provider: IntegrationProvider, model: string, input
 }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal, settings?: ProviderSettings): Request {
   const adapted = adapterRequest(provider, credential, model, input, maxOutputTokens, imageDataUrl, settings); if (adapted) return new Request(adapted.url, { method: 'POST', signal, redirect: 'error', headers: adapted.headers, body: JSON.stringify(adapted.body) })
+  if (isConfigurableAdapter(provider)) throw new Error('provider_settings_unavailable')
   const body = JSON.stringify(requestBody(provider, model, input, maxOutputTokens, imageDataUrl))
   if (provider === 'openai') return new Request(providerCapabilities.openai.endpoint, { method: 'POST', signal, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body })
   if (provider === 'anthropic') return new Request(providerCapabilities.anthropic.endpoint, { method: 'POST', signal, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body })

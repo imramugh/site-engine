@@ -4,6 +4,9 @@ import ipaddr from 'ipaddr.js'
 import type { IntegrationProvider } from './integrations'
 import { normalizeProviderSettings, type ProviderSettings } from './provider-settings'
 
+export const configurableAdapterProviders = new Set<IntegrationProvider>(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'])
+export const isConfigurableAdapter = (provider: IntegrationProvider) => configurableAdapterProviders.has(provider)
+
 export type AdapterRequest = { url: string; headers: Record<string, string>; body: Record<string, unknown> }
 type Address = { address: string; family: number }
 export type PinnedCompatibleDependencies = { resolve?: (hostname: string) => Promise<Address[]>; request?: (url: URL, options: import('node:https').RequestOptions & { autoSelectFamily: boolean }, body: Buffer) => Promise<Response> }
@@ -39,7 +42,10 @@ export function adapterRequest(provider: IntegrationProvider, credential: string
   let settings: ProviderSettings
   try { settings = normalizeProviderSettings(provider, rawSettings) } catch { return undefined }
   if (provider === 'azure-openai') return { url: `${settings.endpoint}/responses`, headers: { 'api-key': credential, 'content-type': 'application/json' }, body: responseBody(model, input, maxOutputTokens, image) }
-  if (provider === 'amazon-bedrock') return { url: `https://bedrock-runtime.${settings.region}.amazonaws.com/model/${encodeURIComponent(model)}/converse`, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: { messages: [{ role: 'user', content: [{ text: input }, ...(image ? [{ image: { format: 'webp', source: { bytes: image.split(',', 2)[1] } } }] : [])] }], inferenceConfig: { maxTokens: maxOutputTokens } } }
+  if (provider === 'amazon-bedrock') {
+    const suffix = settings.region?.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com'
+    return { url: `https://bedrock-runtime.${settings.region}.${suffix}/model/${encodeURIComponent(model)}/converse`, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: { messages: [{ role: 'user', content: [{ text: input }, ...(image ? [{ image: { format: 'webp', source: { bytes: image.split(',', 2)[1] } } }] : [])] }], inferenceConfig: { maxTokens: maxOutputTokens } } }
+  }
   if (provider === 'mistral') return { url: 'https://api.mistral.ai/v1/chat/completions', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: chatBody(model, input, maxOutputTokens, image) }
   if (provider === 'openai-compatible') {
     const endpoint = compatibleOrigin(settings)
@@ -52,8 +58,10 @@ export function adapterMetadataURL(provider: IntegrationProvider, model: string,
   try { settings = normalizeProviderSettings(provider, rawSettings) } catch { return undefined }
   if (provider === 'azure-openai') return `${settings.endpoint}/models/${encodeURIComponent(model)}`
   if (provider === 'amazon-bedrock') {
-    const profile = /^(?:us|eu|apac|global)\./.test(model) || model.startsWith('arn:')
-    return profile ? `https://bedrock.${settings.region}.amazonaws.com/inference-profiles/${encodeURIComponent(model)}` : `https://bedrock.${settings.region}.amazonaws.com/foundation-models/${encodeURIComponent(model)}`
+    const suffix = settings.region?.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com'
+    const profile = /^(?:us|eu|apac|global)\./.test(model) || model.includes(':inference-profile/') || model.includes(':application-inference-profile/')
+    if (model.startsWith('arn:') && !profile && !model.includes(':foundation-model/')) return undefined
+    return profile ? `https://bedrock.${settings.region}.${suffix}/inference-profiles/${encodeURIComponent(model)}` : `https://bedrock.${settings.region}.${suffix}/foundation-models/${encodeURIComponent(model)}`
   }
   if (provider === 'mistral') return `https://api.mistral.ai/v1/models/${encodeURIComponent(model)}`
   if (provider === 'openai-compatible') { const endpoint = compatibleOrigin(settings); return endpoint && `${endpoint}/models/${encodeURIComponent(model)}` }
