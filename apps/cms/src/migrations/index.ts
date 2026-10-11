@@ -1,3 +1,4 @@
+import * as migration_20261011_040000_mailbox_notifications from './20261011_040000_mailbox_notifications'
 import * as migration_20261003_032726_initial_foundation from './20261003_032726_initial_foundation';
 import * as migration_20261006_009000_preview_render_diagnostics from './20261006_009000_preview_render_diagnostics';
 import * as migration_20261006_009000_crm_private_records from './20261006_009000_crm_private_records';
@@ -302,4 +303,5 @@ export const migrations = [
   { up: migration_20261007_010000_local_staff_auth.up, down: migration_20261007_010000_local_staff_auth.down, name: '20261007_010000_local_staff_auth' },
   { up: migration_20261009_121000_preview_evidence_manifest.up, down: migration_20261009_121000_preview_evidence_manifest.down, name: '20261009_121000_preview_evidence_manifest' },
   { up: migration_20261011_010000_provider_settings.up, down: migration_20261011_010000_provider_settings.down, name: '20261011_010000_provider_settings' },
+  { up: migration_20261011_040000_mailbox_notifications.up, down: migration_20261011_040000_mailbox_notifications.down, name: '20261011_040000_mailbox_notifications' },
 ];

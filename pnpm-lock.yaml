@@ -224,6 +224,9 @@ importers:
       ipaddr.js:
         specifier: 2.5.0
         version: 2.5.0
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       next:
         specifier: 16.4.0
         version: 16.4.0(@playwright/test@1.64.0)(@types/node@24.19.1)(babel-plugin-macros@3.1.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(sass@1.77.4)
@@ -273,9 +276,6 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
-      jose:
-        specifier: 6.2.12
-        version: 6.2.12
       tsx:
         specifier: 4.23.15
         version: 4.23.15

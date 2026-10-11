@@ -1,3 +1,4 @@
+import { MailboxNotifications } from './src/mailbox-notification-collections'
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
 import { buildConfig } from 'payload'
 import { dirname, resolve } from 'node:path'
@@ -25,7 +26,7 @@ export default buildConfig({
     },
     importMap: { baseDir: dirname(fileURLToPath(import.meta.url)), importMapFile: new URL('./app/(payload)/admin/importMap.js', import.meta.url).pathname },
   },
-  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, AIJobDefaults, McpPrivacySettings, ProviderUsageReservations, MailboxConfigurations, MailboxOAuthTransactions, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailConversationSuggestions, MailDrafts, MailThreads, MailThreadMessages, ExternalReplies, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
+  collections: [Users, Invitations, AuthSessions, AuthTransactions, AuditEvents, Pages, Sections, Assets, AssetFileVersions, Redirects, ThemeSettings, SiteSettings, StyleGuides, IntegrationConfigurations, AIJobDefaults, McpPrivacySettings, ProviderUsageReservations, MailboxConfigurations, MailboxNotifications, MailboxOAuthTransactions, MailboxAreaMappings, MailboxTestSends, Inquiries, NotificationOutbox, NotificationDeliveries, NotificationPreferences, NotificationUserPreferences, UrgentContacts, MailConversationSuggestions, MailDrafts, MailThreads, MailThreadMessages, ExternalReplies, MailAuthorizations, Applications, RetentionSettings, DeletionTombstones, RetentionPurgeJobs, ChangeSets, ConfiguredAIJobs, PublishSnapshots, PublishOutbox, ScheduledPublications, PreviewRenderJobs, PublishedReleases],
   db: sqliteAdapter({
     // libSQL opens additional pooled connections lazily; its timeout applies to each
     // connection, unlike the one-time PRAGMA below.
