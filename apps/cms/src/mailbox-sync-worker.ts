@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { syncMailboxInbound } from './mailbox-inbound-sync'
 import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
-import { renewMailboxNotifications } from './mailbox-notifications'
+import { notificationCredentialRevision, renewMailboxNotifications } from './mailbox-notifications'
 import type { Fetcher } from './mail-provider-adapters'
 
 const noStore = { 'Cache-Control': 'no-store' }
@@ -38,7 +38,10 @@ async function notificationRenewalNeeded(payload: any, mailbox: Mailbox, now: nu
   if (!notificationEnabled(mailbox)) return false
   const found = await payload.find({ collection: 'mailbox-notifications', where: { mailbox: { equals: mailbox.id } }, limit: 1, depth: 0, overrideAccess: true })
   const current = found.docs[0] as Record<string, unknown> | undefined
-  return !(current && current.provider === mailbox.provider && current.credentialRevision === mailbox.credentialRevision && current.status === 'active' && typeof current.expiresAt === 'string' && Date.parse(current.expiresAt) > now)
+  const binding = notificationCredentialRevision(mailbox)
+  const matches = Boolean(current && current.provider === mailbox.provider && current.credentialRevision === binding)
+  if (matches && typeof current?.nextRenewAttemptAt === 'string' && Date.parse(current.nextRenewAttemptAt) > now) return false
+  return !(matches && current?.status === 'active' && typeof current.expiresAt === 'string' && Date.parse(current.expiresAt) > now + 5 * 60_000)
 }
 
 async function runCycle(payload: any, dependencies: CycleDependencies, now: number) {
@@ -60,13 +63,14 @@ async function runCycle(payload: any, dependencies: CycleDependencies, now: numb
     const mailbox = candidates.docs[0] as Mailbox | undefined
     if (!mailbox || controller.signal.aborted) return { mailbox: null, processed: 0 }
     const dueAt = mailbox.inboundNextAttemptAt ?? null
+    const credentialRevision = mailbox.credentialRevision
     const update = async (data: Record<string, unknown>) => {
       const current = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, depth: 0, overrideAccess: true }) as Mailbox
       // The original due time is a CAS value. A webhook received during polling
       // advances it to now; this worker must not defer that fresh notification.
       return payload.update({ collection: 'mailbox-configurations', where: { and: [
         { id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } },
-        { credentialRevision: { equals: current.credentialRevision } }, { inboundNextAttemptAt: { equals: dueAt } },
+        { credentialRevision: { equals: credentialRevision } }, { inboundNextAttemptAt: { equals: dueAt } },
       ] }, data, overrideAccess: true, context: { mailboxInternal: true } })
     }
     if (await notificationRenewalNeeded(payload, mailbox, now) && !controller.signal.aborted) {
