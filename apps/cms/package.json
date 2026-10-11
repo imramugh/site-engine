@@ -29,7 +29,7 @@
     "ipaddr.js": "2.5.0",
     "jose": "6.2.12",
     "next": "16.4.0",
-    "nodemailer": "10.0.9",
+    "nodemailer": "10.1.0",
     "openid-client": "6.8.8",
     "otpauth": "9.5.2",
     "payload": "3.90.2",

@@ -25,3 +25,16 @@ describe('internal worker CSRF proxy boundary', () => {
     }
   })
 })
+
+describe('ENG-020 provider callback CSRF boundary', () => {
+  it('reaches only the two exact provider-authenticated POST handlers without a browser origin', () => {
+    process.env.PAYLOAD_PUBLIC_SERVER_URL = origin
+    for (const provider of ['microsoft', 'google']) {
+      const path = `/api/email-workspace/notifications/${provider}`
+      expect(post(path).headers.get('x-middleware-next')).toBe('1')
+      expect(post(`${path}/other`).status).toBe(403)
+      for (const method of ['PUT', 'PATCH', 'DELETE']) expect(proxy(new NextRequest(`${origin}${path}`, { method })).status).toBe(403)
+    }
+    for (const path of ['/api/email-workspace', '/api/email-workspace/notifications/other', '/api/email-workspace/oauth/google']) expect(post(path).status).toBe(403)
+  })
+})

@@ -902,6 +902,8 @@ export interface MailboxNotification {
   topic?: string | null;
   expiresAt?: string | null;
   status: 'pending' | 'active' | 'expired' | 'revoked' | 'failed';
+  renewFailureCount: number;
+  nextRenewAttemptAt?: string | null;
   lastNotificationAt?: string | null;
   lastRenewedAt?: string | null;
   failureCode?: string | null;
@@ -2407,6 +2409,8 @@ export interface MailboxNotificationsSelect<T extends boolean = true> {
   topic?: T;
   expiresAt?: T;
   status?: T;
+  renewFailureCount?: T;
+  nextRenewAttemptAt?: T;
   lastNotificationAt?: T;
   lastRenewedAt?: T;
   failureCode?: T;
