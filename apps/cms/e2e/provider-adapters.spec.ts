@@ -93,11 +93,25 @@ test('ENG-027 encrypts adapter credentials, runs approved fallback with the isol
       await card.getByRole('button', { name: /Add key|Replace key/ }).click()
       const dialog = owner.page.locator('[data-integrations-editor]')
       await expect(dialog.getByLabel('Endpoint')).toBeVisible()
-      await expect(dialog.getByLabel('Reviewed image input capability')).toBeVisible()
-      await dialog.getByLabel('Reviewed image input capability').focus()
+      const imageCapability = dialog.getByLabel('Reviewed image input capability')
+      await expect(imageCapability).toBeVisible()
+      expect(await imageCapability.evaluate((input) => {
+        const label = input.closest('label')
+        const style = getComputedStyle(input)
+        return {
+          width: Math.round(input.getBoundingClientRect().width),
+          height: Math.round(input.getBoundingClientRect().height),
+          minWidth: style.minWidth,
+          minHeight: style.minHeight,
+          labelDisplay: label ? getComputedStyle(label).display : null,
+          labelAlignItems: label ? getComputedStyle(label).alignItems : null,
+        }
+      })).toEqual({ width: 16, height: 16, minWidth: '16px', minHeight: '16px', labelDisplay: 'flex', labelAlignItems: 'center' })
+      await imageCapability.focus()
       await owner.page.keyboard.press('Tab')
       await expect(dialog.getByLabel('Image input token upper bound for 768×768')).toBeVisible()
       await axe(owner.page)
+      await dialog.screenshot({ path: testInfo.outputPath(`eng027-adapters-dialog-${width}.png`) })
       await dialog.getByRole('button', { name: 'Close provider configuration' }).click()
       await owner.page.screenshot({ path: testInfo.outputPath(`eng027-adapters-${width}.png`), fullPage: true })
     }
