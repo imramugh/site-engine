@@ -4,7 +4,7 @@ import { testIntegrationConnection } from './integration-configuration'
 
 const normalInterval = 5 * 60_000
 const failedInterval = 15 * 60_000
-const providers = new Set<IntegrationProvider>(['openai', 'anthropic', 'google-gemini', 'openrouter'])
+const providers = new Set<IntegrationProvider>(['openai', 'anthropic', 'google-gemini', 'openrouter', 'azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'])
 /** Bounded worker-only monitor. It never probes absent or explicitly revoked credentials. */
 export async function monitorIntegrationHealth(payload: Payload, now = new Date(), transport: ConnectionTransport = providerConnectionTransport, limit = 5): Promise<number> {
   const configs = await payload.find({ collection: 'integration-configurations', where: { and: [{ encryptedCredential: { exists: true } }, { health: { not_equals: 'revoked' } }] }, sort: 'testedAt', limit, pagination: false, depth: 0, overrideAccess: true })

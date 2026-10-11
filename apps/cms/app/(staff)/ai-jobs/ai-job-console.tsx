@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter'
+type Provider = 'openai' | 'anthropic' | 'google-gemini' | 'openrouter' | 'azure-openai' | 'amazon-bedrock' | 'mistral' | 'openai-compatible'
 type Result = { output: string; reservedMicroUsd: number; usageCostMicroUsd: number | null; costStatus: 'actual' | 'reserved'; usedProvider: Provider; fallbackUsed: boolean }
 type Job = { id: string; provider: Provider; fallbackProvider: Provider | null; maxOutputTokens: number; state: string; costStatus: 'actual' | 'reserved' | null; usedProvider: Provider | null; fallbackUsed: boolean; failureCode: string | null; result: Result | null; createdAt: string }
 type RequestIntent = { provider: Provider; fallbackProvider: string; prompt: string; maxOutputTokens: number; key: string }
-const providers: Provider[] = ['openai', 'anthropic', 'google-gemini', 'openrouter']
+const providers: Provider[] = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible']
 
 const newKey = () => globalThis.crypto?.randomUUID?.().replaceAll('-', '') ?? `${Date.now()}${Math.random().toString(36).slice(2)}`
 const money = (microUsd: number) => `$${(microUsd / 1_000_000).toFixed(6)}`
