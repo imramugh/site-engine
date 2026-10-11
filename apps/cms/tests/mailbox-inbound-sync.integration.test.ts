@@ -10,6 +10,7 @@ Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')
 const { default: config } = await import('../payload.config.js')
 const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
 const { syncMailboxInbound } = await import('../src/mailbox-inbound-sync.js')
+const graphCursor = (url: string, token: string) => { const parsed = new URL(url); return `${parsed.origin}${parsed.pathname}?$deltatoken=${token}` }
 let payload: Awaited<ReturnType<typeof getPayload>>
 beforeAll(async () => { payload = await getPayload({ config }) })
 afterAll(async () => { await payload.destroy(); rmSync(directory, { recursive: true, force: true }) })
@@ -25,14 +26,14 @@ test('a partial Graph page does not advance its durable cursor and safely replay
     if (url.includes('/delta')) return Response.json({ value: [
       { id: 'message-1', conversationId: 'conversation-1', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'One', body: { content: 'One' }, receivedDateTime: '2026-10-06T00:00:00Z' },
       { id: 'message-2', conversationId: 'conversation-1', from: { emailAddress: { address: invalid ? 'not-an-email' : 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'Two', body: { content: 'Two' }, receivedDateTime: '2026-10-06T00:01:00Z' },
-    ], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=next' })
+    ], '@odata.deltaLink': graphCursor(url, 'next') })
     throw new Error(`unexpected ${url}`)
   }
   await expect(syncMailboxInbound(payload, mailbox.id, graph(true))).rejects.toThrow('invalid_inbound_message')
   let stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(stored.inboundCursor).toBeNull()
   expect((await payload.find({ collection: 'mail-thread-messages', overrideAccess: true })).docs).toHaveLength(1)
-  await expect(syncMailboxInbound(payload, mailbox.id, graph(false))).resolves.toMatchObject({ skipped: false, processed: 2 })
+  await expect(syncMailboxInbound(payload, mailbox.id, graph(false))).resolves.toMatchObject({ skipped: false, processed: 4 })
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(stored.inboundCursor).toContain('deltatoken=next')
   expect((await payload.find({ collection: 'mail-thread-messages', overrideAccess: true })).docs).toHaveLength(2)
@@ -46,7 +47,7 @@ test('a disconnected or revised mailbox cannot append a polled message or advanc
     if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
     if (url.includes('/delta')) {
       await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'unavailable', credentialRevision: 'changed-revision' }, overrideAccess: true, context: { mailboxInternal: true } })
-      return Response.json({ value: [{ id: 'race-message', conversationId: 'race-conversation', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync-race@example.test' } }], subject: 'Race', body: { content: 'Race' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=race' })
+      return Response.json({ value: [{ id: 'race-message', conversationId: 'race-conversation', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync-race@example.test' } }], subject: 'Race', body: { content: 'Race' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': graphCursor(url, 'race') })
     }
     throw new Error(`unexpected ${url}`)
   }
@@ -63,7 +64,7 @@ test('an aborted provider poll stops before it appends or advances a cursor', as
   const controller = new AbortController()
   await expect(syncMailboxInbound(payload, mailbox.id, async (url) => {
     if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
-    if (url.includes('/delta')) { controller.abort(); return Response.json({ value: [{ id: 'aborted-message', conversationId: 'aborted-thread', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync-abort@example.test' } }], subject: 'Abort', body: { content: 'Abort' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=aborted' }) }
+    if (url.includes('/delta')) { controller.abort(); return Response.json({ value: [{ id: 'aborted-message', conversationId: 'aborted-thread', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync-abort@example.test' } }], subject: 'Abort', body: { content: 'Abort' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': graphCursor(url, 'aborted') }) }
     throw new Error(`unexpected ${url}`)
   }, controller.signal)).rejects.toThrow('sync_aborted')
   const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
@@ -77,7 +78,7 @@ test('an abort during matched Graph attachment hydration leaves metadata and cur
   const lead = await payload.create({ collection: 'inquiries', data: { email: 'attachment-visitor@example.test', message: 'Original', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: newOpaqueToken(), stage: 'new' }, overrideAccess: true }); await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'attachment-thread' }, overrideAccess: true })
   const controller = new AbortController()
   await expect(syncMailboxInbound(payload, mailbox.id, async url => {
-    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'attachment-message', conversationId: 'attachment-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=attachment' }); if (value.includes('/attachments?')) { controller.abort(); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
+    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'attachment-message', conversationId: 'attachment-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': graphCursor(value, 'attachment') }); if (value.includes('/attachments?')) { controller.abort(); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
   }, controller.signal)).rejects.toThrow('sync_aborted')
   const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any; expect(stored.inboundCursor).toBeNull()
   const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'attachment-message' } }, overrideAccess: true })).docs[0] as any; expect(message.attachmentMetadata).toEqual([])
@@ -88,7 +89,7 @@ test('a mailbox revision during matched Graph attachment hydration cannot persis
   const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'code', owner.id, 'attachment-revision-session', async url => String(url).includes('/token') ? Response.json({ access_token: 'setup', refresh_token: 'refresh' }) : Response.json({ mail: 'attachment-revision@example.test' }))
   const lead = await payload.create({ collection: 'inquiries', data: { email: 'revision-visitor@example.test', message: 'Original', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'visitor-confirmed', idempotencyKey: newOpaqueToken(), stage: 'new' }, overrideAccess: true }); await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'revision-thread' }, overrideAccess: true })
   await expect(syncMailboxInbound(payload, mailbox.id, async url => {
-    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'revision-message', conversationId: 'revision-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=revision' }); if (value.includes('/attachments?')) { await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { credentialRevision: 'revoked-during-attachment' }, overrideAccess: true, context: { mailboxInternal: true } }); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
+    const value = String(url); if (value.includes('/token')) return Response.json({ access_token: 'sync' }); if (value.includes('/delta')) return Response.json({ value: [{ id: 'revision-message', conversationId: 'revision-thread', hasAttachments: true, from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: mailbox.primaryAddress } }], subject: 'Attachment', body: { content: 'body' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': graphCursor(value, 'revision') }); if (value.includes('/attachments?')) { await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { credentialRevision: 'revoked-during-attachment' }, overrideAccess: true, context: { mailboxInternal: true } }); return Response.json({ value: [{ id: 'attachment-id', name: 'cv.pdf', contentType: 'application/pdf', size: 1, '@odata.type': '#microsoft.graph.fileAttachment' }] }) }; throw new Error(`unexpected ${value}`)
   })).rejects.toThrow('mailbox_configuration_changed')
   const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any; expect(stored.inboundCursor).toBeNull()
   const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'revision-message' } }, overrideAccess: true })).docs[0] as any; expect(message.attachmentMetadata).toEqual([])
@@ -108,7 +109,7 @@ test('provider conversations and duplicate message IDs remain isolated by mailbo
   const secondThread = await payload.create({ collection: 'mail-threads', data: { lead: secondLead.id, mailbox: second.id, provider: 'microsoft', providerConversationID: 'shared-conversation' }, overrideAccess: true })
   const page = (conversationID = 'shared-conversation', messageID = 'shared-message') => async (url: string) => {
     if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
-    if (url.includes('/delta')) return Response.json({ value: [{ id: messageID, conversationId: conversationID, from: { emailAddress: { address: 'matched@example.test' } }, toRecipients: [{ emailAddress: { address: 'staff@example.test' } }], subject: 'Scoped', body: { content: 'Scoped' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=scoped' })
+    if (url.includes('/delta')) return Response.json({ value: [{ id: messageID, conversationId: conversationID, from: { emailAddress: { address: 'matched@example.test' } }, toRecipients: [{ emailAddress: { address: 'staff@example.test' } }], subject: 'Scoped', body: { content: 'Scoped' }, receivedDateTime: '2026-10-06T00:00:00Z' }], '@odata.deltaLink': graphCursor(url, 'scoped') })
     throw new Error(`unexpected ${url}`)
   }
   await syncMailboxInbound(payload, first.id, page())
@@ -132,7 +133,7 @@ test('Gmail history hydrates a matched MIME message before advancing its durable
     if (url.endsWith('/profile')) return Response.json({ emailAddress: 'gmail-sync@example.test', historyId: '100' })
     if (url.endsWith('/settings/sendAs')) return Response.json({ sendAs: [{ sendAsEmail: 'gmail-sync@example.test', verificationStatus: 'accepted' }] })
     if (url.includes('/history?')) return Response.json(phase === 'malformed' ? { historyId: '102', history: [{ messagesAdded: [{ message: { id: 'bad-message' } }] }] } : { historyId: '101', history: [{ messagesAdded: [{ message: { id: 'gmail-message' } }] }] })
-    if (url.includes('/messages/gmail-message?')) return Response.json({ id: 'gmail-message', threadId: 'gmail-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'gmail-visitor@example.test' }, { name: 'To', value: 'gmail-sync@example.test' }, { name: 'Subject', value: '<b>Safe reply</b>' }, { name: 'Message-ID', value: '<gmail-original@example.test>' }, { name: 'References', value: '<root@example.test>' }], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('<p>Hello</p>\u0000', 'utf8').toString('base64url') } }, { filename: '<b>resume.pdf</b>', mimeType: 'application/pdf', body: { attachmentId: 'a', size: 42 } }] } })
+    if (url.includes('/messages/gmail-message?')) return Response.json({ id: 'gmail-message', threadId: 'gmail-thread', internalDate: '1791244800000', payload: { headers: [{ name: 'From', value: 'gmail-sync@example.test' }, { name: 'To', value: lead.email }, { name: 'Subject', value: '<b>Safe reply</b>' }, { name: 'Message-ID', value: '<gmail-original@example.test>' }, { name: 'References', value: '<root@example.test>' }], parts: [{ mimeType: 'text/plain', body: { data: Buffer.from('<p>Hello</p>\u0000', 'utf8').toString('base64url') } }, { filename: '<b>resume.pdf</b>', mimeType: 'application/pdf', body: { attachmentId: 'a', size: 42 } }] } })
     if (url.includes('/messages/bad-message?')) return Response.json({ id: 'bad-message', threadId: '' })
     throw new Error(`unexpected ${url}`)
   }
@@ -144,7 +145,7 @@ test('Gmail history hydrates a matched MIME message before advancing its durable
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(JSON.parse(stored.inboundCursor)).toEqual({ historyID: '101' })
   const message = (await payload.find({ collection: 'mail-thread-messages', where: { providerMessageID: { equals: 'gmail-message' } }, overrideAccess: true })).docs[0] as any
-  expect(message).toMatchObject({ subject: 'Safe reply', body: 'Hello', rfcMessageID: '<gmail-original@example.test>', rfcReferences: '<root@example.test>', attachmentMetadata: [{ name: 'resume.pdf', contentType: 'application/pdf', size: 42 }] })
+  expect(message).toMatchObject({ direction: 'outbound', sender: 'gmail-sync@example.test', recipient: lead.email, subject: 'Safe reply', body: 'Hello', rfcMessageID: '<gmail-original@example.test>', rfcReferences: '<root@example.test>', attachmentMetadata: [{ name: 'resume.pdf', contentType: 'application/pdf', size: 42 }] })
   phase = 'malformed'
   await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).rejects.toThrow('provider_malformed_response')
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
@@ -277,7 +278,7 @@ test('overlapping polls compare their original cursor before one can save over t
     if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
     if (url.includes('/delta')) {
       const call = ++deltaCalls
-      return Response.json({ value: [], '@odata.deltaLink': `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=overlap-${call}` })
+      return Response.json({ value: [], '@odata.deltaLink': graphCursor(url, `overlap-${call}`) })
     }
     throw new Error(`unexpected ${url}`)
   }
@@ -285,5 +286,32 @@ test('overlapping polls compare their original cursor before one can save over t
   expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(2)
   expect(results.filter(result => result.status === 'rejected')).toHaveLength(0)
   const stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
-  expect(stored.inboundCursor).toContain('overlap-2')
+  expect(stored.inboundCursor).toMatch(/overlap-[34]/)
+})
+
+test('app-only Graph sync uses only the selected mailbox and preserves Inbox and Sent Items directions', async () => {
+  const { configureMicrosoftAppMailbox } = await import('../src/mailboxes.js')
+  const owner = await payload.create({ collection: 'users', data: { email: 'selected-sync-owner@example.test', name: 'Selected sync owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await configureMicrosoftAppMailbox(payload, { name: 'Selected sync mailbox', tenantID: '11111111-1111-1111-1111-111111111111', clientID: '22222222-2222-2222-2222-222222222222', clientSecret: 'selected-sync-secret', mailboxAddress: 'selected@example.test', aliases: [] }, owner.id)
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'selected-visitor@example.test', message: 'Original', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: crypto.randomUUID(), stage: 'new' }, overrideAccess: true })
+  await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'selected-conversation' }, overrideAccess: true })
+  const calls: string[] = []
+  const fetcher = async (url: string) => {
+    calls.push(url)
+    if (url.includes('/oauth2/v2.0/token')) return Response.json({ access_token: 'selected-token', expires_in: 3600 })
+    if (url.includes('/mailFolders/inbox/')) return Response.json({ value: [{ id: 'selected-incoming', conversationId: 'selected-conversation', from: { emailAddress: { address: lead.email } }, toRecipients: [{ emailAddress: { address: 'selected@example.test' } }], subject: 'Inbound', body: { content: 'inbound' }, receivedDateTime: '2026-10-10T00:00:00Z' }], '@odata.deltaLink': graphCursor(url, 'selected-inbox') })
+    if (url.includes('/mailFolders/sentitems/')) return Response.json({ value: [{ id: 'selected-outgoing', conversationId: 'selected-conversation', from: { emailAddress: { address: 'selected@example.test' } }, toRecipients: [{ emailAddress: { address: lead.email } }], subject: 'Outbound', body: { content: 'outbound' }, receivedDateTime: '2026-10-10T00:01:00Z' }], '@odata.deltaLink': graphCursor(url, 'selected-sent') })
+    throw new Error(`unexpected ${url}`)
+  }
+  await expect(syncMailboxInbound(payload, mailbox.id, fetcher)).resolves.toMatchObject({ processed: 2 })
+  expect(calls.filter(url => url.includes('/mailFolders/'))).toEqual(expect.arrayContaining([
+    expect.stringContaining('/v1.0/users/selected%40example.test/mailFolders/inbox/'),
+    expect.stringContaining('/v1.0/users/selected%40example.test/mailFolders/sentitems/'),
+  ]))
+  expect(calls.some(url => url.includes('/v1.0/me/'))).toBe(false)
+  const messages = await payload.find({ collection: 'mail-thread-messages', where: { mailbox: { equals: mailbox.id } }, sort: 'providerMessageID', overrideAccess: true })
+  expect(messages.docs.map((message: any) => ({ id: message.providerMessageID, direction: message.direction }))).toEqual([{ id: 'selected-incoming', direction: 'inbound' }, { id: 'selected-outgoing', direction: 'outbound' }])
+  const saved = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
+  expect(JSON.parse(saved.inboundCursor)).toMatchObject({ inbox: expect.stringContaining('selected-inbox'), sent: expect.stringContaining('selected-sent') })
 })

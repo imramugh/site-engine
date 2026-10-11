@@ -1,9 +1,9 @@
 import type { Payload } from 'payload'
 import { appendMatchedInbound } from './mail-inbound'
-import { gmailAdapter, gmailIdentity, microsoftAdapter, type Fetcher } from './mail-provider-adapters'
+import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftMailboxTarget, type Fetcher } from './mail-provider-adapters'
 import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
-type Mailbox = { id: string; provider: 'microsoft' | 'google' | 'smtp'; health: string; credentialRevision: string; inboundCursor?: string | null; inboundCursorRevision?: string | null }
+type Mailbox = { id: string; provider: 'microsoft' | 'google' | 'smtp'; health: string; credentialRevision: string; primaryAddress?: string; mailboxAddress?: string; connectionMode?: string; aliases?: unknown; inboundCursor?: string | null; inboundCursorRevision?: string | null }
 type GoogleCursor = { historyID: string; pageToken?: string; offset?: number }
 type MicrosoftCursor = { inbox?: string; sent?: string }
 type SyncResult = { skipped: true; processed: number } | { skipped: false; processed: number }
@@ -12,6 +12,11 @@ const internal = { mailboxInternal: true }
 const activeSyncs = new Map<string, Promise<unknown>>()
 const opaque = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500 && !/[\u0000-\u001f\u007f]/.test(value)
 const googleBatchSize = 10
+const normalizedAddress = (value: unknown) => String(value ?? '').trim().toLowerCase()
+function mailboxSendsFrom(mailbox: Mailbox, address: string) {
+  const configured = [mailbox.primaryAddress, mailbox.mailboxAddress, ...(Array.isArray(mailbox.aliases) ? mailbox.aliases : [])].map(normalizedAddress)
+  return configured.includes(normalizedAddress(address))
+}
 const aborted = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error('sync_aborted') }
 const withSignal = (fetcher: Fetcher, signal?: AbortSignal): Fetcher => async (url, init) => {
   aborted(signal)
@@ -94,8 +99,9 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   let processed = 0
 
   if (active.provider === 'microsoft') {
-    const adapter = microsoftAdapter(providerFetch, 'sync@example.invalid'); const cursors = microsoftCursor(cursor)
-    const pages = await Promise.all([adapter.poll(refreshed.accessToken, 'inbox', cursors.inbox), adapter.poll(refreshed.accessToken, 'sentitems', cursors.sent)])
+    const adapter = microsoftAdapter(providerFetch, 'sync@example.invalid', microsoftMailboxTarget(active)); const cursors = microsoftCursor(cursor)
+    let pages: [Awaited<ReturnType<typeof adapter.poll>>, Awaited<ReturnType<typeof adapter.poll>>]
+    try { pages = await Promise.all([adapter.poll(refreshed.accessToken, 'inbox', cursors.inbox), adapter.poll(refreshed.accessToken, 'sentitems', cursors.sent)]) } catch (error) { aborted(signal); throw error }
     for (const [folder, page] of [['inbox', pages[0]], ['sentitems', pages[1]]] as const) for (const message of page.messages) {
       aborted(signal)
       await unchanged(payload, active)
@@ -134,7 +140,7 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
         aborted(signal)
         const message = await adapter.message(refreshed.accessToken, id)
         await unchanged(payload, active)
-        await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, rfcMessageID: message.rfcMessageID, rfcReferences: message.rfcReferences, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
+        await appendMatchedInbound(payload, { mailbox: active.id, provider: 'google', conversationID: message.threadId, messageID: message.messageId, rfcMessageID: message.rfcMessageID, rfcReferences: message.rfcReferences, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments, direction: mailboxSendsFrom(active, message.sender) ? 'outbound' : 'inbound' })
         processed += 1
         const completed = offset + index + 1
         if (completed < uniqueIDs.length) await persistCursor(JSON.stringify({ historyID: position.historyID, ...(position.pageToken ? { pageToken: position.pageToken } : {}), offset: completed }))
