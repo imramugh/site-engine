@@ -31,7 +31,7 @@ describe('mailbox sync worker', () => {
       renew: async () => { renew++; throw new Error('renew failed') }, fetcher: async () => new Response('{}'), budgetMS: 1000,
     }, Date.parse(due))
     expect(result).toEqual({ mailbox: 'mailbox-1', processed: 3 }); expect(access).toBe(1); expect(renew).toBe(1); expect(polled).toBe(1)
-    expect(updates.at(-1).where.and).toEqual(expect.arrayContaining([{ credentialRevision: { equals: 'revision-1' } }, { inboundNextAttemptAt: { equals: due } }]))
+    expect(updates.at(-1).where.and).toEqual(expect.arrayContaining([{ connectionMode: { equals: 'delegated' } }, { inboundNextAttemptAt: { equals: due } }]))
   })
   it('does not acquire a token when Google notifications are disabled, or a binding is active beyond five minutes', async () => {
     const original = process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC; delete process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC
@@ -49,10 +49,26 @@ describe('mailbox sync worker', () => {
     await runMailboxSyncCycle(payloadFixture(mailbox, { provider: 'microsoft', credentialRevision: 'stale', status: 'failed', nextRenewAttemptAt: '2026-10-11T00:10:00.000Z' }), { sync: async () => ({ skipped: false as const, processed: 0 }), mailboxAccessToken: async () => { tokens++; return { accessToken: 'used', credentialRevision: 'revision-1' } }, renew: (async () => undefined) as never, budgetMS: 1000 }, Date.parse(due))
     expect(tokens).toBe(1)
   })
-  it('uses the original due-time and credential CAS, so notification or config changes are not overwritten', async () => {
-    const mailbox: any = { id: 'mailbox-race', provider: 'microsoft', health: 'connected', credentialRevision: 'before', inboundNextAttemptAt: due }; const updates: any[] = []
+  it('uses the original due-time and app-only credential CAS, so notification or config changes are not overwritten', async () => {
+    const mailbox: any = { id: 'mailbox-race', provider: 'microsoft', connectionMode: 'app-only', health: 'connected', credentialRevision: 'before', inboundNextAttemptAt: due }; const updates: any[] = []
     await runMailboxSyncCycle(payloadFixture(mailbox, { provider: 'microsoft', credentialRevision: notificationCredentialRevision(mailbox), status: 'active', expiresAt: '2026-10-11T00:06:00.000Z' }, input => updates.push(input)), { sync: async () => { mailbox.inboundNextAttemptAt = '2026-10-11T00:00:01.000Z'; mailbox.credentialRevision = 'after'; return { skipped: false as const, processed: 1 } }, budgetMS: 1000 }, Date.parse(due))
-    expect(updates.at(-1).where.and).toEqual(expect.arrayContaining([{ credentialRevision: { equals: 'before' } }, { inboundNextAttemptAt: { equals: due } }]))
+    expect(updates.at(-1).where.and).toEqual(expect.arrayContaining([{ connectionMode: { equals: 'app-only' } }, { credentialRevision: { equals: 'before' } }, { inboundNextAttemptAt: { equals: due } }]))
+  })
+
+  it('persists the next schedule after a delegated refresh-token rotation', async () => {
+    const mailbox: any = { id: 'delegated-rotation', provider: 'microsoft', connectionMode: 'delegated', health: 'connected', credentialRevision: 'before', inboundNextAttemptAt: due }
+    const payload = {
+      find: async (input: any) => input.collection === 'mailbox-configurations' ? { docs: [mailbox] } : { docs: [{ provider: 'microsoft', credentialRevision: notificationCredentialRevision(mailbox), status: 'active', expiresAt: '2026-10-11T00:06:00.000Z' }] },
+      findByID: async () => mailbox,
+      update: async (input: any) => {
+        const clauses = input.where.and as Array<Record<string, { equals: unknown }>>
+        const matches = clauses.every(clause => Object.entries(clause).every(([key, expected]) => mailbox[key] === expected.equals))
+        if (matches) Object.assign(mailbox, input.data)
+        return { docs: matches ? [mailbox] : [] }
+      },
+    }
+    await runMailboxSyncCycle(payload, { sync: async () => { mailbox.credentialRevision = 'rotated'; return { skipped: false as const, processed: 2 } }, budgetMS: 1000 }, Date.parse(due))
+    expect(mailbox).toMatchObject({ credentialRevision: 'rotated', inboundNextAttemptAt: '2026-10-11T00:03:00.000Z', inboundFailureCount: 0 })
   })
   it('aborts an in-flight network poll at its cycle deadline', async () => {
     const mailbox = { id: 'mailbox-deadline', provider: 'microsoft', health: 'connected', credentialRevision: 'revision-1', inboundNextAttemptAt: due }; let aborted = false

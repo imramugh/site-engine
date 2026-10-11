@@ -15,7 +15,7 @@ export function mailboxSyncWorkerAuthorized(request: Request): boolean {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected)
 }
 
-type Mailbox = { id: string; provider: 'microsoft' | 'google'; health: string; credentialRevision: string; inboundNextAttemptAt?: string | null; inboundFailureCount?: number }
+type Mailbox = { id: string; provider: 'microsoft' | 'google'; health: string; connectionMode?: 'delegated' | 'app-only'; credentialRevision: string; inboundNextAttemptAt?: string | null; inboundFailureCount?: number }
 type CycleDependencies = {
   sync: typeof syncMailboxInbound
   renew?: typeof renewMailboxNotifications
@@ -63,14 +63,15 @@ async function runCycle(payload: any, dependencies: CycleDependencies, now: numb
     const mailbox = candidates.docs[0] as Mailbox | undefined
     if (!mailbox || controller.signal.aborted) return { mailbox: null, processed: 0 }
     const dueAt = mailbox.inboundNextAttemptAt ?? null
+    const connectionMode = mailbox.connectionMode === 'app-only' ? 'app-only' : 'delegated'
     const credentialRevision = mailbox.credentialRevision
     const update = async (data: Record<string, unknown>) => {
       const current = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, depth: 0, overrideAccess: true }) as Mailbox
       // The original due time is a CAS value. A webhook received during polling
       // advances it to now; this worker must not defer that fresh notification.
       return payload.update({ collection: 'mailbox-configurations', where: { and: [
-        { id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } },
-        { credentialRevision: { equals: credentialRevision } }, { inboundNextAttemptAt: { equals: dueAt } },
+        { id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } }, { connectionMode: { equals: connectionMode } },
+        ...(connectionMode === 'app-only' ? [{ credentialRevision: { equals: credentialRevision } }] : []), { inboundNextAttemptAt: { equals: dueAt } },
       ] }, data, overrideAccess: true, context: { mailboxInternal: true } })
     }
     if (await notificationRenewalNeeded(payload, mailbox, now) && !controller.signal.aborted) {
