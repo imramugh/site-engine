@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 async function owner(browser: Browser) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -127,7 +126,7 @@ test('ENG-022 Change log remains readable and accessible at desktop and mobile s
     await session.page.goto('/operations?period=all')
     expect(await session.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
     await expect(session.page.locator('[data-change-log-filters]')).toBeVisible()
-    await session.page.addScriptTag({ path: axeSource })
+    await installAxe(session.page)
     expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     await session.page.screenshot({ path: `test-results/change-log-${process.env.CMS_PRIVATE_BRAND === '1' ? 'private' : 'neutral'}-${size.width}.png`, fullPage: true })
   }

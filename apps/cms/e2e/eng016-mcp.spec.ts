@@ -1,10 +1,9 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const pageID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0016'
 const blockID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeee1016'
 
@@ -84,7 +83,7 @@ test('ENG-016 Editor assistant discovers, drafts, and submits a revisioned block
     await review.click()
     await expect(browserSession.page.getByRole('region', { name: 'Change set detail' })).toContainText('Assistant-prepared review heading')
     await expect(browserSession.page.getByRole('button', { name: /Approve and queue publish/ })).toHaveCount(0)
-    await browserSession.page.addScriptTag({ path: axeSource })
+    await installAxe(browserSession.page)
     expect(await browserSession.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   } finally {
     try {

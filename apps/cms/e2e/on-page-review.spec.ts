@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const pageID = '12345678-1234-4234-8234-1234567890ab'
 const blockID = '12345678-1234-4234-8234-1234567890ac'
@@ -66,7 +65,7 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   const pending = reviewer.page.getByLabel('Choose change set')
   await expect(pending).toHaveCount(1)
   await pending.selectOption((await pending.locator('option').filter({ hasText: 'Second pending page review' }).getAttribute('value'))!)
-  await reviewer.page.addScriptTag({ url: '/__e2e/axe.js' })
+  await installAxe(reviewer.page)
   expect(await reviewer.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('[data-public-page-review]', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await reviewer.page.screenshot({ path: 'artifacts/public-page-review-entry-1440.png', fullPage: true })
   const openReview = reviewer.page.getByRole('button', { name: 'Review on page' })
@@ -152,7 +151,7 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   await expect(reviewer.page.getByRole('complementary', { name: 'Review details' })).toHaveCount(0)
   await reviewer.page.getByRole('button', { name: 'Details and actions' }).click()
 
-  await reviewer.page.addScriptTag({ path: axeSource })
+  await installAxe(reviewer.page)
   expect(await reviewer.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await reviewer.page.evaluate(() => { scrollTo(0, 0); return new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))) })
   await reviewer.page.screenshot({ path: 'artifacts/on-page-review-1440.png', fullPage: true })

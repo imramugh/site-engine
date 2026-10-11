@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 
@@ -79,7 +78,7 @@ test('ENG-022 gives only an Owner the source-shaped accessible Change log', asyn
   await expect(owner.page).toHaveURL(/type=editorial/)
   await expect(owner.page.locator('[data-change-log-row]').first()).toBeVisible()
   const firstRow = owner.page.locator('[data-change-log-row]').first(); await firstRow.getByRole('button', { name: 'View', exact: true }).click(); await expect(firstRow.getByRole('button', { name: 'Hide', exact: true })).toHaveAttribute('aria-expanded', 'true')
-  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await installAxe(owner.page); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
   for (const role of ['editor', 'sales'] as const) { const denied = await newPage(browser, role); expect((await denied.page.request.get('/api/operations')).status()).toBe(403); await denied.page.goto('/operations'); await expect(denied.page.getByText('Owner access is required to view the change log.')).toBeVisible(); await denied.context.close() }
 })
@@ -120,7 +119,7 @@ test('ENG-037 lets only a fresh Owner manage retention in Operations and require
   await expect(applicationDialog).toContainText('candidate.synthetic@example.test')
   await applicationDialog.getByRole('button', { name: 'Confirm permanent deletion' }).click()
   await expect(owner.page.getByRole('dialog', { name: 'Confirm permanent application deletion' })).toHaveCount(0)
-  await owner.page.addScriptTag({ path: axeSource })
+  await installAxe(owner.page)
   expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
   const editor = await newPage(browser, 'editor')
@@ -151,7 +150,7 @@ test('ENG-030 records duplicate and out-of-order callbacks in the Owner release 
   await expect(row).toContainText('Retry reason')
   await expect(row).toContainText('STALE_CALLBACK')
   await expect(row).toContainText(proof.retry.correlationID)
-  await owner.page.addScriptTag({ path: axeSource })
+  await installAxe(owner.page)
   expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
 })

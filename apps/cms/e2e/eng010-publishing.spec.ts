@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { readyAndApprove, reviewer } from './eng010-publishing.fixture'
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 test('ENG-010 publishes an approved snapshot, retains it after terminal failure, and alerts its Owner', async ({ browser }) => {
   test.setTimeout(90_000)
@@ -31,7 +30,7 @@ test('ENG-010 publishes an approved snapshot, retains it after terminal failure,
     await successfulLink.click()
     const successfulLog = page.getByRole('region', { name: 'Build log', exact: true })
     for (const stage of ['dispatched', 'building', 'built', 'activating', 'deployed']) await expect(successfulLog).toContainText(stage)
-    for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) { await page.setViewportSize(size); await page.goto('/operations'); await page.getByRole('link', { name: 'Open build log', exact: true }).and(page.locator(`a[href="/operations?publish=${body.claim.id}"]`)).click(); await expect(page.getByRole('region', { name: 'Build log' })).toContainText('BUILD_FAILED'); expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await page.addScriptTag({ path: axeSource }); expect(await page.evaluate(async () => (await (window as any).axe.run('main')).violations)).toEqual([]) }
+    for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) { await page.setViewportSize(size); await page.goto('/operations'); await page.getByRole('link', { name: 'Open build log', exact: true }).and(page.locator(`a[href="/operations?publish=${body.claim.id}"]`)).click(); await expect(page.getByRole('region', { name: 'Build log' })).toContainText('BUILD_FAILED'); expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await installAxe(page); expect(await page.evaluate(async () => (await (window as any).axe.run('main')).violations)).toEqual([]) }
     await page.goto('/operations')
     const failedRow = page.locator('[data-release-history-row]').filter({ has: page.locator(`a[href="/operations?publish=${body.claim.id}"]`) })
     page.once('dialog', dialog => dialog.accept())

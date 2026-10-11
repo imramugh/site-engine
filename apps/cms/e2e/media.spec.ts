@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 import sharp from 'sharp'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 const sessionToken = 'synthetic-media-owner-session-token'
 const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#2563eb' } }).png().toBuffer()
@@ -19,7 +18,7 @@ async function mediaPage(browser: Browser) {
 }
 
 async function axe(page: Page) {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document)).violations)).toEqual([])
 }
 

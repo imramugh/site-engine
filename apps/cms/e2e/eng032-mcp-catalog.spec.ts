@@ -1,10 +1,9 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const pageID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0016'
 
 type CatalogEntry = { name?: string; uri?: string; uriTemplate?: string; description?: string; _meta?: unknown }
@@ -50,7 +49,7 @@ test('ENG-032 exposes the connected-assistant surface and an Editor can only rea
     await session.page.goto('/integrations?tab=assistants')
     await expect(session.page.getByRole('tab', { name: 'Connected assistants' })).toBeVisible()
     await expect(session.page.getByRole('heading', { name: 'My connected assistants' })).toBeVisible()
-    await session.page.addScriptTag({ path: axeSource })
+    await installAxe(session.page)
     expect(await session.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'

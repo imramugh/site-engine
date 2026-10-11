@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 async function signedIn(browser: Browser) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -87,7 +86,7 @@ test('ENG-016 Owner configures visible AI draft routes with a reviewed vision mo
     for (const width of [1440, 390]) {
       await owner.page.setViewportSize({ width, height: 900 })
       expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
-      await owner.page.addScriptTag({ path: axeSource })
+      await installAxe(owner.page)
       expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     }
   } finally {

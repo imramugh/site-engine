@@ -1,6 +1,5 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
 async function signedIn(browser: Browser, token: string) {
@@ -36,7 +35,7 @@ test('ENG-026 Editor saves a Hero draft, completes a scoped preview, and submits
   const frame = editor.page.frameLocator('iframe[title="Proposed draft preview"]')
   await expect(frame.getByText('Browser saved heading')).toBeVisible()
   await expect(frame.getByText('Browser saved body after heading save.')).toBeVisible()
-  await editor.page.addScriptTag({ path: axeSource })
+  await installAxe(editor.page)
   expect(await editor.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
   await editor.page.screenshot({ path: 'artifacts/direct-edit-1440.png', fullPage: true })
   await editor.page.setViewportSize({ width: 390, height: 844 })

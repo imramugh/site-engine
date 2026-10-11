@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
 const cmsOrigin = `https://127.0.0.1:${e2ePort}`
 
@@ -64,7 +63,7 @@ test('ENG-035 lets an Owner choose a compatible installed theme into a named rev
     await owner.page.setViewportSize({ width, height: 900 })
     await owner.page.evaluate(() => new Promise<void>(resolve => { scrollTo(0, 0); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) }))
     expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
-    await owner.page.addScriptTag({ path: axeSource })
+    await installAxe(owner.page)
     expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
     await owner.page.screenshot({ path: test.info().outputPath(`themes-${width}.png`), fullPage: true })
   }

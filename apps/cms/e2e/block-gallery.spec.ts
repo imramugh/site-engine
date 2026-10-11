@@ -1,10 +1,9 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
-import { createRequire } from 'node:module'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 function mcpResult<T>(value: unknown): T { const result = value as { structuredContent?: T; content?: Array<{ text?: string }> }; return result.structuredContent ?? JSON.parse(result.content?.find((item) => item.text)?.text ?? '{}') as T }
 
 async function signedIn(browser: Browser) {
@@ -13,7 +12,7 @@ async function signedIn(browser: Browser) {
   return { context, page: await context.newPage() }
 }
 async function axe(page: Page) {
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
 }
 async function screenshot(page: Page, testInfo: TestInfo, name: string) {

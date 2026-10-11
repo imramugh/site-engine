@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 test('ENG-003 refuses disallowed services templates and reports every incompatible conversion block', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -10,7 +9,7 @@ test('ENG-003 refuses disallowed services templates and reports every incompatib
   const page = await context.newPage()
   await page.goto('/content-tree')
   await expect(page.getByRole('heading', { name: 'Content' })).toBeVisible()
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main')).violations)).toEqual([])
 
   const result = await page.evaluate(async () => {

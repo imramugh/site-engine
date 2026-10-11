@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 test('reviewer sees a real renderer structured-data diagnostic and cannot approve it', async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -19,7 +18,7 @@ test('reviewer sees a real renderer structured-data diagnostic and cannot approv
   await expect(page.getByText('12345678-1234-4234-8234-1234567890ac', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Return to Reviews' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Approve/ })).toHaveCount(0)
-  await page.addScriptTag({ path: axeSource })
+  await installAxe(page)
   expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await context.close()
 })

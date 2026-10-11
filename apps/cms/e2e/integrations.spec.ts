@@ -1,8 +1,7 @@
+import { installAxe } from './axe'
 import { expect, test, type Browser } from '@playwright/test'
-import { createRequire } from 'node:module'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 async function signedIn(browser: Browser, token: string) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
   await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map((name) => ({ name, value: token, url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
@@ -196,7 +195,7 @@ test('ENG-023 provider configuration keeps dialog, rejection, reauthentication, 
     await owner.page.getByRole('button', { name: 'Close provider configuration' }).click()
     await owner.page.unroute('**/api/integrations')
 
-    await owner.page.addScriptTag({ path: axeSource })
+    await installAxe(owner.page)
     expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   } finally {
     await owner.page.unroute('**/api/integrations')
@@ -241,7 +240,7 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   await expect(owner.page.locator('[data-integrations-status][role="alert"]')).toHaveCount(0)
   const signin = owner.page.locator('[data-signin-methods]'); await expect(signin.locator('article')).toHaveCount(1)
   await expect(signin.locator('[data-signin-method="local"]')).toContainText('Last used'); await expect(signin.locator('[data-signin-method="local"]')).toContainText('15 minutes')
-  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await installAxe(owner.page); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.page.screenshot({ path: testInfo.outputPath('sign-in-details-1440.png'), fullPage: true })
   await owner.page.setViewportSize({ width: 390, height: 844 }); await owner.page.getByRole('tab', { name: 'Sign-in' }).click()
   expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
@@ -271,12 +270,12 @@ test('ENG-022 Owner persists notification routing and private urgent contacts', 
   const contactSave = owner.page.waitForResponse(response => response.url().endsWith('/api/urgent-contacts') && response.request().method() === 'POST')
   await urgent.getByRole('button', { name: 'Save urgent contacts', exact: true }).click(); expect((await contactSave).status()).toBe(200); await expect(urgent.getByRole('status')).toContainText('Urgent contacts saved.')
   await owner.page.reload(); await owner.page.getByText('Urgent alert contacts Email and mobile', { exact: true }).click(); await expect(urgent.getByLabel('Email', { exact: true })).toHaveValue(contacts[0]!.email)
-  for (const width of [1440, 390]) { await owner.page.setViewportSize({ width, height: 900 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]); await owner.page.screenshot({ path: testInfo.outputPath(`site-urgent-contacts-${width}.png`), fullPage: true }) }
+  for (const width of [1440, 390]) { await owner.page.setViewportSize({ width, height: 900 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await installAxe(owner.page); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run({ runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([]); await owner.page.screenshot({ path: testInfo.outputPath(`site-urgent-contacts-${width}.png`), fullPage: true }) }
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations?tab=notifications'); await expect(panel).toBeVisible()
   const reloaded = await owner.page.request.get('/api/urgent-contacts'); expect(reloaded.status()).toBe(200); expect(await reloaded.json()).toMatchObject({ contacts })
   await owner.page.screenshot({ path: testInfo.outputPath('notifications-1440.png'), fullPage: true })
   await owner.page.setViewportSize({ width: 390, height: 844 }); expect(await owner.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true); await owner.page.screenshot({ path: testInfo.outputPath('notifications-390.png'), fullPage: true })
-  await owner.page.addScriptTag({ path: axeSource }); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  await installAxe(owner.page); expect(await owner.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   await owner.context.close()
 })
 

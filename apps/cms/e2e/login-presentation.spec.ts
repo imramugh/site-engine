@@ -1,7 +1,6 @@
+import { installAxe } from './axe'
 import { expect, test, type Page } from '@playwright/test'
-import { createRequire } from 'node:module'
 
-const axeSource = createRequire(import.meta.url).resolve('axe-core/axe.min.js')
 
 async function fillSignIn(page: Page) {
   await page.getByLabel('Work email').fill('staff@example.test')
@@ -36,7 +35,7 @@ for (const width of [1440, 390, 320]) {
     await expect(page.locator('#emergency-code-help')).toBeVisible()
     expect(await page.locator('#emergency-code-help').evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(14)
     expect(await page.locator('h1').evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(28)
-    await page.addScriptTag({ path: axeSource })
+    await installAxe(page)
     expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(document, {
       runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] },
     })).violations)).toEqual([])
