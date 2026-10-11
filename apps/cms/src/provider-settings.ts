@@ -1,22 +1,57 @@
 import type { IntegrationProvider } from './integrations'
 
-/** Safe to share with the admin client; secrets are never part of these settings. */
-export type ProviderSettings = { endpoint?: string; region?: string; imageInput?: boolean; imageInputTokenLimit?: number }
+/** Browser-safe, serializable provider settings. Credentials are stored separately. */
+export type ProviderSettings = {
+  endpoint?: string
+  region?: string
+  imageInput?: boolean
+  imageInputTokenLimit?: number
+}
+
 export const MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT = 1_000_000
 const keys = new Set(['endpoint', 'region', 'imageInput', 'imageInputTokenLimit'])
 const regionPattern = /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/
-function invalid(): never { throw new Error('PROVIDER_SETTINGS_INVALID') }
-function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) invalid(); return value as Record<string, unknown> }
-function endpoint(value: unknown): string { if (typeof value !== 'string' || value.length > 2_048) invalid(); let url: URL; try { url = new URL(value) } catch { invalid() }; if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/' && url.pathname !== '/openai/v1' || url.hostname.endsWith('.local') || url.hostname === 'localhost') invalid(); return url.origin }
-function image(settings: Record<string, unknown>, required: boolean): Pick<ProviderSettings, 'imageInput' | 'imageInputTokenLimit'> { const enabled = settings.imageInput; if (enabled === undefined && !required) return {}; if (typeof enabled !== 'boolean') invalid(); if (!enabled) { if (settings.imageInputTokenLimit !== undefined) invalid(); return { imageInput: false } }; if (typeof settings.imageInputTokenLimit !== 'number' || !Number.isSafeInteger(settings.imageInputTokenLimit) || settings.imageInputTokenLimit < 1 || settings.imageInputTokenLimit > MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT) invalid(); return { imageInput: true, imageInputTokenLimit: settings.imageInputTokenLimit } }
 
-/** Validates the serializable configuration shape. Server code additionally authorizes compatible origins. */
+function invalid(): never { throw new Error('PROVIDER_SETTINGS_INVALID') }
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid()
+  return value as Record<string, unknown>
+}
+function endpoint(value: unknown, allowBasePath = false): string {
+  if (typeof value !== 'string' || value.length > 2_048) invalid()
+  let url: URL
+  try { url = new URL(value) } catch { invalid() }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.hostname === 'localhost' || url.hostname.endsWith('.local')) invalid()
+  if (!allowBasePath && !['/', '/openai/v1', '/openai/v1/'].includes(url.pathname)) invalid()
+  return `${url.origin}${url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '')}`
+}
+function imageSettings(settings: Record<string, unknown>, required: boolean): Pick<ProviderSettings, 'imageInput' | 'imageInputTokenLimit'> {
+  if (settings.imageInput === undefined && !required) return {}
+  if (typeof settings.imageInput !== 'boolean') invalid()
+  if (!settings.imageInput) {
+    if (settings.imageInputTokenLimit !== undefined) invalid()
+    return { imageInput: false }
+  }
+  const limit = settings.imageInputTokenLimit
+  if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT) invalid()
+  return { imageInput: true, imageInputTokenLimit: limit }
+}
+
+/** Validates and canonicalizes settings. Compatible endpoint authorization happens server-side. */
 export function normalizeProviderSettings(provider: IntegrationProvider, value: unknown): ProviderSettings {
-  const settings = value === undefined || value === null ? {} : object(value)
+  const settings = value === undefined || value === null ? {} : record(value)
   if (!Object.keys(settings).every(key => keys.has(key))) invalid()
-  if (provider === 'azure-openai') { const origin = endpoint(settings.endpoint); const url = new URL(origin); if (!/^[a-z0-9-]+\.openai\.azure\.com$/i.test(url.hostname)) invalid(); return { endpoint: `${origin}/openai/v1`, ...image(settings, true) } }
-  if (provider === 'amazon-bedrock') { if (typeof settings.region !== 'string' || !regionPattern.test(settings.region)) invalid(); return { region: settings.region, ...image(settings, true) } }
-  if (provider === 'openai-compatible') return { endpoint: endpoint(settings.endpoint), ...image(settings, true) }
+  if (provider === 'azure-openai') {
+    const base = endpoint(settings.endpoint)
+    const url = new URL(base)
+    if (!/^[a-z0-9-]+\.openai\.azure\.com$/i.test(url.hostname)) invalid()
+    return { endpoint: base.endsWith('/openai/v1') ? base : `${base}/openai/v1`, ...imageSettings(settings, true) }
+  }
+  if (provider === 'amazon-bedrock') {
+    if (typeof settings.region !== 'string' || !regionPattern.test(settings.region)) invalid()
+    return { region: settings.region, ...imageSettings(settings, true) }
+  }
+  if (provider === 'openai-compatible') return { endpoint: endpoint(settings.endpoint, true), ...imageSettings(settings, true) }
   if (settings.endpoint !== undefined || settings.region !== undefined) invalid()
-  return image(settings, provider === 'mistral')
+  return imageSettings(settings, provider === 'mistral')
 }

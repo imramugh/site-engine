@@ -11,6 +11,7 @@ process.env.INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString
 const { default: config } = await import('../payload.config.js')
 const { executeConfiguredAIJob, invokeProvider } = await import('../src/ai-providers.js')
 const { encryptCredential, publicIntegration } = await import('../src/integrations.js')
+type NewProvider = 'azure-openai' | 'amazon-bedrock' | 'mistral' | 'openai-compatible'
 let payload: Awaited<ReturnType<typeof getPayload>>
 const now = new Date('2026-10-04T12:00:00.000Z')
 const pricing = { inputMicroUsdPerMillionTokens: 1_000_000, outputMicroUsdPerMillionTokens: 2_000_000, pricingSource: 'https://prices.example.test/review-2026-10-04', pricingAsOf: '2026-10-04T00:00:00.000Z' }
@@ -223,4 +224,62 @@ describe('ENG-023 provider monetary accounting', () => {
     await expect(executeConfiguredAIJob(payload, { ...job('openai'), requiresImage: true, imageDataUrl }, { now, transport: async () => { contacted = true; return Response.json({}) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
     expect(contacted).toBe(false)
   })
+})
+
+
+describe('ENG-027 configured adapter accounting', () => {
+  const adapterSettings: Record<NewProvider, Record<string, unknown>> = {
+    'azure-openai': { endpoint: 'https://demo.openai.azure.com', imageInput: true, imageInputTokenLimit: 10_000 },
+    'amazon-bedrock': { region: 'us-east-1', imageInput: true, imageInputTokenLimit: 10_000 },
+    mistral: { imageInput: true, imageInputTokenLimit: 10_000 },
+    'openai-compatible': { endpoint: 'https://compat.example.test/api/v1', imageInput: true, imageInputTokenLimit: 10_000 },
+  }
+  const response = (provider: NewProvider) => provider === 'azure-openai'
+    ? { output: [{ type: 'message', content: [{ type: 'output_text', text: 'answer' }] }], usage: { input_tokens: 2, output_tokens: 3 } }
+    : provider === 'amazon-bedrock'
+      ? { output: { message: { content: [{ text: 'answer' }] } }, usage: { inputTokens: 2, outputTokens: 3 } }
+      : { choices: [{ message: { content: 'answer' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }
+
+  it.each(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const)('reserves, sends an image, and settles %s usage', async provider => {
+    process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compat.example.test'
+    await configured(provider as never, 'model', 'secret', { providerSettings: adapterSettings[provider], monthlyCapMicroUsd: 2_000_000 })
+    let body: Record<string, unknown> | undefined
+    const result = await executeConfiguredAIJob(payload, { provider, input: 'visible', imageDataUrl: 'data:image/webp;base64,AA==', requiresImage: true, maxOutputTokens: 10 }, { now, transport: async request => { body = await request.json() as Record<string, unknown>; const beforeResponse = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true }); expect(beforeResponse.docs).toHaveLength(1); return Response.json(response(provider)) } })
+    expect(result).toMatchObject({ provider, output: 'answer', usageCostMicroUsd: 8, usageCostStatus: 'actual' })
+    expect(JSON.stringify(body)).toContain('AA==')
+    const rows = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
+    expect(rows.docs).toHaveLength(1)
+    expect(rows.docs[0]).toMatchObject({ state: 'settled', requestInputTokens: expect.any(Number) })
+  })
+
+  it.each(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const)('does not contact capped %s and records OpenRouter fallback', async provider => {
+    process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compat.example.test'
+    await configured(provider as never, 'model', 'primary', { providerSettings: adapterSettings[provider], monthlyCapMicroUsd: 0 })
+    await configured('openrouter', 'vendor/model', 'fallback', { monthlyCapMicroUsd: 2_000_000 })
+    const requests: Request[] = []
+    const result = await executeConfiguredAIJob(payload, { provider, fallbackProvider: 'openrouter', input: 'p', maxOutputTokens: 10 }, { now, transport: async request => { requests.push(request); return Response.json({ choices: [{ message: { content: 'fallback' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }) } })
+    expect(result).toMatchObject({ provider: 'openrouter', fallbackUsed: true })
+    expect(requests).toHaveLength(1)
+  })
+
+  it.each(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const)('retains %s 503 reservation and falls back once', async provider => {
+    process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compat.example.test'
+    await configured(provider as never, 'model', 'primary', { providerSettings: adapterSettings[provider], monthlyCapMicroUsd: 2_000_000 })
+    await configured('openrouter', 'vendor/model', 'fallback', { monthlyCapMicroUsd: 2_000_000 })
+    let calls = 0
+    const result = await executeConfiguredAIJob(payload, { provider, fallbackProvider: 'openrouter', input: 'p', maxOutputTokens: 10 }, { now, transport: async request => { calls++; if (calls === 1) return new Response('{}', { status: 503 }); return Response.json({ choices: [{ message: { content: 'fallback' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }) } })
+    expect(result).toMatchObject({ provider: 'openrouter', fallbackUsed: true, usageCostStatus: 'reserved' })
+    expect(calls).toBe(2)
+    const rows = await payload.find({ collection: 'provider-usage-reservations', overrideAccess: true })
+    expect(rows.docs.some(row => row.state === 'reserved')).toBe(true)
+  })
+
+  it.each(['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const)('does not retry rejected %s credentials', async provider => {
+    await configured(provider as never, 'model', 'secret', { providerSettings: adapterSettings[provider], monthlyCapMicroUsd: 2_000_000 })
+    await configured('openrouter', 'vendor/model', 'fallback', { monthlyCapMicroUsd: 2_000_000 })
+    let calls = 0
+    await expect(executeConfiguredAIJob(payload, { provider, fallbackProvider: 'openrouter', input: 'p', maxOutputTokens: 10 }, { now, transport: async () => { calls++; return new Response('credential', { status: 401 }) } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(1)
+  })
+
 })

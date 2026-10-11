@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Payload, PayloadRequest } from 'payload'
 import { decryptCredential, type IntegrationProvider } from './integrations'
-import { adapterOutput, adapterRequest } from './ai-provider-adapters'
+import { adapterOutput, adapterRequest, pinnedCompatibleFetch } from './ai-provider-adapters'
 import { MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT, normalizeProviderSettings, type ProviderSettings } from './provider-settings'
 import { withPayloadTransaction } from './auth-transaction'
 
@@ -37,7 +37,11 @@ const MAX_OUTPUT_TOKENS = 8_192
 // ceil(768/32)^2 * 1.62 < 934 image tokens; 2,000 leaves headroom.
 // Reviewed 2026-10-06: https://developers.openai.com/api/docs/guides/images-vision#calculating-costs
 const visionInputTokenUpperBounds: Readonly<Record<string, number>> = Object.freeze({ 'gpt-4.1-mini': 2_000, 'gpt-4.1-mini-2025-04-14': 2_000, 'gpt-test': 1_000_000 })
-export function supportsVisionInput(provider: IntegrationProvider, model: string, settings?: ProviderSettings): boolean { return provider === 'openai' ? Number.isSafeInteger(visionInputTokenUpperBounds[model]) : Boolean(settings?.imageInput && settings.imageInputTokenLimit === 2_000) }
+export function supportsVisionInput(provider: IntegrationProvider, model: string, settings?: ProviderSettings): boolean {
+  if (provider === 'openai') return Number.isSafeInteger(visionInputTokenUpperBounds[model])
+  if (!['azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'].includes(provider)) return false
+  return Boolean(settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT)
+}
 export function supportsProductionVisionInput(provider: IntegrationProvider, model: string, settings?: ProviderSettings): boolean { return provider === 'openai' ? (model === 'gpt-4.1-mini' || model === 'gpt-4.1-mini-2025-04-14') : supportsVisionInput(provider, model, settings) }
 const monthAt = (date: Date) => date.toISOString().slice(0, 7)
 const integer = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
@@ -75,9 +79,10 @@ function reservedInputTokens(provider: IntegrationProvider, model: string, input
   // The request does carry the image data URL, but its compressed byte size is
   // unrelated to vision token billing. Count the text/framing representation
   // without it and add the reviewed model-specific pixel bound below.
-  const serialized = Buffer.byteLength(JSON.stringify(requestBody(provider, model, input, maxOutputTokens)), 'utf8')
+  const body = adapterRequest(provider, '', model, input, maxOutputTokens, undefined, settings)?.body ?? requestBody(provider, model, input, maxOutputTokens)
+  const serialized = Buffer.byteLength(JSON.stringify(body), 'utf8')
   if (!imageDataUrl) return serialized
-  const visual = provider === 'openai' && supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : settings?.imageInput && settings.imageInputTokenLimit === 2_000 ? settings.imageInputTokenLimit : undefined
+  const visual = provider === 'openai' && supportsVisionInput(provider, model) ? visionInputTokenUpperBounds[model] : settings?.imageInput && typeof settings.imageInputTokenLimit === 'number' && settings.imageInputTokenLimit >= 1 && settings.imageInputTokenLimit <= MAX_REVIEWED_IMAGE_INPUT_TOKEN_LIMIT ? settings.imageInputTokenLimit : undefined
   return visual !== undefined && Number.isSafeInteger(serialized + visual) ? serialized + visual : undefined
 }
 function requestFor(provider: IntegrationProvider, credential: string, model: string, input: string, maxOutputTokens: number, imageDataUrl?: string, signal?: AbortSignal, settings?: ProviderSettings): Request {
@@ -110,7 +115,9 @@ export async function invokeProvider(provider: IntegrationProvider, credential: 
   const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')) }, timeoutMs) })
   try {
-    const response = await Promise.race([transport(requestFor(provider, credential, model, input, maxOutputTokens, imageDataUrl, controller.signal, settings)), deadline])
+    const request = requestFor(provider, credential, model, input, maxOutputTokens, imageDataUrl, controller.signal, settings)
+    const send = provider === 'openai-compatible' && transport === fetch ? pinnedCompatibleFetch(request) : transport(request)
+    const response = await Promise.race([send, deadline])
     if (!response.ok) return { outcome: response.status === 401 || response.status === 403 ? 'rejected' : 'unavailable' }
     const body = await Promise.race([response.json(), deadline]).catch(() => undefined) as Record<string, unknown> | undefined
     const result = body && parsed(provider, body)

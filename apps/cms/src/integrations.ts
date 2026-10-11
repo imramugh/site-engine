@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import type { ProviderSettings } from './provider-settings'
-import { adapterMetadataURL } from './ai-provider-adapters'
+import { adapterMetadataURL, pinnedCompatibleFetch } from './ai-provider-adapters'
 
 export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
@@ -83,7 +83,8 @@ export async function providerConnectionTransport(input: { provider: Integration
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
   const request = async (url: string, headers: Record<string, string>): Promise<ConnectionResult> => {
-    const response = await fetcher(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' })
+    const request = new Request(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' })
+    const response = input.provider === 'openai-compatible' && fetcher === fetch ? await pinnedCompatibleFetch(request) : await fetcher(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' })
     await drainBounded(response)
     if (response.status === 401 || response.status === 403) return { ok: false, code: 'rejected' }
     return response.ok ? { ok: true, code: 'connected' } : { ok: false, code: 'unavailable' }
