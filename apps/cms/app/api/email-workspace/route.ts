@@ -2,7 +2,7 @@ import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
-import { clearMailboxArea, mailboxAreas, mailboxWorkspace, configureSMTPMailbox, sendAuthorizedMailboxTest, setMailboxArea, testSMTPMailbox, type MailboxArea, type MailboxSecurity } from '../../../src/mailboxes'
+import { clearMailboxArea, mailboxAreas, mailboxWorkspace, configureMicrosoftAppMailbox, configureSMTPMailbox, sendAuthorizedMailboxTest, setMailboxArea, testSMTPMailbox, type MailboxArea, type MailboxSecurity } from '../../../src/mailboxes'
 import { serverSessionStrategy } from '../../../src/identity'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
@@ -23,7 +23,10 @@ async function POSTHandler(request: Request) {
   try {
     const { payload, user } = await owner(request); if (!user || !(await freshStaff(['owner'])({ req: { payload, user, headers: request.headers } as never }))) return json({ error: 'Fresh Owner authentication is required.' }, 403)
     const input = await body(request)
-    if (input.action === 'configure-smtp') {
+    if (input.action === 'configure-microsoft') {
+      const keys = ['action', 'id', 'name', 'tenantID', 'clientID', 'clientSecret', 'mailboxAddress', 'aliases']; if (!Object.keys(input).every(key => keys.includes(key)) || (input.id !== undefined && typeof input.id !== 'string') || typeof input.name !== 'string' || typeof input.tenantID !== 'string' || typeof input.clientID !== 'string' || (input.clientSecret !== undefined && typeof input.clientSecret !== 'string') || typeof input.mailboxAddress !== 'string' || !Array.isArray(input.aliases) || !input.aliases.every(alias => typeof alias === 'string')) throw new Error('invalid')
+      await configureMicrosoftAppMailbox(payload, { id: input.id, name: input.name, tenantID: input.tenantID, clientID: input.clientID, clientSecret: input.clientSecret, mailboxAddress: input.mailboxAddress, aliases: input.aliases }, user.id)
+    } else if (input.action === 'configure-smtp') {
       const keys = ['action', 'id', 'name', 'primaryAddress', 'aliases', 'host', 'port', 'security', 'username', 'password']; if (!Object.keys(input).every((key) => keys.includes(key)) || (input.id !== undefined && typeof input.id !== 'string') || typeof input.name !== 'string' || typeof input.primaryAddress !== 'string' || !Array.isArray(input.aliases) || !input.aliases.every((alias) => typeof alias === 'string') || typeof input.host !== 'string' || typeof input.port !== 'number' || !['starttls', 'tls'].includes(String(input.security)) || typeof input.username !== 'string' || (input.password !== undefined && typeof input.password !== 'string')) throw new Error('invalid')
       await configureSMTPMailbox(payload, { id: input.id, name: input.name, primaryAddress: input.primaryAddress, aliases: input.aliases, host: input.host, port: input.port, security: input.security as MailboxSecurity, username: input.username, password: input.password }, user.id)
     } else if (input.action === 'test-connection' && Object.keys(input).sort().join(',') === 'action,id' && typeof input.id === 'string') await testSMTPMailbox(payload, input.id, user.id)

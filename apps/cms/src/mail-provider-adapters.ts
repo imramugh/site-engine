@@ -28,6 +28,13 @@ const attachmentCountMaximum = 5;
 const attachmentTypes = new Set(['image/avif', 'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']);
 const timeout = 10_000;
 const graph = "https://graph.microsoft.com";
+/** Returns the selected Graph mailbox address only for app-only connections. */
+export function microsoftMailboxTarget(mailbox: { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown }): string | undefined {
+  if (mailbox.connectionMode !== 'app-only') return undefined
+  const address = String(mailbox.mailboxAddress ?? mailbox.primaryAddress ?? '').trim().toLowerCase()
+  return email.test(address) ? address : undefined
+}
+function graphUser(target?: string) { return target ? `/users/${encodeURIComponent(target)}` : '/me' }
 const gmail = "https://gmail.googleapis.com";
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const controls = /[\u0000-\u001f\u007f]/;
@@ -86,8 +93,8 @@ function graphUploadURL(value: unknown): string {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.hostname !== 'outlook.office.com' || !url.pathname.includes('/AttachmentSessions(') || !url.search) throw new Error('provider_malformed_response');
   return value;
 }
-async function graphAttachment(fetcher: Fetcher, token: string, messageID: string, attachment: VerifiedAttachment): Promise<void> {
-  const endpoint = `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments`;
+async function graphAttachment(fetcher: Fetcher, token: string, messageID: string, attachment: VerifiedAttachment, target?: string): Promise<void> {
+  const endpoint = `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(messageID)}/attachments`;
   if (attachment.size <= graphSimpleAttachmentMaximum) {
     const added = await request(fetcher, endpoint, { method: 'POST', headers: graphAuth(token), body: JSON.stringify({ '@odata.type': '#microsoft.graph.fileAttachment', name: attachment.filename, contentType: attachment.mimeType, contentBytes: Buffer.from(attachment.bytes).toString('base64') }) });
     if (added.status !== 201) fail(added.status); return;
@@ -231,9 +238,9 @@ async function attachmentJSON(response: Response) {
     return value as Record<string, unknown>;
   } catch { throw new Error("provider_malformed_response"); }
 }
-function graphDelta(folderID: string, cursor?: string) {
+function graphDelta(folderID: string, cursor?: string, target?: string) {
   if (!opaque(folderID)) throw new Error("invalid_cursor");
-  const path = `/v1.0/me/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
+  const path = `/v1.0${graphUser(target)}/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
   if (!cursor)
     return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,hasAttachments`;
   let url: URL;
@@ -275,10 +282,10 @@ function graphMessage(value: Record<string, unknown>) {
     }>,
   };
 }
-async function graphAttachments(fetcher: Fetcher, token: string, messageID: string) {
+async function graphAttachments(fetcher: Fetcher, token: string, messageID: string, target?: string) {
   // Timeline storage deliberately retains metadata for at most 20 attachments;
   // use Graph's fixed bounded collection rather than following provider links.
-  const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size&$top=20`, { headers: graphAuth(token) });
+  const response = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(messageID)}/attachments?$select=id,name,contentType,size&$top=20`, { headers: graphAuth(token) });
   if (!response.ok) fail(response.status)
   const value = await json(response)
   if (!Array.isArray(value.value) || value.value.length > 20) throw new Error('provider_malformed_response')
@@ -288,7 +295,7 @@ async function graphAttachments(fetcher: Fetcher, token: string, messageID: stri
     return [{ name: clean(entry.name, 255), contentType: clean(entry.contentType, 120), size: Number(entry.size) || 0, providerAttachmentID: String(entry.id) }]
   })
 }
-export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
+export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string, target?: string) {
   return {
     async send(token: string, input: Envelope) {
       checkedEnvelope(input);
@@ -298,18 +305,18 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         throw new Error("invalid_envelope");
       if (input.replyMessageID) {
         if (!opaque(input.replyMessageID)) throw new Error("invalid_envelope");
-        const draft = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(input.replyMessageID)}/createReply`, {
+        const draft = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(input.replyMessageID)}/createReply`, {
           method: 'POST', headers: graphAuth(token), body: JSON.stringify({ message: { subject: input.subject, body: { contentType: 'Text', content: input.body }, toRecipients: [{ emailAddress: { address: input.recipient } }], from: { emailAddress: { address: verifiedSender } } } }),
         });
         if (!draft.ok) fail(draft.status);
         const created = await json(draft); const id = typeof created.id === 'string' ? created.id : '';
         if (!opaque(id)) throw new Error('provider_malformed_response');
-        for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
-        const sent = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
+        for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment, target);
+        const sent = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
         if (sent.status !== 202) fail(sent.status);
         return { accepted: true as const, id };
       }
-      const draft = await request(fetcher, `${graph}/v1.0/me/messages`, {
+      const draft = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages`, {
         method: "POST",
         headers: graphAuth(token),
         body: JSON.stringify({
@@ -324,10 +331,10 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       const id = typeof created.id === "string" ? created.id : "";
       const threadID = typeof created.conversationId === "string" ? created.conversationId : "";
       if (!opaque(id) || !opaque(threadID)) throw new Error("provider_malformed_response");
-      for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment);
+      for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment, target);
       const sent = await request(
         fetcher,
-        `${graph}/v1.0/me/messages/${encodeURIComponent(id)}/send`,
+        `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(id)}/send`,
         { method: "POST", headers: graphAuth(token) },
       );
       if (sent.status !== 202) fail(sent.status);
@@ -337,7 +344,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       if (!opaque(id)) throw new Error("invalid_thread");
       const response = await request(
         fetcher,
-        `${graph}/v1.0/me/messages/${encodeURIComponent(id)}?$select=id,conversationId,body,subject`,
+        `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(id)}?$select=id,conversationId,body,subject`,
         { headers: graphAuth(token) },
       );
       if (!response.ok) fail(response.status);
@@ -352,7 +359,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
       };
     },
     async poll(token: string, folderID: string, cursor?: string) {
-      const response = await request(fetcher, graphDelta(folderID, cursor), {
+      const response = await request(fetcher, graphDelta(folderID, cursor, target), {
         headers: { ...graphAuth(token), Prefer: 'odata.maxpagesize=100, IdType="ImmutableId"' },
       });
       if (!response.ok) fail(response.status);
@@ -372,18 +379,18 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string) {
         return { ...message, attachmentsPending: raw.hasAttachments === true };
       });
       return {
-        cursor: typeof next === "string" ? graphDelta(folderID, next) : null,
+        cursor: typeof next === "string" ? graphDelta(folderID, next, target) : null,
         messages: messages.filter((message): message is NonNullable<typeof message> => !!message),
       };
     },
-    attachments(token: string, messageID: string) { return graphAttachments(fetcher, token, messageID) },
+    attachments(token: string, messageID: string) { return graphAttachments(fetcher, token, messageID, target) },
   };
 }
-export function microsoftIdentity(fetcher: Fetcher) {
+export function microsoftIdentity(fetcher: Fetcher, target?: string) {
   return async (token: string) => {
     const response = await request(
       fetcher,
-      `${graph}/v1.0/me?$select=mail,userPrincipalName`,
+      `${graph}/v1.0${graphUser(target)}?$select=mail,userPrincipalName`,
       { headers: graphAuth(token) },
     );
     if (!response.ok) fail(response.status);
@@ -475,10 +482,10 @@ export function gmailAttachment(fetcher: Fetcher) {
     return new Uint8Array(output);
   };
 }
-export function microsoftAttachment(fetcher: Fetcher) {
+export function microsoftAttachment(fetcher: Fetcher, target?: string) {
   return async (token: string, messageID: string, attachmentID: string) => {
     if (!opaque(messageID) || !opaque(attachmentID)) throw new Error("invalid_attachment");
-    const response = await request(fetcher, `${graph}/v1.0/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}/$value`, { headers: graphAuth(token) });
+    const response = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(attachmentID)}/$value`, { headers: graphAuth(token) });
     if (!response.ok) fail(response.status);
     return bytes(response, attachmentMaximum);
   };

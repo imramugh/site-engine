@@ -5,18 +5,20 @@ import ipaddr from 'ipaddr.js'
 import nodemailer from 'nodemailer'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
-import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, type Fetcher, type VerifiedAttachment } from './mail-provider-adapters'
-import { mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
+import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, microsoftMailboxTarget, type Fetcher, type VerifiedAttachment } from './mail-provider-adapters'
+import { encryptMicrosoftAppOnlyCredential, mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 export const mailboxAreas = ['leads', 'careers', 'notifications'] as const
 export type MailboxArea = (typeof mailboxAreas)[number]
 export type MailboxSecurity = 'starttls' | 'tls'
+export type MicrosoftAppConfiguration = { id?: string; name: string; tenantID: string; clientID: string; clientSecret?: string; mailboxAddress: string; aliases: string[] }
 export type SMTPConfiguration = { id?: string; name: string; primaryAddress: string; aliases: string[]; host: string; port: number; security: MailboxSecurity; username: string; password?: string }
 type StoredMailbox = Record<string, unknown> & { id: string; encryptedCredential?: string | null }
 type Transport = { verify(): Promise<unknown>; sendMail(message: Record<string, unknown>): Promise<{ messageId?: string }> }
 
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const hostname = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
+const tenantUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const normalizedEmail = (value: string) => value.trim().toLowerCase()
 const relationID = (value: unknown) => typeof value === 'string' ? value : String((value as { id?: string } | null)?.id ?? '')
@@ -63,7 +65,7 @@ async function smtpTransport(mailbox: StoredMailbox): Promise<Transport> {
 const internal = (req: PayloadRequest) => { req.context.mailboxInternal = true; return req }
 export function publicMailbox(doc: StoredMailbox) {
   const provider = doc.provider === 'microsoft' || doc.provider === 'google' ? doc.provider : 'smtp'
-  const base = { id: doc.id, name: doc.name, provider, primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null }
+  const base = { id: doc.id, name: doc.name, provider, primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null, connectionMode: doc.connectionMode === 'app-only' ? 'app-only' : 'delegated', tenantID: typeof doc.tenantID === 'string' ? doc.tenantID : null, clientID: typeof doc.clientID === 'string' ? doc.clientID : null, mailboxAddress: typeof doc.mailboxAddress === 'string' ? doc.mailboxAddress : null, syncStatus: doc.inboundLastError ? 'error' : doc.inboundLastSyncedAt ? 'synced' : 'not-synced' }
   return provider === 'smtp' ? { ...base, host: doc.host, port: doc.port, security: doc.security, username: doc.username } : base
 }
 
@@ -83,6 +85,21 @@ export async function configureSMTPMailbox(payload: Payload, input: SMTPConfigur
     const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data, overrideAccess: true, req })
     await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as { id: string }).id, provider: 'smtp', credentialRevision } }, overrideAccess: true, req })
     return saved
+  })
+}
+
+export async function configureMicrosoftAppMailbox(payload: Payload, input: MicrosoftAppConfiguration, actor: string) {
+  const name = input.name.trim(); const primaryAddress = normalizedEmail(input.mailboxAddress); const aliases = [...new Set(input.aliases.map(normalizedEmail))].filter(alias => alias !== primaryAddress)
+  if (!name || name.length > 120 || !tenantUUID.test(input.tenantID) || !tenantUUID.test(input.clientID) || !email.test(primaryAddress) || aliases.length > 20 || aliases.some(alias => !email.test(alias))) throw new Error('Mailbox configuration is invalid.')
+  return withPayloadTransaction(payload, async transaction => {
+    const req = internal(transaction); const existing = input.id ? await payload.findByID({ collection: 'mailbox-configurations', id: input.id, depth: 0, overrideAccess: true, req }) as unknown as StoredMailbox : undefined
+    if (existing && existing.provider !== 'microsoft') throw new Error('Mailbox configuration is invalid.')
+    const secret = input.clientSecret ? encryptMicrosoftAppOnlyCredential(input.clientSecret) : existing?.encryptedCredential
+    if (!secret) throw new Error('Mailbox configuration is invalid.')
+    const credentialRevision = input.clientSecret ? randomBytes(8).toString('hex') : String(existing?.credentialRevision || randomBytes(8).toString('hex'))
+    const data = { name, provider: 'microsoft' as const, connectionMode: 'app-only' as const, tenantID: input.tenantID.toLowerCase(), clientID: input.clientID.toLowerCase(), mailboxAddress: primaryAddress, primaryAddress, aliases, verifiedAliases: [], host: 'oauth', port: 1, security: 'tls' as const, username: primaryAddress, encryptedCredential: secret, credentialRevision, health: 'unknown' as const, testedAt: null }
+    const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data: data as never, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data: data as never, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as any).id, provider: 'microsoft', connectionMode: 'app-only', credentialRevision } }, overrideAccess: true, req }); return saved
   })
 }
 
@@ -187,7 +204,7 @@ export async function sendAreaMail(
   } else await groundedProviderThread(payload, message, mailbox)
 
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
-  const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(refreshed.accessToken)
+  const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher, microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown })) : gmailIdentity(fetcher))(refreshed.accessToken)
   if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
   const final = await currentAreaMailbox(payload, area)
   if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
@@ -205,7 +222,7 @@ export async function sendAreaMail(
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
-    ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
+    ? microsoftAdapter(fetcher, message.sender, microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown })).send(refreshed.accessToken, envelope)
     : gmailAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope))
   const delivered = { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
   return message.initialOutbound && 'threadID' in result ? { ...delivered, threadID: result.threadID } : delivered

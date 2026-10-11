@@ -23,6 +23,18 @@ function encrypt(value: string, provider: MailboxOAuthProvider) {
   return `v1.${Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url')}`
 }
 
+function encryptMicrosoftAppCredential(value: string) {
+  const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key(), iv); cipher.setAAD(Buffer.from('mailbox:microsoft:app-only'))
+  const body = Buffer.concat([cipher.update(value), cipher.final()]); return `v1.${Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url')}`
+}
+function decryptMicrosoftAppCredential(value: string) {
+  if (!value.startsWith('v1.')) throw new Error('provider_rejected')
+  const bytes = Buffer.from(value.slice(3), 'base64url'); if (bytes.length < 29) throw new Error('provider_rejected')
+  const decipher = createDecipheriv('aes-256-gcm', key(), bytes.subarray(0, 12)); decipher.setAAD(Buffer.from('mailbox:microsoft:app-only')); decipher.setAuthTag(bytes.subarray(12, 28))
+  return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString()
+}
+export function encryptMicrosoftAppOnlyCredential(clientSecret: string) { if (!clientSecret || Buffer.byteLength(clientSecret) > 16_384) throw new Error('provider_rejected'); return encryptMicrosoftAppCredential(JSON.stringify({ clientSecret })) }
+
 export function decryptMailboxOAuthCredential(value: string, provider: MailboxOAuthProvider) {
   const bytes = Buffer.from(value.slice(3), 'base64url')
   const decipher = createDecipheriv('aes-256-gcm', key(), bytes.subarray(0, 12))
@@ -81,7 +93,19 @@ export async function completeMailboxOAuth(payload: Payload, provider: MailboxOA
   return (payload as any).create({ collection: 'mailbox-configurations', data: { name: `${provider} ${identity.primaryAddress}`, provider, primaryAddress: identity.primaryAddress, aliases: verifiedAliases, verifiedAliases, host: 'oauth', port: 1, security: 'tls', username: identity.primaryAddress, encryptedCredential: encrypt(JSON.stringify({ refreshToken: token.refresh_token }), provider), credentialRevision: randomBytes(8).toString('hex'), health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
 }
 
+export async function microsoftAppOnlyAccessToken(mailbox: { tenantID?: unknown; clientID?: unknown; encryptedCredential?: unknown }, fetcher: Fetcher = fetch) {
+  const tenantID = typeof mailbox.tenantID === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mailbox.tenantID) ? mailbox.tenantID : undefined
+  const clientID = typeof mailbox.clientID === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mailbox.clientID) ? mailbox.clientID : undefined
+  if (!tenantID || !clientID || typeof mailbox.encryptedCredential !== 'string') throw new Error('provider_not_configured')
+  let clientSecret: string; try { clientSecret = JSON.parse(decryptMicrosoftAppCredential(mailbox.encryptedCredential)).clientSecret } catch { throw new Error('provider_rejected') }
+  if (typeof clientSecret !== 'string' || !clientSecret) throw new Error('provider_rejected')
+  let response: Response; try { response = await fetcher(`https://login.microsoftonline.com/${tenantID}/oauth2/v2.0/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientID, client_secret: clientSecret, scope: 'https://graph.microsoft.com/.default' }), redirect: 'error', signal: AbortSignal.timeout(10_000) }) } catch { throw new Error('provider_rejected') }
+  const value = await tokenJSON(response); if (!response.ok || typeof value.access_token !== 'string' || value.access_token.length < 1 || value.access_token.length > 16_384) throw new Error('provider_rejected')
+  return { accessToken: value.access_token }
+}
+
 export async function refreshMailboxOAuth(mailbox: any, fetcher: Fetcher = fetch) {
+  if (mailbox.provider === 'microsoft' && mailbox.connectionMode === 'app-only') return microsoftAppOnlyAccessToken(mailbox, fetcher)
   const provider = mailbox.provider as MailboxOAuthProvider
   const settings = mailboxOAuthSettings(provider)
   if (!settings) throw new Error('provider_not_configured')
@@ -99,7 +123,7 @@ export async function refreshMailboxOAuth(mailbox: any, fetcher: Fetcher = fetch
 
 export async function refreshAndPersistMailboxOAuth(payload: Payload, mailbox: any, fetcher: Fetcher = fetch) {
   const refreshed = await refreshMailboxOAuth(mailbox, fetcher)
-  if (!refreshed.encryptedCredential) return { ...refreshed, credentialRevision: mailbox.credentialRevision }
+  if (!('encryptedCredential' in refreshed) || !refreshed.encryptedCredential) return { ...refreshed, credentialRevision: mailbox.credentialRevision }
   const saved = await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: mailbox.id } }, { credentialRevision: { equals: mailbox.credentialRevision } }] }, data: { encryptedCredential: refreshed.encryptedCredential, credentialRevision: randomBytes(8).toString('hex') }, overrideAccess: true, context: { mailboxInternal: true } })
   if (saved.docs.length !== 1) throw new Error('credential_changed')
   return { ...refreshed, credentialRevision: saved.docs[0].credentialRevision }
