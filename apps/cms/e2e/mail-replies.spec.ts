@@ -429,3 +429,20 @@ test('ENG-033 lets a fresh Hiring user cancel then send one confirmed applicatio
     await expect(page.getByRole('region', { name: 'Mail timeline' })).toContainText('Confirmed hiring body')
   } finally { await context.close() }
 })
+
+test('ENG-020 receives a Microsoft provider notification, polls the mailbox, and attaches only the existing lead conversation', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: 'synthetic-lead-owner-session-token', url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+  const page = await context.newPage()
+  try {
+    const fixtureResponse = await page.request.post(origin + '/__e2e/eng020-microsoft-delivery')
+    expect(fixtureResponse.ok(), await fixtureResponse.text()).toBe(true)
+    const fixture = await fixtureResponse.json() as { matched: string; unmatched: string }
+    await page.goto('/leads')
+    await page.getByRole('button', { name: /First editable lead/ }).click()
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline).toContainText(fixture.matched)
+    await expect(timeline).toContainText('Delivered through notification and poll.')
+    await expect(timeline).not.toContainText(fixture.unmatched)
+  } finally { await context.close() }
+})
