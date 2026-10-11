@@ -64,7 +64,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await owner.page.locator('[data-admin-account-button]').click()
   await expect(owner.page.getByRole('menuitem', { name: 'Sign out', exact: true })).toHaveAttribute('type', 'button')
   await owner.page.screenshot({ path: 'artifacts/playwright-cms/admin-shell-1440.png', fullPage: true })
-  expect(await installAxe(owner.page)).toEqual([])
+  expect(await axeViolations(owner.page)).toEqual([])
 
   await owner.page.setViewportSize({ width: 390, height: 844 })
   const menu = owner.page.getByTestId('mobile-menu')
@@ -84,7 +84,7 @@ test('ENG-006 renders the role-aware admin shell at desktop and mobile widths', 
   await expect(menu).toBeFocused()
   await owner.page.screenshot({ path: 'artifacts/playwright-cms/admin-shell-390.png', fullPage: true })
   await menu.click()
-  expect(await installAxe(owner.page)).toEqual([])
+  expect(await axeViolations(owner.page)).toEqual([])
   await owner.context.close()
 
   const sales = await pageFor(browser, 'sales')
