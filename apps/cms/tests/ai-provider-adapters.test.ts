@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { adapterMetadataURL, adapterRequest, pinnedCompatibleFetch } from '../src/ai-provider-adapters'
+import { adapterMetadataURL, adapterRequest, compatibleResponse, pinnedCompatibleFetch } from '../src/ai-provider-adapters'
 import { invokeProvider } from '../src/ai-providers'
 import { normalizeProviderSettings } from '../src/provider-settings'
 import type { IntegrationProvider } from '../src/integrations'
@@ -61,6 +61,10 @@ describe('ENG-027 provider adapters', () => {
     let calls = 0
     await expect(invokeProvider('amazon-bedrock', 'secret', 'model', 'p', 1, async () => { calls++; return Response.json({}) }, 1_000, 'data:image/gif;base64,AA==', settings['amazon-bedrock'])).resolves.toEqual({ outcome: 'unavailable' })
     expect(calls).toBe(0)
+  })
+  it('constructs bounded native compatible responses safely for empty and malformed headers', async () => {
+    expect(await compatibleResponse(204, { 'x-array': ['a', 'b'], skipped: undefined }, Buffer.from('ignored')).text()).toBe('')
+    expect(compatibleResponse(200, { 'x-array': ['a', 'b'], skipped: undefined }, Buffer.from('body')).headers.get('x-array')).toBe('a, b')
   })
   it('does not open a pinned connection after cancellation or mixed DNS answers', async () => {
     const controller = new AbortController(); let calls = 0

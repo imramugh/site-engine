@@ -9,6 +9,15 @@ export const isConfigurableAdapter = (provider: IntegrationProvider) => configur
 
 export type AdapterRequest = { url: string; headers: Record<string, string>; body: Record<string, unknown> }
 type Address = { address: string; family: number }
+
+export function compatibleResponse(status: number, headers: Record<string, string | string[] | number | undefined>, body: Buffer): Response {
+  const safeHeaders = new Headers()
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === 'string' || typeof value === 'number') safeHeaders.set(name, String(value))
+    else if (Array.isArray(value)) safeHeaders.set(name, value.join(', '))
+  }
+  return new Response([204, 205, 304].includes(status) ? null : body, { status, headers: safeHeaders })
+}
 export type PinnedCompatibleDependencies = { resolve?: (hostname: string) => Promise<Address[]>; request?: (url: URL, options: import('node:https').RequestOptions & { autoSelectFamily: boolean }, body: Buffer) => Promise<Response> }
 
 function publicAddress(address: string): boolean {
@@ -109,7 +118,10 @@ export async function pinnedCompatibleFetch(request: Request, dependencies: Pinn
       const chunks: Buffer[] = []; let size = 0
       incoming.on('data', chunk => { size += chunk.length; if (size > 1_048_576) req.destroy(new Error('compatible_response_too_large')); else chunks.push(Buffer.from(chunk)) })
       incoming.once('error', reject)
-      incoming.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode ?? 502, headers: incoming.headers as HeadersInit })))
+      incoming.on('end', () => {
+        try { resolve(compatibleResponse(incoming.statusCode ?? 502, incoming.headers, Buffer.concat(chunks))) }
+        catch (error) { reject(error) }
+      })
     })
     const abort = () => req.destroy(new Error('aborted'))
     req.once('error', error => { request.signal.removeEventListener('abort', abort); reject(error) })
