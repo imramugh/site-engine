@@ -4,7 +4,7 @@ import { microsoftMailboxTarget } from './mail-provider-adapters'
 import type { Payload } from 'payload'
 export type NotificationFetcher = (url: string, init: RequestInit) => Promise<Response>
 const internal = { mailboxInternal: true }; const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-const bounded = async (request: Request, limit = 64 * 1024) => { const text = await request.text(); if (Buffer.byteLength(text) > limit) throw new Error('notification_invalid'); return JSON.parse(text) as Record<string, unknown> }
+const bounded = async (request: Request, limit = 64 * 1024) => { const reader = request.body?.getReader(); if (!reader) throw new Error('notification_invalid'); const chunks: Uint8Array[] = []; let size = 0; try { while (true) { const next = await reader.read(); if (next.done) break; size += next.value.byteLength; if (size > limit) { await reader.cancel(); throw new Error('notification_invalid') }; chunks.push(next.value) } } finally { reader.releaseLock() }; return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks))) as Record<string, unknown> }
 const safeEqual = (left: string, right: string) => { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b) }
 export async function scheduleMailboxNotification(payload: Payload, provider: 'microsoft' | 'google', mailboxID: string, revision: string, notificationID: string) {
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as any
