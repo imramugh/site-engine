@@ -2,7 +2,7 @@ import { sqliteAuthenticationBoundary } from '../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../payload.config'
 import { freshStaff, hasRole } from '../../../src/access'
-import { clearMailboxArea, mailboxAreas, mailboxWorkspace, configureMicrosoftAppMailbox, configureSMTPMailbox, sendAuthorizedMailboxTest, setMailboxArea, testSMTPMailbox, type MailboxArea, type MailboxSecurity } from '../../../src/mailboxes'
+import { clearMailboxArea, mailboxAreas, mailboxWorkspace, configureMicrosoftAppMailbox, configureSMTPMailbox, revokeMailbox, sendAuthorizedMailboxTest, setMailboxArea, testMailboxConnection, type MailboxArea, type MailboxSecurity } from '../../../src/mailboxes'
 import { serverSessionStrategy } from '../../../src/identity'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 
@@ -29,7 +29,8 @@ async function POSTHandler(request: Request) {
     } else if (input.action === 'configure-smtp') {
       const keys = ['action', 'id', 'name', 'primaryAddress', 'aliases', 'host', 'port', 'security', 'username', 'password']; if (!Object.keys(input).every((key) => keys.includes(key)) || (input.id !== undefined && typeof input.id !== 'string') || typeof input.name !== 'string' || typeof input.primaryAddress !== 'string' || !Array.isArray(input.aliases) || !input.aliases.every((alias) => typeof alias === 'string') || typeof input.host !== 'string' || typeof input.port !== 'number' || !['starttls', 'tls'].includes(String(input.security)) || typeof input.username !== 'string' || (input.password !== undefined && typeof input.password !== 'string')) throw new Error('invalid')
       await configureSMTPMailbox(payload, { id: input.id, name: input.name, primaryAddress: input.primaryAddress, aliases: input.aliases, host: input.host, port: input.port, security: input.security as MailboxSecurity, username: input.username, password: input.password }, user.id)
-    } else if (input.action === 'test-connection' && Object.keys(input).sort().join(',') === 'action,id' && typeof input.id === 'string') await testSMTPMailbox(payload, input.id, user.id)
+    } else if (input.action === 'test-connection' && Object.keys(input).sort().join(',') === 'action,id' && typeof input.id === 'string') await testMailboxConnection(payload, input.id, user.id)
+    else if (input.action === 'revoke' && Object.keys(input).sort().join(',') === 'action,id' && typeof input.id === 'string') await revokeMailbox(payload, input.id, user.id)
     else if (input.action === 'map-area' && Object.keys(input).sort().join(',') === 'action,area,mailbox,senderAddress' && typeof input.area === 'string' && mailboxAreas.includes(input.area as MailboxArea) && typeof input.mailbox === 'string' && typeof input.senderAddress === 'string') await setMailboxArea(payload, { area: input.area as MailboxArea, mailbox: input.mailbox, senderAddress: input.senderAddress }, user.id)
     else if (input.action === 'clear-area' && Object.keys(input).sort().join(',') === 'action,area' && typeof input.area === 'string' && mailboxAreas.includes(input.area as MailboxArea)) await clearMailboxArea(payload, input.area as MailboxArea, user.id)
     else if (input.action === 'send-test' && Object.keys(input).sort().join(',') === 'action,body,confirmed,mailbox,recipientAddress,requestKey,senderAddress,subject' && typeof input.requestKey === 'string' && typeof input.mailbox === 'string' && typeof input.senderAddress === 'string' && typeof input.recipientAddress === 'string' && typeof input.subject === 'string' && typeof input.body === 'string' && input.confirmed === true) await sendAuthorizedMailboxTest(payload, { requestKey: input.requestKey, mailbox: input.mailbox, senderAddress: input.senderAddress, recipientAddress: input.recipientAddress, subject: input.subject, body: input.body, confirmed: true }, user.id)
@@ -39,7 +40,7 @@ async function POSTHandler(request: Request) {
     const backpressure = sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'private, no-store' })
     if (backpressure) return backpressure
     if (error instanceof Error && error.message === 'too_large') return json({ error: 'Request is too large.' }, 413)
-    return json({ error: error instanceof Error && /confirmation|request key|not configured|not been verified|must be tested|could not be delivered|unassign this mailbox sender/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
+    return json({ error: error instanceof Error && /confirmation|request key|not configured|not been verified|must be tested|could not be delivered|test message|unassign this mailbox sender/i.test(error.message) ? error.message : 'Email workspace request could not be completed.' }, 400)
   }
 }
 

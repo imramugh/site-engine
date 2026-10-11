@@ -330,7 +330,11 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string, targe
       const created = await json(draft);
       const id = typeof created.id === "string" ? created.id : "";
       const threadID = typeof created.conversationId === "string" ? created.conversationId : "";
+      const actualSender = String((created.from as { emailAddress?: { address?: unknown } } | undefined)?.emailAddress?.address ?? '').trim().toLowerCase();
       if (!opaque(id) || !opaque(threadID)) throw new Error("provider_malformed_response");
+      // App-only Graph can rewrite a requested From address. Confirm its draft
+      // response before sending so a successful test proves the exact sender.
+      if (target && actualSender !== verifiedSender.toLowerCase()) throw new Error("sender_not_verified");
       for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment, target);
       const sent = await request(
         fetcher,
@@ -338,7 +342,7 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string, targe
         { method: "POST", headers: graphAuth(token) },
       );
       if (sent.status !== 202) fail(sent.status);
-      return { accepted: true as const, id, threadID };
+      return { accepted: true as const, id, threadID, ...(email.test(actualSender) ? { actualSender } : {}) };
     },
     async thread(token: string, id: string) {
       if (!opaque(id)) throw new Error("invalid_thread");

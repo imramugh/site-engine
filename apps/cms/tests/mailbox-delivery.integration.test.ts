@@ -373,3 +373,34 @@ test('a provider reply thread cannot cross the mailbox or its target binding', a
   await expect(service.sendAreaMail(payload, 'leads', { sender: 'thread-second@example.test', recipient: lead.email, subject: 'Reviewed', body: 'Exact approved content', threadID: 'local-draft-thread', providerThreadID: 'provider-thread', providerMessageID: 'provider-message', providerMailboxID: first.id, provider: 'google', providerTarget: { collection: 'inquiries', id: lead.id } }, async () => { calls += 1; return Response.json({}) })).rejects.toThrow('mailbox_thread_not_grounded')
   expect(calls).toBe(0)
 })
+
+
+test('Microsoft app-only mailbox persists only safe fields, proves its selected sender, and revocation clears local authority', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: 'app-only-owner@example.test', name: 'App-only owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await service.configureMicrosoftAppMailbox(payload, { name: 'Selected shared mailbox', tenantID: '11111111-1111-1111-1111-111111111111', clientID: '22222222-2222-2222-2222-222222222222', clientSecret: 'app-only-secret', mailboxAddress: 'shared@example.test', aliases: ['alias@example.test'] }, owner.id)
+  expect(service.publicMailbox(mailbox as never)).toMatchObject({ provider: 'microsoft', connectionMode: 'app-only', tenantID: '11111111-1111-1111-1111-111111111111', clientID: '22222222-2222-2222-2222-222222222222', mailboxAddress: 'shared@example.test', credentialConfigured: true })
+  expect(JSON.stringify(service.publicMailbox(mailbox as never))).not.toContain('app-only-secret')
+  await expect(service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'shared@example.test' }, owner.id)).rejects.toThrow('not been verified')
+  const calls: Array<{ url: string; method: string }> = []
+  const graph = async (url: string, init: RequestInit) => {
+    calls.push({ url, method: init.method ?? 'GET' })
+    if (url === 'https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token') return Response.json({ access_token: 'app-token', expires_in: 3600 })
+    if (url === 'https://graph.microsoft.com/v1.0/users/shared%40example.test?$select=mail,userPrincipalName') return Response.json({ mail: 'shared@example.test' })
+    if (url === 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages') return Response.json({ id: 'app-draft', conversationId: 'app-thread', from: { emailAddress: { address: 'shared@example.test' } } })
+    if (url === 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/app-draft/send') return new Response(null, { status: 202 })
+    throw new Error(`unexpected ${url}`)
+  }
+  await expect(service.testMailboxConnection(payload, mailbox.id, owner.id, graph)).resolves.toMatchObject({ health: 'connected' })
+  expect(calls.some(call => call.url.includes('/messages'))).toBe(false)
+  const testSend = await service.sendAuthorizedMailboxTest(payload, { requestKey: crypto.randomUUID(), mailbox: mailbox.id, senderAddress: 'shared@example.test', recipientAddress: 'sink@example.test', subject: 'Exact app-only sender', body: 'This confirmed message proves the selected sender.', confirmed: true }, owner.id, graph)
+  expect(testSend).toMatchObject({ state: 'sent', providerMessageID: 'app-draft' })
+  const proven = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, depth: 0, overrideAccess: true })
+  expect(proven.verifiedAliases).toEqual(['shared@example.test'])
+  await service.setMailboxArea(payload, { area: 'leads', mailbox: mailbox.id, senderAddress: 'shared@example.test' }, owner.id)
+  await expect(service.configureMicrosoftAppMailbox(payload, { id: mailbox.id, name: 'Changed selected mailbox', tenantID: '11111111-1111-1111-1111-111111111111', clientID: '22222222-2222-2222-2222-222222222222', mailboxAddress: 'changed@example.test', aliases: [] }, owner.id)).rejects.toThrow('Unassign this mailbox sender')
+  await service.revokeMailbox(payload, mailbox.id, owner.id, graph)
+  const revoked = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, depth: 0, overrideAccess: true })
+  expect(revoked).toMatchObject({ encryptedCredential: null, aliases: [], verifiedAliases: [], health: 'revoked' })
+  expect((await payload.find({ collection: 'mailbox-area-mappings', where: { mailbox: { equals: mailbox.id } }, overrideAccess: true })).docs).toHaveLength(0)
+  expect(JSON.stringify(service.publicMailbox(revoked as never))).not.toContain('app-only-secret')
+})

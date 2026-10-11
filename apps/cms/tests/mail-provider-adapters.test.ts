@@ -97,3 +97,15 @@ describe('Graph upload-session response boundary', () => {
 })
 
 it('uploads varied large reply bytes contiguously before sending', async () => { const bytes=Uint8Array.from({length:3*1024*1024},(_,i)=>i%251); const digest=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'); const url="https://outlook.office.com/api/v2.0/Users('a')/Messages('reply')/AttachmentSessions('x')?authtoken=x"; const chunks:Uint8Array[]=[]; const ranges:string[]=[]; const calls:string[]=[]; const graph=microsoftAdapter(async (target,init)=>{calls.push(target); if(target.endsWith('/createReply'))return Response.json({id:'reply'}); if(target.endsWith('/createUploadSession'))return Response.json({uploadUrl:url,nextExpectedRanges:['0-']},{status:201}); if(target===url){ranges.push(new Headers(init.headers).get('content-range')!); chunks.push(new Uint8Array(init.body as Uint8Array)); const last=ranges.at(-1)!.endsWith(`${bytes.length-1}/${bytes.length}`); return last?Response.json({id:'done'},{status:201}):Response.json({nextExpectedRanges:[`${chunks.reduce((n,x)=>n+x.length,0)}-`]},{status:200})} if(target.endsWith('/send'))return new Response(null,{status:202}); throw Error(target)},'a@test.test'); await graph.send('t',{sender:'a@test.test',recipient:'b@test.test',subject:'s',body:'b',threadID:'thread',replyMessageID:'original',attachments:[{filename:'large.pdf',mimeType:'application/pdf',size:bytes.length,sha256:digest,bytes}]}); expect(Buffer.concat(chunks.map(x=>Buffer.from(x))).equals(Buffer.from(bytes))).toBe(true); expect(ranges[0]).toBe(`bytes 0-327679/${bytes.length}`); expect(calls.at(-1)).toMatch(/\/send$/) }, 15000)
+
+
+it('anchors app-only Graph drafts to the selected mailbox and refuses a rewritten sender before send', async () => {
+  const calls: string[] = []
+  const graph = microsoftAdapter(async (url) => {
+    calls.push(url)
+    if (url.endsWith('/users/shared%40example.test/messages')) return Response.json({ id: 'draft-id', conversationId: 'conversation-id', from: { emailAddress: { address: 'rewritten@example.test' } } })
+    throw new Error(`unexpected ${url}`)
+  }, 'shared@example.test', 'shared@example.test')
+  await expect(graph.send('token', { sender: 'shared@example.test', recipient: 'recipient@example.test', subject: 'test', body: 'body' })).rejects.toThrow('sender_not_verified')
+  expect(calls).toEqual(['https://graph.microsoft.com/v1.0/users/shared%40example.test/messages'])
+})
