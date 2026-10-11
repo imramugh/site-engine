@@ -16,7 +16,10 @@ export function compatibleResponse(status: number, headers: Record<string, strin
     if (typeof value === 'string' || typeof value === 'number') safeHeaders.set(name, String(value))
     else if (Array.isArray(value)) safeHeaders.set(name, value.join(', '))
   }
-  return new Response([204, 205, 304].includes(status) ? null : body, { status, headers: safeHeaders })
+  if ([204, 205, 304].includes(status)) return new Response(null, { status, headers: safeHeaders })
+  const bytes = new Uint8Array(body.byteLength)
+  bytes.set(body)
+  return new Response(bytes, { status, headers: safeHeaders })
 }
 export type PinnedCompatibleDependencies = { resolve?: (hostname: string) => Promise<Address[]>; request?: (url: URL, options: import('node:https').RequestOptions & { autoSelectFamily: boolean }, body: Buffer) => Promise<Response> }
 
