@@ -665,7 +665,10 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
   }
   if (request.method === 'POST' && (request.url ?? '').split('?')[0] === '/__e2e/eng020-microsoft-delivery') {
     void (async () => {
-      const state = new URL(await startMailboxOAuth(payload, 'microsoft', localOwnerID!, leadSessionTokens.owner)).searchParams.get('state')!
+      const owner = await payload.create({ collection: 'users', data: { email: 'eng020-delivery-' + randomUUID() + '@example.test', name: 'ENG020 delivery Owner', roles: ['owner'] }, overrideAccess: true })
+      const sessionToken = 'eng020-delivery-session-' + randomUUID(); const now = new Date().toISOString()
+      await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(sessionToken), user: owner.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 300000).toISOString() }, overrideAccess: true })
+      const state = new URL(await startMailboxOAuth(payload, 'microsoft', String(owner.id), sessionToken)).searchParams.get('state')!
       const provider = async (url: string) => {
         if (url.includes('/token')) return Response.json({ access_token: 'eng020-access', refresh_token: 'eng020-refresh' })
         if (url.includes('/delta')) {
@@ -678,7 +681,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         }
         return Response.json({ mail: 'eng020-microsoft@example.test' })
       }
-      const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'eng020-code', localOwnerID!, leadSessionTokens.owner, provider)
+      const mailbox = await completeMailboxOAuth(payload, 'microsoft', state, 'eng020-code', String(owner.id), sessionToken, provider)
       const lead = await payload.create({ collection: 'inquiries', data: { name: 'ENG020 delivered Microsoft lead', email: 'eng020-delivery-' + mailbox.id + '@example.test', message: 'Dedicated provider delivery fixture.', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: 'eng020-delivery-' + mailbox.id, stage: 'new' }, overrideAccess: true })
       await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'eng020-matched-conversation' }, overrideAccess: true })
       const clientState = 'eng020-notification-client-state'
@@ -690,7 +693,7 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { inboundNextAttemptAt: '2000-01-01T00:00:00.000Z' }, overrideAccess: true, context: { mailboxInternal: true } })
       const cycle = await runMailboxSyncCycle(payload, { sync: syncMailboxInbound, fetcher: provider }, Date.now())
       if (cycle.mailbox !== mailbox.id || cycle.processed !== 2) throw new Error('ENG020 provider delivery fixture did not poll both messages ' + JSON.stringify(cycle))
-      json(response, { lead: lead.id, matched: 'Delivered Microsoft reply', unmatched: 'Unmatched Microsoft reply' })
+      json(response, { lead: lead.id, sessionToken, matched: 'Delivered Microsoft reply', unmatched: 'Unmatched Microsoft reply' })
     })().catch((error) => { response.writeHead(500); response.end(error instanceof Error ? error.message : 'ENG020 fixture failed') })
     return
   }
