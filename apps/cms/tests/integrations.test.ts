@@ -61,4 +61,20 @@ describe('ENG-023 credential envelopes', () => {
     await expect(providerConnectionTransport({ provider: 'openrouter', model: 'openai/gpt-test', credential: 'bad-key' }, fakeFetch)).resolves.toEqual({ ok: false, code: 'rejected' })
     expect(calls).toBe(1)
   })
+  it.each([
+    ['azure-openai', 'model', { endpoint: 'https://demo.openai.azure.com', imageInput: false }, 'https://demo.openai.azure.com/openai/v1/models/model', 'api-key'],
+    ['amazon-bedrock', 'model', { region: 'us-east-1', imageInput: false }, 'https://bedrock.us-east-1.amazonaws.com/foundation-models/model', 'authorization'],
+    ['mistral', 'model', { imageInput: false }, 'https://api.mistral.ai/v1/models/model', 'authorization'],
+    ['openai-compatible', 'model', { endpoint: 'https://compat.example.test/api/v1', imageInput: false }, 'https://compat.example.test/api/v1/models/model', 'authorization'],
+  ] as const)('checks %s metadata without exposing credentials', async (provider, model, settings, expectedURL, header) => {
+    process.env.AI_COMPATIBLE_ALLOWED_ORIGINS = 'https://compat.example.test'
+    const requests: Array<{ url: string; headers: Headers }> = []
+    const fake = async (url: RequestInfo | URL, init?: RequestInit) => { requests.push({ url: String(url), headers: new Headers(init?.headers) }); return new Response('credential-secret', { status: 200 }) }
+    await expect(providerConnectionTransport({ provider, model, credential: 'credential-secret', settings }, fake)).resolves.toEqual({ ok: true, code: 'connected' })
+    expect(requests[0]!.url).toBe(expectedURL)
+    expect(requests[0]!.headers.get(header)).toContain('credential-secret')
+    await expect(providerConnectionTransport({ provider, model, credential: 'credential-secret', settings }, async () => new Response('credential-secret', { status: 401 }))).resolves.toEqual({ ok: false, code: 'rejected' })
+    await expect(providerConnectionTransport({ provider, model, credential: 'credential-secret', settings }, async () => new Response('credential-secret', { status: 503 }))).resolves.toEqual({ ok: false, code: 'unavailable' })
+  })
+
 })

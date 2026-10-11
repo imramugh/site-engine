@@ -4,6 +4,7 @@ import * as migration_20261006_009000_crm_private_records from './20261006_00900
 import * as migration_20261006_010000_ai_job_defaults from './20261006_010000_ai_job_defaults';
 import * as migration_20261007_010000_local_staff_auth from './20261007_010000_local_staff_auth';
 import * as migration_20261009_121000_preview_evidence_manifest from './20261009_121000_preview_evidence_manifest';
+import * as migration_20261011_010000_provider_settings from './20261011_010000_provider_settings';
 import * as migration_20261003_032907_add_user_email_and_section_summary from './20261003_032907_add_user_email_and_section_summary';
 import * as migration_20261003_033755_identity_session_foundation from './20261003_033755_identity_session_foundation';
 import * as migration_20261003_033949_invitation_token_binding from './20261003_033949_invitation_token_binding';
@@ -300,4 +301,5 @@ export const migrations = [
   { up: migration_20261006_010000_ai_job_defaults.up, down: migration_20261006_010000_ai_job_defaults.down, name: '20261006_010000_ai_job_defaults' },
   { up: migration_20261007_010000_local_staff_auth.up, down: migration_20261007_010000_local_staff_auth.down, name: '20261007_010000_local_staff_auth' },
   { up: migration_20261009_121000_preview_evidence_manifest.up, down: migration_20261009_121000_preview_evidence_manifest.down, name: '20261009_121000_preview_evidence_manifest' },
+  { up: migration_20261011_010000_provider_settings.up, down: migration_20261011_010000_provider_settings.down, name: '20261011_010000_provider_settings' },
 ];

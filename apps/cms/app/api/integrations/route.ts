@@ -7,6 +7,7 @@ import { serverSessionStrategy, SENSITIVE_REAUTH_SECONDS } from '../../../src/id
 import { configureIntegration, revokeIntegration, testIntegrationConnection } from '../../../src/integration-configuration'
 import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../src/sqlite'
 import { supportsProductionVisionInput } from '../../../src/ai-providers'
+import { normalizeProviderSettings } from '../../../src/provider-settings'
 
 export const dynamic = 'force-dynamic'
 const sameOrigin = (request: Request) => {
@@ -56,7 +57,7 @@ async function GETHandler(request: Request) {
   return privateJSON({
     integrations: records.docs.map((doc) => publicIntegration(doc as unknown as Record<string, unknown>)),
     aiJobDefaults: aiJobDefaults.docs.map((doc) => ({ jobType: doc.jobType, provider: doc.provider, model: doc.model, fallbackProvider: doc.fallbackProvider ?? null })),
-    productionVisionProviders: records.docs.map((doc) => doc as unknown as { provider?: IntegrationProvider; model?: string }).filter((item): item is { provider: IntegrationProvider; model: string } => Boolean(item.provider && typeof item.model === 'string' && supportsProductionVisionInput(item.provider, item.model))).map((item) => item.provider),
+    productionVisionProviders: records.docs.map((doc) => doc as unknown as { provider?: IntegrationProvider; model?: string; providerSettings?: unknown }).filter((item): item is { provider: IntegrationProvider; model: string } => Boolean(item.provider && typeof item.model === 'string' && supportsProductionVisionInput(item.provider, item.model, normalizeProviderSettings(item.provider, item.providerSettings)))).map((item) => item.provider),
     capabilities: {
       identity: {
         local: { configured: localUsers.totalDocs > 0, users: localUsers.totalDocs, lastUsedAt: localUses.docs[0]?.createdAt ?? null, sensitiveReauthMinutes: SENSITIVE_REAUTH_SECONDS / 60 },
@@ -81,15 +82,15 @@ async function POSTHandler(request: Request) {
       const types = ['summary', 'meta', 'faq', 'alt', 'lead-reply']
       if (typeof body.jobType !== 'string' || !types.includes(body.jobType) || typeof body.model !== 'string' || !body.model.trim() || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && (!isProvider(body.fallbackProvider) || body.fallbackProvider === body.provider))) return failure()
       const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.provider } }, limit: 1, depth: 0, overrideAccess: true })
-      const integration = configured.docs[0] as unknown as { model?: string; encryptedCredential?: string } | undefined
+      const integration = configured.docs[0] as unknown as { model?: string; encryptedCredential?: string; providerSettings?: unknown } | undefined
       if (!integration?.encryptedCredential || integration.model !== body.model.trim()) return privateJSON({ error: 'Select the reviewed model configured for this provider before routing jobs.' }, 400)
       if (body.fallbackProvider) {
         const fallback = await payload.find({ collection: 'integration-configurations', where: { provider: { equals: body.fallbackProvider } }, limit: 1, depth: 0, overrideAccess: true })
-        const fallbackIntegration = fallback.docs[0] as unknown as { model?: string; encryptedCredential?: string } | undefined
+        const fallbackIntegration = fallback.docs[0] as unknown as { model?: string; encryptedCredential?: string; providerSettings?: unknown } | undefined
         if (!fallbackIntegration?.encryptedCredential || !fallbackIntegration.model?.trim()) return privateJSON({ error: 'Configure the fallback provider before routing jobs to it.' }, 400)
-        if (body.jobType === 'alt' && !supportsProductionVisionInput(body.fallbackProvider, fallbackIntegration.model)) return privateJSON({ error: 'Select a reviewed production vision model for the image-alt fallback.' }, 400)
+        if (body.jobType === 'alt' && !supportsProductionVisionInput(body.fallbackProvider, fallbackIntegration.model, normalizeProviderSettings(body.fallbackProvider, fallbackIntegration.providerSettings))) return privateJSON({ error: 'Select a reviewed production vision model for the image-alt fallback.' }, 400)
       }
-      if (body.jobType === 'alt' && !supportsProductionVisionInput(body.provider, body.model.trim())) return privateJSON({ error: 'Select the reviewed production vision model before routing image alt text.' }, 400)
+      if (body.jobType === 'alt' && !supportsProductionVisionInput(body.provider, body.model.trim(), normalizeProviderSettings(body.provider, integration?.providerSettings))) return privateJSON({ error: 'Select the reviewed production vision model before routing image alt text.' }, 400)
       const existing = await payload.find({ collection: 'ai-job-defaults', where: { jobType: { equals: body.jobType } }, limit: 1, depth: 0, overrideAccess: true })
       const data = { jobType: body.jobType, provider: body.provider, model: body.model.trim(), fallbackProvider: body.fallbackProvider ?? null }
       const saved = existing.docs[0] ? await payload.update({ collection: 'ai-job-defaults', id: existing.docs[0].id, data: data as never, overrideAccess: true }) : await payload.create({ collection: 'ai-job-defaults', data: data as never, overrideAccess: true })
@@ -106,8 +107,9 @@ async function POSTHandler(request: Request) {
     }
     const money = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
     if (body.action !== 'configure' || typeof body.credential !== 'string' || typeof body.model !== 'string' || body.model.length > 160 || (body.fallbackProvider !== null && body.fallbackProvider !== undefined && (!isProvider(body.fallbackProvider) || body.fallbackProvider === body.provider)) || (body.monthlyCapMicroUsd !== null && body.monthlyCapMicroUsd !== undefined && !money(body.monthlyCapMicroUsd)) || !money(body.inputMicroUsdPerMillionTokens) || !money(body.outputMicroUsdPerMillionTokens) || typeof body.pricingSource !== 'string' || !body.pricingSource.trim() || body.pricingSource.length > 500 || typeof body.pricingAsOf !== 'string' || Number.isNaN(Date.parse(body.pricingAsOf))) return failure()
+    let providerSettings; try { providerSettings = normalizeProviderSettings(body.provider, body.providerSettings) } catch { return failure() }
     const monthlyCapMicroUsd = typeof body.monthlyCapMicroUsd === 'number' ? body.monthlyCapMicroUsd : null
-    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
+    const result = await configureIntegration(payload, { provider: body.provider, model: body.model, credential: body.credential, fallbackProvider: body.fallbackProvider ?? null, providerSettings, pricing: { monthlyCapMicroUsd, inputMicroUsdPerMillionTokens: body.inputMicroUsdPerMillionTokens, outputMicroUsdPerMillionTokens: body.outputMicroUsdPerMillionTokens, pricingSource: body.pricingSource.trim(), pricingAsOf: new Date(body.pricingAsOf).toISOString() }, actor: user.id })
     return privateJSON({ integration: publicIntegration(result.saved as unknown as Record<string, unknown>) }, result.created ? 201 : 200)
   } catch (error) { return sqliteBackpressureResponse(error, { error: sqliteBackpressureMessage }, { 'Cache-Control': 'no-store' }) ?? failure() }
 }

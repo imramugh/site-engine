@@ -120,7 +120,7 @@ test('ENG-023 provider configuration keeps dialog, rejection, reauthentication, 
     await owner.page.getByRole('navigation', { name: 'Site', exact: true }).getByRole('link', { name: 'Integrations' }).click()
     await expect(owner.page.getByRole('heading', { name: 'Integrations', exact: true })).toBeVisible()
     await expect(owner.page.getByRole('tab')).toHaveCount(5)
-    await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(4)
+    await expect(owner.page.locator('[data-integrations-providers] article')).toHaveCount(8)
 
     await owner.page.getByRole('tab', { name: 'AI providers' }).focus()
     await owner.page.keyboard.press('ArrowRight')
@@ -208,8 +208,27 @@ test('ENG-023 provider configuration keeps dialog, rejection, reauthentication, 
 test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', async ({ browser }, testInfo) => {
   const owner = await signedIn(browser, 'synthetic-theme-owner-session-token')
   await owner.page.setViewportSize({ width: 1440, height: 900 }); await owner.page.goto('/integrations')
-  const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(4)
-  const tops = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top))); expect(new Set(tops).size).toBe(1)
+  const cards = owner.page.locator('[data-integrations-providers] article'); await expect(cards).toHaveCount(8)
+  const desktopGeometry = await cards.evaluateAll((nodes) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect()
+    return { top: Math.round(rect.top), height: Math.round(rect.height), width: Math.round(rect.width) }
+  }))
+  expect(new Set(desktopGeometry.map(card => card.top)).size).toBe(2)
+  expect(desktopGeometry.slice(0, 4).map(card => card.height)).toEqual(Array(4).fill(desktopGeometry[0]!.height))
+  expect(desktopGeometry.slice(4).map(card => card.height)).toEqual(Array(4).fill(desktopGeometry[4]!.height))
+  expect(desktopGeometry.map(card => card.width)).toEqual(Array(8).fill(desktopGeometry[0]!.width))
+  const headers = await cards.evaluateAll((nodes) => nodes.map((node) => {
+    const title = node.querySelector('header > span:first-child')!.getBoundingClientRect()
+    const status = node.querySelector('header > span:last-child')!.getBoundingClientRect()
+    return { titleBottom: Math.round(title.bottom), statusTop: Math.round(status.top), titleRight: Math.round(title.right), statusLeft: Math.round(status.left) }
+  }))
+  expect(headers.every(({ titleBottom, statusTop, titleRight, statusLeft }) => statusTop - titleBottom >= 8 || titleRight <= statusLeft)).toBe(true)
+  for (const provider of ['anthropic', 'openrouter', 'openai-compatible']) {
+    const name = owner.page.locator(`[data-provider="${provider}"] strong`)
+    await expect(name).toBeVisible()
+    expect(await name.evaluate((node) => ({ wordBreak: getComputedStyle(node).wordBreak, overflowWrap: getComputedStyle(node).overflowWrap }))).toEqual({ wordBreak: 'normal', overflowWrap: 'normal' })
+  }
+  expect(await cards.first().getByRole('button', { name: /Add key|Replace key/ }).evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap')
   if (process.env.CMS_PRIVATE_BRAND === '1') {
     await owner.page.evaluate(() => document.fonts.ready)
     expect(await owner.page.locator('link[href*="admin-branding.css"]').count()).toBe(1)

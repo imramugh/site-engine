@@ -67,6 +67,22 @@ describe('ENG-023 integration configuration access', () => {
     await expect(payload.find({ collection: 'integration-configurations', user: owner, overrideAccess: false })).rejects.toThrow()
   })
 
+  it('persists normalized adapter settings through the fresh Owner route without returning the credential', async () => {
+    const owner = await payload.create({ collection: 'users', data: { email: 'azure-owner@example.test', name: 'Azure owner', roles: ['owner'] }, overrideAccess: true })
+    const session = await freshSession(owner.id)
+    const response = await integrationRoute.POST(new Request('http://cms.test/api/integrations', { method: 'POST', headers: { origin: 'http://cms.test', cookie: session, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'configure', provider: 'azure-openai', model: 'reviewed-deployment', credential: 'azure-write-only-secret', fallbackProvider: null, providerSettings: { endpoint: 'https://reviewed-resource.openai.azure.com', imageInput: false }, monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1, outputMicroUsdPerMillionTokens: 2, pricingSource: 'https://prices.example.test/azure', pricingAsOf: '2026-10-11T00:00:00.000Z' }) }))
+    expect(response.status).toBe(201)
+    const body = await response.json() as Record<string, unknown>
+    expect(JSON.stringify(body)).not.toContain('azure-write-only-secret')
+    expect(body).toMatchObject({ integration: { provider: 'azure-openai', providerSettings: { endpoint: 'https://reviewed-resource.openai.azure.com/openai/v1', imageInput: false } } })
+    const stored = (await payload.find({ collection: 'integration-configurations', where: { provider: { equals: 'azure-openai' } }, overrideAccess: true })).docs[0] as any
+    expect(stored.providerSettings).toEqual({ endpoint: 'https://reviewed-resource.openai.azure.com/openai/v1', imageInput: false })
+    expect(stored.encryptedCredential).not.toContain('azure-write-only-secret')
+    const audit = (await payload.find({ collection: 'audit-events', where: { event: { equals: 'integration.credential_rotated' } }, overrideAccess: true })).docs.find((item: any) => item.detail?.provider === 'azure-openai')
+    if (audit) await payload.delete({ collection: 'audit-events', id: audit.id, overrideAccess: true })
+    await payload.delete({ collection: 'integration-configurations', id: stored.id, overrideAccess: true })
+  })
+
   it('rolls back the route service when its required audit write fails', async () => {
     const pricing = { monthlyCapMicroUsd: null, inputMicroUsdPerMillionTokens: 1_000_000, outputMicroUsdPerMillionTokens: 2_000_000, pricingSource: 'https://prices.example.test/review', pricingAsOf: '2026-10-04T00:00:00.000Z' }
     await configureIntegration(payload, { provider: 'anthropic', model: 'stable-model', credential: 'stable-credential', fallbackProvider: null, pricing }, async ({ payload, req, event, actor, provider }) => {
