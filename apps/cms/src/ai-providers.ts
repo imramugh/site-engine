@@ -9,13 +9,13 @@ import { withPayloadTransaction } from './auth-transaction'
 export type MicroUsd = number
 export type AIJob = { provider: IntegrationProvider; fallbackProvider?: IntegrationProvider | null; input: string; requiresImage?: boolean; imageDataUrl?: string; maxOutputTokens: number }
 export type AIConfigurationSnapshot = { id: string; provider: IntegrationProvider; model: string; credentialFingerprint: string; monthlyCapMicroUsd: number | null; inputMicroUsdPerMillionTokens: MicroUsd; outputMicroUsdPerMillionTokens: MicroUsd; pricingSource: string; pricingAsOf: string; providerSettings?: ProviderSettings }
-export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' }
+export type ProviderCapability = { imageInput: boolean; endpoint: string; auth: 'bearer' | 'x-api-key' | 'api-key' }
 export const providerCapabilities: Record<IntegrationProvider, ProviderCapability> = {
   openai: { imageInput: true, endpoint: 'https://api.openai.com/v1/responses', auth: 'bearer' },
   anthropic: { imageInput: false, endpoint: 'https://api.anthropic.com/v1/messages', auth: 'x-api-key' },
   'google-gemini': { imageInput: false, endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', auth: 'x-api-key' },
   openrouter: { imageInput: false, endpoint: 'https://openrouter.ai/api/v1/chat/completions', auth: 'bearer' },
-  'azure-openai': { imageInput: false, endpoint: 'configured', auth: 'x-api-key' },
+  'azure-openai': { imageInput: false, endpoint: 'configured', auth: 'api-key' },
   'amazon-bedrock': { imageInput: false, endpoint: 'regional', auth: 'bearer' },
   mistral: { imageInput: false, endpoint: 'https://api.mistral.ai/v1/chat/completions', auth: 'bearer' },
   'openai-compatible': { imageInput: false, endpoint: 'configured', auth: 'bearer' },
