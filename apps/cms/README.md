@@ -159,3 +159,15 @@ optional root-relative `/admin-branding/...` `logoUrl`, and the bounded color
 tokens `--admin-accent`, `--admin-accent-contrast`, `--admin-surface`,
 `--admin-sidebar`, `--admin-text`, and `--admin-border`. An absent or invalid
 bundle always falls back to the neutral public shell.
+
+
+### Staff document CSP
+
+Production staff and Payload admin documents receive a fresh request nonce in
+`script-src` and allows only same-origin scripts; Next reads the request CSP and applies it to its hydration scripts.
+The policy permits no inline or eval scripts in production, marks staff HTML
+`no-store` and `noindex`, and limits content sources to same-origin resources
+plus data/blob image handling. `style-src 'unsafe-inline'` is a documented
+compatibility exception: branded staff layouts use inline CSS custom properties,
+and Payload can add runtime style elements that do not receive the request nonce.
+Development alone adds `unsafe-eval` for React's debugging support.
