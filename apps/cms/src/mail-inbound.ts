@@ -8,7 +8,7 @@ const providers = new Set(['smtp', 'microsoft', 'google'])
 const clean = (value: unknown, limit: number) => String(value ?? '').replace(/<[^>]*>/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit)
 const addressHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const inFlight = new Map<string, Promise<unknown>>()
-const providerLink = (value: unknown) => { try { const url = new URL(String(value)); return url.protocol === 'https:' && ['outlook.office.com', 'outlook.office365.com', 'mail.google.com'].includes(url.hostname) ? url.toString() : undefined } catch { return undefined } }
+const providerLink = (value: unknown) => { try { const url = new URL(String(value)); return String(value).length <= 2000 && !url.username && !url.password && !url.port && url.protocol === 'https:' && ['outlook.office.com', 'outlook.office365.com', 'mail.google.com'].includes(url.hostname) ? url.toString() : undefined } catch { return undefined } }
 
 export type InboundMessage = { mailbox: string; provider: 'smtp' | 'microsoft' | 'google'; conversationID: string; messageID: string; rfcMessageID?: string; rfcReferences?: string; messageLink?: string; direction?: 'inbound' | 'outbound'; sender: string; recipient: string; subject: string; body: string; receivedAt: string; attachmentMetadata?: Array<{ name?: unknown; contentType?: unknown; size?: unknown; providerAttachmentID?: unknown }> }
 type InboundResult = { matched: false; suggested: boolean } | { matched: true; duplicate: boolean; message: unknown }

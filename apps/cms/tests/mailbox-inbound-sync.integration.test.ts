@@ -24,8 +24,8 @@ test('a partial Graph page does not advance its durable cursor and safely replay
   const graph = (invalid = false) => async (url: string) => {
     if (url.includes('/token')) return Response.json({ access_token: 'sync-access' })
     if (url.includes('/delta')) return Response.json({ value: [
-      { id: 'message-1', conversationId: 'conversation-1', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'One', body: { content: 'One' }, receivedDateTime: '2026-10-06T00:00:00Z' },
-      { id: 'message-2', conversationId: 'conversation-1', from: { emailAddress: { address: invalid ? 'not-an-email' : 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'Two', body: { content: 'Two' }, receivedDateTime: '2026-10-06T00:01:00Z' },
+      { id: 'message-1', conversationId: 'conversation-1', webLink: 'https://outlook.office.com/mail/deeplink/read/message-1', from: { emailAddress: { address: 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'One', body: { content: 'One' }, receivedDateTime: '2026-10-06T00:00:00Z' },
+      { id: 'message-2', conversationId: 'conversation-1', webLink: 'https://attacker.example/mail', from: { emailAddress: { address: invalid ? 'not-an-email' : 'visitor@example.test' } }, toRecipients: [{ emailAddress: { address: 'sync@example.test' } }], subject: 'Two', body: { content: 'Two' }, receivedDateTime: '2026-10-06T00:01:00Z' },
     ], '@odata.deltaLink': graphCursor(url, 'next') })
     throw new Error(`unexpected ${url}`)
   }
@@ -36,7 +36,10 @@ test('a partial Graph page does not advance its durable cursor and safely replay
   await expect(syncMailboxInbound(payload, mailbox.id, graph(false))).resolves.toMatchObject({ skipped: false, processed: 4 })
   stored = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, overrideAccess: true }) as any
   expect(stored.inboundCursor).toContain('deltatoken=next')
-  expect((await payload.find({ collection: 'mail-thread-messages', overrideAccess: true })).docs).toHaveLength(2)
+  const messages = (await payload.find({ collection: 'mail-thread-messages', overrideAccess: true })).docs
+  expect(messages).toHaveLength(2)
+  expect(messages.find(message => message.providerMessageID === 'message-1')?.messageLink).toBe('https://outlook.office.com/mail/deeplink/read/message-1')
+  expect(messages.find(message => message.providerMessageID === 'message-2')?.messageLink).toBeNull()
 })
 
 test('a disconnected or revised mailbox cannot append a polled message or advance its cursor', async () => {

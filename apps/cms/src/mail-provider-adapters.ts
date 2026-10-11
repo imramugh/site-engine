@@ -242,7 +242,7 @@ function graphDelta(folderID: string, cursor?: string, target?: string) {
   if (!opaque(folderID)) throw new Error("invalid_cursor");
   const path = `/v1.0${graphUser(target)}/mailFolders/${encodeURIComponent(folderID)}/messages/delta`;
   if (!cursor)
-    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,hasAttachments`;
+    return `${graph}${path}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,hasAttachments,webLink`;
   let url: URL;
   try {
     url = new URL(cursor);
@@ -270,6 +270,7 @@ function graphMessage(value: Record<string, unknown>) {
   return {
     messageId: String(value.id ?? ""),
     threadId: String(value.conversationId ?? ""),
+    messageLink: typeof value.webLink === "string" ? value.webLink : undefined,
     subject: clean(value.subject),
     body: clean(body?.content),
     date: String(value.receivedDateTime ?? ""),
