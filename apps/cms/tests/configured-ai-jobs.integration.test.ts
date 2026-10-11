@@ -197,6 +197,14 @@ describe('configured AI job CMS execution', () => {
     expect(JSON.stringify(audit.docs)).not.toContain('safe result')
   })
 
+  it('refuses a queued job after its immutable provider settings change without provider I/O', async () => {
+    const configuration = await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0
+    await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { providerSettings: { imageInput: false } }, overrideAccess: true })
+    await expect(executor.executeClaimedConfiguredAIJob(payload, claimed, { now, transport: async () => { calls += 1; return answer() } })).rejects.toThrow('AI_JOB_UNAVAILABLE')
+    expect(calls).toBe(0)
+    await expect(payload.findByID({ collection: 'configured-ai-jobs', id: queuedJob.job.id, overrideAccess: true })).resolves.toMatchObject({ state: 'failed', failureCode: 'CONFIGURATION_SNAPSHOT_STALE', dispatchStartedAt: null })
+  })
+
   it('fails closed before dispatch when the snapshotted configuration rotates', async () => {
     const configuration = await usableConfiguration(); const queuedJob = await queued(); const claimed = await claim(); let calls = 0
     await payload.update({ collection: 'integration-configurations', id: configuration.id, data: { model: 'rotated-model' }, overrideAccess: true })
