@@ -51,3 +51,20 @@ test('Owner sees Microsoft app-only configuration and Google OAuth availability 
   await expect(owner.page.locator('[data-email-workspace] [role="alert"]')).toContainText('Mailbox authorization could not be completed. No mailbox was connected.')
   await owner.context.close()
 })
+
+test('ENG-020 persists a Microsoft shared mailbox through the real handler without exposing its secret and rejects an unverified area mapping', async ({ browser }) => {
+  const owner = await signedIn(browser)
+  try {
+    const configured = await owner.page.request.post('/api/email-workspace', { headers: { origin }, data: { action: 'configure-microsoft', name: 'E2E scoped shared mailbox', tenantID: '11111111-1111-4111-8111-111111111111', clientID: '22222222-2222-4222-8222-222222222222', clientSecret: 'e2e-write-only-client-secret', mailboxAddress: 'shared-e2e@example.test', aliases: ['alias-e2e@example.test'] } })
+    expect(configured.ok(), await configured.text()).toBe(true)
+    const workspace = await configured.json() as { mailboxes: Array<{ id: string; name: string; connectionMode?: string; clientSecret?: string; verifiedAliases: string[] }> }
+    const mailbox = workspace.mailboxes.find(item => item.name === 'E2E scoped shared mailbox')
+    expect(mailbox).toMatchObject({ connectionMode: 'app-only', verifiedAliases: [] })
+    expect(JSON.stringify(mailbox)).not.toContain('e2e-write-only-client-secret')
+    const rejected = await owner.page.request.post('/api/email-workspace', { headers: { origin }, data: { action: 'map-area', area: 'notifications', mailbox: mailbox!.id, senderAddress: 'alias-e2e@example.test' } })
+    expect(rejected.status()).toBe(400)
+    expect(await rejected.json()).toMatchObject({ error: expect.stringMatching(/verified/i) })
+    const revoked = await owner.page.request.post('/api/email-workspace', { headers: { origin }, data: { action: 'revoke', id: mailbox!.id } })
+    expect(revoked.ok(), await revoked.text()).toBe(true)
+  } finally { await owner.context.close() }
+})
