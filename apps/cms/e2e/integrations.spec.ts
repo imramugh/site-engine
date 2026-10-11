@@ -43,10 +43,13 @@ test('ENG-023 Owner replaces a write-only credential, retains operational card s
     expect(await initialResponse.text()).not.toContain(initialSecret)
 
     await owner.page.reload()
+    // Reload renders the static card before its workspace request resolves. Wait
+    // for the credential field itself rather than reading its initial placeholder.
+    await expect(card).toContainText('synthetic-reviewed-model')
+    await expect(card.locator('code')).not.toHaveText('Not set')
     const initialHint = await card.locator('code').textContent()
     expect(initialHint).toBeTruthy()
     expect(initialHint).not.toContain(initialSecret)
-    await expect(card).toContainText('synthetic-reviewed-model')
     await expect(card).toContainText('Not tested')
     await expect(card.getByRole('button', { name: 'Test' })).toBeEnabled()
 
@@ -62,6 +65,8 @@ test('ENG-023 Owner replaces a write-only credential, retains operational card s
     expect(replacementBody).not.toContain(replacementSecret)
 
     await owner.page.reload()
+    await expect(card).toContainText('synthetic-reviewed-model')
+    await expect(card.locator('code')).not.toHaveText('Not set')
     const replacementHint = await card.locator('code').textContent()
     expect(replacementHint).toBeTruthy()
     expect(replacementHint).not.toBe(initialHint)
