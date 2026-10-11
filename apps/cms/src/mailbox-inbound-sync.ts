@@ -5,6 +5,7 @@ import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 type Mailbox = { id: string; provider: 'microsoft' | 'google' | 'smtp'; health: string; credentialRevision: string; inboundCursor?: string | null; inboundCursorRevision?: string | null }
 type GoogleCursor = { historyID: string; pageToken?: string; offset?: number }
+type MicrosoftCursor = { inbox?: string; sent?: string }
 type SyncResult = { skipped: true; processed: number } | { skipped: false; processed: number }
 
 const internal = { mailboxInternal: true }
@@ -17,6 +18,11 @@ const withSignal = (fetcher: Fetcher, signal?: AbortSignal): Fetcher => async (u
   const requestSignal = init?.signal
   const combined = signal && requestSignal ? AbortSignal.any([signal, requestSignal]) : signal ?? requestSignal
   return fetcher(url, { ...init, ...(combined ? { signal: combined } : {}) })
+}
+
+function microsoftCursor(value: unknown): MicrosoftCursor {
+  if (typeof value !== 'string') return {}
+  try { const parsed = JSON.parse(value) as MicrosoftCursor; return { ...(opaque(parsed.inbox) ? { inbox: parsed.inbox } : {}), ...(opaque(parsed.sent) ? { sent: parsed.sent } : {}) } } catch { return opaque(value) ? { inbox: value } : {} }
 }
 
 function googleCursor(value: unknown): GoogleCursor | undefined {
@@ -88,15 +94,16 @@ async function syncMailboxInboundInner(payload: Payload, mailboxID: string, fetc
   let processed = 0
 
   if (active.provider === 'microsoft') {
-    const adapter = microsoftAdapter(providerFetch, 'sync@example.invalid'); const page = await adapter.poll(refreshed.accessToken, 'inbox', cursor ?? undefined)
-    for (const message of page.messages) {
+    const adapter = microsoftAdapter(providerFetch, 'sync@example.invalid'); const cursors = microsoftCursor(cursor)
+    const pages = await Promise.all([adapter.poll(refreshed.accessToken, 'inbox', cursors.inbox), adapter.poll(refreshed.accessToken, 'sentitems', cursors.sent)])
+    for (const [folder, page] of [['inbox', pages[0]], ['sentitems', pages[1]]] as const) for (const message of page.messages) {
       aborted(signal)
       await unchanged(payload, active)
-      const appended = await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments })
+      const appended = await appendMatchedInbound(payload, { mailbox: active.id, provider: 'microsoft', conversationID: message.threadId, messageID: message.messageId, sender: message.sender, recipient: message.recipient, subject: message.subject, body: message.body, receivedAt: message.date, attachmentMetadata: message.attachments, direction: folder === 'sentitems' ? 'outbound' : 'inbound' })
       if (appended.matched && message.attachmentsPending) { const attachmentMetadata = await adapter.attachments(refreshed.accessToken, message.messageId); aborted(signal); await unchanged(payload, active); if (attachmentMetadata.length) await payload.update({ collection: 'mail-thread-messages', id: (appended.message as { id: string }).id, data: { attachmentMetadata }, overrideAccess: true }) }
       processed += 1
     }
-    nextCursor = page.cursor
+    nextCursor = JSON.stringify({ ...(pages[0].cursor ? { inbox: pages[0].cursor } : {}), ...(pages[1].cursor ? { sent: pages[1].cursor } : {}) })
   } else {
     let position = googleCursor(cursor)
     if (!position) {
