@@ -1,9 +1,11 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import type { ProviderSettings } from './provider-settings'
+import { adapterMetadataURL } from './ai-provider-adapters'
 
-export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter'] as const
+export const integrationProviders = ['openai', 'anthropic', 'google-gemini', 'openrouter', 'azure-openai', 'amazon-bedrock', 'mistral', 'openai-compatible'] as const
 export type IntegrationProvider = (typeof integrationProviders)[number]
 export type ConnectionResult = { ok: boolean; code: 'connected' | 'unavailable' | 'rejected' }
-export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null }) => Promise<ConnectionResult>
+export type ConnectionTransport = (input: { provider: IntegrationProvider; credential: string; model?: string | null; settings?: ProviderSettings }) => Promise<ConnectionResult>
 export type ConnectionFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 const CONNECTION_TIMEOUT_MS = 5_000
@@ -36,17 +38,18 @@ export function decryptCredential(envelope: string, provider: IntegrationProvide
 export const credentialFingerprint = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12)
 
 /** No production provider is contacted by this foundation. Adapters inject this seam when approved. */
-export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null }, transport?: ConnectionTransport): Promise<ConnectionResult> {
+export async function testConnection(input: { provider: IntegrationProvider; encryptedCredential: string; model?: string | null; settings?: ProviderSettings }, transport?: ConnectionTransport): Promise<ConnectionResult> {
   const credential = decryptCredential(input.encryptedCredential, input.provider)
   if (!transport) return { ok: false, code: 'unavailable' }
   try {
-    const result = await transport({ provider: input.provider, credential, model: input.model })
+    const result = await transport({ provider: input.provider, credential, model: input.model, settings: input.settings })
     return result?.ok === true && result.code === 'connected' ? { ok: true, code: 'connected' } : result?.code === 'unavailable' ? { ok: false, code: 'unavailable' } : { ok: false, code: 'rejected' }
   }
   catch { return { ok: false, code: 'rejected' } }
 }
 
-function endpoint(provider: IntegrationProvider, model: string, credential: string): { url: string; headers: Record<string, string> } | undefined {
+function endpoint(provider: IntegrationProvider, model: string, credential: string, settings?: ProviderSettings): { url: string; headers: Record<string, string> } | undefined {
+  const adapterURL = adapterMetadataURL(provider, model, settings); if (adapterURL) return { url: adapterURL, headers: provider === 'azure-openai' ? { 'api-key': credential } : { authorization: 'Bearer ' + credential } }
   const encodedModel = encodeURIComponent(model)
   if (provider === 'openai') return { url: `https://api.openai.com/v1/models/${encodedModel}`, headers: { authorization: `Bearer ${credential}` } }
   if (provider === 'anthropic') return { url: `https://api.anthropic.com/v1/models/${encodedModel}`, headers: { 'x-api-key': credential, 'anthropic-version': '2023-06-01' } }
@@ -73,9 +76,9 @@ async function drainBounded(response: Response) {
 }
 
 /** Explicit, non-billable provider metadata lookup used only by the Owner test action. */
-export async function providerConnectionTransport(input: { provider: IntegrationProvider; credential: string; model?: string | null }, fetcher: ConnectionFetch = fetch): Promise<ConnectionResult> {
+export async function providerConnectionTransport(input: { provider: IntegrationProvider; credential: string; model?: string | null; settings?: ProviderSettings }, fetcher: ConnectionFetch = fetch): Promise<ConnectionResult> {
   if (!input.model) return { ok: false, code: 'unavailable' }
-  const target = endpoint(input.provider, input.model, input.credential)
+  const target = endpoint(input.provider, input.model, input.credential, input.settings)
   if (!target) return { ok: false, code: 'unavailable' }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS)
@@ -103,6 +106,7 @@ export function publicIntegration(doc: Record<string, unknown>) {
     id: doc.id,
     provider: doc.provider,
     model: doc.model ?? null,
+    providerSettings: doc.providerSettings ?? {},
     fallbackProvider: doc.fallbackProvider ?? null,
     monthlyCapMicroUsd: doc.monthlyCapMicroUsd ?? null,
     monthlyUsageMicroUsd: doc.monthlyUsageMicroUsd ?? 0,
