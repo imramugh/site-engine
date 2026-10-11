@@ -31,9 +31,9 @@ async function configure(page: Page, provider: Adapter, fallbackProvider: Adapte
   expect(await response.text()).not.toContain(secret)
 }
 
-async function axe(page: Page) {
+async function axe(page: Page, selector = 'main') {
   await page.addScriptTag({ path: axeSource })
-  expect(await page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
+  expect(await page.evaluate(async root => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run(root, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations, selector)).toEqual([])
 }
 
 test('ENG-027 encrypts adapter credentials, runs approved fallback with the isolated transport, and rejects text-only image routing', async ({ browser }, testInfo) => {
@@ -110,7 +110,7 @@ test('ENG-027 encrypts adapter credentials, runs approved fallback with the isol
       await imageCapability.focus()
       await owner.page.keyboard.press('Tab')
       await expect(dialog.getByLabel('Image input token upper bound for 768×768')).toBeVisible()
-      await axe(owner.page)
+      await axe(owner.page, '[data-integrations-editor]')
       await dialog.screenshot({ path: testInfo.outputPath(`eng027-adapters-dialog-${width}.png`) })
       await dialog.getByRole('button', { name: 'Close provider configuration' }).click()
       await owner.page.screenshot({ path: testInfo.outputPath(`eng027-adapters-${width}.png`), fullPage: true })

@@ -583,10 +583,12 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       for await (const chunk of request) chunks.push(Buffer.from(chunk))
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { jobID?: unknown }
       if (typeof body.jobID !== 'string') return { error: 'missing_job' }
-      const queued = await payload.find({ collection: 'configured-ai-jobs', where: { state: { equals: 'queued' } }, limit: 2, depth: 0, overrideAccess: true })
-      if (queued.docs.length !== 1 || queued.docs[0]?.id !== body.jobID) return { error: 'fixture_not_isolated' }
-      const expected = await payload.findByID({ collection: 'configured-ai-jobs', id: body.jobID, depth: 0, overrideAccess: true }) as { fallbackProvider?: unknown }
-      if (!eng027AdapterProviders.includes(expected.fallbackProvider as typeof eng027AdapterProviders[number])) return { error: 'unexpected_job' }
+      const expected = await payload.findByID({ collection: 'configured-ai-jobs', id: body.jobID, depth: 0, overrideAccess: true }) as { id?: unknown; state?: unknown; fallbackProvider?: unknown }
+      if (expected.id !== body.jobID || expected.state !== 'queued' || !eng027AdapterProviders.includes(expected.fallbackProvider as typeof eng027AdapterProviders[number])) return { error: 'unexpected_job' }
+      // Other CMS browser stories retain queued jobs. Make only this isolated
+      // fixture job the oldest claimable row, then use the production worker
+      // convenience unchanged so no unrelated job is claimed or mutated.
+      await payload.update({ collection: 'configured-ai-jobs', id: body.jobID, data: { createdAt: '1970-01-01T00:00:00.000Z' }, depth: 0, overrideAccess: true })
       const configured = await payload.find({ collection: 'integration-configurations', where: { provider: { in: eng027AdapterProviders as unknown as string[] } }, limit: 8, depth: 0, overrideAccess: true })
       const models = new Map((configured.docs as Array<{ provider?: unknown; model?: unknown }>)
         .filter((item): item is { provider: typeof eng027AdapterProviders[number]; model: string } => eng027AdapterProviders.includes(item.provider as typeof eng027AdapterProviders[number]) && typeof item.model === 'string')
