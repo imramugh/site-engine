@@ -170,4 +170,8 @@ The policy permits no inline or eval scripts in production, marks staff HTML
 plus data/blob image handling. `style-src 'unsafe-inline'` is a documented
 compatibility exception: branded staff layouts use inline CSS custom properties,
 and Payload can add runtime style elements that do not receive the request nonce.
-Development alone adds `unsafe-eval` for React's debugging support.
+Development alone adds `unsafe-eval` for React's debugging support. The dynamic
+`/review/*` workspace is the sole framing exception: it keeps the nonce policy but
+uses `frame-ancestors 'self'` because the same-origin page-review screen embeds it.
+Preview artifacts remain outside this generic document policy and retain their
+existing protections.

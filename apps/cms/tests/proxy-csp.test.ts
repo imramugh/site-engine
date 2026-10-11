@@ -31,8 +31,13 @@ describe('CMS document CSP proxy boundary', () => {
     for (const directive of [
       "default-src 'self'", "base-uri 'none'", "object-src 'none'", "connect-src 'self'",
       "img-src 'self' data: blob:", "font-src 'self' data:", "media-src 'self'", "frame-src 'self'",
-      "frame-ancestors 'none'", "form-action 'self'", 'report-uri /__csp/report', "script-src 'self' 'nonce-",
+      "form-action 'self'", 'report-uri /__csp/report', "script-src 'self' 'nonce-",
     ]) expect(firstPolicy).toContain(directive)
+    expect(firstPolicy).toContain("frame-ancestors 'none'")
+    // The dynamic review workspace is embedded only by the same-origin page-review screen.
+    expect(secondPolicy).toContain("frame-ancestors 'self'")
+    expect(secondPolicy).toContain("script-src 'self' 'nonce-")
+    expect(secondPolicy).not.toContain("'unsafe-eval'")
     expect(firstPolicy).not.toContain("script-src 'unsafe-inline'")
     expect(firstPolicy).not.toContain("'unsafe-eval'")
     expect(first.headers.get('cache-control')).toBe('no-store')

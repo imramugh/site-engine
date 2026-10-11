@@ -15,13 +15,16 @@ function isStaffDocument(pathname: string): boolean {
 function documentResponse(request: NextRequest): NextResponse {
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
   const isDevelopment = process.env.NODE_ENV === 'development'
+  // The review workspace is intentionally embedded by the same-origin page
+  // review screen. Other staff documents must never be framed.
+  const frameAncestors = request.nextUrl.pathname.startsWith('/review/') ? "'self'" : "'none'"
   // Payload's admin shell and the branded staff layouts use inline custom
   // properties. Payload can also insert runtime style tags without a nonce.
   // Keep this narrowly to styles; inline scripts require this response nonce, while external scripts remain same-origin.
   const policy = [
     "default-src 'self'", "base-uri 'none'", "object-src 'none'",
     `script-src 'self' 'nonce-${nonce}'${isDevelopment ? " 'unsafe-eval'" : ''}`,
-    "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "font-src 'self' data:", "media-src 'self'", "connect-src 'self'", "frame-src 'self'", "frame-ancestors 'none'", "form-action 'self'", "report-uri /__csp/report",
+    "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "font-src 'self' data:", "media-src 'self'", "connect-src 'self'", "frame-src 'self'", "frame-ancestors " + frameAncestors, "form-action 'self'", "report-uri /__csp/report",
   ].join('; ')
   const requestHeaders = new Headers(request.headers)
   // Next reads the request CSP to attach the nonce to its hydration scripts.
