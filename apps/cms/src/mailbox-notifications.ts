@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
 import { microsoftMailboxTarget } from './mail-provider-adapters'
 import type { Payload } from 'payload'
+import { withPayloadTransaction } from './auth-transaction'
 export type NotificationFetcher = (url: string, init: RequestInit) => Promise<Response>
 export type GoogleJWKSResolver = JWTVerifyGetKey
 const internal = { mailboxInternal: true }; const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -12,19 +13,45 @@ const boundedResponse = async (response: Response) => { const reader = response.
 const safeEqual = (left: string, right: string) => { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b) }
 /** App-only credentials rotate; delegated subscriptions are bound to the mailbox, not refresh-token ciphertext. */
 export const notificationCredentialRevision = (mailbox: { id?: unknown; connectionMode?: unknown; credentialRevision?: unknown }) => mailbox.connectionMode === 'app-only' ? String(mailbox.credentialRevision ?? '') : hash('delegated:' + String(mailbox.id ?? '')).slice(0, 32)
-export async function scheduleMailboxNotification(payload: Payload, provider: 'microsoft' | 'google', mailboxID: string, revision: string, notificationID: string) {
-  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as any
-  if (!mailbox || mailbox.provider !== provider || mailbox.health !== 'connected' || notificationCredentialRevision(mailbox) !== revision) throw new Error('notification_invalid')
-  const row = await payload.find({ collection: 'mailbox-notifications' as never, where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true }); const current = row.docs[0] as any
-  if (!current || current.provider !== provider || current.credentialRevision !== revision || current.status !== 'active' || !current.subscriptionID || !current.expiresAt || Date.parse(current.expiresAt) <= Date.now()) throw new Error('notification_invalid')
-  if (notificationID && current.replayKey === notificationID) return false
-  await payload.update({ collection: 'mailbox-notifications' as never, id: current.id, data: { lastNotificationAt: new Date().toISOString(), ...(notificationID ? { replayKey: notificationID.slice(0, 128) } : {}) } as never, overrideAccess: true, context: internal })
-  await (payload as any).update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: mailboxID } }, { health: { equals: 'connected' } }, { credentialRevision: { equals: mailbox.credentialRevision } }] }, data: { inboundNextAttemptAt: new Date().toISOString() }, overrideAccess: true, context: internal })
-  return true
+export async function scheduleMailboxNotification(payload: Payload, provider: 'microsoft' | 'google', mailboxID: string, revision: string, notificationID: string, lifecycle?: string, subscriptionID?: string) {
+  return withPayloadTransaction(payload, async req => {
+    req.context = { ...req.context, ...internal }
+    const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true, req })
+    if (mailbox.provider !== provider || mailbox.health !== 'connected' || notificationCredentialRevision(mailbox) !== revision) throw new Error('notification_invalid')
+    const found = await payload.find({ collection: 'mailbox-notifications', where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true, req })
+    const current = found.docs[0]
+    if (!current || current.provider !== provider || current.credentialRevision !== revision || current.status !== 'active' || !current.subscriptionID || (subscriptionID && current.subscriptionID !== subscriptionID) || !Number.isFinite(Date.parse(current.expiresAt ?? '')) || Date.parse(current.expiresAt!) <= Date.now()) throw new Error('notification_invalid')
+    if (notificationID && current.replayKey === notificationID) return false
+    const needsRenewal = ['missed', 'subscriptionRemoved', 'reauthorizationRequired'].includes(lifecycle ?? '')
+    await payload.update({ collection: 'mailbox-notifications', id: current.id, data: {
+      lastNotificationAt: new Date().toISOString(), ...(notificationID ? { replayKey: notificationID } : {}),
+      ...(needsRenewal ? { status: 'expired', expiresAt: new Date(0).toISOString(), nextRenewAttemptAt: null, failureCode: 'graph_lifecycle' } : {}),
+    }, overrideAccess: true, req })
+    await payload.update({ collection: 'mailbox-configurations', id: mailboxID, data: { inboundNextAttemptAt: new Date().toISOString() }, overrideAccess: true, req })
+    return true
+  })
 }
+
 export async function receiveMicrosoftNotification(payload: Payload, request: Request) {
-  const validation = new URL(request.url).searchParams.get('validationToken'); if (validation) return validation.length <= 4096 ? new Response(validation, { headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' } }) : new Response(null, { status: 400, headers: { 'cache-control': 'no-store' } })
-  try { const body = await bounded(request); const values = Array.isArray(body.value) ? body.value : []; if (values.length < 1 || values.length > 20) throw new Error(); for (const item of values) { const value = item as Record<string, unknown>; if (typeof value.subscriptionId !== 'string' || typeof value.clientState !== 'string') throw new Error(); const found = await payload.find({ collection: 'mailbox-notifications' as never, where: { subscriptionID: { equals: value.subscriptionId } }, limit: 1, depth: 0, overrideAccess: true }); const row = found.docs[0] as any; if (!row || !row.clientStateHash || !safeEqual(hash(value.clientState), row.clientStateHash)) throw new Error(); const id = String(typeof row.mailbox === 'string' ? row.mailbox : row.mailbox.id); const replay = typeof value.id === 'string' && value.id ? `${value.subscriptionId}:${value.id}` : ''; await scheduleMailboxNotification(payload, 'microsoft', id, row.credentialRevision, replay); if (value.lifecycleEvent === 'missed' || value.lifecycleEvent === 'subscriptionRemoved') await payload.update({ collection: 'mailbox-notifications' as never, id: row.id, data: { status: 'expired', expiresAt: new Date(0).toISOString(), failureCode: 'graph_lifecycle' } as never, overrideAccess: true, context: internal }) }; return new Response(null, { status: 202 }) } catch { return new Response(null, { status: 400 }) }
+  const headers = { 'cache-control': 'no-store' }
+  const validation = new URL(request.url).searchParams.get('validationToken')
+  if (validation !== null) return validation.length > 0 && validation.length <= 4096 ? new Response(validation, { headers: { ...headers, 'content-type': 'text/plain' } }) : new Response(null, { status: 400, headers })
+  try {
+    const body = await bounded(request)
+    const values = Array.isArray(body.value) ? body.value : []
+    if (!values.length || values.length > 20) throw new Error('notification_invalid')
+    for (const item of values) {
+      const value = item as Record<string, unknown>
+      if (!value || typeof value.subscriptionId !== 'string' || value.subscriptionId.length > 500 || typeof value.clientState !== 'string' || value.clientState.length > 128) throw new Error('notification_invalid')
+      const found = await payload.find({ collection: 'mailbox-notifications', where: { and: [{ subscriptionID: { equals: value.subscriptionId } }, { provider: { equals: 'microsoft' } }] }, limit: 1, depth: 0, overrideAccess: true })
+      const row = found.docs[0]
+      if (!row?.clientStateHash || !safeEqual(hash(value.clientState), row.clientStateHash)) throw new Error('notification_invalid')
+      const id = typeof row.mailbox === 'string' ? row.mailbox : row.mailbox.id
+      const replay = typeof value.id === 'string' && value.id ? hash(value.subscriptionId + ':' + value.id) : ''
+      await scheduleMailboxNotification(payload, 'microsoft', id, row.credentialRevision, replay, typeof value.lifecycleEvent === 'string' ? value.lifecycleEvent : undefined, value.subscriptionId)
+    }
+    return new Response(null, { status: 202, headers })
+  } catch { return new Response(null, { status: 400, headers }) }
 }
 export type GoogleJWTVerify = (token: string) => Promise<void>
 export function googleJWTVerifier(resolver: GoogleJWKSResolver = googleJWKS): GoogleJWTVerify | undefined {
@@ -39,39 +66,95 @@ export const notificationClientState = () => randomBytes(32).toString('base64url
 const notificationURL = (provider: 'microsoft' | 'google') => { const value = process.env.PAYLOAD_PUBLIC_SERVER_URL; if (!value) throw new Error('notification_unavailable'); let url: URL; try { url = new URL(value) } catch { throw new Error('notification_unavailable') }; if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1')) throw new Error('notification_unavailable'); return url.origin + '/api/email-workspace/notifications/' + provider }
 
 
-export async function renewMailboxNotifications(payload: Payload, mailboxID: string, accessToken: string, fetcher: NotificationFetcher = fetch, now = new Date()) {
-  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as any
-  if (!mailbox || mailbox.health !== 'connected' || !['microsoft', 'google'].includes(mailbox.provider)) throw new Error('notification_unavailable')
-  const prior = await payload.find({ collection: 'mailbox-notifications' as never, where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true }) as any
-  let current = prior.docs[0] as any; const revision = notificationCredentialRevision(mailbox)
-  if (current?.status === 'active' && current.provider === mailbox.provider && current.credentialRevision === revision && current.subscriptionID && current.expiresAt && Date.parse(current.expiresAt) > now.getTime() + renewalLeadMS) return current
-  if (current?.nextRenewAttemptAt && Date.parse(current.nextRenewAttemptAt) > now.getTime()) throw new Error('notification_backoff')
-  const clientState = current?.clientStateHash ? undefined : notificationClientState(); const headers = { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' }
-  if (!current) current = await payload.create({ collection: 'mailbox-notifications' as never, data: { mailbox: mailboxID, provider: mailbox.provider, credentialRevision: revision, clientStateHash: mailbox.provider === 'microsoft' ? hash(clientState!) : null, status: 'pending', renewFailureCount: 0 } as never, overrideAccess: true, context: internal }) as any
-  let response: Response; let data: any; const expires = new Date(now.getTime() + 50 * 60_000).toISOString()
+async function removeRemote(provider: string, subscriptionID: string | undefined, token: string, fetcher: NotificationFetcher) {
+  if (provider === 'microsoft' && !subscriptionID) return
   try {
-    if (mailbox.provider === 'microsoft') {
-      const target = microsoftMailboxTarget(mailbox); const resource = target ? `/users/${encodeURIComponent(target)}/messages` : '/me/messages'
-      const patch = current?.subscriptionID && current.provider === 'microsoft' && current.credentialRevision === revision
-      response = await fetcher(patch ? `${graphURL}/${encodeURIComponent(current.subscriptionID)}` : graphURL, { method: patch ? 'PATCH' : 'POST', headers, body: JSON.stringify(patch ? { expirationDateTime: expires } : { changeType: 'created,updated', resource, notificationUrl: notificationURL('microsoft'), expirationDateTime: expires, clientState }), redirect: 'error', signal: AbortSignal.timeout(10_000) })
-    } else {
-      const topic = process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC; if (!topic) throw new Error('notification_unavailable')
-      response = await fetcher(`https://gmail.googleapis.com/gmail/v1/users/me/watch`, { method: 'POST', headers, body: JSON.stringify({ topicName: topic }), redirect: 'error', signal: AbortSignal.timeout(10_000) })
-    }
-    if (!response.ok) throw new Error('notification_unavailable'); data = await boundedResponse(response)
-  } catch { if (current?.id) { const failures = Math.min(Number(current.renewFailureCount ?? 0) + 1, 12); await payload.update({ collection: 'mailbox-notifications' as never, id: current.id, data: { status: 'failed', failureCode: 'renew_failed', renewFailureCount: failures, nextRenewAttemptAt: new Date(now.getTime() + Math.min(3600000, 1000 * 2 ** failures)).toISOString() } as never, overrideAccess: true, context: internal }).catch(() => undefined) }; throw new Error('notification_unavailable') }
-  const subscriptionID = mailbox.provider === 'microsoft' ? data.id : String(data.historyId ?? '')
-  const googleExpiry = Number(data.expiration); const responseExpiry = mailbox.provider === 'microsoft' ? data.expirationDateTime : (Number.isFinite(googleExpiry) ? new Date(googleExpiry).toISOString() : '')
-  const expectedResource = microsoftMailboxTarget(mailbox) ? `/users/${encodeURIComponent(microsoftMailboxTarget(mailbox)!)}/messages` : '/me/messages'
-  if (typeof subscriptionID !== 'string' || !subscriptionID || subscriptionID.length > 500 || typeof responseExpiry !== 'string' || !Number.isFinite(Date.parse(responseExpiry)) || Date.parse(responseExpiry) <= now.getTime() || (mailbox.provider === 'microsoft' && data.resource !== undefined && data.resource !== expectedResource)) throw new Error('notification_unavailable')
-  const latestMailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true }) as any
-  const latestRows = await payload.find({ collection: 'mailbox-notifications' as never, where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true }) as any; const latest = latestRows.docs[0] as any
-  if (!latestMailbox || latestMailbox.health !== 'connected' || latestMailbox.provider !== mailbox.provider || notificationCredentialRevision(latestMailbox) !== revision || (current && (!latest || latest.id !== current.id || latest.status === 'revoked'))) { if (!current?.subscriptionID && mailbox.provider === 'microsoft') await fetcher(`${graphURL}/${encodeURIComponent(subscriptionID)}`, { method: 'DELETE', headers: { authorization: `Bearer ${accessToken}` }, redirect: 'error', signal: AbortSignal.timeout(10_000) }).catch(() => undefined); throw new Error('notification_stale') }
-  const record = { mailbox: mailboxID, provider: mailbox.provider, credentialRevision: revision, subscriptionID, clientStateHash: mailbox.provider === 'microsoft' ? (current?.clientStateHash ?? hash(clientState!)) : null, resource: mailbox.provider === 'microsoft' ? expectedResource : null, topic: mailbox.provider === 'google' ? process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC : null, expiresAt: responseExpiry, status: 'active', lastRenewedAt: now.toISOString(), failureCode: null, renewFailureCount: 0, nextRenewAttemptAt: null }
-  return latest ? (payload as any).update({ collection: 'mailbox-notifications', where: { and: [{ id: { equals: latest.id } }, { credentialRevision: { equals: revision } }, { status: { not_equals: 'revoked' } }] }, data: record, overrideAccess: true, context: internal }) : payload.create({ collection: 'mailbox-notifications' as never, data: record as never, overrideAccess: true, context: internal })
+    await fetcher(provider === 'microsoft' ? `${graphURL}/${encodeURIComponent(subscriptionID!)}` : 'https://gmail.googleapis.com/gmail/v1/users/me/stop', {
+      method: provider === 'microsoft' ? 'DELETE' : 'POST', headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(5_000),
+    })
+  } catch { /* Polling and local revocation remain authoritative. */ }
 }
+
+export async function renewMailboxNotifications(payload: Payload, mailboxID: string, accessToken: string, fetcher: NotificationFetcher = fetch, now = new Date()) {
+  const at = now.getTime()
+  // Serialize the local decision, but never hold a SQLite transaction during network I/O.
+  const prepared = await withPayloadTransaction(payload, async req => {
+    req.context = { ...req.context, ...internal }
+    const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true, req }) as any
+    if (mailbox.health !== 'connected' || !['microsoft', 'google'].includes(mailbox.provider)) throw new Error('notification_unavailable')
+    const revision = notificationCredentialRevision(mailbox)
+    const found = await payload.find({ collection: 'mailbox-notifications', where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true, req })
+    const current = found.docs[0]
+    const target = microsoftMailboxTarget(mailbox)
+    const resource = target ? `/users/${encodeURIComponent(target)}/messages` : '/me/messages'
+    const topic = mailbox.provider === 'google' ? process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC : undefined
+    if (mailbox.provider === 'google' && (!topic || !/^projects\/[a-z][a-z0-9-]{4,61}[a-z0-9]\/topics\/[A-Za-z][A-Za-z0-9._~+%-]{2,254}$/.test(topic))) throw new Error('notification_unavailable')
+    const same = current?.provider === mailbox.provider && current.credentialRevision === revision && (mailbox.provider === 'google' ? current.topic === topic : current.resource === resource)
+    const live = same && current?.status === 'active' && current.subscriptionID && Number.isFinite(Date.parse(current.expiresAt ?? '')) && Date.parse(current.expiresAt!) > at
+    if (live && Date.parse(current.expiresAt!) > at + renewalLeadMS) return { skip: true as const, current }
+    if (same && current?.nextRenewAttemptAt && Date.parse(current.nextRenewAttemptAt) > at) throw new Error('notification_backoff')
+    const patch = Boolean(live && mailbox.provider === 'microsoft' && current.clientStateHash)
+    const clientState = mailbox.provider === 'microsoft' && !patch ? notificationClientState() : undefined
+    // lastRenewedAt also distinguishes overlapping operations/revocation after the request.
+    const attempt = new Date().toISOString()
+    const data = {
+      mailbox: mailboxID, provider: mailbox.provider, credentialRevision: revision,
+      resource: mailbox.provider === 'microsoft' ? resource : null, topic: topic ?? null,
+      status: (patch ? 'active' : 'pending') as 'active' | 'pending',
+      clientStateHash: mailbox.provider === 'microsoft' ? (patch ? current!.clientStateHash : hash(clientState!)) : null,
+      subscriptionID: patch ? current!.subscriptionID : null, expiresAt: patch ? current!.expiresAt : null,
+      lastRenewedAt: attempt, replayKey: null, failureCode: null, nextRenewAttemptAt: null,
+      renewFailureCount: same ? current?.renewFailureCount ?? 0 : 0,
+    }
+    const saved = current ? await payload.update({ collection: 'mailbox-notifications', id: current.id, data, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-notifications', data, overrideAccess: true, req })
+    return { skip: false as const, mailbox, revision, resource, topic, current: saved, patch, clientState, attempt, oldSubscription: !patch && current?.provider === 'microsoft' ? current.subscriptionID : undefined }
+  })
+  if (prepared.skip) return prepared.current
+  const { mailbox, revision, resource, topic, current, patch, clientState, attempt } = prepared
+  let remoteID: string | undefined
+  let expiredRemote = false
+  try {
+    if (prepared.oldSubscription) await removeRemote('microsoft', prepared.oldSubscription, accessToken, fetcher)
+    const expires = new Date(at + 50 * 60_000).toISOString()
+    const callback = mailbox.provider === 'microsoft' ? notificationURL('microsoft') : undefined
+    const response = await fetcher(mailbox.provider === 'microsoft' ? (patch ? `${graphURL}/${encodeURIComponent(current.subscriptionID!)}` : graphURL) : 'https://gmail.googleapis.com/gmail/v1/users/me/watch', {
+      method: patch ? 'PATCH' : 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify(mailbox.provider === 'google' ? { topicName: topic } : patch ? { expirationDateTime: expires } : { changeType: 'created,updated', resource, notificationUrl: callback, lifecycleNotificationUrl: callback, expirationDateTime: expires, clientState }),
+      redirect: 'error', signal: AbortSignal.timeout(10_000),
+    })
+    expiredRemote = response.status === 404 || response.status === 410
+    if (!response.ok) throw new Error('notification_unavailable')
+    const data = await boundedResponse(response)
+    const id = mailbox.provider === 'microsoft' ? data.id : data.historyId
+    if (typeof id !== 'string' || !id || id.length > 500 || /[\u0000-\u001f\u007f]/.test(id)) throw new Error('notification_unavailable')
+    remoteID = id
+    const expiration = mailbox.provider === 'microsoft' ? Date.parse(String(data.expirationDateTime ?? '')) : Number(data.expiration)
+    if (!Number.isFinite(expiration) || expiration <= at || expiration > at + 8 * 24 * 3600_000 || (patch && id !== current.subscriptionID) || (mailbox.provider === 'microsoft' && data.resource !== undefined && data.resource !== resource)) throw new Error('notification_unavailable')
+    return await withPayloadTransaction(payload, async req => {
+      req.context = { ...req.context, ...internal }
+      const latestMailbox = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true, req })
+      const latest = await payload.findByID({ collection: 'mailbox-notifications', id: current.id, depth: 0, overrideAccess: true, req })
+      if (latestMailbox.health !== 'connected' || latestMailbox.provider !== mailbox.provider || notificationCredentialRevision(latestMailbox) !== revision || latest.status === 'revoked' || latest.credentialRevision !== revision || latest.lastRenewedAt !== attempt) throw new Error('notification_stale')
+      return payload.update({ collection: 'mailbox-notifications', id: latest.id, data: { subscriptionID: id, status: 'active', expiresAt: new Date(expiration).toISOString(), failureCode: null, renewFailureCount: 0, nextRenewAttemptAt: null }, overrideAccess: true, req })
+    })
+  } catch (error) {
+    if (remoteID && (!patch || remoteID !== current.subscriptionID)) await removeRemote(mailbox.provider, remoteID, accessToken, fetcher)
+    await withPayloadTransaction(payload, async req => {
+      req.context = { ...req.context, ...internal }
+      const mailboxNow = await payload.findByID({ collection: 'mailbox-configurations', id: mailboxID, depth: 0, overrideAccess: true, req })
+      const latest = await payload.findByID({ collection: 'mailbox-notifications', id: current.id, depth: 0, overrideAccess: true, req })
+      if (mailboxNow.health !== 'connected' || notificationCredentialRevision(mailboxNow) !== revision || latest.status === 'revoked' || latest.credentialRevision !== revision || latest.lastRenewedAt !== attempt) return
+      const failures = Math.min(Number(latest.renewFailureCount ?? 0) + 1, 12)
+      const stillLive = patch && !expiredRemote && Date.parse(latest.expiresAt ?? '') > Date.now()
+      await payload.update({ collection: 'mailbox-notifications', id: latest.id, data: { status: stillLive ? 'active' : 'failed', failureCode: 'renew_failed', renewFailureCount: failures, nextRenewAttemptAt: new Date(at + Math.min(3600000, 30000 * 2 ** (failures - 1))).toISOString(), ...(!stillLive ? { subscriptionID: null, expiresAt: null } : {}) }, overrideAccess: true, req })
+    }).catch(() => undefined)
+    throw error
+  }
+}
+
 export async function revokeMailboxNotifications(payload: Payload, mailboxID: string, accessToken?: string, fetcher: NotificationFetcher = fetch) {
-  const found = await payload.find({ collection: 'mailbox-notifications' as never, where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true }) as any; const row = found.docs[0] as any
-  if (row) await payload.update({ collection: 'mailbox-notifications' as never, id: row.id, data: { status: 'revoked', subscriptionID: null, expiresAt: null, replayKey: null, nextRenewAttemptAt: null } as never, overrideAccess: true, context: internal })
-  try { if (row?.provider === 'microsoft' && row.subscriptionID && accessToken) await fetcher(`${graphURL}/${encodeURIComponent(row.subscriptionID)}`, { method: 'DELETE', headers: { authorization: `Bearer ${accessToken}` }, redirect: 'error', signal: AbortSignal.timeout(10_000) }); if (row?.provider === 'google' && accessToken) await fetcher('https://gmail.googleapis.com/gmail/v1/users/me/stop', { method: 'POST', headers: { authorization: `Bearer ${accessToken}` }, redirect: 'error', signal: AbortSignal.timeout(10_000) }) } catch { /* local revoke is authoritative */ }
+  const found = await payload.find({ collection: 'mailbox-notifications', where: { mailbox: { equals: mailboxID } }, limit: 1, depth: 0, overrideAccess: true })
+  const row = found.docs[0]
+  if (row) await payload.update({ collection: 'mailbox-notifications', id: row.id, data: { status: 'revoked', subscriptionID: null, expiresAt: null, replayKey: null, nextRenewAttemptAt: null }, overrideAccess: true, context: internal })
+  if (row && accessToken) await removeRemote(row.provider, row.subscriptionID ?? undefined, accessToken, fetcher)
 }

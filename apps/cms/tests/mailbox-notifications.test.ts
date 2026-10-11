@@ -58,7 +58,9 @@ describe('ENG-020 Google JWT verification', () => {
     const expired = await new SignJWT({ email: expectedEmail, email_verified: true }).setProtectedHeader({ alg: 'RS256' }).setAudience('https://cms.test/push').setIssuer('https://accounts.google.com').setIssuedAt().setExpirationTime('0s').sign(privateKey)
     const cases = [wrongIssuer, wrongAudience, expired, await sign({ email: 'other@example.test' }), await sign({ email_verified: false }), await sign({ exp: undefined }), await sign({ iat: undefined })]
     for (const token of cases) await expect(verifier(token)).rejects.toThrow()
-    const forged = (await sign()).replace(/.$/, value => value === 'a' ? 'b' : 'a')
+    const parts = (await sign()).split('.')
+    parts[2] = (parts[2]![0] === 'a' ? 'b' : 'a') + parts[2]!.slice(1)
+    const forged = parts.join('.')
     await expect(verifier(forged)).rejects.toThrow()
   })
 })

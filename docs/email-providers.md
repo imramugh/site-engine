@@ -96,6 +96,7 @@ an authenticated Pub/Sub push subscription and set restricted CMS environment:
 - `MAILBOX_GOOGLE_PUBSUB_TOPIC`: full `projects/.../topics/...` name.
 - `MAILBOX_GOOGLE_PUBSUB_AUDIENCE`: the configured push token audience.
 - `MAILBOX_GOOGLE_PUBSUB_SERVICE_ACCOUNT`: exact push service-account email.
+- `MAILBOX_GOOGLE_PUBSUB_SUBSCRIPTION`: optional exact `projects/.../subscriptions/...` binding.
 
 Configure its endpoint as the Google notification route. Tokens are verified
 against Google's signing keys, issuer, audience, expiry and verified service

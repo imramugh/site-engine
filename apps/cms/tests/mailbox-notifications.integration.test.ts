@@ -7,7 +7,7 @@ import { generateKeyPair, SignJWT, exportJWK, importJWK } from 'jose'
 import { getPayload } from 'payload'
 
 const directory = mkdtempSync(join(tmpdir(), 'mailbox-notifications-'))
-Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-notifications-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAILBOX_MICROSOFT_CLIENT_ID: 'client', MAILBOX_MICROSOFT_CLIENT_SECRET: 'secret', MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret', MAILBOX_GOOGLE_PUBSUB_TOPIC: 'projects/test/topics/mail' })
+Object.assign(process.env, { DATABASE_URI: `file:${join(directory, 'cms.sqlite')}`, PAYLOAD_SECRET: 'mailbox-notifications-test-secret', PAYLOAD_PUBLIC_SERVER_URL: 'https://cms.example.test', INTEGRATION_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'), MAILBOX_MICROSOFT_CLIENT_ID: 'client', MAILBOX_MICROSOFT_CLIENT_SECRET: 'secret', MAILBOX_GOOGLE_CLIENT_ID: 'google-client', MAILBOX_GOOGLE_CLIENT_SECRET: 'google-secret', MAILBOX_GOOGLE_PUBSUB_TOPIC: 'projects/test-project/topics/mail' })
 const { default: config } = await import('../payload.config.js')
 const { startMailboxOAuth, completeMailboxOAuth } = await import('../src/mailbox-oauth.js')
 const { renewMailboxNotifications, revokeMailboxNotifications, receiveMicrosoftNotification, receiveGoogleNotification, googleJWTVerifier, notificationCredentialRevision } = await import('../src/mailbox-notifications.js')
@@ -53,8 +53,8 @@ test('first provider failure creates durable retry backoff', async () => {
 })
 
 test('a configuration revision during create does not reactivate the old binding and deletes Graph state', async () => {
-  const box = await mailbox('microsoft', 'race'); const calls: string[] = []
-  await expect(renewMailboxNotifications(payload, box.id, 'token', async (url, init) => { calls.push(String(init.method)); if (init.method === 'POST') await (payload as any).update({ collection: 'mailbox-configurations', id: box.id, data: { credentialRevision: 'rotated' }, overrideAccess: true, context: { mailboxInternal: true } }); return Response.json({ id: 'race-sub', resource: '/me/messages', expirationDateTime: new Date(Date.now() + 45 * 60_000).toISOString() }) })).rejects.toThrow()
+  const box = await mailbox('microsoft', 'race'); await payload.update({ collection: 'mailbox-configurations', id: box.id, data: { connectionMode: 'app-only', mailboxAddress: box.primaryAddress }, overrideAccess: true, context: { mailboxInternal: true } }); const calls: string[] = []
+  await expect(renewMailboxNotifications(payload, box.id, 'token', async (url, init) => { calls.push(String(init.method)); if (init.method === 'POST') await (payload as any).update({ collection: 'mailbox-configurations', id: box.id, data: { credentialRevision: 'rotated' }, overrideAccess: true, context: { mailboxInternal: true } }); return Response.json({ id: 'race-sub', resource: `/users/${encodeURIComponent(box.primaryAddress)}/messages`, expirationDateTime: new Date(Date.now() + 45 * 60_000).toISOString() }) })).rejects.toThrow()
   expect(calls).toContain('DELETE'); expect((await notification(box.id)).status).not.toBe('active')
 })
 
@@ -78,4 +78,31 @@ test('signed Google watch callbacks do not trust historyId or advance inbound cu
   const token = await new SignJWT({ email: 'push@example.test', email_verified: true }).setProtectedHeader({ alg: 'RS256' }).setIssuer('https://accounts.google.com').setAudience('aud').setIssuedAt().setExpirationTime('5m').sign(privateKey)
   const request = new Request('https://cms.example.test', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ message: { messageId: 'google-wake', data: Buffer.from(JSON.stringify({ emailAddress: box.primaryAddress, historyId: 'attacker' })).toString('base64') } }) })
   expect((await receiveGoogleNotification(payload, request, googleJWTVerifier(async () => key))).status).toBe(204); expect((await payload.findByID({ collection: 'mailbox-configurations', id: box.id, overrideAccess: true }) as any).inboundCursor).toBe(original)
+})
+
+
+test('delegated refresh rotation preserves subscriptions but expiry creates a fresh Graph client state', async () => {
+  const box = await mailbox('microsoft', 'expiry'); let first = ''
+  await renewMailboxNotifications(payload, box.id, 'token', async (_url, init) => { first = JSON.parse(String(init.body)).clientState; return graph('expiry-first')(_url, init) })
+  await payload.update({ collection: 'mailbox-configurations', id: box.id, data: { credentialRevision: 'refresh-rotated' }, overrideAccess: true, context: { mailboxInternal: true } })
+  await renewMailboxNotifications(payload, box.id, 'token', async () => { throw new Error('active subscription must be reused after token rotation') })
+  const row = await notification(box.id)
+  await payload.update({ collection: 'mailbox-notifications', id: row.id, data: { expiresAt: new Date(0).toISOString() }, overrideAccess: true, context: { mailboxInternal: true } })
+  let next = ''
+  await renewMailboxNotifications(payload, box.id, 'token', async (url, init) => { if (init.method === 'DELETE') return new Response(null, { status: 204 }); expect(init.method).toBe('POST'); next = JSON.parse(String(init.body)).clientState; return graph('expiry-next')(url, init) })
+  expect(next).toBeTruthy(); expect(next).not.toBe(first); expect((await notification(box.id)).clientStateHash).toBe(createHash('sha256').update(next).digest('hex'))
+})
+
+test('revocation during Graph create cannot resurrect the subscription', async () => {
+  const box = await mailbox('microsoft', 'revoke-race'); const calls: string[] = []
+  await expect(renewMailboxNotifications(payload, box.id, 'token', async (url, init) => { calls.push(String(init.method)); if (init.method === 'POST') await revokeMailboxNotifications(payload, box.id); return graph('revoked-created')(url, init) })).rejects.toThrow('notification_stale')
+  expect(calls).toContain('DELETE'); expect((await notification(box.id)).status).toBe('revoked')
+})
+
+test('Graph lifecycle event schedules renewal and polling without accepting supplied mail content', async () => {
+  const box = await mailbox('microsoft', 'lifecycle'); let state = ''
+  await renewMailboxNotifications(payload, box.id, 'token', async (url, init) => { const body = JSON.parse(String(init.body)); state = body.clientState; expect(body.lifecycleNotificationUrl).toBe(body.notificationUrl); return graph('lifecycle-sub')(url, init) })
+  const response = await receiveMicrosoftNotification(payload, new Request('https://cms.example.test', { method: 'POST', body: JSON.stringify({ value: [{ subscriptionId: 'lifecycle-sub', clientState: state, lifecycleEvent: 'reauthorizationRequired', body: 'untrusted' }] }) }))
+  expect(response.status).toBe(202); expect((await notification(box.id)).status).toBe('expired')
+  expect((await payload.findByID({ collection: 'mailbox-configurations', id: box.id, overrideAccess: true })).inboundNextAttemptAt).toBeTruthy()
 })
