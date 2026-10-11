@@ -22,7 +22,7 @@ describe('CMS document CSP proxy boundary', () => {
   it('protects staff and Payload admin documents with a fresh production nonce', () => {
     environment.NODE_ENV = 'production'
     const first = document('/admin/login')
-    const second = document('/operations')
+    const second = document('/review/11111111-1111-4111-8111-111111111111')
     const firstPolicy = first.headers.get('content-security-policy')
     const secondPolicy = second.headers.get('content-security-policy')
     expect(firstPolicy).toBeTruthy()
@@ -44,9 +44,9 @@ describe('CMS document CSP proxy boundary', () => {
     expect(first.headers.get('x-middleware-request-content-security-policy')).toBe(firstPolicy)
   })
 
-  it('keeps APIs, static framework assets, and review documents out of the generic staff policy', () => {
+  it('keeps APIs and static framework assets out of the generic document policy', () => {
     environment.NODE_ENV = 'production'
-    for (const path of ['/api/health', '/_next/static/chunks/app.js', '/review/11111111-1111-4111-8111-111111111111']) {
+    for (const path of ['/api/health', '/_next/static/chunks/app.js']) {
       const response = document(path)
       expect(response.headers.get('content-security-policy')).toBeNull()
       expect(response.headers.get('cache-control')).not.toBe('no-store')

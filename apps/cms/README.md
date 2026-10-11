@@ -163,7 +163,7 @@ bundle always falls back to the neutral public shell.
 
 ### Staff document CSP
 
-Production staff and Payload admin documents receive a fresh request nonce in
+Production staff, review, and Payload admin documents receive a fresh request nonce in
 `script-src` and allows only same-origin scripts; Next reads the request CSP and applies it to its hydration scripts.
 The policy permits no inline or eval scripts in production, marks staff HTML
 `no-store` and `noindex`, and limits content sources to same-origin resources

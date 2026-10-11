@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 const mutating = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const staffDocumentRoots = new Set([
   'account', 'ai-jobs', 'applications', 'block-gallery', 'content-editor', 'content-tree',
-  'direct-edit', 'editorial', 'integrations', 'leads', 'media', 'operations', 'site', 'themes', 'users',
+  'direct-edit', 'editorial', 'integrations', 'review', 'leads', 'media', 'operations', 'site', 'themes', 'users',
 ])
 
 function isStaffDocument(pathname: string): boolean {
@@ -64,7 +64,7 @@ export function proxy(request: NextRequest) {
 export const config = { matcher: [
   '/api/:path*', '/', '/admin/:path*', '/account/:path*', '/ai-jobs/:path*',
   '/applications/:path*', '/block-gallery/:path*', '/content-editor/:path*',
-  '/content-tree/:path*', '/direct-edit/:path*', '/editorial/:path*',
+  '/content-tree/:path*', '/direct-edit/:path*', '/editorial/:path*', '/review/:path*',
   '/integrations/:path*', '/leads/:path*', '/media/:path*', '/operations/:path*',
   '/site/:path*', '/themes/:path*', '/users/:path*',
 ] }
