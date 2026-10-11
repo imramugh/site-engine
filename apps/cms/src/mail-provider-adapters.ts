@@ -310,7 +310,9 @@ export function microsoftAdapter(fetcher: Fetcher, verifiedSender: string, targe
         });
         if (!draft.ok) fail(draft.status);
         const created = await json(draft); const id = typeof created.id === 'string' ? created.id : '';
+        const actualSender = String((created.from as { emailAddress?: { address?: unknown } } | undefined)?.emailAddress?.address ?? '').trim().toLowerCase()
         if (!opaque(id)) throw new Error('provider_malformed_response');
+        if (target && actualSender !== verifiedSender.toLowerCase()) throw new Error('sender_not_verified')
         for (const attachment of attachments) await graphAttachment(fetcher, token, id, attachment, target);
         const sent = await request(fetcher, `${graph}/v1.0${graphUser(target)}/messages/${encodeURIComponent(id)}/send`, { method: 'POST', headers: graphAuth(token) });
         if (sent.status !== 202) fail(sent.status);

@@ -232,9 +232,12 @@ export async function sendAreaMail(
 
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
   const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher, microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown })) : gmailIdentity(fetcher))(refreshed.accessToken)
-  if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
+  if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender)) && mailbox.connectionMode !== 'app-only') throw new Error('mailbox_sender_not_verified')
   const final = await currentAreaMailbox(payload, area)
   if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
+  // App-only aliases are usable only after an exact confirmed test under this
+  // unchanged credential revision; reconfiguration clears that stored proof.
+  if (final.mailbox.connectionMode === 'app-only' && !(Array.isArray(final.mailbox.verifiedAliases) ? final.mailbox.verifiedAliases.map(normalizedEmail) : []).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
   if (!message.initialOutbound) await groundedProviderThread(payload, message, final.mailbox)
 
   const envelope = {

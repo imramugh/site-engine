@@ -109,3 +109,26 @@ it('anchors app-only Graph drafts to the selected mailbox and refuses a rewritte
   await expect(graph.send('token', { sender: 'shared@example.test', recipient: 'recipient@example.test', subject: 'test', body: 'body' })).rejects.toThrow('sender_not_verified')
   expect(calls).toEqual(['https://graph.microsoft.com/v1.0/users/shared%40example.test/messages'])
 })
+
+it('refuses an app-only rewritten reply sender before Graph send', async () => {
+  const calls: string[] = []
+  const adapter = microsoftAdapter(async url => {
+    calls.push(url)
+    if (url.endsWith('/users/alias%40example.test/messages/original/createReply')) return Response.json({ id: 'reply-draft', from: { emailAddress: { address: 'rewritten@example.test' } } })
+    throw new Error(`unexpected ${url}`)
+  }, 'alias@example.test', 'alias@example.test')
+  await expect(adapter.send('token', { sender: 'alias@example.test', recipient: 'visitor@example.test', subject: 'Reply', body: 'body', threadID: 'thread', replyMessageID: 'original' })).rejects.toThrow('sender_not_verified')
+  expect(calls).toEqual(['https://graph.microsoft.com/v1.0/users/alias%40example.test/messages/original/createReply'])
+})
+
+it('sends an app-only reply only after Graph confirms the exact proven alias', async () => {
+  const calls: string[] = []
+  const adapter = microsoftAdapter(async url => {
+    calls.push(url)
+    if (url.endsWith('/users/shared%40example.test/messages/original/createReply')) return Response.json({ id: 'reply-draft', from: { emailAddress: { address: 'alias@example.test' } } })
+    if (url.endsWith('/users/shared%40example.test/messages/reply-draft/send')) return new Response(null, { status: 202 })
+    throw new Error(`unexpected ${url}`)
+  }, 'alias@example.test', 'shared@example.test')
+  await expect(adapter.send('token', { sender: 'alias@example.test', recipient: 'visitor@example.test', subject: 'Reply', body: 'body', threadID: 'thread', replyMessageID: 'original' })).resolves.toEqual({ accepted: true, id: 'reply-draft' })
+  expect(calls).toEqual(['https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/original/createReply', 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/reply-draft/send'])
+})
