@@ -217,6 +217,12 @@ test('ENG-023 five-tab workspace remains usable at desktop and mobile sizes', as
   expect(desktopGeometry.slice(0, 4).map(card => card.height)).toEqual(Array(4).fill(desktopGeometry[0]!.height))
   expect(desktopGeometry.slice(4).map(card => card.height)).toEqual(Array(4).fill(desktopGeometry[4]!.height))
   expect(desktopGeometry.map(card => card.width)).toEqual(Array(8).fill(desktopGeometry[0]!.width))
+  const headers = await cards.evaluateAll((nodes) => nodes.map((node) => {
+    const title = node.querySelector('header > span:first-child')!.getBoundingClientRect()
+    const status = node.querySelector('header > span:last-child')!.getBoundingClientRect()
+    return { titleBottom: Math.round(title.bottom), statusTop: Math.round(status.top), titleRight: Math.round(title.right), statusLeft: Math.round(status.left) }
+  }))
+  expect(headers.every(({ titleBottom, statusTop, titleRight, statusLeft }) => statusTop - titleBottom >= 8 || titleRight <= statusLeft)).toBe(true)
   for (const provider of ['anthropic', 'openrouter', 'openai-compatible']) {
     const name = owner.page.locator(`[data-provider="${provider}"] strong`)
     await expect(name).toBeVisible()
