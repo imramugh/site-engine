@@ -1,5 +1,8 @@
 import { timingSafeEqual } from 'node:crypto'
 import { syncMailboxInbound } from './mailbox-inbound-sync'
+import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
+import { notificationCredentialRevision, renewMailboxNotifications } from './mailbox-notifications'
+import type { Fetcher } from './mail-provider-adapters'
 
 const noStore = { 'Cache-Control': 'no-store' }
 const workerBudgetMS = 35_000
@@ -12,7 +15,14 @@ export function mailboxSyncWorkerAuthorized(request: Request): boolean {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected)
 }
 
-type CycleDependencies = { sync: typeof syncMailboxInbound; budgetMS?: number }
+type Mailbox = { id: string; provider: 'microsoft' | 'google'; health: string; connectionMode?: 'delegated' | 'app-only'; credentialRevision: string; inboundNextAttemptAt?: string | null; inboundFailureCount?: number }
+type CycleDependencies = {
+  sync: typeof syncMailboxInbound
+  renew?: typeof renewMailboxNotifications
+  mailboxAccessToken?: typeof refreshAndPersistMailboxOAuth
+  fetcher?: Fetcher
+  budgetMS?: number
+}
 let activeCycle: Promise<{ mailbox: string | null; processed: number }> | undefined
 
 /** One CMS writer owns scheduling; overlapping internal requests share its cycle. */
@@ -23,22 +33,56 @@ export function runMailboxSyncCycle(payload: any, dependencies: CycleDependencie
   return operation
 }
 
+const notificationEnabled = (mailbox: Mailbox) => mailbox.provider !== 'google' || Boolean(process.env.MAILBOX_GOOGLE_PUBSUB_TOPIC)
+async function notificationRenewalNeeded(payload: any, mailbox: Mailbox, now: number) {
+  if (!notificationEnabled(mailbox)) return false
+  const found = await payload.find({ collection: 'mailbox-notifications', where: { mailbox: { equals: mailbox.id } }, limit: 1, depth: 0, overrideAccess: true })
+  const current = found.docs[0] as Record<string, unknown> | undefined
+  const binding = notificationCredentialRevision(mailbox)
+  const matches = Boolean(current && current.provider === mailbox.provider && current.credentialRevision === binding)
+  if (matches && typeof current?.nextRenewAttemptAt === 'string' && Date.parse(current.nextRenewAttemptAt) > now) return false
+  return !(matches && current?.status === 'active' && typeof current.expiresAt === 'string' && Date.parse(current.expiresAt) > now + 5 * 60_000)
+}
+
 async function runCycle(payload: any, dependencies: CycleDependencies, now: number) {
   const budget = dependencies.budgetMS ?? workerBudgetMS
   if (!Number.isSafeInteger(budget) || budget < 1 || budget > workerBudgetMS) throw new Error('invalid_worker_budget')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new Error('mailbox_sync_deadline')), budget)
+  const fetcher: Fetcher = async (url, init) => {
+    if (controller.signal.aborted) throw new Error('sync_aborted')
+    const requestSignal = init.signal
+    const signal = requestSignal ? AbortSignal.any([controller.signal, requestSignal]) : controller.signal
+    return (dependencies.fetcher ?? fetch)(url, { ...init, signal })
+  }
   try {
     const candidates = await payload.find({ collection: 'mailbox-configurations', where: { and: [
       { health: { equals: 'connected' } }, { provider: { in: ['microsoft', 'google'] } },
       { or: [{ inboundNextAttemptAt: { exists: false } }, { inboundNextAttemptAt: { less_than_equal: new Date(now).toISOString() } }] },
     ] }, sort: ['inboundLastSyncedAt', 'id'], limit: 1, depth: 0, overrideAccess: true })
-    const mailbox = candidates.docs[0]
+    const mailbox = candidates.docs[0] as Mailbox | undefined
     if (!mailbox || controller.signal.aborted) return { mailbox: null, processed: 0 }
-    const update = (data: Record<string, unknown>) => payload.update({ collection: 'mailbox-configurations', where: { and: [{ id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } }] }, data, overrideAccess: true, context: { mailboxInternal: true } })
+    const dueAt = mailbox.inboundNextAttemptAt ?? null
+    const connectionMode = mailbox.connectionMode === 'app-only' ? 'app-only' : 'delegated'
+    const credentialRevision = mailbox.credentialRevision
+    const update = async (data: Record<string, unknown>) => {
+      const current = await payload.findByID({ collection: 'mailbox-configurations', id: mailbox.id, depth: 0, overrideAccess: true }) as Mailbox
+      // The original due time is a CAS value. A webhook received during polling
+      // advances it to now; this worker must not defer that fresh notification.
+      return payload.update({ collection: 'mailbox-configurations', where: { and: [
+        { id: { equals: mailbox.id } }, { health: { equals: 'connected' } }, { provider: { equals: mailbox.provider } }, { connectionMode: { equals: connectionMode } },
+        ...(connectionMode === 'app-only' ? [{ credentialRevision: { equals: credentialRevision } }] : []), { inboundNextAttemptAt: { equals: dueAt } },
+      ] }, data, overrideAccess: true, context: { mailboxInternal: true } })
+    }
+    if (await notificationRenewalNeeded(payload, mailbox, now) && !controller.signal.aborted) {
+      try {
+        const access = await (dependencies.mailboxAccessToken ?? refreshAndPersistMailboxOAuth)(payload, mailbox, fetcher)
+        await (dependencies.renew ?? renewMailboxNotifications)(payload, mailbox.id, access.accessToken, fetcher, new Date(now))
+      } catch { /* Subscription renewal is best effort; polling remains authoritative. */ }
+    }
     try {
-      const result = await dependencies.sync(payload, mailbox.id, undefined, controller.signal)
-      await update({ inboundLastSyncedAt: new Date(now).toISOString(), inboundNextAttemptAt: new Date(now + 1_000).toISOString(), inboundFailureCount: 0, inboundLastError: null })
+      const result = await dependencies.sync(payload, mailbox.id, fetcher, controller.signal)
+      await update({ inboundLastSyncedAt: new Date(now).toISOString(), inboundNextAttemptAt: new Date(now + 3 * 60_000).toISOString(), inboundFailureCount: 0, inboundLastError: null })
       return { mailbox: mailbox.id, processed: result.processed }
     } catch {
       const failures = Math.min(Number(mailbox.inboundFailureCount ?? 0) + 1, 8)

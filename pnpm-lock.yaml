@@ -224,12 +224,15 @@ importers:
       ipaddr.js:
         specifier: 2.5.0
         version: 2.5.0
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       next:
         specifier: 16.4.0
         version: 16.4.0(@playwright/test@1.64.0)(@types/node@24.19.1)(babel-plugin-macros@3.1.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(sass@1.77.4)
       nodemailer:
-        specifier: 10.0.9
-        version: 10.0.9
+        specifier: 10.1.0
+        version: 10.1.0
       openid-client:
         specifier: 6.8.8
         version: 6.8.8
@@ -273,9 +276,6 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
-      jose:
-        specifier: 6.2.12
-        version: 6.2.12
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -3549,8 +3549,8 @@ packages:
   node-mock-http@1.0.5:
     resolution: {integrity: sha512-KQyt/wLjG3TAc7DOUhpqWzgd4ERxR80JOlTK5VE5R1S12IaPVN5qkj4klBce9HPG1Njuup4Sb5bljaT34lIyjw==}
 
-  nodemailer@10.0.9:
-    resolution: {integrity: sha512-BF0qcyplCwp+jMk6HCjFykBz/YhhZSsxrARhOldLwFWH+8kGjQsd2WIMIZhqEuyXRoGFi0ONbDeWDMDoL8MhLw==}
+  nodemailer@10.1.0:
+    resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
     engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
@@ -7843,7 +7843,7 @@ snapshots:
 
   node-mock-http@1.0.5: {}
 
-  nodemailer@10.0.9: {}
+  nodemailer@10.1.0: {}
 
   normalize-path@3.0.0: {}
 

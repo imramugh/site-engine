@@ -429,3 +429,19 @@ test('ENG-033 lets a fresh Hiring user cancel then send one confirmed applicatio
     await expect(page.getByRole('region', { name: 'Mail timeline' })).toContainText('Confirmed hiring body')
   } finally { await context.close() }
 })
+
+test('ENG-020 receives a Microsoft provider notification, polls the mailbox, and attaches only the existing lead conversation', async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  const page = await context.newPage()
+  try {
+    const fixtureResponse = await page.request.post(origin + '/__e2e/eng020-microsoft-delivery')
+    expect(fixtureResponse.ok(), await fixtureResponse.text()).toBe(true)
+    const fixture = await fixtureResponse.json() as { lead: string; sessionToken: string; matched: string; unmatched: string }
+    await context.addCookies(['site_engine_session', '__Host-site_engine_session'].map(name => ({ name, value: fixture.sessionToken, url: origin, secure: true, httpOnly: true, sameSite: 'Lax' as const })))
+    await page.goto('/leads?lead=' + encodeURIComponent(fixture.lead))
+    const timeline = page.getByRole('region', { name: 'Mail timeline' })
+    await expect(timeline).toContainText(fixture.matched)
+    await expect(timeline).toContainText('Delivered through notification and poll.')
+    await expect(timeline).not.toContainText(fixture.unmatched)
+  } finally { await context.close() }
+})

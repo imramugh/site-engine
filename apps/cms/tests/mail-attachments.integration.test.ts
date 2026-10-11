@@ -29,3 +29,18 @@ test('retrieves only a matched record attachment through the fixed Gmail API pat
   expect(calls.filter(url => url.includes('/attachments/'))).toHaveLength(1)
   expect(calls.find(url => url.includes('/attachments/'))).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/message%2Bopaque/attachments/attachment%2B%2Fopaque')
 })
+
+test('retrieves an app-only Graph attachment through its selected mailbox only', async () => {
+  const { configureMicrosoftAppMailbox } = await import('../src/mailboxes.js')
+  const owner = await payload.create({ collection: 'users', data: { email: 'graph-attachment-owner@example.test', name: 'Graph attachment owner', roles: ['owner'] }, overrideAccess: true })
+  const mailbox = await configureMicrosoftAppMailbox(payload, { name: 'Selected attachment mailbox', tenantID: '33333333-3333-3333-3333-333333333333', clientID: '44444444-4444-4444-4444-444444444444', clientSecret: 'graph-attachment-secret', mailboxAddress: 'graph-selected@example.test', aliases: [] }, owner.id)
+  await (payload as any).update({ collection: 'mailbox-configurations', id: mailbox.id, data: { health: 'connected' }, overrideAccess: true, context: { mailboxInternal: true } })
+  const lead = await payload.create({ collection: 'inquiries', data: { email: 'graph-attachment-visitor@example.test', message: 'lead', topic: 'general', sourcePage: '/', consentedAt: new Date().toISOString(), consentBasis: 'staff-recorded', idempotencyKey: crypto.randomUUID(), stage: 'new' }, overrideAccess: true })
+  const thread = await payload.create({ collection: 'mail-threads', data: { lead: lead.id, mailbox: mailbox.id, provider: 'microsoft', providerConversationID: 'graph-attachment-thread' }, overrideAccess: true })
+  const message = await payload.create({ collection: 'mail-thread-messages', data: { thread: thread.id, lead: lead.id, mailbox: mailbox.id, providerMessageID: 'graph-message', direction: 'inbound', sender: lead.email, recipient: mailbox.primaryAddress, subject: 'Attachment', body: 'body', receivedAt: new Date().toISOString(), attachmentMetadata: [{ name: 'cv.pdf', contentType: 'application/pdf', size: 4, providerAttachmentID: 'graph-attachment' }] }, overrideAccess: true })
+  const calls: string[] = []
+  const fetcher = async (url: string) => { calls.push(url); if (url.includes('/oauth2/v2.0/token')) return Response.json({ access_token: 'graph-download', expires_in: 3600 }); if (url.includes('/users/graph-selected%40example.test/messages/graph-message/attachments/graph-attachment/$value')) return new Response(Buffer.from('file')); throw new Error(`unexpected ${url}`) }
+  await expect(downloadMatchedMailAttachment(payload, { target: 'lead', targetID: lead.id, messageID: message.id, attachment: 0 }, fetcher)).resolves.toMatchObject({ provider: 'microsoft', data: new Uint8Array(Buffer.from('file')) })
+  expect(calls).toContain('https://graph.microsoft.com/v1.0/users/graph-selected%40example.test/messages/graph-message/attachments/graph-attachment/$value')
+  expect(calls.some(url => url.includes('/v1.0/me/'))).toBe(false)
+})

@@ -1,5 +1,5 @@
 import type { Payload } from 'payload'
-import { gmailAttachment, microsoftAttachment, type Fetcher } from './mail-provider-adapters'
+import { gmailAttachment, microsoftAttachment, microsoftMailboxTarget, type Fetcher } from './mail-provider-adapters'
 import { refreshAndPersistMailboxOAuth } from './mailbox-oauth'
 
 const opaque = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 500 && !/[\u0000-\u001f\u007f]/.test(value)
@@ -25,6 +25,6 @@ export async function downloadMatchedMailAttachment(payload: Payload, input: { t
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
   const data = mailbox.provider === 'google'
     ? await gmailAttachment(fetcher)(refreshed.accessToken, String(record.providerMessageID), String(attachmentID))
-    : await microsoftAttachment(fetcher)(refreshed.accessToken, String(record.providerMessageID), String(attachmentID))
+    : await microsoftAttachment(fetcher, microsoftMailboxTarget(mailbox))(refreshed.accessToken, String(record.providerMessageID), String(attachmentID))
   return { data, contentType: contentType(metadata?.contentType), filename: filename(metadata?.name), mailbox: mailboxID, provider: mailbox.provider }
 }

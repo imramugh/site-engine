@@ -14,6 +14,11 @@ export function proxy(request: NextRequest) {
     || request.nextUrl.pathname === '/api/internal/publish-jobs/log'
     || /^\/api\/internal\/(preview-jobs|publish-jobs)\/(claim|renew|complete|fail)$/.test(request.nextUrl.pathname)
   )) return NextResponse.next()
+  // Provider callbacks authenticate their own signatures/state, without staff cookies.
+  if (request.method === 'POST' && (
+    request.nextUrl.pathname === '/api/email-workspace/notifications/microsoft'
+    || request.nextUrl.pathname === '/api/email-workspace/notifications/google'
+  )) return NextResponse.next()
   const expected = process.env.PAYLOAD_PUBLIC_SERVER_URL
   const origin = request.headers.get('origin')
   if (!expected || !origin || origin !== new URL(expected).origin) return new NextResponse('CSRF origin check failed.', { status: 403 })

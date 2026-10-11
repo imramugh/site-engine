@@ -85,6 +85,7 @@ export interface Config {
     'mcp-privacy-settings': McpPrivacySetting;
     'provider-usage-reservations': ProviderUsageReservation;
     'mailbox-configurations': MailboxConfiguration;
+    'mailbox-notifications': MailboxNotification;
     'mailbox-oauth-transactions': MailboxOauthTransaction;
     'mailbox-area-mappings': MailboxAreaMapping;
     'mailbox-test-sends': MailboxTestSend;
@@ -136,6 +137,7 @@ export interface Config {
     'mcp-privacy-settings': McpPrivacySettingsSelect<false> | McpPrivacySettingsSelect<true>;
     'provider-usage-reservations': ProviderUsageReservationsSelect<false> | ProviderUsageReservationsSelect<true>;
     'mailbox-configurations': MailboxConfigurationsSelect<false> | MailboxConfigurationsSelect<true>;
+    'mailbox-notifications': MailboxNotificationsSelect<false> | MailboxNotificationsSelect<true>;
     'mailbox-oauth-transactions': MailboxOauthTransactionsSelect<false> | MailboxOauthTransactionsSelect<true>;
     'mailbox-area-mappings': MailboxAreaMappingsSelect<false> | MailboxAreaMappingsSelect<true>;
     'mailbox-test-sends': MailboxTestSendsSelect<false> | MailboxTestSendsSelect<true>;
@@ -846,6 +848,10 @@ export interface MailboxConfiguration {
   name: string;
   provider: 'smtp' | 'microsoft' | 'google';
   primaryAddress: string;
+  connectionMode?: ('delegated' | 'app-only') | null;
+  tenantID?: string | null;
+  clientID?: string | null;
+  mailboxAddress?: string | null;
   aliases:
     | {
         [k: string]: unknown;
@@ -878,6 +884,30 @@ export interface MailboxConfiguration {
   inboundFailureCount?: number | null;
   inboundLastError?: string | null;
   inboundLastSyncedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-notifications".
+ */
+export interface MailboxNotification {
+  id: string;
+  mailbox: string | MailboxConfiguration;
+  provider: 'microsoft' | 'google';
+  credentialRevision: string;
+  subscriptionID?: string | null;
+  clientStateHash?: string | null;
+  resource?: string | null;
+  topic?: string | null;
+  expiresAt?: string | null;
+  status: 'pending' | 'active' | 'expired' | 'revoked' | 'failed';
+  renewFailureCount: number;
+  nextRenewAttemptAt?: string | null;
+  lastNotificationAt?: string | null;
+  lastRenewedAt?: string | null;
+  failureCode?: string | null;
+  replayKey?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1223,6 +1253,7 @@ export interface MailThreadMessage {
     | number
     | boolean
     | null;
+  messageLink?: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1729,6 +1760,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'mailbox-configurations';
         value: string | MailboxConfiguration;
+      } | null)
+    | ({
+        relationTo: 'mailbox-notifications';
+        value: string | MailboxNotification;
       } | null)
     | ({
         relationTo: 'mailbox-oauth-transactions';
@@ -2337,6 +2372,10 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   name?: T;
   provider?: T;
   primaryAddress?: T;
+  connectionMode?: T;
+  tenantID?: T;
+  clientID?: T;
+  mailboxAddress?: T;
   aliases?: T;
   verifiedAliases?: T;
   host?: T;
@@ -2353,6 +2392,29 @@ export interface MailboxConfigurationsSelect<T extends boolean = true> {
   inboundFailureCount?: T;
   inboundLastError?: T;
   inboundLastSyncedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "mailbox-notifications_select".
+ */
+export interface MailboxNotificationsSelect<T extends boolean = true> {
+  mailbox?: T;
+  provider?: T;
+  credentialRevision?: T;
+  subscriptionID?: T;
+  clientStateHash?: T;
+  resource?: T;
+  topic?: T;
+  expiresAt?: T;
+  status?: T;
+  renewFailureCount?: T;
+  nextRenewAttemptAt?: T;
+  lastNotificationAt?: T;
+  lastRenewedAt?: T;
+  failureCode?: T;
+  replayKey?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -2566,6 +2628,7 @@ export interface MailThreadMessagesSelect<T extends boolean = true> {
   body?: T;
   receivedAt?: T;
   attachmentMetadata?: T;
+  messageLink?: T;
   updatedAt?: T;
   createdAt?: T;
 }

@@ -5,18 +5,21 @@ import ipaddr from 'ipaddr.js'
 import nodemailer from 'nodemailer'
 import type { Payload, PayloadRequest } from 'payload'
 import { withPayloadTransaction } from './auth-transaction'
-import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, type Fetcher, type VerifiedAttachment } from './mail-provider-adapters'
-import { mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
+import { gmailAdapter, gmailIdentity, microsoftAdapter, microsoftIdentity, microsoftMailboxTarget, type Fetcher, type VerifiedAttachment } from './mail-provider-adapters'
+import { encryptMicrosoftAppOnlyCredential, mailboxOAuthSettings, refreshAndPersistMailboxOAuth } from './mailbox-oauth'
+import { revokeMailboxNotifications } from './mailbox-notifications'
 
 export const mailboxAreas = ['leads', 'careers', 'notifications'] as const
 export type MailboxArea = (typeof mailboxAreas)[number]
 export type MailboxSecurity = 'starttls' | 'tls'
+export type MicrosoftAppConfiguration = { id?: string; name: string; tenantID: string; clientID: string; clientSecret?: string; mailboxAddress: string; aliases: string[] }
 export type SMTPConfiguration = { id?: string; name: string; primaryAddress: string; aliases: string[]; host: string; port: number; security: MailboxSecurity; username: string; password?: string }
 type StoredMailbox = Record<string, unknown> & { id: string; encryptedCredential?: string | null }
 type Transport = { verify(): Promise<unknown>; sendMail(message: Record<string, unknown>): Promise<{ messageId?: string }> }
 
 const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const hostname = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
+const tenantUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const normalizedEmail = (value: string) => value.trim().toLowerCase()
 const relationID = (value: unknown) => typeof value === 'string' ? value : String((value as { id?: string } | null)?.id ?? '')
@@ -63,7 +66,7 @@ async function smtpTransport(mailbox: StoredMailbox): Promise<Transport> {
 const internal = (req: PayloadRequest) => { req.context.mailboxInternal = true; return req }
 export function publicMailbox(doc: StoredMailbox) {
   const provider = doc.provider === 'microsoft' || doc.provider === 'google' ? doc.provider : 'smtp'
-  const base = { id: doc.id, name: doc.name, provider, primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null }
+  const base = { id: doc.id, name: doc.name, provider, primaryAddress: doc.primaryAddress, aliases: Array.isArray(doc.aliases) ? doc.aliases : [], verifiedAliases: Array.isArray(doc.verifiedAliases) ? doc.verifiedAliases : [], health: doc.health ?? 'unknown', testedAt: doc.testedAt ?? null, credentialConfigured: Boolean(doc.encryptedCredential), credentialHint: doc.credentialRevision ? `configured • ${doc.credentialRevision}` : null, connectionMode: doc.connectionMode === 'app-only' ? 'app-only' : 'delegated', tenantID: typeof doc.tenantID === 'string' ? doc.tenantID : null, clientID: typeof doc.clientID === 'string' ? doc.clientID : null, mailboxAddress: typeof doc.mailboxAddress === 'string' ? doc.mailboxAddress : null, syncStatus: doc.inboundLastError ? 'error' : doc.inboundLastSyncedAt ? 'synced' : 'not-synced' }
   return provider === 'smtp' ? { ...base, host: doc.host, port: doc.port, security: doc.security, username: doc.username } : base
 }
 
@@ -86,6 +89,27 @@ export async function configureSMTPMailbox(payload: Payload, input: SMTPConfigur
   })
 }
 
+export async function configureMicrosoftAppMailbox(payload: Payload, input: MicrosoftAppConfiguration, actor: string) {
+  const name = input.name.trim(); const primaryAddress = normalizedEmail(input.mailboxAddress); const aliases = [...new Set(input.aliases.map(normalizedEmail))].filter(alias => alias !== primaryAddress)
+  if (!name || name.length > 120 || !tenantUUID.test(input.tenantID) || !tenantUUID.test(input.clientID) || !email.test(primaryAddress) || aliases.length > 20 || aliases.some(alias => !email.test(alias))) throw new Error('Mailbox configuration is invalid.')
+  return withPayloadTransaction(payload, async transaction => {
+    const req = internal(transaction); const existing = input.id ? await payload.findByID({ collection: 'mailbox-configurations', id: input.id, depth: 0, overrideAccess: true, req }) as unknown as StoredMailbox : undefined
+    if (existing && existing.provider !== 'microsoft') throw new Error('Mailbox configuration is invalid.')
+    const secret = input.clientSecret ? encryptMicrosoftAppOnlyCredential(input.clientSecret) : existing?.encryptedCredential
+    if (!secret) throw new Error('Mailbox configuration is invalid.')
+    const credentialRevision = input.clientSecret ? randomBytes(8).toString('hex') : String(existing?.credentialRevision || randomBytes(8).toString('hex'))
+    const changed = Boolean(existing && (String(existing.tenantID ?? '').toLowerCase() !== input.tenantID.toLowerCase() || String(existing.clientID ?? '').toLowerCase() !== input.clientID.toLowerCase() || normalizedEmail(String(existing.mailboxAddress ?? existing.primaryAddress ?? '')) !== primaryAddress || JSON.stringify((Array.isArray(existing.aliases) ? existing.aliases : []).map(normalizedEmail).sort()) !== JSON.stringify(aliases.slice().sort()) || input.clientSecret))
+    const verifiedAliases = !changed && Array.isArray(existing?.verifiedAliases) ? existing.verifiedAliases.map(normalizedEmail).filter(address => [primaryAddress, ...aliases].includes(address)) : []
+    if (existing) {
+      const mappings = await payload.find({ collection: 'mailbox-area-mappings', where: { mailbox: { equals: existing.id } }, limit: mailboxAreas.length, depth: 0, overrideAccess: true, req })
+      if (mappings.docs.some(mapping => !verifiedAliases.includes(normalizedEmail(String(mapping.senderAddress))))) throw new Error('Unassign this mailbox sender before removing or changing its address.')
+    }
+    const data = { name, provider: 'microsoft' as const, connectionMode: 'app-only' as const, tenantID: input.tenantID.toLowerCase(), clientID: input.clientID.toLowerCase(), mailboxAddress: primaryAddress, primaryAddress, aliases, verifiedAliases, host: 'oauth', port: 1, security: 'tls' as const, username: primaryAddress, encryptedCredential: secret, credentialRevision, health: 'unknown' as const, testedAt: null }
+    const saved = existing ? await payload.update({ collection: 'mailbox-configurations', id: existing.id, data: data as never, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-configurations', data: data as never, overrideAccess: true, req })
+    await payload.create({ collection: 'audit-events', data: { event: existing ? 'mailbox.configuration_updated' : 'mailbox.configuration_created', user: actor, actor, detail: { mailbox: (saved as any).id, provider: 'microsoft', connectionMode: 'app-only', credentialRevision } }, overrideAccess: true, req }); return saved
+  })
+}
+
 export async function testSMTPMailbox(payload: Payload, id: string, actor: string) {
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
   let health: 'connected' | 'rejected' | 'unavailable' = 'unavailable'
@@ -93,10 +117,30 @@ export async function testSMTPMailbox(payload: Payload, id: string, actor: strin
   return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const saved = await payload.update({ collection: 'mailbox-configurations', id, data: { health, testedAt: new Date().toISOString() }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.connection_tested', user: actor, actor, detail: { mailbox: id, health } }, overrideAccess: true, req }); return saved })
 }
 
+export async function testMailboxConnection(payload: Payload, id: string, actor: string, fetcher: Fetcher = fetch) {
+  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
+  if (mailbox.provider === 'smtp') return testSMTPMailbox(payload, id, actor)
+  let health: 'connected' | 'rejected' | 'unavailable' = 'unavailable'
+  try { const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher); const target = mailbox.provider === 'microsoft' ? microsoftMailboxTarget(mailbox as any) : undefined; const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher, target) : gmailIdentity(fetcher))(refreshed.accessToken); if (!identity.primaryAddress) throw new Error('provider_identity_missing'); health = 'connected' } catch (error) { health = error instanceof Error && /unauthorized|forbidden|rejected/i.test(error.message) ? 'rejected' : 'unavailable' }
+  return withPayloadTransaction(payload, async transaction => { const req = internal(transaction); const saved = await payload.update({ collection: 'mailbox-configurations', id, data: { health, testedAt: new Date().toISOString() }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.connection_tested', user: actor, actor, detail: { mailbox: id, health } }, overrideAccess: true, req }); return saved })
+}
+
+export async function revokeMailbox(payload: Payload, id: string, actor: string, fetcher: Fetcher = fetch) {
+  const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id, depth: 0, overrideAccess: true }) as unknown as StoredMailbox
+  // Provider cleanup cannot prevent local revocation: stale credentials and mappings must
+  // become unusable even when the provider is unavailable.
+  if (mailbox.provider === 'microsoft' || mailbox.provider === 'google') {
+    try { const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher); await revokeMailboxNotifications(payload, id, refreshed.accessToken, fetcher) } catch { /* best effort; local state is revoked below */ }
+  }
+  return withPayloadTransaction(payload, async transaction => { const req = internal(transaction); const mappings = await payload.find({ collection: 'mailbox-area-mappings', where: { mailbox: { equals: id } }, limit: mailboxAreas.length, depth: 0, overrideAccess: true, req }); for (const mapping of mappings.docs) await payload.delete({ collection: 'mailbox-area-mappings', id: mapping.id, overrideAccess: true, req }); const notifications = await payload.find({ collection: 'mailbox-notifications' as never, where: { mailbox: { equals: id } }, limit: 20, depth: 0, overrideAccess: true, req }); for (const notification of notifications.docs as any[]) await payload.update({ collection: 'mailbox-notifications' as never, id: notification.id, data: { status: 'revoked', failureCode: 'mailbox_revoked', subscriptionID: null, expiresAt: null, replayKey: null } as never, overrideAccess: true, req }); const saved = await payload.update({ collection: 'mailbox-configurations', id, data: { encryptedCredential: null, aliases: [], verifiedAliases: [], health: 'revoked', testedAt: new Date().toISOString(), credentialRevision: randomBytes(8).toString('hex') } as never, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.configuration_revoked', user: actor, actor, detail: { mailbox: id, provider: mailbox.provider, mappingsCleared: mappings.docs.length } }, overrideAccess: true, req }); return saved })
+}
+
 export async function setMailboxArea(payload: Payload, input: { area: MailboxArea; mailbox: string; senderAddress: string }, actor: string) {
   if (!mailboxAreas.includes(input.area) || !uuid.test(input.mailbox)) throw new Error('Mailbox mapping is invalid.')
   const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: input.mailbox, depth: 0, overrideAccess: true }) as unknown as StoredMailbox; const senderAddress = normalizedEmail(input.senderAddress)
-  if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(String) : [])].includes(senderAddress)) throw new Error('Sender address has not been verified on this mailbox.')
+  const verified = Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(normalizedEmail) : []
+  const allowed = mailbox.connectionMode === 'app-only' ? verified : [normalizedEmail(String(mailbox.primaryAddress)), ...verified]
+  if (!allowed.includes(senderAddress)) throw new Error('Sender address has not been verified on this mailbox.')
   return withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const current = await payload.find({ collection: 'mailbox-area-mappings', where: { area: { equals: input.area } }, limit: 1, depth: 0, overrideAccess: true, req }); const saved = current.docs[0] ? await payload.update({ collection: 'mailbox-area-mappings', id: current.docs[0].id, data: { mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }) : await payload.create({ collection: 'mailbox-area-mappings', data: { area: input.area, mailbox: input.mailbox, senderAddress }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.area_mapped', user: actor, actor, detail: { area: input.area, mailbox: input.mailbox, senderAddress } }, overrideAccess: true, req }); return saved })
 }
 
@@ -187,10 +231,13 @@ export async function sendAreaMail(
   } else await groundedProviderThread(payload, message, mailbox)
 
   const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
-  const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher) : gmailIdentity(fetcher))(refreshed.accessToken)
-  if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
+  const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher, microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown })) : gmailIdentity(fetcher))(refreshed.accessToken)
+  if (!identity.verifiedSenders.map(normalizedEmail).includes(normalizedEmail(message.sender)) && mailbox.connectionMode !== 'app-only') throw new Error('mailbox_sender_not_verified')
   const final = await currentAreaMailbox(payload, area)
   if (final.mailboxID !== mailboxID || final.mailbox.provider !== mailbox.provider || final.mailbox.health !== 'connected' || final.mailbox.credentialRevision !== refreshed.credentialRevision || normalizedEmail(message.sender) !== normalizedEmail(String(final.mapping.senderAddress))) throw new Error('mailbox_not_ready')
+  // App-only aliases are usable only after an exact confirmed test under this
+  // unchanged credential revision; reconfiguration clears that stored proof.
+  if (final.mailbox.connectionMode === 'app-only' && !(Array.isArray(final.mailbox.verifiedAliases) ? final.mailbox.verifiedAliases.map(normalizedEmail) : []).includes(normalizedEmail(message.sender))) throw new Error('mailbox_sender_not_verified')
   if (!message.initialOutbound) await groundedProviderThread(payload, message, final.mailbox)
 
   const envelope = {
@@ -205,7 +252,7 @@ export async function sendAreaMail(
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
   }
   const result = await (mailbox.provider === 'microsoft'
-    ? microsoftAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope)
+    ? microsoftAdapter(fetcher, message.sender, microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown })).send(refreshed.accessToken, envelope)
     : gmailAdapter(fetcher, message.sender).send(refreshed.accessToken, envelope))
   const delivered = { provider: mailbox.provider, messageID: 'id' in result ? result.id : null }
   return message.initialOutbound && 'threadID' in result ? { ...delivered, threadID: result.threadID } : delivered
@@ -213,34 +260,40 @@ export async function sendAreaMail(
 
 const sendLocks = new Map<string, Promise<void>>()
 async function exclusively<T>(key: string, operation: () => Promise<T>) { const previous = sendLocks.get(key) ?? Promise.resolve(); let release: () => void = () => undefined; const current = new Promise<void>((resolve) => { release = resolve }); sendLocks.set(key, current); await previous; try { return await operation() } finally { release(); if (sendLocks.get(key) === current) sendLocks.delete(key) } }
-export async function sendAuthorizedMailboxTest(payload: Payload, input: { requestKey: string; mailbox: string; senderAddress: string; recipientAddress: string; subject: string; body: string; confirmed: boolean }, actor: string) {
+export async function sendAuthorizedMailboxTest(payload: Payload, input: { requestKey: string; mailbox: string; senderAddress: string; recipientAddress: string; subject: string; body: string; confirmed: boolean }, actor: string, fetcher: Fetcher = fetch) {
   if (!uuid.test(input.requestKey) || !uuid.test(input.mailbox) || input.confirmed !== true || !email.test(normalizedEmail(input.recipientAddress)) || !input.subject.trim() || input.subject.length > 200 || !input.body.trim() || input.body.length > 10_000) throw new Error('Explicit confirmation of a valid test message is required.')
   return exclusively(input.requestKey, async () => {
     const exact = { mailbox: input.mailbox, senderAddress: normalizedEmail(input.senderAddress), recipientAddress: normalizedEmail(input.recipientAddress), subject: input.subject.trim(), body: input.body.trim() }; const digest = requestHash(exact)
     const prior = await payload.find({ collection: 'mailbox-test-sends', where: { requestKey: { equals: input.requestKey } }, limit: 1, depth: 0, overrideAccess: true }); if (prior.docs[0]) { if (prior.docs[0].requestHash !== digest) throw new Error('Test-send request key was already used for different content.'); return prior.docs[0] }
     const mailbox = await payload.findByID({ collection: 'mailbox-configurations', id: input.mailbox, depth: 0, overrideAccess: true }) as unknown as StoredMailbox; if (mailbox.health !== 'connected') throw new Error('Mailbox connection must be tested before sending.')
-    if (![String(mailbox.primaryAddress), ...(Array.isArray(mailbox.aliases) ? mailbox.aliases.map(String) : [])].includes(exact.senderAddress)) throw new Error('Sender address is not configured on this mailbox.')
+    if (![normalizedEmail(String(mailbox.primaryAddress)), ...(Array.isArray(mailbox.aliases) ? mailbox.aliases.map(normalizedEmail) : [])].includes(exact.senderAddress)) throw new Error('Sender address is not configured on this mailbox.')
     const claim = await withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); const created = await payload.create({ collection: 'mailbox-test-sends', data: { requestKey: input.requestKey, requestHash: digest, mailbox: input.mailbox, senderAddress: exact.senderAddress, recipientAddress: exact.recipientAddress, authorizedBy: actor, state: 'sending' }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_authorized', user: actor, actor, detail: { mailbox: input.mailbox, testSend: created.id, requestHash: digest } }, overrideAccess: true, req }); return created })
     try {
-      const result = await (await smtpTransport(mailbox)).sendMail({ from: exact.senderAddress, to: exact.recipientAddress, subject: exact.subject, text: exact.body })
+      let providerMessageID: string | undefined; let providerConfirmedSender: string | undefined
+      if (mailbox.provider === 'smtp') providerMessageID = (await (await smtpTransport(mailbox)).sendMail({ from: exact.senderAddress, to: exact.recipientAddress, subject: exact.subject, text: exact.body })).messageId
+      else if (mailbox.provider === 'microsoft' || mailbox.provider === 'google') {
+        const refreshed = await refreshAndPersistMailboxOAuth(payload, mailbox, fetcher)
+        const target = mailbox.provider === 'microsoft' ? microsoftMailboxTarget(mailbox as { connectionMode?: unknown; mailboxAddress?: unknown; primaryAddress?: unknown }) : undefined
+        const identity = await (mailbox.provider === 'microsoft' ? microsoftIdentity(fetcher, target) : gmailIdentity(fetcher))(refreshed.accessToken)
+        if (mailbox.provider === 'microsoft' && target && normalizedEmail(identity.primaryAddress) !== target) throw new Error('provider_identity_missing')
+        if (!identity.verifiedSenders.map(normalizedEmail).includes(exact.senderAddress) && !(mailbox.provider === 'microsoft' && target)) throw new Error('mailbox_sender_not_verified')
+        const result = mailbox.provider === 'microsoft' ? await microsoftAdapter(fetcher, exact.senderAddress, target).send(refreshed.accessToken, { sender: exact.senderAddress, recipient: exact.recipientAddress, subject: exact.subject, body: exact.body }) : await gmailAdapter(fetcher, exact.senderAddress).send(refreshed.accessToken, { sender: exact.senderAddress, recipient: exact.recipientAddress, subject: exact.subject, body: exact.body })
+        providerMessageID = typeof result.id === 'string' ? result.id : undefined
+        providerConfirmedSender = typeof (result as unknown as { actualSender?: unknown }).actualSender === 'string' ? (result as unknown as { actualSender: string }).actualSender : exact.senderAddress
+        if (mailbox.provider === 'microsoft' && target && normalizedEmail(providerConfirmedSender) !== exact.senderAddress) throw new Error('mailbox_sender_not_verified')
+      } else throw new Error('mailbox_not_ready')
       return withPayloadTransaction(payload, async (transaction) => {
-        const req = internal(transaction)
-        const sent = await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'sent', providerMessageID: result.messageId?.slice(0, 500) }, overrideAccess: true, req })
-        const aliases = Array.isArray(mailbox.aliases) ? mailbox.aliases.map(String) : []
-        const verified = Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(String) : []
-        if (aliases.includes(exact.senderAddress) && !verified.includes(exact.senderAddress)) {
-          await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { verifiedAliases: [...verified, exact.senderAddress] }, overrideAccess: true, req })
-        }
+        const req = internal(transaction); const sent = await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'sent', providerMessageID: providerMessageID?.slice(0, 500) }, overrideAccess: true, req })
+        const aliases = [normalizedEmail(String(mailbox.primaryAddress)), ...(Array.isArray(mailbox.aliases) ? mailbox.aliases.map(normalizedEmail) : [])]
+        const verified = Array.isArray(mailbox.verifiedAliases) ? mailbox.verifiedAliases.map(normalizedEmail) : []
+        const proofRequired = mailbox.provider === 'smtp' || mailbox.connectionMode === 'app-only'
+        if (proofRequired && aliases.includes(exact.senderAddress) && !verified.includes(exact.senderAddress)) await payload.update({ collection: 'mailbox-configurations', id: mailbox.id, data: { verifiedAliases: [...verified, exact.senderAddress] }, overrideAccess: true, req })
         await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'sent', senderVerified: exact.senderAddress } }, overrideAccess: true, req })
         return sent
       })
     } catch {
-      await withPayloadTransaction(payload, async (transaction) => {
-        const req = internal(transaction)
-        await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'failed', failureCode: 'provider_unavailable' }, overrideAccess: true, req })
-        await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'failed' } }, overrideAccess: true, req })
-      })
-      throw new Error('SMTP test message could not be delivered.')
+      await withPayloadTransaction(payload, async (transaction) => { const req = internal(transaction); await payload.update({ collection: 'mailbox-test-sends', id: claim.id, data: { state: 'failed', failureCode: 'provider_unavailable' }, overrideAccess: true, req }); await payload.create({ collection: 'audit-events', data: { event: 'mailbox.test_send_completed', user: actor, actor, detail: { mailbox: input.mailbox, testSend: claim.id, state: 'failed' } }, overrideAccess: true, req }) })
+      throw new Error('Mailbox test message could not be delivered.')
     }
   })
 }

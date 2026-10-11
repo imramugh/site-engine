@@ -641,6 +641,7 @@ export const MailThreadMessages: CollectionConfig = {
     { name: 'providerMessageID', type: 'text', required: true, maxLength: 500 }, { name: 'rfcMessageID', type: 'text', maxLength: 500 }, { name: 'rfcReferences', type: 'text', maxLength: 4_000 }, { name: 'direction', type: 'select', required: true, options: ['inbound', 'outbound'] },
     { name: 'sender', type: 'text', required: true, maxLength: 320 }, { name: 'recipient', type: 'text', required: true, maxLength: 320 }, { name: 'subject', type: 'text', required: true, maxLength: 500 },
     { name: 'body', type: 'textarea', required: true, maxLength: 20_000 }, { name: 'receivedAt', type: 'date', required: true }, { name: 'attachmentMetadata', type: 'json', defaultValue: [] },
+    { name: 'messageLink', type: 'text', maxLength: 2000 },
   ],
 }
 
