@@ -27,7 +27,7 @@ const databasePath = join(tmpdir(), `site-engine-oauth-${process.pid}.sqlite`);
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' });
 let currentUser = 'synthetic-user';
 let userEnabled = true;
-let currentScopes = ['mcp:content:read', 'mcp:leads:read'];
+let currentScopes = ['mcp:content:read', 'mcp:content:write', 'mcp:leads:read'];
 let bridgeAvailable = true;
 let bridgeAuthenticated = true;
 let currentSessionId = `${currentUser}-session`;
@@ -52,13 +52,14 @@ await new Promise<void>((resolve) => service.server.listen(port, '127.0.0.1', re
 try {
   const protectedMetadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(protectedMetadata.status, 200);
-  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'] });
+  assert.deepEqual(await protectedMetadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'] });
 
   const discovery = await fetch(`${issuer}/.well-known/openid-configuration`);
   assert.equal(discovery.status, 200);
-  const metadata = await discovery.json() as { issuer: string; registration_endpoint: string; token_endpoint: string };
+  const metadata = await discovery.json() as { issuer: string; registration_endpoint: string; token_endpoint: string; scopes_supported: string[] };
   assert.equal(metadata.issuer, issuer);
   assert.equal(metadata.registration_endpoint, `${issuer}/reg`);
+  assert.ok(metadata.scopes_supported.includes('mcp:content:publish'));
   assert.equal((await fetch(`${origin}/.well-known/oauth-authorization-server/oauth`)).status, 200);
 
   const rejectedRegistration = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://evil.example/callback'], token_endpoint_auth_method: 'none', response_types: ['code'] }) });
@@ -98,7 +99,7 @@ try {
   assert.equal(nonStringScopeRegistration.status, 400);
   assert.equal(registrationFailures.at(-1), 'unsupported_scope');
 
-  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read mcp:leads:read offline_access' }) });
+  const registered = await fetch(`${issuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Synthetic protocol client', redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'], scope: 'mcp:content:read mcp:content:write mcp:content:publish mcp:leads:read offline_access' }) });
   assert.equal(registered.status, 201);
   const client = await registered.json() as { client_id: string; application_type: string };
   assert.equal(client.application_type, 'native');
@@ -107,7 +108,7 @@ try {
   const secondClient = await registeredSecond.json() as { client_id: string };
 
   const authorization = new URL(`${issuer}/auth`);
-  authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read mcp:leads:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
+  authorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read mcp:content:write mcp:leads:read offline_access', resource, state: 'state-value', code_challenge: challenge, code_challenge_method: 'S256' }).toString();
   const authWithoutResource = new URL(authorization);
   authWithoutResource.searchParams.delete('resource');
   assert.equal((await fetch(authWithoutResource, { redirect: 'manual' })).status, 400);
@@ -215,8 +216,9 @@ try {
   assert.equal(activeBody.active, true);
   assert.equal(activeBody.clientId, client.client_id);
   assert.equal(activeBody.resource, resource);
-  assert.deepEqual(activeBody.scopes, ['mcp:content:read', 'mcp:leads:read']);
+  assert.deepEqual(activeBody.scopes, ['mcp:content:read', 'mcp:content:write', 'mcp:leads:read']);
   assert.equal(activeBody.scopes.includes('mcp:leads:write'), false, 'a token consented before the write scope cannot gain it implicitly');
+  assert.equal(activeBody.scopes.includes('mcp:content:publish'), false, 'a content-write-era grant cannot gain publication authority implicitly');
   assert.equal(activeBody.userId, 'synthetic-user');
   assert.equal(activeBody.sessionId, 'synthetic-user-session');
   assert.equal(typeof activeBody.expiresAt, 'number');
@@ -238,10 +240,15 @@ try {
   for (const secret of [tokens.access_token, tokens.refresh_token, code]) assert.equal(issuedPayloads.includes(secret), false);
   assert.equal(issuedPayloads.includes('__adapter_lookup_id__'), true);
 
+  const draftRefreshEscalation = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource, scope: 'mcp:content:publish' }) });
+  assert.equal(draftRefreshEscalation.status, 400, 'a draft-only refresh token cannot request publication authority');
   const refreshed = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(refreshed.status, 200);
   const rotated = await refreshed.json() as { access_token: string; refresh_token: string };
   assert.ok(rotated.refresh_token);
+  const refreshedActive = await introspection(rotated.access_token);
+  assert.equal(refreshedActive.status, 200);
+  assert.equal((await refreshedActive.json() as { scopes: string[] }).scopes.includes('mcp:content:publish'), false, 'refresh cannot escalate a draft-only grant to publication authority');
   const descendant = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rotated.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(descendant.status, 200);
   const descendantTokens = await descendant.json() as { access_token: string; refresh_token: string };
@@ -250,7 +257,7 @@ try {
   currentScopes = [];
   const narrowedRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: descendantTokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(narrowedRefresh.status, 400);
-  currentScopes = ['mcp:content:read', 'mcp:leads:read'];
+  currentScopes = ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:leads:read'];
   userEnabled = false;
   const disabledRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: descendantTokens.refresh_token, client_id: client.client_id, resource }) });
   assert.equal(disabledRefresh.status, 400);
@@ -259,6 +266,56 @@ try {
   assert.equal(reusedRefresh.status, 400);
   const revokedDescendant = db.prepare('SELECT COUNT(*) AS count FROM oidc_records WHERE model IN (?, ?) AND id_hash IN (?, ?)').get('AccessToken', 'RefreshToken', createHash('sha256').update(descendantTokens.access_token).digest('base64url'), createHash('sha256').update(descendantTokens.refresh_token).digest('base64url')) as { count: number };
   assert.equal(revokedDescendant.count, 0);
+
+  currentScopes = ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:leads:read'];
+  const publishVerifier = randomBytes(48).toString('base64url');
+  const publishAuthorization = new URL(authorization);
+  publishAuthorization.search = new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read mcp:content:write mcp:content:publish mcp:leads:read offline_access', resource, state: 'publish-state', code_challenge: createHash('sha256').update(publishVerifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
+  const publishStart = await fetch(publishAuthorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(publishStart.status, 303);
+  for (const value of publishStart.headers.getSetCookie()) {
+    const [pair] = value.split(';', 1);
+    cookies.set(pair!.split('=', 1)[0]!, pair!);
+  }
+  let publishNext = new URL(publishStart.headers.get('location')!, issuer);
+  let publishCallback: URL | undefined;
+  let publicationConsentShown = false;
+  for (let redirects = 0; redirects < 8; redirects++) {
+    const response = await fetch(publishNext, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+    if (response.status === 200) {
+      const page = await response.text();
+      publicationConsentShown ||= page.includes('Approve and publish reviewed content on your behalf.');
+      const csrf = /name="csrf" value="([^"]+)"/.exec(page)?.[1];
+      assert.ok(csrf, 'publication consent must include CSRF confirmation');
+      const confirmed = await fetch(publishNext, { method: 'POST', redirect: 'manual', headers: { cookie: [...cookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf, decision: 'allow' }) });
+      assert.equal(confirmed.status, 303);
+      publishNext = new URL(confirmed.headers.get('location')!, issuer);
+      continue;
+    }
+    assert.equal(response.status, 303);
+    for (const value of response.headers.getSetCookie()) {
+      const [pair] = value.split(';', 1);
+      cookies.set(pair!.split('=', 1)[0]!, pair!);
+    }
+    const location = response.headers.get('location');
+    assert.ok(location, 'missing OAuth redirect');
+    const redirect = new URL(location!, issuer);
+    if (redirect.origin === 'http://127.0.0.1' && redirect.pathname === '/callback') { publishCallback = redirect; break; }
+    publishNext = redirect;
+  }
+  assert.equal(publicationConsentShown, true, 'publication scope must be shown before it is granted');
+  const publishCode = publishCallback?.searchParams.get('code');
+  assert.ok(publishCode, 'publication authorization did not reach the callback');
+  const publishToken = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: publishCode, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: publishVerifier, resource }) });
+  assert.equal(publishToken.status, 200);
+  const publishTokens = await publishToken.json() as { access_token: string; refresh_token: string };
+  const publishActive = await introspection(publishTokens.access_token);
+  assert.equal(publishActive.status, 200);
+  assert.equal((await publishActive.json() as { scopes: string[] }).scopes.includes('mcp:content:publish'), true, 'an explicitly consented publication grant has the publication scope');
+  currentScopes = ['mcp:content:read', 'mcp:content:write', 'mcp:leads:read'];
+  const roleDeniedPublishRefresh = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: publishTokens.refresh_token, client_id: client.client_id, resource }) });
+  assert.equal(roleDeniedPublishRefresh.status, 400, 'a session bridge without publication eligibility cannot refresh a publication grant');
+  currentScopes = ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:leads:read'];
 
   userEnabled = false;
   const disabledAuthorization = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });

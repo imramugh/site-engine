@@ -16,11 +16,11 @@ test('HTTP CMS bridge sends only the CMS session cookie and accepts the exact mi
     cmsOrigin: 'http://cms.test:3001', secret: 'shared-secret',
     fetch: async (url, init) => {
       received = { url: String(url), headers: new Headers(init?.headers), body: String(init?.body), redirect: init?.redirect }
-      return Response.json({ user: { id: 'user-1', sessionId: 'session-1', scopes: ['mcp:content:read'] } })
+      return Response.json({ user: { id: 'user-1', sessionId: 'session-1', scopes: ['mcp:content:read', 'mcp:content:publish'] } })
     },
   })
   assert.deepEqual(await bridge.resolve(incoming('unrelated=value; site_engine_session=opaque-session; another=other')), {
-    id: 'user-1', sessionId: 'session-1', enabled: true, scopes: ['mcp:content:read'],
+    id: 'user-1', sessionId: 'session-1', enabled: true, scopes: ['mcp:content:read', 'mcp:content:publish'],
   })
   assert.equal(received.url, 'http://cms.test:3001/api/internal/oauth/session')
   assert.equal(received.headers?.get('cookie'), 'site_engine_session=opaque-session')
@@ -28,7 +28,7 @@ test('HTTP CMS bridge sends only the CMS session cookie and accepts the exact mi
   assert.equal(received.redirect, 'error')
   assert.deepEqual(JSON.parse(received.body ?? ''), { operation: 'resolve' })
   assert.deepEqual(await bridge.find('user-1', 'session-1'), {
-    id: 'user-1', sessionId: 'session-1', enabled: true, scopes: ['mcp:content:read'],
+    id: 'user-1', sessionId: 'session-1', enabled: true, scopes: ['mcp:content:read', 'mcp:content:publish'],
   })
   assert.deepEqual(JSON.parse(received.body ?? ''), { operation: 'validate', userId: 'user-1', sessionId: 'session-1' })
 })

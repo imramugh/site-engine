@@ -8,7 +8,7 @@ import { createHashedAdapter, findGrantBinding, listManagedGrants, openOAuthData
 import { createHttpSessionBridge } from './session-bridge.js';
 import { assetForBranding, baseStylesheet, loadOAuthBranding, renderBrowserError, renderConsent, renderLogout, renderLogoutSuccess, renderRecovery } from './presentation.js';
 
-const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'];
+const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'];
 
 export type SessionUser = { id: string; enabled: boolean; scopes: readonly string[]; sessionId?: string };
 /** Bridge supplied by the private CMS process; this package provides no login route. */
