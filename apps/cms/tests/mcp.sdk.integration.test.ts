@@ -14,7 +14,7 @@ import { withPayloadTransaction } from '../src/auth-transaction'
 import { snapshot as capturedSnapshot, transitionChangeSet } from '../src/editorial'
 import { AppearanceOptions, CONTRACT_VERSION, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { neutralFixture } from '@site-engine/contract/fixtures'
-import { canonicalHash, changeSetHash } from '../src/publishing'
+import { buildCandidate, canonicalHash, changeSetHash } from '../src/publishing'
 import { pageEditorHash, pageEditorProjection } from '../src/page-editor'
 import { authorizeMailDraft } from '../src/mail-authorizations'
 import { prepareReply, setReplyDeliveryForTest } from '../src/mail-replies'
@@ -1372,4 +1372,50 @@ test('MCP AI suggestions are durable, scoped human-review drafts', async () => {
     expect(resultJson(await sdk.client.callTool({ name: 'get_ai_suggestion', arguments: { jobId: queuedAlt.jobId } }))).toEqual({ error: 'not_found' })
     expect(configuration.id).toBeTruthy()
   } finally { await Promise.all([sdk.transport.close(), foreign.transport.close(), readonly.transport.close()]) }
+}, 30_000)
+
+test('MCP publication requires its dedicated scope and queues only an exact confirmed immutable proof', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-publish-owner-${randomUUID()}@example.test`, name: 'MCP Publish Owner', roles: ['owner'] }, overrideAccess: true })
+  const approver = await payload.create({ collection: 'users', data: { email: `mcp-publish-approver-${randomUUID()}@example.test`, name: 'MCP Publish Approver', roles: ['approver'] }, overrideAccess: true })
+  const editor = await payload.create({ collection: 'users', data: { email: `mcp-publish-editor-${randomUUID()}@example.test`, name: 'MCP Publish Editor', roles: ['editor'] }, overrideAccess: true })
+  const [ownerSession, approverSession, editorSession] = await Promise.all([sessionFor(owner.id), sessionFor(approver.id), sessionFor(editor.id)])
+  const aged = new Date(Date.now() - 30 * 60_000).toISOString()
+  await Promise.all([ownerSession, approverSession].map(session => payload.update({ collection: 'auth-sessions', id: session.id, data: { authenticatedAt: aged }, overrideAccess: true })))
+  const baseline = structuredClone(neutralFixture); baseline.settings.homepageId = baseline.pages[0]!.id
+  const section = baseline.settings.sections[0]!; const page = baseline.pages[0]!
+  await payload.create({ collection: 'sections', data: { id: section.id, name: section.name, summary: section.summary, slug: section.slug, allowedTemplates: section.allowedTemplates, pageIds: [] }, draft: true, overrideAccess: true })
+  await payload.create({ collection: 'pages', data: { id: page.id, sectionId: page.sectionId, title: page.title, summary: page.summary, slug: page.slug, template: page.template, blocks: page.blocks }, draft: true, overrideAccess: true })
+  await publishFrozenSnapshot(owner.id, baseline)
+  const release = (await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })).docs[0] as unknown as { sequence: number; snapshot: { id: string } }
+  const baselineSnapshotID = release.snapshot.id; const baselineSequence = release.sequence
+  const before = { ...page, status: undefined }; delete (before as { status?: unknown }).status
+  const after = { ...before, title: `MCP approved ${randomUUID()}` }
+  const changes = [{ collection: 'pages' as const, id: after.id, before, after, beforeHash: canonicalHash(before), afterHash: null }]
+  const keys = [`pages:${after.id}`]
+  const versions = { themeVersion: '1.0.0', engineVersion: 'test', contractVersion: baseline.settings.contractVersion }
+  const candidate = buildCandidate(baseline, changes, keys, versions)
+  const revision = 7; const changeHash = changeSetHash(changes); const contentHash = canonicalHash(candidate); const previewJobID = randomUUID()
+  const set = await payload.create({ collection: 'change-sets', data: { name: 'MCP exact publication', actor: editor.id, state: 'submitted', revision, changes, preview: { status: 'ready', jobID: previewJobID, revision, changeHash, includedChangeKeys: keys, contentHash, baselineSnapshotID, baselineSequence }, quality: { checks: [{ name: 'deterministic-readiness', status: 'passed', errors: [] }], proof: { revision, changeHash, contentHash, includedChangeKeys: keys, baselineSnapshotID, baselineSequence, previewJobID, versionPins: { ...versions, liveThemeVersion: versions.themeVersion, liveContractVersion: versions.contractVersion }, report: { publishable: true } } } }, overrideAccess: true, context: { editorialInternal: true } })
+  const proof = { revision, changeHash, contentHash, includedChangeKeys: keys, baselineSnapshotID, baselineSequence, previewJobID, versionPins: { ...versions, liveThemeVersion: versions.themeVersion, liveContractVersion: versions.contractVersion } }
+  const ownerToken = `mcp-publish-owner-${randomUUID()}`; const approverToken = `mcp-publish-approver-${randomUUID()}`; const editorToken = `mcp-publish-editor-${randomUUID()}`; const missingScopeToken = `mcp-publish-missing-${randomUUID()}`
+  tokens.set(ownerToken, { clientId: `owner-publisher-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:publish'] })
+  tokens.set(approverToken, { clientId: `approver-publisher-${randomUUID()}`, userId: approver.id, sessionId: approverSession.id, scopes: ['mcp:content:publish'] })
+  tokens.set(editorToken, { clientId: `editor-publisher-${randomUUID()}`, userId: editor.id, sessionId: editorSession.id, scopes: ['mcp:content:publish'] })
+  tokens.set(missingScopeToken, { clientId: `missing-publisher-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:write'] })
+  const [ownerSDK, approverSDK, editorSDK, missingSDK] = await Promise.all([clientFor(ownerToken), clientFor(approverToken), clientFor(editorToken), clientFor(missingScopeToken)])
+  try {
+    await expect(missingSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/insufficient_scope/)
+    expect(resultJson(await editorSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } }))).toEqual({ error: 'publish_access_required' })
+    await expect(ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: false } })).resolves.toMatchObject({ isError: true })
+    expect(resultJson(await ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof: { ...proof, contentHash: '0'.repeat(64) }, confirmation: true } }))).toEqual({ error: 'stale_review' })
+    const approved = resultJson(await approverSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: true } })) as { state: string; outboxID: string }
+    expect(approved).toMatchObject({ state: 'queued', outboxID: expect.any(String) })
+    expect(resultJson(await approverSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: true } }))).toMatchObject({ state: 'queued', outboxID: approved.outboxID })
+    expect((await payload.find({ collection: 'publish-outbox', where: { changeSet: { equals: set.id } }, overrideAccess: true })).docs).toHaveLength(1)
+    expect(resultJson(await ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } }))).toMatchObject({ state: 'queued', outboxID: approved.outboxID })
+    await payload.update({ collection: 'publish-outbox', id: approved.outboxID, data: { status: 'failed', errorCode: 'BUILD_FAILED' }, overrideAccess: true, context: { editorialInternal: true } })
+    expect(resultJson(await ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } }))).toMatchObject({ state: 'failed', outboxID: approved.outboxID })
+    await payload.update({ collection: 'users', id: approver.id, data: { disabled: true }, overrideAccess: true })
+    await expect(approverSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/HTTP error/)
+  } finally { await Promise.all([ownerSDK.transport.close(), approverSDK.transport.close(), editorSDK.transport.close(), missingSDK.transport.close()]) }
 }, 30_000)
