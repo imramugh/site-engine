@@ -1408,6 +1408,8 @@ test('MCP publication requires its dedicated scope and queues only an exact conf
     expect(resultJson(await editorSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } }))).toEqual({ error: 'publish_access_required' })
     await expect(ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: false } })).resolves.toMatchObject({ isError: true })
     expect(resultJson(await ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof: { ...proof, contentHash: '0'.repeat(64) }, confirmation: true } }))).toEqual({ error: 'stale_review' })
+    expect(resultJson(await ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof: { ...proof, includedChangeKeys: [`pages:${randomUUID()}`] }, confirmation: true } }))).toEqual({ error: 'stale_review' })
+    expect(resultJson(await ownerSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof: { ...proof, versionPins: { ...proof.versionPins, engineVersion: 'obsolete-renderer' } }, confirmation: true } }))).toEqual({ error: 'stale_review' })
     const approved = resultJson(await approverSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: true } })) as { state: string; outboxID: string }
     expect(approved).toMatchObject({ state: 'queued', outboxID: expect.any(String) })
     expect(resultJson(await approverSDK.client.callTool({ name: 'approve_and_publish', arguments: { changeSetId: set.id, proof, confirmation: true } }))).toMatchObject({ state: 'queued', outboxID: approved.outboxID })
@@ -1417,5 +1419,12 @@ test('MCP publication requires its dedicated scope and queues only an exact conf
     expect(resultJson(await ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } }))).toMatchObject({ state: 'failed', outboxID: approved.outboxID })
     await payload.update({ collection: 'users', id: approver.id, data: { disabled: true }, overrideAccess: true })
     await expect(approverSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/HTTP error/)
+    tokens.set(ownerToken, { clientId: `expired-publisher-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:publish'], expiresAt: Math.floor(Date.now() / 1000) - 1 })
+    await expect(ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/HTTP error/)
+    tokens.set(ownerToken, { clientId: `revoked-publisher-${randomUUID()}`, userId: owner.id, sessionId: ownerSession.id, scopes: ['mcp:content:publish'] })
+    await payload.update({ collection: 'auth-sessions', id: ownerSession.id, data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    await expect(ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/HTTP error/)
+    tokens.set(ownerToken, { clientId: `mismatched-publisher-${randomUUID()}`, userId: owner.id, sessionId: approverSession.id, scopes: ['mcp:content:publish'] })
+    await expect(ownerSDK.client.callTool({ name: 'get_publication_status', arguments: { changeSetId: set.id, proof } })).rejects.toThrow(/HTTP error/)
   } finally { await Promise.all([ownerSDK.transport.close(), approverSDK.transport.close(), editorSDK.transport.close(), missingSDK.transport.close()]) }
 }, 30_000)
