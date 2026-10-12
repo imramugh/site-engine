@@ -95,6 +95,10 @@ test('ENG-219 keeps OAuth shells responsive and local-only at desktop and phone 
     await setSession(page)
     await page.setViewportSize({ width, height: 900 })
     await reachConsent(page, client.authorization)
+    for (const [control, minHeight] of [[page.getByRole('button', { name: 'Allow', exact: true }), 44], [page.getByRole('button', { name: 'Deny', exact: true }), 44], [page.locator('.oauth-details summary'), 24]] as const) {
+      const box = await control.boundingBox()
+      expect(box?.height).toBeGreaterThanOrEqual(minHeight)
+    }
     await expectNoOverflow(page)
     await screenshot(page, testInfo, `consent-${width}`)
   }
