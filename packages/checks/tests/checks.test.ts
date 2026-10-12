@@ -202,7 +202,14 @@ describe('public package boundaries', () => {
 describe('public provenance', () => {
   it('allows the exact RFC 7591 DCR field only in OAuth protocol files', async () => {
     const marker = 'client' + '_name'
-    const root = await fixture({ 'apps/oauth/src/server.ts': `const field = '${marker}'\n`, 'apps/oauth/tests/protocol.test.ts': `const field = '${marker}'\n` })
+    const dto = 'client' + 'Name'
+    const root = await fixture({
+      'apps/oauth/src/server.ts': `const ${dto} = '${marker}'\n`,
+      'apps/oauth/tests/protocol.test.ts': `const ${dto} = '${marker}'\n`,
+      'apps/oauth/src/presentation.ts': `const ${dto} = '${marker}'\n`,
+      'apps/oauth/tests/presentation.test.ts': `const ${dto} = '${marker}'\n`,
+      'apps/oauth/e2e/oauth-pages.spec.ts': `const ${dto} = '${marker}'\n`,
+    })
     await expect(inspectPublicProvenance(root)).resolves.toEqual([])
   })
 
@@ -221,7 +228,13 @@ describe('public provenance', () => {
   })
 
   it('still rejects client assets and fixtures within OAuth protocol files', async () => {
-    const root = await fixture({ 'apps/oauth/src/server.ts': `const field = '${'client' + '_asset'}'\n`, 'apps/oauth/tests/protocol.test.ts': `const field = '${'client' + '_fixture'}'\n` })
-    await expect(inspectPublicProvenance(root)).resolves.toHaveLength(2)
+    const root = await fixture({
+      'apps/oauth/src/server.ts': `const field = '${'client' + '_asset'}'\n`,
+      'apps/oauth/tests/protocol.test.ts': `const field = '${'client' + '_fixture'}'\n`,
+      'apps/oauth/src/presentation.ts': `const field = '${'client' + '-name'}'\n`,
+      'apps/oauth/tests/presentation.test.ts': `const field = '${'customer' + '_fixture'}'\n`,
+      'apps/oauth/e2e/oauth-pages.spec.ts': `const field = '${'customer' + '_asset'}'\n`,
+    })
+    await expect(inspectPublicProvenance(root)).resolves.toHaveLength(5)
   })
 })
