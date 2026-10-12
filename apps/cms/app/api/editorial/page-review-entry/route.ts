@@ -1,7 +1,7 @@
 import { sqliteAuthenticationBoundary } from '../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../payload.config'
-import { freshStaff, hasRole } from '../../../../src/access'
+import { hasRole, sessionStaff } from '../../../../src/access'
 import { serverSessionStrategy } from '../../../../src/identity'
 import { canonicalReviewPath, pageReviewEntries } from '../../../../src/page-review-entry'
 
@@ -19,8 +19,8 @@ async function GETHandler(request: Request): Promise<Response> {
   const internalPath = request.headers.get('x-original-uri')
   const requestedPath = canonicalReviewPath(internalPath ?? url.searchParams.get('path') ?? '')
   if (!requestedPath) return empty(403)
-  const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never }) === true
-  const entries = await pageReviewEntries(payload, requestedPath, fresh)
+  const sessionAuthorized = await sessionStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never }) === true
+  const entries = await pageReviewEntries(payload, requestedPath, sessionAuthorized)
   if (internalPath) {
     if (!entries.length) return empty(403)
     return empty(200, {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createLocalReq, getPayload, type PayloadRequest } from 'payload'
-import { freshStaff } from '../src/access'
+import { freshStaff, sessionStaff } from '../src/access'
 import { cookieName, hashOpaqueToken, newOpaqueToken, SESSION_COOKIE } from '../src/identity'
 
 const directory = mkdtempSync(join(tmpdir(), 'site-engine-fresh-auth-'))
@@ -14,12 +14,14 @@ const { default: config } = await import('../payload.config.js')
 let payload: Awaited<ReturnType<typeof getPayload>>
 let owner: { id: string; email: string; name: string; roles: string[] }
 let otherOwner: { id: string }
+let editor: { id: string; email: string; name: string; roles: string[] }
 let token: string
 
 beforeAll(async () => {
   payload = await getPayload({ config })
   owner = await payload.create({ collection: 'users', data: { email: 'fresh-owner@example.test', name: 'Fresh owner', roles: ['owner'] }, overrideAccess: true })
   otherOwner = await payload.create({ collection: 'users', data: { email: 'other-owner@example.test', name: 'Other owner', roles: ['owner'] }, overrideAccess: true })
+  editor = await payload.create({ collection: 'users', data: { email: 'session-editor@example.test', name: 'Session editor', roles: ['editor'] }, overrideAccess: true })
 })
 
 beforeEach(async () => {
@@ -52,6 +54,12 @@ async function requestFor(user: { id: string; roles: string[]; disabled?: boolea
 }
 
 const canMutateIdentity = async (req: PayloadRequest) => freshStaff(['owner'])({ req })
+const canApproveEditorial = async (req: PayloadRequest) => sessionStaff(['owner', 'approver'])({ req })
+
+async function sessionID() {
+  const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true })
+  return sessions.docs[0]!.id
+}
 
 describe('fresh server-side authentication access (ENG-007)', () => {
   it('allows a canonical owner only when its opaque session was freshly authenticated', async () => {
@@ -59,14 +67,42 @@ describe('fresh server-side authentication access (ENG-007)', () => {
     await expect(canMutateIdentity(req)).resolves.toBe(true)
   })
 
-  it('denies a valid but stale session', async () => {
+  it('allows a valid older reviewer session while the unrelated fresh identity guard still denies it', async () => {
     const req = await requestFor(owner, 15 * 60_000 + 1)
+    await expect(canApproveEditorial(req)).resolves.toBe(true)
     await expect(canMutateIdentity(req)).resolves.toBe(false)
+  })
+
+  it('denies a request without the server session cookie', async () => {
+    const req = await requestFor(owner)
+    req.headers = new Headers()
+    await expect(canApproveEditorial(req)).resolves.toBe(false)
   })
 
   it('does not trust a request user that does not match the opaque session owner', async () => {
     const req = await requestFor({ id: otherOwner.id, roles: ['owner'] })
     await expect(canMutateIdentity(req)).resolves.toBe(false)
+    await expect(canApproveEditorial(req)).resolves.toBe(false)
+  })
+
+
+  it('denies revoked, expired, and wrong-role reviewer sessions', async () => {
+    const revoked = await requestFor(owner)
+    await payload.update({ collection: 'auth-sessions', id: await sessionID(), data: { revokedAt: new Date().toISOString() }, overrideAccess: true })
+    await expect(canApproveEditorial(revoked)).resolves.toBe(false)
+
+    await (payload.db as unknown as { client: { execute: (sql: string) => Promise<unknown> } }).client.execute('DELETE FROM auth_sessions')
+    token = newOpaqueToken()
+    const expired = await requestFor(owner)
+    await payload.update({ collection: 'auth-sessions', id: await sessionID(), data: { expiresAt: new Date(Date.now() - 1).toISOString() }, overrideAccess: true })
+    await expect(canApproveEditorial(expired)).resolves.toBe(false)
+
+    await (payload.db as unknown as { client: { execute: (sql: string) => Promise<unknown> } }).client.execute('DELETE FROM auth_sessions')
+    token = newOpaqueToken()
+    const now = new Date().toISOString()
+    await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(token), user: editor.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
+    const wrongRole = await createLocalReq({ req: { headers: new Headers({ cookie: `${cookieName(SESSION_COOKIE)}=${token}` }) }, user: { ...editor, collection: 'users' } as never }, payload)
+    await expect(canApproveEditorial(wrongRole)).resolves.toBe(false)
   })
 
   it('re-reads the canonical user and denies a disabled owner despite a forged active request user', async () => {
@@ -74,6 +110,7 @@ describe('fresh server-side authentication access (ENG-007)', () => {
     try {
       const req = await requestFor({ ...owner, disabled: false })
       await expect(canMutateIdentity(req)).resolves.toBe(false)
+      await expect(canApproveEditorial(req)).resolves.toBe(false)
     } finally {
       await payload.update({ collection: 'users', id: owner.id, data: { disabled: false }, overrideAccess: true })
     }

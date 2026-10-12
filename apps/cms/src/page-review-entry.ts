@@ -1,7 +1,7 @@
 import type { Payload } from 'payload'
 import { loadReviewModePages } from './review-mode'
 
-export type PageReviewEntry = { id: string; name: string; revision: number; path: string; pageID?: string; freshApproval: boolean }
+export type PageReviewEntry = { id: string; name: string; revision: number; path: string; pageID?: string; sessionAuthorized: boolean }
 
 export function canonicalReviewPath(value: string): string | undefined {
   const raw = value.split('?', 1)[0]
@@ -10,7 +10,7 @@ export function canonicalReviewPath(value: string): string | undefined {
 }
 
 /** Finds only current, immutable, submitted comparisons for one canonical page. */
-export async function pageReviewEntries(payload: Payload, path: string, freshApproval: boolean): Promise<PageReviewEntry[]> {
+export async function pageReviewEntries(payload: Payload, path: string, sessionAuthorized: boolean): Promise<PageReviewEntry[]> {
   const canonical = canonicalReviewPath(path)
   if (!canonical) return []
   const entries: PageReviewEntry[] = []
@@ -23,7 +23,7 @@ export async function pageReviewEntries(payload: Payload, path: string, freshApp
         const reviews = await loadReviewModePages(payload, String(set.id))
         for (const review of reviews) {
           if (canonicalReviewPath(review.path) !== canonical || (!review.changedBlocks.length && !review.pageFields.length)) continue
-          entries.push({ id: review.id, name: review.name, revision: review.revision, path: review.path, pageID: review.pageID, freshApproval })
+          entries.push({ id: review.id, name: review.name, revision: review.revision, path: review.path, pageID: review.pageID, sessionAuthorized })
         }
       } catch {
         // A stale or incomplete comparison is never an on-page entry.

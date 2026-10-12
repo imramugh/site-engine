@@ -16,7 +16,6 @@ const editorRecoveryCodes = {
 } as const
 const reviewOwnerEmail = 'review-owner.synthetic@example.test'
 const reviewOwnerRecoveryCode = 'synthetic-review-owner-code-04'
-const reviewOwnerReauthenticationCode = 'synthetic-review-owner-code-10'
 const scheduleOwnerEmail = 'schedule-owner.synthetic@example.test'
 const scheduleOwnerRecoveryCode = 'synthetic-schedule-owner-code-09'
 const e2ePort = Number(process.env.CMS_E2E_PORT ?? 4300)
@@ -397,14 +396,12 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const staleProof = await reviewer.evaluate(async ({ id, proof }) => (await fetch('/api/editorial/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, proof: { ...proof, previewJobID: '00000000-0000-4000-8000-000000000000' } }) })).status, displayed)
   expect(staleProof).toBe(400)
   await expect(reviewer.request.get('/__e2e/publish-state').then(async (response) => response.json())).resolves.toEqual(beforeApproval)
-  const staleSession = await reviewer.request.post('/__e2e/session/stale')
-  expect(staleSession.status(), await staleSession.text()).toBe(204)
-  await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
-  await expect(reviewer.getByRole('status')).toContainText('Fresh reviewer authentication is required before approval.')
-  await signInLocalOwner(reviewer, reviewOwnerReauthenticationCode, reviewOwnerEmail)
-  await reviewer.goto(`/admin/editorial?changeSet=${changeSetID}`)
-  await reviewer.locator(`[data-editorial-queue-item][data-change-set-id="${changeSetID}"]`).click()
-  await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
+  // Age the authenticated owner beyond the previous 15-minute approval window.
+  // The exact-proof rejection above must remain the only reason this approval
+  // attempt is denied; an otherwise valid proof remains approvable by an
+  // established session.
+  const sessionOlderThanFifteenMinutes = await reviewer.request.post('/__e2e/session/stale')
+  expect(sessionOlderThanFifteenMinutes.status(), await sessionOlderThanFifteenMinutes.text()).toBe(204)
   await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Approved snapshot queued' })).toContainText('publish worker')
   const queued = await reviewer.request.get('/__e2e/publish-state')

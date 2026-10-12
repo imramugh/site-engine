@@ -1,7 +1,7 @@
 import { sqliteAuthenticationBoundary } from '../../../../../src/sqlite'
 import { getPayload } from 'payload'
 import config from '../../../../../payload.config'
-import { freshStaff, hasRole } from '../../../../../src/access'
+import { hasRole, sessionStaff } from '../../../../../src/access'
 import { serverSessionStrategy } from '../../../../../src/identity'
 import { isAuthenticationSQLiteContention } from '../../../../../src/sqlite'
 import { loadReviewModeData } from '../../../../../src/review-mode'
@@ -53,8 +53,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       if (job.status !== 'failed' || relationID(job.changeSet) !== id || Number(preview?.revision) !== Number(set.revision) || Number(job.reviewRevision) !== Number(set.revision) || preview?.changeHash !== job.changeHash || job.changeHash !== (await import('../../../../../src/publishing')).changeSetHash(Array.isArray(set.changes) ? set.changes as never[] : []) || !keysMatch(preview?.includedChangeKeys, job.includedChangeKeys) || preview?.baselineSnapshotID !== relationID(job.baselineSnapshot) || Number(preview?.baselineSequence) !== Number(job.baselineSequence) || baseline && (relationID(job.baselineSnapshot) !== baseline.snapshotID || Number(job.baselineSequence) !== baseline.sequence) || preview?.liveManifestHash !== job.liveManifestHash || preview?.proposedManifestHash !== job.proposedManifestHash || canonicalHash(job.liveManifest) !== job.liveManifestHash || canonicalHash(job.proposedManifest) !== job.proposedManifestHash || !versionPinsMatch(preview?.versionPins, job.versionPins)) throw error
       failedPreview = { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), diagnostics }
     }
-    const fresh = await freshStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
-    return Response.json(failedPreview ? { failedPreview, fresh } : { review, fresh }, { headers: privateHeaders })
+    const sessionAuthorized = await sessionStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
+    return Response.json(failedPreview ? { failedPreview, sessionAuthorized } : { review, sessionAuthorized }, { headers: privateHeaders })
   } catch (error) {
     if (isAuthenticationSQLiteContention(error)) throw error
     const text = error instanceof Error ? error.message : 'Unable to load this review.'

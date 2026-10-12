@@ -46,8 +46,8 @@ function baseline() {
   return value
 }
 
-async function fixture(label: string, options: { installed?: boolean; secondPage?: boolean } = {}) {
-  const reviewer = await payload.create({ collection: 'users', data: { email: `${label}-${randomUUID()}@example.test`, name: 'Reviewer', roles: ['approver'] }, overrideAccess: true })
+async function fixture(label: string, options: { installed?: boolean; secondPage?: boolean; reviewerRole?: 'owner' | 'approver' } = {}) {
+  const reviewer = await payload.create({ collection: 'users', data: { email: `${label}-${randomUUID()}@example.test`, name: 'Reviewer', roles: [options.reviewerRole ?? 'approver'] }, overrideAccess: true })
   const editor = await payload.create({ collection: 'users', data: { email: `${label}-editor-${randomUUID()}@example.test`, name: 'Editor', roles: ['editor'] }, overrideAccess: true })
   const live = baseline(); const page = live.pages[0]!; const before = { ...page, status: undefined }; delete (before as { status?: unknown }).status
   const after = { ...before, title: `Proposed ${label}` }
@@ -205,8 +205,8 @@ describe('ENG-030 immutable review preview jobs', () => {
     expect(excluded.status).toBe(400)
   })
 
-  it('requires a freshly authenticated reviewer for approval', async () => {
-    const current = await fixture('stale-approval')
+  it.each(['owner', 'approver'] as const)('accepts a valid session older than fifteen minutes for %s approval and queues an immutable outbox item', async (reviewerRole) => {
+    const current = await fixture(`stale-approval-${reviewerRole}`, { reviewerRole })
     const job = await prepare(current)
     const lease = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
     await withPayloadTransaction(payload, req => completePreviewRenderJob(payload, req, String(job.id), String(lease!.leaseToken), { liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash), artifactDigest: digest, evidenceManifest: { version: 1, state: 'unavailable', reason: 'SELECTED_PAGE_NOT_RENDERABLE', jobID: String(job.id), liveManifestHash: String(job.liveManifestHash), proposedManifestHash: String(job.proposedManifestHash) } }))
@@ -214,13 +214,15 @@ describe('ENG-030 immutable review preview jobs', () => {
     const set = await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })
     const sessions = await payload.find({ collection: 'auth-sessions', where: { user: { equals: current.reviewer.id } }, limit: 1, overrideAccess: true })
     await payload.update({ collection: 'auth-sessions', id: sessions.docs[0]!.id, data: { authenticatedAt: new Date(Date.now() - 15 * 60_000 - 1).toISOString() }, overrideAccess: true })
+    const review = await reviewModeRoute.GET(new Request(`http://cms.test/api/editorial/review/${current.set.id}`, { headers: current.headers }), { params: Promise.resolve({ id: String(current.set.id) }) })
+    expect(review.status).toBe(200)
+    await expect(review.json()).resolves.toMatchObject({ sessionAuthorized: true })
     const response = await editorialRoute.POST(new Request('http://cms.test/api/editorial/approve', { method: 'POST', headers: { origin: 'http://cms.test', 'content-type': 'application/json', cookie: current.headers.get('cookie')! }, body: JSON.stringify({ id: current.set.id, proof: (set.quality as { proof: unknown }).proof }) }), { params: Promise.resolve({ action: 'approve' }) })
-    expect(response.status).toBe(403)
-    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Fresh reviewer authentication/) })
-    await expect(payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).resolves.toMatchObject({ state: 'submitted' })
-    const audits = await payload.find({ collection: 'audit-events', where: { and: [{ event: { equals: 'editorial.approval_denied' } }, { user: { equals: current.reviewer.id } }, { 'detail.reason': { equals: 'fresh_authentication_required' } }] }, limit: 10, depth: 0, overrideAccess: true })
-    expect(audits.docs).toHaveLength(1)
-    expect(audits.docs[0]).toMatchObject({ actor: current.reviewer.id, detail: { reason: 'fresh_authentication_required' } })
+    expect(response.status).toBe(200)
+    const result = await response.json() as { outboxID?: string; snapshotID?: string }
+    expect(result.outboxID).toBeTruthy()
+    expect(await payload.findByID({ collection: 'change-sets', id: current.set.id, overrideAccess: true })).toMatchObject({ state: 'approved' })
+    await expect(payload.findByID({ collection: 'publish-outbox', id: result.outboxID!, depth: 1, overrideAccess: true })).resolves.toMatchObject({ status: 'pending', changeSet: { id: current.set.id }, snapshot: { id: result.snapshotID, approvedBy: current.reviewer.id, contentHash: (set.quality as { proof: { contentHash: string } }).proof.contentHash } })
   })
 
   it('denies an editor approval before writing approval records and persists only bounded denial evidence', async () => {

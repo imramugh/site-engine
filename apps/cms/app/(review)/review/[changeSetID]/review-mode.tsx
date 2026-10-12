@@ -6,7 +6,7 @@ import styles from './review-mode.module.css'
 
 type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
-type Data = { review?: ReviewModeData; failedPreview?: { id: string; name: string; state: string; revision: number; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; fresh: boolean }
+type Data = { review?: ReviewModeData; failedPreview?: { id: string; name: string; state: string; revision: number; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; sessionAuthorized: boolean }
 
 function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 760 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
@@ -163,9 +163,8 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
           {submitted && <><label htmlFor="page-review-comment">Add a comment</label><textarea id="page-review-comment" rows={3} maxLength={2000} value={comment} onChange={(event) => setComment(event.target.value)} /><button type="button" disabled={acting || !comment.trim()} onClick={() => void action('comment')}>Add comment</button></>}
         </section>
         {submitted && <section className={styles.actions} aria-label="Review actions" data-page-review-actions><h2>Decision</h2>
-          <button className={styles.approve} type="button" disabled={acting || !publishable || !data.fresh} onClick={() => void action('approve')}>Approve and queue publish</button>
+          <button className={styles.approve} type="button" disabled={acting || !publishable || !data.sessionAuthorized} onClick={() => void action('approve')}>Approve and queue publish</button>
           {!publishable && <small>Approval requires passing readiness checks for this exact comparison.</small>}
-          {publishable && !data.fresh && <small>Sign in again before approval because this session is older than 15 minutes.</small>}
           <button type="button" disabled={acting} onClick={() => void action('request-changes')}>Request changes</button>
           <button className={styles.reject} type="button" disabled={acting} onClick={() => void action('reject')}>Reject</button>
         </section>}
