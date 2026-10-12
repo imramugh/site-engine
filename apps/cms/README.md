@@ -54,7 +54,10 @@ submitted work. Approvers cannot create Pages or change Sections, Assets,
 Redirects, themes, integrations, or users. Every Approver edit remains a draft;
 approval still requires a separate fresh-authentication action bound to the
 exact change-set revision, change hash, rendered preview, and version pins.
-MCP exposes no approval or publication tool.
+MCP draft and read scopes expose no approval or publication capability. The
+separately granted `mcp:content:publish` scope is limited to enabled Owners and
+Approvers with a usable OAuth-backed CMS session; it exposes exact reviewed
+publication preparation, explicit confirmation, and status tools.
 
 ### Direct text editing in the page preview
 

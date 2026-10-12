@@ -62,7 +62,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
     if (!mediaRead) return error('role_access_required')
     try { const found = await mediaWorkspace(payload, current, { id, page: 1, pageSize: 1 }); const asset = found.assets[0]; return asset ? text({ id, usages: asset.usages }) : error('not_found') } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : 'read_failed') }
   })
-  server.registerTool('update_media', { title: 'Update media metadata', description: 'Update media metadata and focal point in an explicit revisioned change set. Returns a draft result only; this server cannot publish, approve, manage users, or permanently delete content.', inputSchema: updateInput, outputSchema: updateOutput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, alt, decorative, caption, credit, tags, focalX, focalY }) => {
+  server.registerTool('update_media', { title: 'Update media metadata', description: 'Update media metadata and focal point in an explicit revisioned change set. Returns a draft result only; this tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: updateInput, outputSchema: updateOutput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, alt, decorative, caption, credit, tags, focalX, focalY }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       const result = await withPayloadTransaction(payload, async (req) => {

@@ -44,8 +44,9 @@ contract's schema and field rules.
 
 The catalog lists the following read-only resources. Each entry advertises its
 OAuth requirement, requires an effective CMS user, and carries limits stating
-that it cannot approve, publish, manage users, access credentials, or permanently
-delete content. Authorization is enforced when a resource is read; a client may
+that the resource read cannot approve, publish, manage users, access credentials,
+or permanently delete content. Publication remains available only through the
+separately scoped publication tools above. Authorization is enforced when a resource is read; a client may
 discover catalog metadata without gaining access to a resource outside its grant.
 
 | Resource | Purpose |
