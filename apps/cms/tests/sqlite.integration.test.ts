@@ -60,7 +60,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
 
     const resolved = await resolve(firstToken)
     expect(resolved.status).toBe(200)
-    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'] } })
+    await expect(resolved.json()).resolves.toEqual({ user: { id: user.id, sessionId: first.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'] } })
     const validated = await handleOAuthSessionBridge(new Request('http://cms.test/api/internal/oauth/session', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-oauth-bridge-secret': secret }, body: JSON.stringify({ operation: 'validate', sessionId: first.id, userId: user.id }),
     }), payload, secret)
@@ -80,7 +80,11 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     const roleUser = await payload.create({ collection: 'users', data: { email: 'bridge-editor@example.test', name: 'Bridge editor', roles: ['editor'] }, overrideAccess: true })
     const roleToken = newOpaqueToken()
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(roleToken), user: roleUser.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
-    expect((await resolve(roleToken)).status).toBe(200)
+    const editorResolution = await resolve(roleToken)
+    expect(editorResolution.status).toBe(200)
+    const editorBody = await editorResolution.json() as { user: { id: string; scopes: string[] } }
+    expect(editorBody).toMatchObject({ user: { id: roleUser.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write'] } })
+    expect(editorBody.user.scopes).not.toContain('mcp:content:publish')
     await payload.update({ collection: 'users', id: roleUser.id, data: { roles: ['approver'] }, overrideAccess: true })
     expect((await resolve(roleToken)).status).toBe(401)
 
@@ -89,7 +93,7 @@ describe('real SQLite Payload access controls and WAL (ENG-006, ENG-007, ENG-036
     await payload.create({ collection: 'auth-sessions', data: { tokenHash: hashOpaqueToken(approverToken), user: approver.id, authenticatedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + 60_000).toISOString() }, overrideAccess: true })
     const approverResolution = await resolve(approverToken)
     expect(approverResolution.status).toBe(200)
-    await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read'] } })
+    await expect(approverResolution.json()).resolves.toMatchObject({ user: { id: approver.id, scopes: ['mcp:content:read', 'mcp:content:write', 'mcp:content:publish', 'mcp:redirects:read'] } })
 
     for (const [role, scope] of [['sales', ['mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply']], ['hiring', ['mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply']]] as const) {
       const staff = await payload.create({ collection: 'users', data: { email: `bridge-${role}@example.test`, name: `Bridge ${role}`, roles: [role] }, overrideAccess: true })

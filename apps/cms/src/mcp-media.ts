@@ -51,18 +51,18 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
   const mediaWrite = write && roles.some((role) => ['owner', 'editor'].includes(role))
   const readMeta = { securitySchemes: (contentSecurity.securitySchemes as unknown[]), authorization: contentSecurity }
   const writeMeta = { securitySchemes: (writeSecurity.securitySchemes as unknown[]), authorization: writeSecurity }
-  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, outputSchema: z.object({ assets: z.array(mediaItem), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page = 1, pageSize = 24 }) => {
+  server.registerTool('find_media', { title: 'Find media', description: 'Find scoped media by text, tag, status, or usage. This tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: findInput, outputSchema: z.object({ assets: z.array(mediaItem), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ q, tag, usage, filter, page = 1, pageSize = 24 }) => {
     if (!mediaRead) return error('role_access_required')
     try {
       const found = await mediaWorkspace(payload, current, { q, tag, usage, filter, page, pageSize })
       return text(clean({ assets: found.assets, total: found.total, page: found.page, pageSize: found.pageSize, totalPages: found.totalPages }))
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : 'read_failed') }
   })
-  server.registerTool('get_media_usage', { title: 'Get media usage', description: 'Read the scoped draft-page references for one media asset. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: z.object({ id: z.string().uuid(), usages: z.array(z.object({ pageId: z.string(), pageTitle: z.string(), locations: z.array(z.string()) }).strict()) }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ id }) => {
+  server.registerTool('get_media_usage', { title: 'Get media usage', description: 'Read the scoped draft-page references for one media asset. This tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: z.object({ id: z.string().uuid() }).strict(), outputSchema: z.object({ id: z.string().uuid(), usages: z.array(z.object({ pageId: z.string(), pageTitle: z.string(), locations: z.array(z.string()) }).strict()) }).strict(), annotations: { readOnlyHint: true }, _meta: readMeta }, async ({ id }) => {
     if (!mediaRead) return error('role_access_required')
     try { const found = await mediaWorkspace(payload, current, { id, page: 1, pageSize: 1 }); const asset = found.assets[0]; return asset ? text({ id, usages: asset.usages }) : error('not_found') } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : 'read_failed') }
   })
-  server.registerTool('update_media', { title: 'Update media metadata', description: 'Update media metadata and focal point in an explicit revisioned change set. Returns a draft result only; this server cannot publish, approve, manage users, or permanently delete content.', inputSchema: updateInput, outputSchema: updateOutput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, alt, decorative, caption, credit, tags, focalX, focalY }) => {
+  server.registerTool('update_media', { title: 'Update media metadata', description: 'Update media metadata and focal point in an explicit revisioned change set. Returns a draft result only; this tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: updateInput, outputSchema: updateOutput, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, alt, decorative, caption, credit, tags, focalX, focalY }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       const result = await withPayloadTransaction(payload, async (req) => {
@@ -80,7 +80,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
-  server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
+  server.registerTool('upload_media', { title: 'Upload media', description: 'Create raster media in an explicit revisioned change set. dataBase64 is limited so the MCP request always stays below 32 KiB; a public HTTP(S) URL is fetched only after SSRF-safe DNS resolution and byte validation. This tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: uploadInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ changeSetId, expectedChangeSetRevision, source, ...metadata }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       // Fetches can take the full remote-image deadline; never hold SQLite's write
@@ -98,7 +98,7 @@ export function registerMediaTools(input: { server: McpServer; payload: Payload;
       return text({ draft: { assetId: result.id, changeSetId, changeSetRevision: result.revision }, checks: result.checks, warnings: result.warnings, readiness: result.readiness })
     } catch (cause) { return error(isRetryableSQLiteError(cause) ? 'temporarily_unavailable' : cause instanceof Error && cause.message === 'revision_conflict' ? 'revision_conflict' : 'write_failed') }
   })
-  server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This server cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
+  server.registerTool('replace_media', { title: 'Replace media', description: 'Replace bytes for one existing asset through the immutable version pipeline in an explicit revisioned change set. The same asset ID remains usable and prior files stay pinned for rollback. This tool cannot publish, approve, manage users, or permanently delete content.', inputSchema: replaceInput, annotations: { readOnlyHint: false }, _meta: writeMeta }, async ({ id, changeSetId, expectedChangeSetRevision, idempotencyKey, source }) => {
     if (!mediaWrite) return error('role_access_required')
     try {
       await editableSet(payload, undefined, current, changeSetId, expectedChangeSetRevision)

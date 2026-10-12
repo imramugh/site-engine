@@ -6,6 +6,7 @@ import { cookieName, hashOpaqueToken, readCookie, SESSION_COOKIE, sessionIsUsabl
 const MAX_BODY_BYTES = 4_096
 const contentRead = 'mcp:content:read'
 const contentWrite = 'mcp:content:write'
+const contentPublish = 'mcp:content:publish'
 const redirectsRead = 'mcp:redirects:read'
 const redirectsWrite = 'mcp:redirects:write'
 const leadsRead = 'mcp:leads:read'
@@ -19,9 +20,9 @@ export type OAuthBridgeUser = { id: string; sessionId: string; scopes: readonly 
 type BridgeRequest = { operation: 'resolve' } | { operation: 'validate'; sessionId: string; userId: string }
 
 const roleScopes: Record<string, readonly string[]> = {
-  owner: [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply],
+  owner: [contentRead, contentWrite, contentPublish, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply],
   editor: [contentRead, contentWrite, redirectsRead, redirectsWrite],
-  approver: [contentRead, contentWrite, redirectsRead],
+  approver: [contentRead, contentWrite, contentPublish, redirectsRead],
   sales: [leadsRead, leadsWrite, leadsReply],
   hiring: [careersRead, careersWrite, careersReply],
 }
@@ -30,7 +31,7 @@ const roleScopes: Record<string, readonly string[]> = {
  * MCP clients, while never adding a scope outside the role allowlist. */
 function scopesForRoles(roles: readonly string[] | null | undefined): string[] {
   const granted = new Set((roles ?? []).flatMap((role) => roleScopes[role] ?? []))
-  return [contentRead, contentWrite, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply].filter((scope) => granted.has(scope))
+  return [contentRead, contentWrite, contentPublish, redirectsRead, redirectsWrite, leadsRead, leadsWrite, leadsReply, careersRead, careersWrite, careersReply].filter((scope) => granted.has(scope))
 }
 
 function relationId(value: AuthSession['user']): string | undefined {

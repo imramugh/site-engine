@@ -258,14 +258,21 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   return SiteSnapshotSchema.parse({ ...candidate, redirects: validateRedirectSet(redirectsWithMovedTargets) })
 }
 
-async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: Actor | undefined): Promise<Actor> {
+/** Resolve the reviewer from either the browser cookie or a server-trusted OAuth
+ * session id.  The latter is intentionally an internal argument: MCP never
+ * accepts it from a tool payload. */
+async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: Actor | undefined, trustedSessionID?: string): Promise<Actor> {
   if (!actor?.id) throw new Error('Reviewer role required.')
   const user = await payload.findByID({ collection: 'users', id: actor.id, overrideAccess: true, req }) as unknown as Actor
   if (!hasRole(user, ['owner', 'approver'])) throw new Error('Reviewer role required.')
-  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
-  if (!token) throw new Error('Reviewer session is required.')
-  const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
-  const session = sessions.docs[0]
+  const session = trustedSessionID
+    ? await payload.findByID({ collection: 'auth-sessions', id: trustedSessionID, depth: 0, overrideAccess: true, req })
+    : await (async () => {
+      const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
+      if (!token) return undefined
+      const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
+      return sessions.docs[0]
+    })()
   if (!session || idOf(session.user) !== actor.id || !sessionIsUsable(session)) throw new Error('Reviewer session is required.')
   return user
 }
@@ -282,10 +289,10 @@ async function canonicalOwner(payload: Payload, req: PayloadRequest, actor: Acto
   return user
 }
 
-export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot; scheduledFor?: string }) {
+export async function approveChangeSet(input: { payload: Payload; req: PayloadRequest; actor: Actor | undefined; id: string; expectedRevision: number; expectedChangeHash: string; includedChangeKeys: string[]; previewContentHash: string; previewJobID?: string; versions: Versions; initialBaseline?: SiteSnapshot; scheduledFor?: string; trustedReviewerSessionID?: string }) {
   const { payload, req, actor, id, expectedRevision, expectedChangeHash, includedChangeKeys, previewContentHash, versions, initialBaseline } = input
   requireTransaction(req, 'Approval')
-  const reviewer = await canonicalReviewer(payload, req, actor)
+  const reviewer = await canonicalReviewer(payload, req, actor, input.trustedReviewerSessionID)
   if (!includedChangeKeys.length || new Set(includedChangeKeys).size !== includedChangeKeys.length) throw new Error('Approval must explicitly include unique captured changes only.')
   const scheduledFor = scheduledPublicationTime(input.scheduledFor)
   const idempotencyKey = `publish:${id}:${expectedRevision}:${previewContentHash}`

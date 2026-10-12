@@ -65,7 +65,7 @@ export function renderRecovery(options: PageOptions, retry: string): string {
 
 export const scopeDescription = (scope: string): string => ({
   'sign in': 'Confirm your signed-in identity.',
-  'mcp:content:read': 'View site content.', 'mcp:content:write': 'Create and edit content drafts for review.',
+  'mcp:content:read': 'View site content.', 'mcp:content:write': 'Create and edit content drafts for review.', 'mcp:content:publish': 'Approve and publish reviewed content on your behalf.',
   'mcp:redirects:read': 'View redirects.', 'mcp:redirects:write': 'Propose redirect changes for review.',
   'mcp:leads:read': 'View leads.', 'mcp:leads:write': 'Create and update leads.', 'mcp:leads:reply': 'Prepare and send human-confirmed replies to leads.',
   'mcp:careers:read': 'View job applications.', 'mcp:careers:write': 'Update job application records.',
