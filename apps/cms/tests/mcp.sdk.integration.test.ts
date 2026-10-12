@@ -201,7 +201,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       if (!['request_rollback', 'create_change_set', 'submit_change_set', 'start_change_set', 'submit_for_review', 'discard_change_set', 'create_page', 'create_page_from_recipe', 'create_section', 'update_section', 'archive_section', 'duplicate_page', 'move_page', 'change_page_template', 'archive_page', 'update_page', 'update_page_fields', 'update_block', 'update_media', 'upload_media', 'replace_media', 'update_site_settings', 'update_nav_overrides', 'switch_theme', 'update_theme_settings', 'create_redirect', 'add_block', 'move_block', 'hide_block', 'copy_block', 'remove_block', 'reorder_blocks', 'add_item', 'update_item', 'move_item', 'remove_item', 'update_inquiry', 'update_lead', 'record_reply', 'update_application', 'prepare_reply', 'send_reply', 'suggest_summary', 'suggest_meta', 'suggest_faq', 'suggest_alt'].includes(tool.name)) expect(tool.annotations?.readOnlyHint).toBe(true)
       if (['prepare_reply', 'send_reply', 'get_reply_status'].includes(tool.name)) expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2', scopes: ['mcp:leads:read', 'mcp:leads:reply'] }), expect.objectContaining({ type: 'oauth2', scopes: ['mcp:careers:read', 'mcp:careers:reply'] })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
       else expect(tool._meta).toMatchObject({ securitySchemes: [expect.objectContaining({ type: 'oauth2' })], authorization: expect.objectContaining({ effectiveUserRequired: true }) })
-      expect(tool.description).toContain('cannot publish, approve, manage users, access credentials, permanently delete content')
+      expect(tool.description).toContain('Draft and read scopes cannot approve or publish')
       expect(tool._meta).toMatchObject({ limits: { approve: false, publish: false, userManagement: false, credentialAccess: false, permanentDelete: false } })
     }
     for (const name of ['list_leads', 'get_lead']) expect(editorTools.tools.find((tool) => tool.name === name)?._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:leads:read'] }], authorization: { requiredScopes: ['mcp:leads:read'] } })
@@ -224,7 +224,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
       })
     }
     for (const prompt of prompts.prompts) {
-      expect(prompt.description).toContain('cannot publish, approve, manage users, access credentials, permanently delete content')
+      expect(prompt.description).toContain('Draft and read scopes cannot approve or publish')
       expect(prompt._meta).toMatchObject({ securitySchemes: [{ type: 'oauth2', scopes: ['mcp:content:read'] }], authorization: { requiredScopes: ['mcp:content:read'], effectiveUserRequired: true }, limits: { approve: false, publish: false, userManagement: false, credentialAccess: false, permanentDelete: false } })
     }
     for (const uri of ['site-engine://site/settings', 'site-engine://site/installed-themes']) expect(resources.resources.find((entry) => entry.uri === uri)?._meta).toMatchObject({ authorization: { requiredRoles: ['owner'] } })

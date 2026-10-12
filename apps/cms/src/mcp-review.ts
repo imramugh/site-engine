@@ -5,12 +5,13 @@ import { withPayloadTransaction } from './auth-transaction'
 import { changeSetQuality, createNamedChangeSet, transitionChangeSet, type CapturedChange } from './editorial'
 import { loadReviewModePages } from './review-mode'
 import { isRetryableSQLiteError } from './sqlite'
+import { changeSetHash } from './publishing'
 
 type Current = { id: string; roles?: string[]; disabled?: boolean }
 const text = (value: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value })
 const error = (name: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify(name === 'temporarily_unavailable' ? { error: name, retryAfterSeconds: 1 } : { error: name }) }] })
 const commentOutput = z.object({ id: z.string(), author: z.string(), body: z.string(), createdAt: z.string() }).strict()
-const setOutput = z.object({ id: z.string().uuid(), name: z.string(), state: z.string(), revision: z.number().int().nonnegative(), checks: z.array(z.object({ name: z.string(), status: z.enum(['passed', 'failed']), errors: z.array(z.object({ collection: z.string(), id: z.string(), message: z.string() }).strict()) }).strict()), comments: z.array(commentOutput), privatePreviewURL: z.string().url().nullable() }).strict()
+const setOutput = z.object({ id: z.string().uuid(), name: z.string(), state: z.string(), revision: z.number().int().nonnegative(), changeHash: z.string().regex(/^[a-f0-9]{64}$/), includedChangeKeys: z.array(z.string()), checks: z.array(z.object({ name: z.string(), status: z.enum(['passed', 'failed']), errors: z.array(z.object({ collection: z.string(), id: z.string(), message: z.string() }).strict()) }).strict()), comments: z.array(commentOutput), privatePreviewURL: z.string().url().nullable() }).strict()
 const id = z.string().uuid()
 const comments = (value: unknown) => Array.isArray(value) ? value.flatMap((comment) => {
   if (!comment || typeof comment !== 'object' || Array.isArray(comment)) return []
@@ -39,7 +40,8 @@ async function currentReviewURL(payload: Payload, set: Record<string, unknown>):
 }
 
 async function view(payload: Payload, set: Record<string, unknown>, checks: unknown[] = []) {
-  return { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), checks, comments: comments(set.reviewComments), privatePreviewURL: await currentReviewURL(payload, set) }
+  const changes = Array.isArray(set.changes) ? set.changes as CapturedChange[] : []
+  return { id: String(set.id), name: String(set.name), state: String(set.state), revision: Number(set.revision), changeHash: changeSetHash(changes), includedChangeKeys: changes.map(change => `${change.collection}:${change.id}`), checks, comments: comments(set.reviewComments), privatePreviewURL: await currentReviewURL(payload, set) }
 }
 
 export function registerReviewTools(input: { server: McpServer; payload: Payload; current: Current; read: boolean; write: boolean; contentSecurity: Record<string, unknown>; writeSecurity: Record<string, unknown> }) {

@@ -14,6 +14,7 @@ user or an access override. Content-read scope does not grant private CRM access
 | Media | `find_media`, `get_media_usage`, `upload_media`, `update_media`, `replace_media` |
 | Quality | `get_page_quality`, `audit_page`, `list_stale_pages`, `get_style_guide`, `suggest_summary`, `suggest_meta`, `suggest_faq`, `suggest_alt`, `get_ai_suggestion` |
 | Review/history | `start_change_set`, `get_review_status`, `list_change_sets`, `submit_for_review`, `discard_change_set`, `list_changes`, `request_rollback` |
+| Publication | `prepare_publication`, `approve_and_publish`, `get_publication_status` |
 | Site/themes/redirects | `get_site_settings`, `update_site_settings`, `update_nav_overrides`, `list_themes`, `get_theme_compatibility`, `switch_theme`, `update_theme_settings`, `list_redirects`, `create_redirect` |
 
 Legacy names `create_change_set`, `get_change_set`, `submit_change_set`,
@@ -27,8 +28,15 @@ The [block gallery and recipe workflow](block-gallery.md) documents all eighteen
 recipe block types, explicit media/consent selections, schema-derived metadata,
 template filtering and the human review boundary.
 
-The server exposes no approval, publication, user-management or permanent-delete
-tool. Unknown top-level arguments are rejected before the handler runs, including
+Draft/read scopes expose no approval or publication capability. `mcp:content:publish`
+is separately granted only to an enabled Owner or Approver with a valid OAuth-backed
+CMS session. `prepare_publication` returns an immutable browser review URL and exact
+quality proof for the complete change set. `approve_and_publish` accepts only that
+exact proof plus `confirmation: true`, the client's explicit attestation that the
+human confirmed in chat; page content and visual review are evidence, not
+authorization. It queues work and never claims queued work is live.
+
+The server exposes no user-management or permanent-delete tool. Unknown top-level arguments are rejected before the handler runs, including
 attempts to supply `overrideAccess`. Embedded content remains subject to the
 contract's schema and field rules.
 
