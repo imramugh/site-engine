@@ -29,6 +29,8 @@ let currentUser = 'synthetic-user';
 let userEnabled = true;
 let currentScopes = ['mcp:content:read', 'mcp:leads:read'];
 let bridgeAvailable = true;
+let bridgeAuthenticated = true;
+let currentSessionId = `${currentUser}-session`;
 const registrationFailures: string[] = [];
 const previousIntrospectionSecret = process.env.OAUTH_INTROSPECTION_SECRET;
 process.env.OAUTH_INTROSPECTION_SECRET = 'test-introspection-secret';
@@ -40,8 +42,8 @@ const service = createOAuthService({
   cookieKeys: ['test-cookie-key-one', 'test-cookie-key-two'],
   jwks: { keys: [{ ...signingKey, kid: 'test-key', use: 'sig', alg: 'RS256' }] },
   sessionBridge: {
-    resolve: async () => ({ id: currentUser, sessionId: `${currentUser}-session`, enabled: userEnabled, scopes: currentScopes }),
-    find: async (id, sessionId) => { if (!bridgeAvailable) throw new Error('synthetic bridge outage'); return ['synthetic-user', 'other-user'].includes(id) && (!sessionId || sessionId === `${id}-session`) ? { id, sessionId: `${id}-session`, enabled: userEnabled, scopes: currentScopes } : undefined; },
+    resolve: async () => bridgeAuthenticated ? { id: currentUser, sessionId: currentSessionId, enabled: userEnabled, scopes: currentScopes } : undefined,
+    find: async (id, sessionId) => { if (!bridgeAvailable) throw new Error('synthetic bridge outage'); return id === currentUser && (!sessionId || sessionId === currentSessionId) ? { id, sessionId: currentSessionId, enabled: userEnabled, scopes: currentScopes } : undefined; },
   },
   onRegistrationFailure: (reason) => registrationFailures.push(reason),
 });
@@ -248,6 +250,70 @@ try {
   const disabledAuthorization = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
   assert.equal(disabledAuthorization.status, 401);
   userEnabled = true;
+  bridgeAuthenticated = false;
+  const missingSessionAuthorization = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(missingSessionAuthorization.status, 401);
+  assert.deepEqual(await missingSessionAuthorization.json(), { error: 'login_required' });
+  const browserRecovery = await fetch(authorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; '), accept: 'text/html' } });
+  assert.equal(browserRecovery.status, 401);
+  const recoveryPage = await browserRecovery.text();
+  assert.match(recoveryPage, /href="\/admin\/login" target="_blank"/);
+  assert.match(recoveryPage, /Retry authorization/);
+  bridgeAuthenticated = true;
+  currentSessionId = 'synthetic-user-new-session';
+  const reconnectVerifier = randomBytes(48).toString('base64url');
+  const reconnectAuthorization = new URL(authorization);
+  reconnectAuthorization.searchParams.set('code_challenge', createHash('sha256').update(reconnectVerifier).digest('base64url'));
+  const reconnectStart = await fetch(reconnectAuthorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(reconnectStart.status, 303);
+  for (const value of reconnectStart.headers.getSetCookie()) {
+    const [pair] = value.split(';', 1);
+    cookies.set(pair!.split('=', 1)[0]!, pair!);
+  }
+  const reconnectInteraction = new URL(reconnectStart.headers.get('location')!, issuer);
+  const reconnectPage = await fetch(reconnectInteraction, { headers: { cookie: [...cookies.values()].join('; ') } });
+  const reconnectHtml = await reconnectPage.text();
+  assert.equal(reconnectPage.status, 200, reconnectHtml);
+  const reconnectCsrf = /name="csrf" value="([^"]+)"/.exec(reconnectHtml)?.[1];
+  assert.ok(reconnectCsrf);
+  const reconnectConsent = await fetch(reconnectInteraction, { method: 'POST', redirect: 'manual', headers: { cookie: [...cookies.values()].join('; '), origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: reconnectCsrf, decision: 'allow' }) });
+  assert.equal(reconnectConsent.status, 303);
+  let reconnectNext = new URL(reconnectConsent.headers.get('location')!, issuer);
+  let reconnectCode: string | null = null;
+  for (let redirects = 0; redirects < 4; redirects++) {
+    const reconnectResponse = await fetch(reconnectNext, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+    for (const value of reconnectResponse.headers.getSetCookie()) {
+      const [pair] = value.split(';', 1);
+      cookies.set(pair!.split('=', 1)[0]!, pair!);
+    }
+    const location = reconnectResponse.headers.get('location');
+    assert.ok(location);
+    reconnectNext = new URL(location, issuer);
+    if (reconnectNext.origin === 'http://127.0.0.1' && reconnectNext.pathname === '/callback') { reconnectCode = reconnectNext.searchParams.get('code'); break; }
+  }
+  assert.ok(reconnectCode);
+  const reconnectToken = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: reconnectCode, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: reconnectVerifier, resource }) });
+  assert.equal(reconnectToken.status, 200);
+  const reconnectTokens = await reconnectToken.json() as { access_token: string };
+  assert.equal((await introspection(tokens.access_token)).status, 200);
+  assert.deepEqual(await (await introspection(tokens.access_token)).json(), { active: false });
+  assert.equal((await introspection(reconnectTokens.access_token)).status, 200);
+  assert.equal((await (await introspection(reconnectTokens.access_token)).json() as { active: boolean }).active, true);
+  currentUser = 'other-user';
+  currentSessionId = 'other-user-session';
+  const switchedAuthorization = new URL(reconnectAuthorization);
+  switchedAuthorization.searchParams.set('code_challenge', createHash('sha256').update(randomBytes(48).toString('base64url')).digest('base64url'));
+  const switchedStart = await fetch(switchedAuthorization, { redirect: 'manual', headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(switchedStart.status, 303);
+  for (const value of switchedStart.headers.getSetCookie()) {
+    const [pair] = value.split(';', 1);
+    cookies.set(pair!.split('=', 1)[0]!, pair!);
+  }
+  const switchedInteraction = new URL(switchedStart.headers.get('location')!, issuer);
+  const switchedPage = await fetch(switchedInteraction, { headers: { cookie: [...cookies.values()].join('; ') } });
+  assert.equal(switchedPage.status, 200);
+  assert.match(await switchedPage.text(), /Requested access: sign in/);
+  assert.deepEqual(await (await introspection(reconnectTokens.access_token)).json(), { active: false });
 
   const reusedCode = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: client.client_id, code_verifier: verifier, resource }) });
   assert.equal(reusedCode.status, 400);
@@ -270,9 +336,8 @@ try {
     const gatedRegistration = await fetch(`${gatedIssuer}/reg`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://127.0.0.1/callback'], token_endpoint_auth_method: 'none', response_types: ['code'], scope: 'mcp:content:read' }) });
     const gatedClient = await gatedRegistration.json() as { client_id: string };
     const gatedAuthorization = await fetch(`${gatedIssuer}/auth?${new URLSearchParams({ response_type: 'code', client_id: gatedClient.client_id, redirect_uri: 'http://127.0.0.1/callback', scope: 'mcp:content:read', resource: `${gatedOrigin}/mcp`, state: 'gated-state', code_challenge: challenge, code_challenge_method: 'S256' })}`, { redirect: 'manual' });
-    assert.equal(gatedAuthorization.status, 303);
-    const gatedInteraction = new URL(gatedAuthorization.headers.get('location')!, gatedIssuer);
-    assert.equal((await fetch(gatedInteraction)).status, 401);
+    assert.equal(gatedAuthorization.status, 401);
+    assert.deepEqual(await gatedAuthorization.json(), { error: 'login_required' });
   } finally {
     await new Promise<void>((resolve) => gated.server.close(() => resolve()));
     gated.close();

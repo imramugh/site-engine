@@ -3,7 +3,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import Provider from 'oidc-provider';
+import Provider, { interactionPolicy } from 'oidc-provider';
 import { createHashedAdapter, findGrantBinding, listManagedGrants, openOAuthDatabase, revokeGrantFamily, revokeManagedGrant, storeGrantBinding, touchManagedGrant } from './adapter.js';
 import { createHttpSessionBridge } from './session-bridge.js';
 
@@ -18,16 +18,23 @@ export type OAuthServiceOptions = { issuer: string; resource: string; databasePa
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
 class SessionBridgeUnavailable extends Error {}
 type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
-type Grant = { addResourceScope(resource: string, scope: string): void; addOIDCScope(scope: string): void; save(): Promise<string> };
+type Grant = { accountId: string; clientId: string; addResourceScope(resource: string, scope: string): void; addOIDCScope(scope: string): void; save(): Promise<string> };
 type ProviderWithGrants = Provider & { Grant: { new (attributes: { accountId: string; clientId: string }): Grant; find(id: string): Promise<Grant | undefined> }; Client: { find(id: string): Promise<{ clientName?: string } | undefined> } };
 type PendingInteraction = { csrf: string; accountId: string; sessionId: string; expiresAt: number };
 type TokenRecord = { grantId?: string; accountId?: string; clientId?: string; resource?: string; scope?: string; exp?: number; aud?: string | string[] };
+type ProviderContext = { req: IncomingMessage; oidc: { account?: { accountId: string }; client: { clientId: string }; result?: { consent?: { grantId?: string } }; session: { grantIdFor(clientId: string): string | undefined } } };
 const pendingInteractionLimit = 500;
 const pendingInteractionTtl = 10 * 60 * 1000;
 const json = (response: ServerResponse, status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
 
 const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]!);
 const invalidRequest = (response: ServerResponse, description: string) => json(response, 400, { error: 'invalid_request', error_description: description });
+
+function loginRequired(request: IncomingMessage, response: ServerResponse, retry: string): void {
+  if (!request.headers.accept?.includes('text/html')) return json(response, 401, { error: 'login_required' });
+  response.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
+  response.end(`<!doctype html><title>Sign in required</title><main><h1>Sign in required</h1><p>Sign in, then retry this authorization request.</p><p><a href="/admin/login" target="_blank" rel="noopener">Open sign in</a></p><p><a href="${escapeHtml(retry)}">Retry authorization</a></p></main>`);
+}
 
 function exactResource(resource: string, candidate: unknown): boolean {
   return typeof candidate === 'string' && candidate === resource;
@@ -156,6 +163,11 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
   const lookupToken = async (model: 'AuthorizationCode' | 'RefreshToken' | 'AccessToken', value: string): Promise<TokenRecord | undefined> => {
     try { return await (provider as unknown as Record<string, { find(id: string): Promise<TokenRecord | undefined> }>)[model].find(value); } catch { return undefined; }
   };
+  const policy = interactionPolicy.base();
+  const login = policy.get('login');
+  const noSession = login?.checks.get('no_session');
+  if (!noSession) throw new Error('oidc-provider login policy is missing no_session');
+  noSession.check = (ctx: { oidc: { account?: unknown } }) => !ctx.oidc.account;
   const provider = new Provider(options.issuer, {
     adapter: createHashedAdapter(db),
     clients: [],
@@ -199,7 +211,21 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
       if (!user?.enabled || user.id !== id || !user.sessionId) return undefined;
       return { accountId: user.id, claims: async () => ({ sub: user.id }) };
     },
-    interactions: { url: async (_ctx: unknown, interaction: { jti: string }) => `${prefix}/interaction/${interaction.jti}` },
+    loadExistingGrant: async (ctx: unknown) => {
+      const context = ctx as ProviderContext;
+      const account = context.oidc.account;
+      const grantId = context.oidc.result?.consent?.grantId ?? context.oidc.session.grantIdFor(context.oidc.client.clientId);
+      if (!account || !grantId) return undefined;
+      let user: SessionUser | undefined;
+      try { user = await bridge.resolve(context.req); } catch { return undefined; }
+      if (!user?.enabled || !user.sessionId || user.id !== account.accountId) return undefined;
+      const binding = findGrantBinding(db, grantId);
+      if (!binding) return undefined;
+      if (binding.userId !== user.id || binding.sessionId !== user.sessionId || binding.clientId !== context.oidc.client.clientId || binding.resource !== options.resource || !binding.scopes.every((scope) => user.scopes.includes(scope))) return undefined;
+      const grant = await (provider as ProviderWithGrants).Grant.find(grantId);
+      return grant?.accountId === user.id && grant.clientId === context.oidc.client.clientId ? grant : undefined;
+    },
+    interactions: { policy, url: async (_ctx: unknown, interaction: { jti: string }) => `${prefix}/interaction/${interaction.jti}` },
   });
   // The public issuer may be HTTPS while this private service receives HTTP
   // only from an edge that overwrites forwarded headers. Keep this opt-in so
@@ -277,7 +303,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     if (requestUrl.pathname === `${prefix}/auth`) {
       let sessionUser: SessionUser | undefined;
       try { sessionUser = await bridge.resolve(request); } catch { sessionUser = undefined; }
-      if (sessionUser && !sessionUser.enabled) return json(response, 401, { error: 'login_required' });
+      if (!sessionUser?.enabled || !sessionUser.sessionId) return loginRequired(request, response, `${requestUrl.pathname}${requestUrl.search}`);
     }
     if (requestUrl.pathname === `${prefix}/token`) {
       if (request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
@@ -306,7 +332,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
       if (request.method !== 'GET' && request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
       let user: SessionUser | undefined;
       try { user = await bridge.resolve(request); } catch { user = undefined; }
-      if (!user?.enabled) return json(response, 401, { error: 'login_required' });
+      if (!user?.enabled || !user.sessionId) return loginRequired(request, response, `${requestUrl.pathname}${requestUrl.search}`);
       try {
         const interaction = await provider.interactionDetails(request, response) as unknown as Interaction;
         const jti = requestUrl.pathname.slice(`${prefix}/interaction/`.length);
@@ -337,8 +363,11 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
           result = { login: { accountId: user.id } };
         } else {
           const grants = provider as ProviderWithGrants;
-          const grant = interaction.grantId ? await grants.Grant.find(interaction.grantId) : new grants.Grant({ accountId: interaction.session.accountId, clientId: interaction.params.client_id });
-          if (!grant) throw new Error('grant not found');
+          const existing = interaction.grantId ? await grants.Grant.find(interaction.grantId) : undefined;
+          const binding = interaction.grantId ? findGrantBinding(db, interaction.grantId) : undefined;
+          const grant = existing && binding?.userId === user.id && binding.sessionId === user.sessionId && binding.clientId === interaction.params.client_id && binding.resource === options.resource
+            ? existing
+            : new grants.Grant({ accountId: user.id, clientId: interaction.params.client_id });
           if (interaction.prompt.details.missingOIDCScope?.length) grant.addOIDCScope(interaction.prompt.details.missingOIDCScope.join(' '));
           const effectiveScopes: string[] = [];
           for (const [indicator, requestedScopes] of Object.entries(interaction.prompt.details.missingResourceScopes ?? {})) {

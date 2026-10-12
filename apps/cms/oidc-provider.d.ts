@@ -1,6 +1,9 @@
 // CMS integration tests exercise the OAuth package through its public server
 // factory. Keep its local oidc-provider shim visible to this TS project too.
 declare module 'oidc-provider' {
+  type PolicyCheck = { check(context: unknown): boolean | Promise<boolean> };
+  type PolicyPrompt = { checks: { get(name: string): PolicyCheck | undefined } };
+  export const interactionPolicy: { base(): { get(name: string): PolicyPrompt | undefined } };
   export class Provider {
     constructor(issuer: string, configuration: Record<string, unknown>);
     callback(): (request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse) => void;

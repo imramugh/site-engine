@@ -1,6 +1,8 @@
 declare module 'oidc-provider' {
   export const errors: Record<string, new (...args: never[]) => Error>;
-  export const interactionPolicy: { base(): { remove(name: string): void } };
+  type PolicyCheck = { check(context: unknown): boolean | Promise<boolean> };
+  type PolicyPrompt = { checks: { get(name: string): PolicyCheck | undefined } };
+  export const interactionPolicy: { base(): { get(name: string): PolicyPrompt | undefined } };
   export class Provider {
     constructor(issuer: string, configuration: Record<string, unknown>);
     callback(): (request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse) => void;
