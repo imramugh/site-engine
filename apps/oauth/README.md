@@ -18,6 +18,8 @@ the edge still needs production request-size, rate-limit, TLS, and audit-log
 policy before release. Supply a private signing JWKS from the deployment secret
 store; this repository contains no usable key material.
 
+Optional presentation branding is deployment-owned: set OAUTH_BRANDING_DIR to a directory with branding.json containing optional name and a local logoFile, plus optional branding.css and local .woff2 fonts. The service exposes only the declared logo, branding.css, and regular local fonts under the issuer assets path; invalid manifests and symlinks fall back to the neutral presentation. The base stylesheet is served from the issuer assets path.
+
 For a private HTTP container behind an HTTPS edge, set `OAUTH_TRUST_PROXY=true`.
 This enables oidc-provider's proxy mode so its secure authorization cookies and
 redirect handling use the edge's `X-Forwarded-Proto: https`. Set it only when

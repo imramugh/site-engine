@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Provider, { interactionPolicy } from 'oidc-provider';
 import { createHashedAdapter, findGrantBinding, listManagedGrants, openOAuthDatabase, revokeGrantFamily, revokeManagedGrant, storeGrantBinding, touchManagedGrant } from './adapter.js';
 import { createHttpSessionBridge } from './session-bridge.js';
+import { assetForBranding, baseStylesheet, loadOAuthBranding, renderBrowserError, renderConsent, renderLogout, renderLogoutSuccess, renderRecovery } from './presentation.js';
 
 const scopes = ['mcp:content:read', 'mcp:content:write', 'mcp:redirects:read', 'mcp:redirects:write', 'mcp:leads:read', 'mcp:leads:write', 'mcp:leads:reply', 'mcp:careers:read', 'mcp:careers:write', 'mcp:careers:reply'];
 
@@ -13,11 +14,11 @@ export type SessionUser = { id: string; enabled: boolean; scopes: readonly strin
 /** Bridge supplied by the private CMS process; this package provides no login route. */
 export type SessionBridge = { resolve(request: IncomingMessage): Promise<SessionUser | undefined>; find(id: string, sessionId?: string): Promise<SessionUser | undefined> };
 export type RegistrationFailureReason = 'invalid_request' | 'public_client_required' | 'invalid_redirect_uri' | 'application_type_mismatch' | 'unsupported_grant_type' | 'unsupported_response_type' | 'unsupported_scope' | 'provider_rejected_metadata';
-export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean; onRegistrationFailure?: (reason: RegistrationFailureReason) => void };
+export type OAuthServiceOptions = { issuer: string; resource: string; databasePath: string; cookieKeys: readonly string[]; jwks: { keys: Array<Record<string, unknown>> }; sessionBridge?: SessionBridge; trustProxy?: boolean; brandingDirectory?: string; onRegistrationFailure?: (reason: RegistrationFailureReason) => void };
 
 const unavailableBridge: SessionBridge = { resolve: async () => undefined, find: async () => undefined };
 class SessionBridgeUnavailable extends Error {}
-type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string } };
+type Interaction = { prompt: { name: string; details: { missingOIDCScope?: string[]; missingResourceScopes?: Record<string, string[]> } }; grantId?: string; session: { accountId: string }; params: { client_id: string; scope?: string } };
 type Grant = { accountId: string; clientId: string; addResourceScope(resource: string, scope: string): void; addOIDCScope(scope: string): void; save(): Promise<string> };
 type ProviderWithGrants = Provider & { Grant: { new (attributes: { accountId: string; clientId: string }): Grant; find(id: string): Promise<Grant | undefined> }; Client: { find(id: string): Promise<{ clientName?: string } | undefined> } };
 type PendingInteraction = { csrf: string; accountId: string; sessionId: string; expiresAt: number };
@@ -27,13 +28,12 @@ const pendingInteractionLimit = 500;
 const pendingInteractionTtl = 10 * 60 * 1000;
 const json = (response: ServerResponse, status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
 
-const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]!);
-const invalidRequest = (response: ServerResponse, description: string) => json(response, 400, { error: 'invalid_request', error_description: description });
+const invalidRequest = (response: ServerResponse, description: string, request?: IncomingMessage, prefix?: string, branding?: ReturnType<typeof loadOAuthBranding>) => { if (request?.headers.accept?.includes('text/html') && prefix && branding) { response.writeHead(400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' }); response.end(renderBrowserError({ prefix, branding })); return; } json(response, 400, { error: 'invalid_request', error_description: description }); };
 
-function loginRequired(request: IncomingMessage, response: ServerResponse, retry: string): void {
+function loginRequired(request: IncomingMessage, response: ServerResponse, retry: string, prefix: string, branding: ReturnType<typeof loadOAuthBranding>): void {
   if (!request.headers.accept?.includes('text/html')) return json(response, 401, { error: 'login_required' });
   response.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
-  response.end(`<!doctype html><title>Sign in required</title><main><h1>Sign in required</h1><p>Sign in, then retry this authorization request.</p><p><a href="/admin/login" target="_blank" rel="noopener">Open sign in</a></p><p><a href="${escapeHtml(retry)}">Retry authorization</a></p></main>`);
+  response.end(renderRecovery({ prefix, branding }, retry));
 }
 
 function exactResource(resource: string, candidate: unknown): boolean {
@@ -123,6 +123,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
   const issuer = new URL(options.issuer);
   const prefix = issuer.pathname.replace(/\/$/, '');
   const resource = new URL(options.resource);
+  const branding = loadOAuthBranding(options.brandingDirectory);
   const loopback = issuer.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(issuer.hostname);
   if (!prefix || issuer.origin === 'null' || resource.origin !== issuer.origin || (!loopback && (issuer.protocol !== 'https:' || resource.protocol !== 'https:'))) {
     throw new Error('issuer and resource must share an HTTPS origin (loopback HTTP is test-only)');
@@ -169,6 +170,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
   if (!noSession) throw new Error('oidc-provider login policy is missing no_session');
   noSession.check = (ctx: { oidc: { account?: unknown } }) => !ctx.oidc.account;
   const provider = new Provider(options.issuer, {
+    renderError: async (ctx: { type?: string; body?: unknown; path?: string; req?: IncomingMessage }, out: unknown, _error: unknown) => { const browserRoute = ctx.path === '/auth' || ctx.path?.startsWith('/auth/') || ctx.path?.startsWith('/interaction/') || ctx.path?.startsWith('/session/'); if (browserRoute && ctx.req?.headers.accept?.includes('text/html')) { ctx.type = 'html'; ctx.body = renderBrowserError({ prefix, branding }); return; } ctx.type = 'application/json'; ctx.body = out; },
     adapter: createHashedAdapter(db),
     clients: [],
     jwks: options.jwks,
@@ -187,6 +189,11 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     },
     features: {
       devInteractions: { enabled: false },
+      rpInitiatedLogout: {
+        enabled: true,
+        logoutSource: async (ctx: { body?: string; host: string }, form: string) => { ctx.body = renderLogout({ prefix, branding }, form, ctx.host); },
+        postLogoutSuccessSource: async (ctx: { body?: string; oidc: { client?: { clientName?: string } } }) => { ctx.body = renderLogoutSuccess({ prefix, branding }, ctx.oidc.client?.clientName); },
+      },
       registration: { enabled: true, issueRegistrationAccessToken: false },
       registrationManagement: { enabled: false },
       clientCredentials: { enabled: false },
@@ -246,6 +253,13 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
 
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(request.url ?? '/', issuer.origin);
+    if (requestUrl.pathname === prefix + '/assets/base.css' && request.method === 'GET') { response.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' }); response.end(baseStylesheet); return; }
+    if (requestUrl.pathname.startsWith(prefix + '/assets/')) {
+      if (request.method !== 'GET') return json(response, 405, { error: 'method_not_allowed' });
+      const asset = assetForBranding(branding, requestUrl.pathname.slice((prefix + '/assets/').length));
+      if (!asset) return json(response, 404, { error: 'not_found' });
+      response.writeHead(200, { 'content-type': asset.mime, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' }); response.end(readFileSync(asset.path)); return;
+    }
     if (requestUrl.pathname === '/.well-known/oauth-protected-resource/mcp') {
       return json(response, 200, { resource: options.resource, authorization_servers: [options.issuer], scopes_supported: scopes });
     }
@@ -298,12 +312,12 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
     }
     if (requestUrl.pathname === `${prefix}/reg` || requestUrl.pathname.startsWith(`${prefix}/reg/`)) return json(response, 405, { error: 'method_not_allowed' });
     if (requestUrl.pathname === `${prefix}/auth` && !exactResource(options.resource, requestUrl.searchParams.get('resource'))) {
-      return invalidRequest(response, 'an exact resource indicator is required');
+      return invalidRequest(response, 'an exact resource indicator is required', request, prefix, branding);
     }
     if (requestUrl.pathname === `${prefix}/auth`) {
       let sessionUser: SessionUser | undefined;
       try { sessionUser = await bridge.resolve(request); } catch { sessionUser = undefined; }
-      if (!sessionUser?.enabled || !sessionUser.sessionId) return loginRequired(request, response, `${requestUrl.pathname}${requestUrl.search}`);
+      if (!sessionUser?.enabled || !sessionUser.sessionId) return loginRequired(request, response, requestUrl.pathname + requestUrl.search, prefix, branding);
     }
     if (requestUrl.pathname === `${prefix}/token`) {
       if (request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
@@ -332,7 +346,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
       if (request.method !== 'GET' && request.method !== 'POST') return json(response, 405, { error: 'method_not_allowed' });
       let user: SessionUser | undefined;
       try { user = await bridge.resolve(request); } catch { user = undefined; }
-      if (!user?.enabled || !user.sessionId) return loginRequired(request, response, `${requestUrl.pathname}${requestUrl.search}`);
+      if (!user?.enabled || !user.sessionId) return loginRequired(request, response, requestUrl.pathname + requestUrl.search, prefix, branding);
       try {
         const interaction = await provider.interactionDetails(request, response) as unknown as Interaction;
         const jti = requestUrl.pathname.slice(`${prefix}/interaction/`.length);
@@ -342,22 +356,20 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
           const csrf = randomUUID();
           if (!user.sessionId) return json(response, 401, { error: 'login_required' });
           pendingInteractions.set(jti, { csrf, accountId: user.id, sessionId: user.sessionId, expiresAt: Date.now() + pendingInteractionTtl });
-          const requested = [
-            ...(interaction.prompt.details.missingOIDCScope ?? []),
-            ...Object.values(interaction.prompt.details.missingResourceScopes ?? {}).flat(),
-          ].filter((scope, index, all) => all.indexOf(scope) === index).map(escapeHtml).join(', ');
+          const requested = (interaction.params.scope ?? '').split(' ').filter(Boolean);
+          const client = await (provider as ProviderWithGrants).Client.find(interaction.params.client_id);
           response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
-          response.end(`<!doctype html><title>Authorize access</title><main><h1>Authorize access</h1><p>Client: ${escapeHtml(interaction.params.client_id)}</p><p>Requested access: ${requested || 'sign in'}</p><form method="post" action="${escapeHtml(requestUrl.pathname)}"><input type="hidden" name="csrf" value="${csrf}"><button type="submit" name="decision" value="allow">Allow</button><button type="submit" name="decision" value="deny">Deny</button></form></main>`);
+          response.end(renderConsent({ prefix, branding }, { action: requestUrl.pathname, csrf, clientId: interaction.params.client_id, clientName: client?.clientName, scopes: interaction.prompt.name === 'login' ? [] : requested }));
           return;
         }
-        if (request.headers.origin !== issuer.origin) return invalidRequest(response, 'same-origin form submission required');
+        if (request.headers.origin !== issuer.origin) return invalidRequest(response, 'same-origin form submission required', request, prefix, branding);
         const form = await requestJson(request);
         const pending = pendingInteractions.get(jti);
         pendingInteractions.delete(jti);
-        if (!pending || pending.expiresAt <= Date.now() || pending.csrf !== form.csrf || pending.accountId !== user.id || pending.sessionId !== user.sessionId) return invalidRequest(response, 'invalid interaction confirmation');
-        if (form.decision !== 'allow' && form.decision !== 'deny') return invalidRequest(response, 'invalid interaction decision');
+        if (!pending || pending.expiresAt <= Date.now() || pending.csrf !== form.csrf || pending.accountId !== user.id || pending.sessionId !== user.sessionId) return invalidRequest(response, 'invalid interaction confirmation', request, prefix, branding);
+        if (form.decision !== 'allow' && form.decision !== 'deny') return invalidRequest(response, 'invalid interaction decision', request, prefix, branding);
         if (form.decision === 'deny') return provider.interactionFinished(request, response, { error: 'access_denied', error_description: 'resource owner denied access' });
-        if (interaction.prompt.name === 'consent' && interaction.session.accountId !== user.id) return invalidRequest(response, 'session account does not match current user');
+        if (interaction.prompt.name === 'consent' && interaction.session.accountId !== user.id) return invalidRequest(response, 'session account does not match current user', request, prefix, branding);
         let result: Record<string, unknown>;
         if (interaction.prompt.name === 'login') {
           result = { login: { accountId: user.id } };
@@ -384,6 +396,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
         }
         return provider.interactionFinished(request, response, result);
       } catch {
+        if (request.headers.accept?.includes('text/html')) { response.writeHead(400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' }); response.end(renderBrowserError({ prefix, branding })); return; }
         return json(response, 400, { error: 'invalid_interaction' });
       }
     }
@@ -413,6 +426,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const sessionBridge = cmsOrigin && bridgeSecret
     ? createHttpSessionBridge({ cmsOrigin, secret: bridgeSecret })
     : undefined;
-  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge, trustProxy: process.env.OAUTH_TRUST_PROXY === 'true', onRegistrationFailure: (reason) => console.warn(`oauth_registration_rejected reason=${reason}`) });
+  const service = createOAuthService({ issuer, resource, databasePath, cookieKeys, jwks, sessionBridge, trustProxy: process.env.OAUTH_TRUST_PROXY === 'true', brandingDirectory: process.env.OAUTH_BRANDING_DIR, onRegistrationFailure: (reason) => console.warn(`oauth_registration_rejected reason=${reason}`) });
   service.server.listen(port);
 }
