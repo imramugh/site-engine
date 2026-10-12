@@ -8,7 +8,7 @@ import { changeSetHash, scheduledPublicationTime } from '../../../../src/publish
 import { approveChangeSet } from '../../../../src/publishing'
 import { runReviewQuality } from '../../../../src/review-quality'
 import { loadInitialPreviewBaseline } from '../../../../src/review-preview'
-import { freshStaff } from '../../../../src/access'
+import { sessionStaff } from '../../../../src/access'
 import { routeForReviewPreview } from '../../../../src/review-mode'
 import { isAuthenticationSQLiteContention, sqliteAuthenticationBoundary, sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../../src/sqlite'
 
@@ -63,11 +63,11 @@ function approvalProof(value: unknown): ApprovalProof | undefined {
 
 const sameKeys = (left: readonly string[], right: readonly string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
 
-type ApprovalDenialReason = 'reviewer_role_required' | 'fresh_authentication_required'
+type ApprovalDenialReason = 'reviewer_role_required' | 'reviewer_session_required'
 
 class ApprovalAuthorizationDenied extends Error {
   constructor(readonly userID: string, readonly reason: ApprovalDenialReason) {
-    super(reason === 'reviewer_role_required' ? 'Reviewer role required.' : 'Fresh reviewer authentication is required before approval.')
+    super(reason === 'reviewer_role_required' ? 'Reviewer role required.' : 'A valid reviewer session is required before approval.')
   }
 }
 
@@ -81,9 +81,9 @@ async function auditApprovalDenial(payload: Payload, userID: string, reason: App
   })
 }
 
-async function requireFreshApprover(payload: Payload, user: { id: string; roles?: string[] }, headers: Headers, req?: PayloadRequest) {
+async function requireApproverSession(payload: Payload, user: { id: string; roles?: string[] }, headers: Headers, req?: PayloadRequest) {
   if (!user.roles?.some((role) => role === 'owner' || role === 'approver')) throw new ApprovalAuthorizationDenied(user.id, 'reviewer_role_required')
-  if (!(await freshStaff(['owner', 'approver'])({ req: req ?? { payload, user, headers } as never }))) throw new ApprovalAuthorizationDenied(user.id, 'fresh_authentication_required')
+  if (!(await sessionStaff(['owner', 'approver'])({ req: req ?? { payload, user, headers } as never }))) throw new ApprovalAuthorizationDenied(user.id, 'reviewer_session_required')
 }
 
 /** Server-owned lifecycle API. Collection REST updates are denied so clients
@@ -100,7 +100,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
     if (action === 'publish') return Response.json({ error: 'Publication is performed only by the durable worker after approval.' }, { status: 409, headers: { 'Cache-Control': 'no-store' } })
     if (action === 'approve') {
       try {
-        await requireFreshApprover(payload, authenticated.user as { id: string; roles?: string[] }, request.headers)
+        await requireApproverSession(payload, authenticated.user as { id: string; roles?: string[] }, request.headers)
       } catch (error) {
         if (!(error instanceof ApprovalAuthorizationDenied)) throw error
         await auditApprovalDenial(payload, error.userID, error.reason)
@@ -136,7 +136,7 @@ async function POSTHandler(request: Request, context: { params: Promise<{ action
         return runReviewQuality({ payload, req, id: requestBody.id })
       }
       if (action === 'approve' && typeof requestBody.id === 'string') {
-        await requireFreshApprover(payload, authenticated.user as { id: string; roles?: string[] }, request.headers, req)
+        await requireApproverSession(payload, authenticated.user as { id: string; roles?: string[] }, request.headers, req)
         const proof = approvalProof(requestBody.proof)
         if (!proof) throw new Error('The exact readiness proof displayed to the reviewer is required before approval.')
         const set = await payload.findByID({ collection: 'change-sets', id: requestBody.id, depth: 0, overrideAccess: true, req }) as unknown as { revision?: unknown; changes?: unknown; preview?: { contentHash?: unknown; includedChangeKeys?: unknown; jobID?: unknown } }

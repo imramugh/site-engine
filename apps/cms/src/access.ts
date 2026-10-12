@@ -16,6 +16,36 @@ export const staff = (allowed: readonly Role[]): Access => ({ req }): AccessResu
   hasRole(req.user as Actor, allowed)
 
 /**
+ * Editorial actions need a current, server-side session for the same enabled
+ * canonical user. They do not, by themselves, require recent reauthentication.
+ */
+export const sessionStaff = (allowed: readonly Role[]): Access => async ({ req }) => {
+  const requestUser = req.user as (Actor & { id?: string })
+  if (!requestUser?.id) return false
+  const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
+  if (!token) return false
+
+  const sessions = await req.payload.find({
+    collection: 'auth-sessions',
+    where: { tokenHash: { equals: hashOpaqueToken(token) } },
+    limit: 1,
+    overrideAccess: true,
+    req,
+  })
+  const session = sessions.docs[0]
+  const sessionUserID = typeof session?.user === 'string' ? session.user : session?.user?.id
+  if (!session || sessionUserID !== requestUser.id || !sessionIsUsable(session)) return false
+
+  try {
+    const canonicalUser = await req.payload.findByID({ collection: 'users', id: sessionUserID, overrideAccess: true, req })
+    return canonicalUser.id === requestUser.id && hasRole(canonicalUser as Actor, allowed)
+  } catch (error) {
+    if (isRetryableSQLiteError(error)) throw error
+    return false
+  }
+}
+
+/**
  * Sensitive identity changes require a recent, server-side session for the
  * same canonical user. Request user fields alone are never sufficient.
  */

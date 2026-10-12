@@ -263,10 +263,10 @@ async function canonicalReviewer(payload: Payload, req: PayloadRequest, actor: A
   const user = await payload.findByID({ collection: 'users', id: actor.id, overrideAccess: true, req }) as unknown as Actor
   if (!hasRole(user, ['owner', 'approver'])) throw new Error('Reviewer role required.')
   const token = readCookie(req.headers, cookieName(SESSION_COOKIE))
-  if (!token) throw new Error('Fresh authentication is required.')
+  if (!token) throw new Error('Reviewer session is required.')
   const sessions = await payload.find({ collection: 'auth-sessions', where: { tokenHash: { equals: hashOpaqueToken(token) } }, limit: 1, overrideAccess: true, req })
   const session = sessions.docs[0]
-  if (!session || idOf(session.user) !== actor.id || !sessionIsUsable(session) || !hasFreshAuthentication(session)) throw new Error('Fresh authentication is required.')
+  if (!session || idOf(session.user) !== actor.id || !sessionIsUsable(session)) throw new Error('Reviewer session is required.')
   return user
 }
 
