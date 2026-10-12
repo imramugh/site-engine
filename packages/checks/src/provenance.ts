@@ -6,6 +6,8 @@ const ignored = new Set(['node_modules', '.git', 'dist', '.astro', '.next', 'art
 const oauthProtocolFields = new Set([
   'apps/oauth/src/server.ts', 'apps/oauth/src/adapter.ts',
   'apps/oauth/tests/protocol.test.ts', 'apps/oauth/tests/grant-management.test.ts',
+  'apps/oauth/src/presentation.ts', 'apps/oauth/tests/presentation.test.ts',
+  'apps/oauth/e2e/oauth-pages.spec.ts',
   'apps/cms/src/connected-assistants.ts', 'apps/cms/tests/connected-assistants.integration.test.ts',
   'apps/cms/tests/oauth-bridge.integration.test.ts', 'apps/cms/e2e/connected-assistants.spec.ts',
   'apps/cms/app/(staff)/integrations/integration-configuration.tsx',

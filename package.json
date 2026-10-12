@@ -16,6 +16,7 @@
     "test:db": "corepack pnpm@12.10.1 --filter @site-engine/cms test:db",
     "test:e2e": "corepack pnpm@12.10.1 exec playwright test",
     "test:e2e:cms": "corepack pnpm@12.10.1 exec playwright test --config playwright.cms.config.ts",
+    "test:e2e:oauth": "corepack pnpm@12.10.1 exec playwright test --config playwright.oauth.config.ts",
     "typecheck": "corepack pnpm@12.10.1 -r --if-present typecheck",
     "lint": "corepack pnpm@12.10.1 -r --if-present lint",
     "check:boundaries": "tsx packages/checks/src/assert-boundaries.ts",
