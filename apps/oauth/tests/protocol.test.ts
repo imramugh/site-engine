@@ -189,6 +189,9 @@ try {
   const brandedAuthError = await fetch(`${issuer}/auth?resource=${encodeURIComponent(resource)}`, { headers: { accept: "text/html" } });
   assert.equal(brandedAuthError.status, 400);
   assert.match(await brandedAuthError.text(), /Unable to continue/);
+  const brandedStaleAuthorizationResume = await fetch(`${issuer}/auth/stale-interaction`, { headers: { accept: "text/html" } });
+  assert.equal(brandedStaleAuthorizationResume.status, 400);
+  assert.match(await brandedStaleAuthorizationResume.text(), /Unable to continue/);
   const wrongRedirect = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/other', client_id: client.client_id, code_verifier: verifier, resource }) });
   assert.equal(wrongRedirect.status, 400);
   const wrongClient = await fetch(`${issuer}/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: 'http://127.0.0.1/callback', client_id: secondClient.client_id, code_verifier: verifier, resource }) });

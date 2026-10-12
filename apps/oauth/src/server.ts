@@ -170,7 +170,7 @@ export function createOAuthService(options: OAuthServiceOptions): { server: Serv
   if (!noSession) throw new Error('oidc-provider login policy is missing no_session');
   noSession.check = (ctx: { oidc: { account?: unknown } }) => !ctx.oidc.account;
   const provider = new Provider(options.issuer, {
-    renderError: async (ctx: { type?: string; body?: unknown; path?: string; req?: IncomingMessage }, out: unknown, _error: unknown) => { const browserRoute = ctx.path === '/auth' || ctx.path?.startsWith('/interaction/') || ctx.path?.startsWith('/session/'); if (browserRoute && ctx.req?.headers.accept?.includes('text/html')) { ctx.type = 'html'; ctx.body = renderBrowserError({ prefix, branding }); return; } ctx.type = 'application/json'; ctx.body = out; },
+    renderError: async (ctx: { type?: string; body?: unknown; path?: string; req?: IncomingMessage }, out: unknown, _error: unknown) => { const browserRoute = ctx.path === '/auth' || ctx.path?.startsWith('/auth/') || ctx.path?.startsWith('/interaction/') || ctx.path?.startsWith('/session/'); if (browserRoute && ctx.req?.headers.accept?.includes('text/html')) { ctx.type = 'html'; ctx.body = renderBrowserError({ prefix, branding }); return; } ctx.type = 'application/json'; ctx.body = out; },
     adapter: createHashedAdapter(db),
     clients: [],
     jwks: options.jwks,
