@@ -141,9 +141,9 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
     ).toEqual({ background: 'rgb(255, 255, 255)', color: 'rgb(15, 27, 38)' })
   }
   await hero.getByRole('button', { name: '+ Media' }).click()
-  await expect(hero.getByLabel('Media', { exact: true })).toBeVisible()
+  await expect(hero.getByRole('combobox', { name: /^Media/ })).toBeVisible()
   await hero.getByRole('button', { name: 'Remove Media' }).click()
-  await expect(hero.getByLabel('Media', { exact: true })).toHaveCount(0)
+  await expect(hero.getByRole('combobox', { name: /^Media/ })).toHaveCount(0)
 
   await editor.page.getByText('Page fields', { exact: false }).first().click()
   await editor.page
