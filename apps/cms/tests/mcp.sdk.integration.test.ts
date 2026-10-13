@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -502,28 +502,41 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const hiddenMedia = structuredJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } })) as { draft: { changeSetRevision: number } }
     const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; const afterFixed = pageEditorProjection(afterFixedRecord)
     expect(afterFixed.blocks.find((block) => block.id === fixedID)?.hidden).toBe(true)
-    const videoAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK video', filename: 'fixed-sdk.webm', mimeType: 'video/webm' } }) as { id: string }
-    const captionsAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK captions', filename: 'fixed-sdk.vtt', mimeType: 'text/vtt' } }) as { id: string }
-    const directReferenceSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP direct block references' } })) as { id: string; revision: number }
+    const videoFilename = `fixed-sdk-${randomUUID()}.webm`; const captionsFilename = `fixed-sdk-${randomUUID()}.vtt`
+    mkdirSync(process.env.MEDIA_STORAGE_DIR!, { recursive: true }); writeFileSync(join(process.env.MEDIA_STORAGE_DIR!, videoFilename), Buffer.from('synthetic video fixture')); writeFileSync(join(process.env.MEDIA_STORAGE_DIR!, captionsFilename), 'WEBVTT\n')
+    const videoAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK video', filename: videoFilename, mimeType: 'video/webm' } }) as { id: string }
+    const captionsAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK captions', filename: captionsFilename, mimeType: 'text/vtt' } }) as { id: string }
+    const serviceSection = await payload.create({ collection: 'sections', data: { name: `Direct services ${randomUUID()}`, slug: `direct-services-${randomUUID().slice(0, 8)}`, allowedTemplates: ['pillar', 'service'], pageIds: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    const servicePillar = await payload.create({ collection: 'pages', data: { title: 'Direct services', summary: 'A synthetic pillar page for direct related-services reference coverage.', slug: `direct-pillar-${randomUUID().slice(0, 8)}`, sectionId: serviceSection.id, template: 'pillar', blocks: [{ id: randomUUID(), type: 'featureGrid', heading: 'Direct services', items: [{ title: 'Direct service', body: 'A synthetic service.' }], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const relatedService = await payload.create({ collection: 'pages', data: { title: 'Direct related service', summary: 'A synthetic service page used for direct related-services reference coverage.', slug: `direct-service-${randomUUID().slice(0, 8)}`, sectionId: serviceSection.id, parentId: servicePillar.id, template: 'service', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Direct service', body: 'A synthetic service page.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+    // Use an isolated editor and request bucket: this deliberately exercises
+    // every direct block type without weakening the MCP rate limit covered
+    // elsewhere in this suite.
+    const directEditor = await payload.create({ collection: 'users', data: { email: `mcp-direct-blocks-${randomUUID()}@example.test`, name: 'MCP Direct Blocks', roles: ['editor'] }, overrideAccess: true })
+    const directSession = await sessionFor(directEditor.id); const directToken = `mcp-direct-blocks-${randomUUID()}`
+    tokens.set(directToken, { clientId: `mcp-direct-blocks-client-${randomUUID()}`, userId: directEditor.id, sessionId: directSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+    const directClient = await clientFor(directToken)
+    const directReferenceSet = resultJson(await directClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP direct block references' } })) as { id: string; revision: number }
     const directBlocks = [
       { type: 'hero', fields: { heading: 'Direct hero', body: 'A direct hero with a real asset.', mediaId: fixedAsset.id } }, { type: 'incidentBar', fields: { message: 'Direct status message.' } },
       { type: 'pillarGrid', fields: { heading: 'Direct pillars', items: [{ title: 'Pillar', body: 'Direct item.', href: '/' }] } }, { type: 'featureGrid', fields: { heading: 'Direct features', items: [{ title: 'Feature', body: 'Direct item.' }] } },
       { type: 'splitList', fields: { heading: 'Direct list', items: [{ title: 'Item', body: 'Direct item.' }] } }, { type: 'chipList', fields: { chips: ['Direct'] } },
       { type: 'testimonials', fields: { items: [{ quote: 'A direct confirmed testimonial.', attribution: 'Synthetic customer', permissionConfirmed: true }] } }, { type: 'quote', fields: { quote: 'A direct attributed quotation.', attribution: 'Synthetic source' } },
       { type: 'faq', fields: { heading: 'Direct questions', items: [{ question: 'Question?', answer: 'Direct answer.' }] } }, { type: 'callout', fields: { heading: 'Direct callout', body: 'Direct supporting text.' } },
-      { type: 'relatedServices', fields: { heading: 'Direct services', pageIds: [page.id] } }, { type: 'cta', fields: { heading: 'Direct action', body: 'Direct action text.', cta: { label: 'Continue', href: '/' } } },
+      { type: 'relatedServices', fields: { heading: 'Direct services', pageIds: [relatedService.id] } }, { type: 'cta', fields: { heading: 'Direct action', body: 'Direct action text.', cta: { label: 'Continue', href: '/' } } },
       { type: 'richText', fields: { body: 'Direct rich text.' } }, { type: 'contact', fields: { heading: 'Direct contact', body: 'Direct contact text.' } }, { type: 'media', fields: { mediaId: fixedAsset.id } },
       { type: 'imageText', fields: { heading: 'Direct image', body: 'Direct image text.', mediaId: fixedAsset.id } }, { type: 'gallery', fields: { mediaIds: [fixedAsset.id] } }, { type: 'logoStrip', fields: { mediaIds: [fixedAsset.id] } },
       { type: 'video', fields: { mediaId: videoAsset.id, posterMediaId: fixedAsset.id, captionsMediaId: captionsAsset.id, transcript: 'Direct transcript.' } },
     ] as const
     let directRevision = directReferenceSet.revision; let directDraft = afterFixed
     for (const block of directBlocks) {
-      const inserted = structuredJson(await editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block } })) as { draft: { changeSetRevision: number } }
+      const inserted = structuredJson(await directClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block } })) as { draft: { changeSetRevision: number } }
       directRevision = inserted.draft.changeSetRevision
       directDraft = pageEditorProjection(await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>)
     }
     expect(directDraft.blocks.slice(-directBlocks.length).map((block) => block.type)).toEqual(directBlocks.map((block) => block.type))
-    expect(resultJson(await editorClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block: { type: 'media', fields: { mediaId: randomUUID() } } } }))).toEqual({ error: 'recipe_reference_unavailable' })
+    expect(resultJson(await directClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block: { type: 'media', fields: { mediaId: randomUUID() } } } }))).toEqual({ error: 'recipe_reference_unavailable' })
+    await directClient.transport.close()
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
     const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [
       { type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } } },

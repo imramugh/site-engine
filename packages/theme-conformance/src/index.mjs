@@ -269,7 +269,6 @@ function fixture(contractVersion = "1.7.0") {
           },
         ],
       }),
-      ...(contractVersion === "1.9.0" ? [block(70, "quote", { quote: "Neutral attributed quote.", attribution: "Neutral author" })] : []),
       block(8, "faq", {
         heading: "Questions",
         items: [{ question: "Question?", answer: "Neutral answer." }],
@@ -319,6 +318,7 @@ function fixture(contractVersion = "1.7.0") {
         captionsMediaId: id(205),
         transcript: "Neutral transcript.",
       }),
+      ...(contractVersion === "1.9.0" ? [block(70, "quote", { quote: "Neutral attributed quote.", attribution: "Neutral author" })] : []),
     ],
   };
   const templates = [
