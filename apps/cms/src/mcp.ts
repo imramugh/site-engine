@@ -279,7 +279,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const currentEditableManifest = async () => {
     const [siteSettings, sections, pages, redirects, assets, guides] = await Promise.all([
       payload.find({ collection: 'site-settings', limit: 1, depth: 0, draft: true, user: current, overrideAccess: false }),
-      payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, user: current, overrideAccess: false }),
+      payload.find({ collection: 'sections', limit: 0, pagination: false, depth: 0, draft: true, user: current, overrideAccess: false }),
       payload.find({ collection: 'pages', limit: 0, pagination: false, depth: 0, draft: true, user: current, overrideAccess: false }),
       payload.find({ collection: 'redirects', limit: 0, pagination: false, depth: 0, user: current, overrideAccess: false }),
       payload.find({ collection: 'assets', limit: 0, pagination: false, depth: 0, user: current, overrideAccess: false }),

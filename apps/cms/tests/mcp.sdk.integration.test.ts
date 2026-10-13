@@ -1063,6 +1063,30 @@ test('MCP change log and rollback require a fresh canonical Owner or Approver se
   }
 })
 
+test('audit_page reads matching draft page and section template policies', async () => {
+  const owner = await payload.create({ collection: 'users', data: { email: `mcp-draft-audit-${randomUUID()}@example.test`, name: 'MCP draft audit', roles: ['owner'] }, overrideAccess: true })
+  const section = await payload.create({ collection: 'sections', data: { name: 'Draft audit section', summary: 'A synthetic section for matching draft template-policy audit coverage.', slug: `draft-audit-${randomUUID().slice(0, 8)}`, allowedTemplates: ['standard'] }, draft: true, user: owner, overrideAccess: false })
+  const page = await payload.create({ collection: 'pages', data: { title: 'Draft audit page', summary: 'A synthetic page that changes template only after its section draft permits it.', slug: `draft-audit-${randomUUID().slice(0, 8)}`, sectionId: section.id, template: 'standard', blocks: [{ id: randomUUID(), type: 'richText', body: 'A neutral paragraph that is valid in standard and article templates.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, draft: true, user: owner, overrideAccess: false })
+  await payload.update({ collection: 'sections', id: section.id, data: { allowedTemplates: ['standard', 'article'] }, draft: true, user: owner, overrideAccess: false })
+  await payload.update({ collection: 'pages', id: page.id, data: { template: 'article' }, draft: true, user: owner, overrideAccess: false })
+  const [baseSection, draftSection, draftPage] = await Promise.all([
+    payload.findByID({ collection: 'sections', id: section.id, depth: 0, draft: false, overrideAccess: true }),
+    payload.findByID({ collection: 'sections', id: section.id, depth: 0, draft: true, overrideAccess: true }),
+    payload.findByID({ collection: 'pages', id: page.id, depth: 0, draft: true, overrideAccess: true }),
+  ])
+  expect(baseSection.allowedTemplates).toEqual(['standard'])
+  expect(draftSection.allowedTemplates).toEqual(['standard', 'article'])
+  expect(draftPage.template).toBe('article')
+  await expect(payload.update({ collection: 'pages', id: page.id, data: { template: 'listing' }, draft: true, user: owner, overrideAccess: false })).rejects.toThrow('template')
+  const session = await sessionFor(String(owner.id)); const token = `mcp-draft-audit-${randomUUID()}`
+  tokens.set(token, { clientId: token, userId: String(owner.id), sessionId: String(session.id), scopes: ['mcp:content:read'] })
+  const sdk = await clientFor(token)
+  try {
+    const audit = structuredJson(await sdk.client.callTool({ name: 'audit_page', arguments: { id: page.id } })) as { blockers: Array<{ code: string; path: string }> }
+    expect(audit.blockers.filter((issue) => issue.code === 'SCHEMA_INVALID' && issue.path.endsWith('.template'))).toEqual([])
+  } finally { await sdk.client.close() }
+})
+
 test('ENG-017 creates and updates draft pages only through an explicit revisioned change set', async () => {
   const editor = await payload.create({ collection: 'users', data: { email: 'mcp-page@example.test', name: 'MCP Page Editor', roles: ['editor'] }, overrideAccess: true })
   const section = await payload.create({ collection: 'sections', data: { name: 'MCP pages', summary: 'Synthetic section that accepts standard pages for MCP mutation testing.', slug: 'mcp-pages', allowedTemplates: ['standard'] }, user: editor, overrideAccess: false })
