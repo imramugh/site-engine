@@ -159,7 +159,7 @@ async function POSTHandler(request: Request) {
         if (!value || !value.settings || !value.guide || Object.keys(value.settings).some(key => !['seoDescription', 'searchEnabled', 'crawlerPolicy'].includes(key)) || Object.keys(value.guide).some(key => !['bannedPhrases','preferredTerms','canadianSpelling','maximumSentenceWords','minimumReadingEase'].includes(key))) throw new Error('Unsupported Search and AI setting.')
         const policy = cleanCrawlerPolicy(value.settings.crawlerPolicy)
         const description = value.settings.seoDescription
-        if (description !== null && (typeof description !== 'string' || !description.trim() || description.trim().length > 160)) throw new Error('The short site description must be 160 characters or fewer.')
+        if (description !== null && (typeof description !== 'string' || !description.trim() || description.trim().length > 300)) throw new Error('The short site description must be 300 characters or fewer.')
         if (typeof value.settings.searchEnabled !== 'boolean') throw new Error('Public search preference is required.')
         if (!['off', 'warn'].includes(String(value.guide.canadianSpelling)) || !Number.isInteger(value.guide.maximumSentenceWords) || Number(value.guide.maximumSentenceWords) < 5 || Number(value.guide.maximumSentenceWords) > 100 || !Number.isInteger(value.guide.minimumReadingEase) || Number(value.guide.minimumReadingEase) < 0 || Number(value.guide.minimumReadingEase) > 121) throw new Error('Writing guidance values are outside the supported range.')
         const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
