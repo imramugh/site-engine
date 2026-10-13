@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -502,10 +502,8 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const hiddenMedia = structuredJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } })) as { draft: { changeSetRevision: number } }
     const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; const afterFixed = pageEditorProjection(afterFixedRecord)
     expect(afterFixed.blocks.find((block) => block.id === fixedID)?.hidden).toBe(true)
-    const mediaFixture = join(process.cwd(), 'public/admin-branding/assets/gallery-libraries/starter-v1-8-0/renders/media')
-    const videoBytes = readFileSync(join(mediaFixture, 'sample-video.webm')); const captionsBytes = readFileSync(join(mediaFixture, 'sample-captions.vtt'))
-    const videoAsset = await payload.create({ collection: 'assets', data: { alt: 'Fixed SDK video' }, file: { data: videoBytes, mimetype: 'video/webm', name: 'fixed-sdk.webm', size: videoBytes.length }, overrideAccess: true })
-    const captionsAsset = await payload.create({ collection: 'assets', data: { alt: 'Fixed SDK captions' }, file: { data: captionsBytes, mimetype: 'text/vtt', name: 'fixed-sdk.vtt', size: captionsBytes.length }, overrideAccess: true })
+    const videoAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK video', filename: 'fixed-sdk.webm', mimeType: 'video/webm' } }) as { id: string }
+    const captionsAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK captions', filename: 'fixed-sdk.vtt', mimeType: 'text/vtt' } }) as { id: string }
     const directReferenceSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP direct block references' } })) as { id: string; revision: number }
     const directBlocks = [
       { type: 'hero', fields: { heading: 'Direct hero', body: 'A direct hero with a real asset.', mediaId: fixedAsset.id } }, { type: 'incidentBar', fields: { message: 'Direct status message.' } },
