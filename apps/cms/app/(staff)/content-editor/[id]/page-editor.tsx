@@ -908,8 +908,8 @@ export function PageEditor({ pageID }: { pageID: string }) {
   const selectedContractVersion = selectedSet
     ? selectedSet.contractVersion
     : data?.activeContractVersion
-  const supportsPageMetadata = selectedContractVersion === '1.4.0' || selectedContractVersion === '1.5.0' || selectedContractVersion === '1.6.0' || selectedContractVersion === '1.7.0' || selectedContractVersion === '1.8.0'
-  const supportsJobWorkMode = selectedContractVersion === '1.8.0'
+  const supportsPageMetadata = selectedContractVersion === '1.4.0' || selectedContractVersion === '1.5.0' || selectedContractVersion === '1.6.0' || selectedContractVersion === '1.7.0' || selectedContractVersion === '1.8.0' || selectedContractVersion === '1.9.0'
+  const supportsJobWorkMode = selectedContractVersion === '1.8.0' || selectedContractVersion === '1.9.0'
   const dirty = Boolean(
     draft && saved && JSON.stringify(draft) !== JSON.stringify(saved),
   )
