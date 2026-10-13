@@ -59,7 +59,7 @@ test('ENG-018 renders the complete active-theme library and captures an ordered 
     await expect(galleryLibrary.locator('[data-gallery-renderer]')).toBeHidden()
     await page.locator('[data-gallery-kind="block"]').click()
     const cards = page.locator('[data-block-gallery-card]')
-    await expect(cards).toHaveCount(18)
+    await expect(cards).toHaveCount(19)
     await expect(page.getByText(/^Active theme /)).toBeVisible()
 
     await page.getByRole('button', { name: 'article', exact: true }).click()

@@ -6,11 +6,10 @@ import { sqliteBackpressureMessage, sqliteBackpressureResponse } from '../../../
 import { createNamedChangeSet } from '../../../src/editorial'
 import { serverSessionStrategy } from '../../../src/identity'
 import { compatibilityReport, getInstalledTheme, installedThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
-import { SiteSnapshotSchema } from '@site-engine/contract'
+import { compatibilityForTheme, selectionCandidate, type ThemeSelection } from '../../../src/theme-selection'
 
 export const dynamic = 'force-dynamic'
 
-type ThemeSelection = { id: string; version: string; contract: string; manifestDigest: string }
 type ThemeSettings = Record<string, Record<string, string | number | boolean>>
 type Actor = { id: string; roles?: string[] }
 
@@ -57,23 +56,6 @@ function sameSelection(left: ThemeSelection | null, right: ThemeSelection | null
   return left === null ? right === null : Boolean(right && left.id === right.id && left.version === right.version && left.contract === right.contract && left.manifestDigest === right.manifestDigest)
 }
 
-/** A selection is reviewed as a candidate snapshot. This is the sole path
- * that may advance a contract pin; ordinary editorial changes retain theirs. */
-function selectionCandidate(manifest: unknown, selection: ThemeSelection) {
-  const snapshot = SiteSnapshotSchema.parse(manifest)
-  const hasHeroExtensions = snapshot.pages.some((page) => page.blocks.some((block) => block.type === 'hero' && (block.secondaryCta || block.supportPanel)))
-  if (snapshot.settings.contractVersion === '1.1.0' && selection.contract === '1.0.0' && hasHeroExtensions) {
-    throw new Error('This theme would downgrade a snapshot that uses Hero supporting content.')
-  }
-  return SiteSnapshotSchema.parse({ ...snapshot, settings: { ...snapshot.settings, contractVersion: selection.contract, theme: selection } })
-}
-
-function compatibilityFor(manifest: unknown, installed: { manifest: Parameters<typeof compatibilityReport>[1]; manifestDigest: string }) {
-  const selection: ThemeSelection = { id: installed.manifest.name, version: installed.manifest.version, contract: installed.manifest.contract, manifestDigest: installed.manifestDigest }
-  try { return compatibilityReport(selectionCandidate(manifest, selection), installed.manifest) }
-  catch { return { compatible: false, actions: [{ action: 'contract-version', pageID: '', blockID: '', reason: 'theme-contract-transition-invalid' }] } }
-}
-
 async function currentState(payload: Awaited<ReturnType<typeof getPayload>>) {
   const [release, setting] = await Promise.all([
     payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true }),
@@ -102,7 +84,7 @@ async function chooserData(payload: Awaited<ReturnType<typeof getPayload>>, acto
       manifestDigest: installed.manifestDigest,
       standardBlocks: installed.manifest.standardBlocks,
       settingKeys: installed.manifest.settingKeys,
-      compatibility: compatibilityFor(state.manifest, installed),
+      compatibility: compatibilityForTheme(state.manifest, installed),
     })),
     publishedSelection: publicSelection(published),
     draftSelection: publicSelection(draft),

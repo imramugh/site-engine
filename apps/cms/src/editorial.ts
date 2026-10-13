@@ -6,6 +6,7 @@ import { hasRole } from './access'
 import { mediaFileIdentity, snapshotMediaReference } from './media'
 import { validatePageTree, type TreePage, type TreeSection } from './tree/validation'
 import { enqueueNotification } from './notification-settings'
+import { attachConfiguredAIStatus } from './ai-quality-status'
 
 export type CapturedCollection = 'pages' | 'sections' | 'redirects' | 'assets' | 'theme-settings' | 'site-settings' | 'style-guides'
 export type ChangeSetState = 'open' | 'submitted' | 'changes-requested' | 'approved' | 'rejected' | 'published' | 'discarded' | 'stale'
@@ -155,10 +156,12 @@ function capturedAssetHasMetadata(value: Record<string, unknown> | null | undefi
   return Boolean(value && ['caption', 'credit', 'tags'].some((field) => Object.prototype.hasOwnProperty.call(value, field)))
 }
 
-/** CMS-only media metadata is reviewable in captures but never part of a public snapshot. */
-export function publicAssetSnapshot(value: Record<string, unknown>): Record<string, unknown> {
-  const { caption: _caption, credit: _credit, tags: _tags, ...publicFields } = value
-  return publicFields
+export function publicAssetSnapshot(value: Record<string, unknown>, includePublicMetadata = false): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key, item]) => item !== undefined
+    && (includePublicMetadata || !['caption', 'credit', 'tags'].includes(key))
+    && (key !== 'caption' || (typeof item === 'string' && item.trim().length > 0))
+    && (key !== 'credit' || (typeof item === 'string' && item.trim().length > 0))
+    && (key !== 'tags' || (Array.isArray(item) && item.length > 0))))
 }
 
 export async function assetRestoration(payload: Payload, req: PayloadRequest, current: Record<string, unknown>, before: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -302,12 +305,12 @@ export async function currentDraftReadiness(payload: Payload, req: PayloadReques
     const base = await currentPreviewBaseline(payload, req)
     if (!base) throw new Error('No configured baseline')
     const candidate = buildCandidate(base.manifest, changes, changes.map(change => `${change.collection}:${change.id}`), base.versions)
-    return checkSiteSnapshot(candidate, { ...(options.asOf ? { asOf: options.asOf } : {}), style: candidate.styleGuide })
+    return await attachConfiguredAIStatus(payload, checkSiteSnapshot(candidate, { ...(options.asOf ? { asOf: options.asOf } : {}), style: candidate.styleGuide }), req)
   } catch {
     // A stale or malformed capture must remain available for repair. The
     // contract/tree evaluator is the only write-aborting quality gate.
     const unavailable = { code: 'READINESS_CANDIDATE_UNAVAILABLE', severity: 'blocker' as const, path: '$', message: 'Readiness cannot be evaluated until the captured draft can be assembled against its publication baseline.', remediation: 'Correct the draft or refresh the change set, then review readiness again.' }
-    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: false, issues: [unavailable], blockers: [unavailable], warnings: [], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }
+    return { version: 1, asOf: typeof options.asOf === 'string' ? options.asOf : (options.asOf ?? new Date()).toISOString(), publishable: false, issues: [unavailable], blockers: [unavailable], warnings: [], stalePages: [], ai: { status: 'not-run', code: 'AI_CHECKS_NOT_RUN', message: 'Deterministic checks do not run an AI provider. Request an AI suggestion separately.' } }
   }
 }
 

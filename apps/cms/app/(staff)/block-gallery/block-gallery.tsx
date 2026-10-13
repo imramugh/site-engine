@@ -22,6 +22,7 @@ function RecipeFields({ item, index, assets, pages, setField }: { item: RecipeIt
   const values = item.fields ?? {}
   const selectMedia = (name: string, label: string, media: Asset[], multiple = false) => <label key={name}>{label}<select multiple={multiple} value={multiple ? (Array.isArray(values[name]) ? values[name] as string[] : []) : String(values[name] ?? '')} onChange={event => setField(index, name, multiple ? Array.from(event.target.selectedOptions, option => option.value) : event.target.value)}>{!multiple ? <option value="">Choose media</option> : null}{media.map(asset => <option key={asset.id} value={asset.id}>{asset.label}</option>)}</select></label>
   const images = assets.filter(asset => asset.mimeType.startsWith('image/'))
+  if (item.type === 'hero') return <div className={styles.requiredFields}>{selectMedia('mediaId', 'Hero image (optional)', images)}</div>
   if (['media', 'imageText'].includes(item.type)) return <div className={styles.requiredFields}>{selectMedia('mediaId', 'Image', images)}</div>
   if (['gallery', 'logoStrip'].includes(item.type)) return <div className={styles.requiredFields}>{selectMedia('mediaIds', 'Images (select one or more)', images, true)}</div>
   if (item.type === 'video') return <div className={styles.requiredFields}>{selectMedia('mediaId', 'Video', assets.filter(asset => asset.mimeType.startsWith('video/')))}{selectMedia('posterMediaId', 'Poster image', images)}{selectMedia('captionsMediaId', 'Captions file', assets.filter(asset => asset.mimeType === 'text/vtt'))}</div>
@@ -31,6 +32,7 @@ function RecipeFields({ item, index, assets, pages, setField }: { item: RecipeIt
     const change = (field: string, value: unknown) => setField(index, 'items', [{ quote: '', attribution: '', permissionConfirmed: false, ...testimonial, [field]: value }])
     return <div className={styles.requiredFields}><label>Quotation<textarea maxLength={500} value={testimonial?.quote ?? ''} onChange={event => change('quote', event.target.value)} /></label><label>Attribution<input maxLength={100} value={testimonial?.attribution ?? ''} onChange={event => change('attribution', event.target.value)} /></label><label className={styles.checkbox}><input type="checkbox" checked={testimonial?.permissionConfirmed ?? false} onChange={event => change('permissionConfirmed', event.target.checked)} />I have permission to publish this quotation.</label></div>
   }
+  if (item.type === 'quote') return <div className={styles.requiredFields}><label>Quotation<textarea maxLength={1000} value={String(values.quote ?? '')} onChange={event => setField(index, 'quote', event.target.value)} /></label><label>Attribution<input maxLength={100} value={String(values.attribution ?? '')} onChange={event => setField(index, 'attribution', event.target.value)} /></label><label>Role (optional)<input maxLength={100} value={String(values.role ?? '')} onChange={event => setField(index, 'role', event.target.value)} /></label></div>
   return null
 }
 

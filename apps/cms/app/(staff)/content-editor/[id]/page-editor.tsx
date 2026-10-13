@@ -119,6 +119,7 @@ function removeAt<T>(source: T, path: Path): T {
 
 function optionalFieldEntries(
   block: Record<string, unknown>,
+  references?: Context['references'],
 ): Array<[string, unknown]> {
   const values: Record<string, Array<[string, unknown]>> = {
     hero: [
@@ -126,6 +127,7 @@ function optionalFieldEntries(
       ['cta', { label: 'Learn more', href: '/' }],
       ['secondaryCta', { label: 'More information', href: '/' }],
       ['phoneCta', { label: 'Call', number: '+15550123' }],
+      ['mediaId', references?.media.find((item) => item.mimeType?.startsWith('image/'))?.id],
       [
         'supportPanel',
         {
@@ -167,6 +169,7 @@ function optionalFieldEntries(
       ['contactDetails', { channels: [] }],
     ],
     media: [['caption', 'Draft caption']],
+    quote: [['role', 'Draft role']],
     video: [['transcript', 'Replace this draft transcript.']],
   }
   return values[String(block.type)] ?? []
@@ -174,8 +177,9 @@ function optionalFieldEntries(
 
 function optionalFields(
   block: Record<string, unknown>,
+  references?: Context['references'],
 ): Array<[string, unknown]> {
-  return optionalFieldEntries(block).filter(([key]) => !(key in block))
+  return optionalFieldEntries(block, references).filter(([key, value]) => !(key in block) && value !== undefined)
 }
 
 function optionalObjectEntries(
@@ -291,6 +295,11 @@ export function blockDefault(
           permissionConfirmed: false,
         },
       ],
+    },
+    quote: {
+      ...base,
+      quote: 'Replace this attributed draft quote.',
+      attribution: 'Draft attribution',
     },
     faq: {
       ...base,
@@ -834,7 +843,7 @@ function BlockEditor({
               path={[key]}
               onSet={set}
               onRemove={
-                optionalFieldEntries(record).some(([name]) => name === key)
+                optionalFieldEntries(record, references).some(([name]) => name === key)
                   ? remove
                   : undefined
               }
@@ -849,10 +858,10 @@ function BlockEditor({
           onRemove={(path) => remove(['appearance', ...path])}
           references={references}
         />
-        {optionalFields(record).length ? (
+        {optionalFields(record, references).length ? (
           <div className={styles.optional}>
             <span>Optional fields</span>
-            {optionalFields(record).map(([key, value]) => (
+            {optionalFields(record, references).map(([key, value]) => (
               <button type="button" key={key} onClick={() => set([key], value)}>
                 + {title(key)}
               </button>

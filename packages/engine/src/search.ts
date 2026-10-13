@@ -12,6 +12,7 @@ function text(block: Block): { headings: string[]; body: string[] } {
     case 'splitList': return { headings: [block.heading, ...block.items.map((item) => item.title)], body: block.items.map((item) => item.body) }
     case 'chipList': return { headings: block.heading ? [block.heading] : [], body: block.chips }
     case 'testimonials': return { headings: [], body: block.items.filter((item) => item.permissionConfirmed).flatMap((item) => [item.quote, item.attribution, item.role ?? '']) }
+    case 'quote': return { headings: [], body: [block.quote, block.attribution, block.role ?? ''] }
     case 'faq': return { headings: [block.heading, ...block.items.map((item) => item.question)], body: block.items.map((item) => item.answer) }
     case 'callout': case 'cta': case 'imageText': return { headings: [block.heading], body: [block.body] }
     case 'richText': return { headings: [], body: [block.body] }

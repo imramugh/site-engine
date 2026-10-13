@@ -34,6 +34,7 @@ describe('ENG-002 exported schema fixtures', () => {
     ['splitList', { id, hidden: false, type: 'splitList', heading: 'List', items: [{ title: 'One', body: 'Body' }], appearance }],
     ['chipList', { id, hidden: false, type: 'chipList', chips: ['One'], appearance }],
     ['testimonials', { id, hidden: false, type: 'testimonials', items: [{ quote: 'Quote', attribution: 'Person', permissionConfirmed: true }], appearance }],
+    ['quote', { id, hidden: false, type: 'quote', quote: 'Quoted neutral text.', attribution: 'Person', appearance }],
     ['callout', { id, hidden: false, type: 'callout', heading: 'Callout', body: 'Body', appearance }],
     ['relatedServices', { id, hidden: false, type: 'relatedServices', heading: 'Related', pageIds: [id], appearance }],
     ['richText', { id, hidden: false, type: 'richText', body: 'Body', appearance }],
@@ -57,6 +58,21 @@ describe('ENG-002 site data semantic fixtures', () => {
     expect(SiteSnapshotSchema.safeParse(old).success).toBe(false)
     old.settings.contractVersion = '1.4.0'
     expect(SiteSnapshotSchema.safeParse(old).success).toBe(true)
+  })
+  it('gates quote, hero image, public media metadata, and extended site SEO to contract 1.9', () => {
+    const value = snapshot()
+    const image = { id, filename: 'neutral.webp', mimeType: 'image/webp', width: 10, height: 10, alt: 'Neutral image', caption: 'A neutral caption', credit: 'Neutral credit', tags: ['neutral'] }
+    value.media = [image]
+    value.pages[0]!.blocks = [{ id, hidden: false, type: 'hero', heading: 'Hero', body: 'Neutral hero.', mediaId: id, appearance }]
+    value.settings.seoDescription = 'x'.repeat(161)
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(false)
+    value.settings.contractVersion = '1.9.0'
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(true)
+    value.pages[0]!.blocks[0] = { id, hidden: false, type: 'hero', heading: 'Hero', body: 'Neutral hero.', mediaId: '22222222-2222-4222-8222-222222222222', appearance }
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(false)
+    value.media[0]!.mimeType = 'video/mp4'
+    value.pages[0]!.blocks[0] = { id, hidden: false, type: 'hero', heading: 'Hero', body: 'Neutral hero.', mediaId: id, appearance }
+    expect(SiteSnapshotSchema.safeParse(value).success).toBe(false)
   })
   it('keeps type-specific page metadata on its supported templates', () => {
     const page = snapshot().pages[0]

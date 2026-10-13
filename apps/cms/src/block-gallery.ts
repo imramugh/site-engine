@@ -11,10 +11,10 @@ export const appearanceOptions = {
 } as const
 
 const fieldLimits: Record<Block['type'], string> = {
-  hero: 'Eyebrow 80 characters; heading 120 characters; body 1,000 characters; optional primary and secondary CTAs; optional supporting panel with the same text limits, internal CTA, and E.164 telephone CTA.', incidentBar: 'Message 240 characters; optional CTA.',
+  hero: 'Eyebrow 80 characters; heading 120 characters; body 1,000 characters; optional image, primary and secondary CTAs; optional supporting panel with the same text limits, internal CTA, and E.164 telephone CTA.', incidentBar: 'Message 240 characters; optional CTA.',
   pillarGrid: '1–12 linked items; item titles 100 characters and bodies 300 characters.', featureGrid: '1–12 items; item titles 100 characters and bodies 300 characters.',
   splitList: '1–10 items; item titles 100 characters and bodies 500 characters.', chipList: '1–24 chips of up to 48 characters.',
-  testimonials: '1–8 permission-confirmed testimonials; quotes up to 500 characters.', faq: '1–16 questions; answers up to 2,000 characters.',
+  testimonials: '1–8 permission-confirmed testimonials; quotes up to 500 characters.', quote: 'Quote up to 1,000 characters; attribution required; optional role up to 100 characters.', faq: '1–16 questions; answers up to 2,000 characters.',
   callout: 'Heading 120 characters; body 1,000 characters; optional CTA.', relatedServices: '1–3 existing page references.',
   cta: 'Heading 120 characters; body 500 characters; CTA required.', richText: 'Rich text up to 10,000 characters.',
   contact: 'Heading 120 characters; body 500 characters; optional inquiry form.', media: 'One existing media reference; caption up to 300 characters.',
@@ -23,16 +23,16 @@ const fieldLimits: Record<Block['type'], string> = {
 }
 
 const names: Record<Block['type'], string> = {
-  hero: 'Hero', incidentBar: 'Incident bar', pillarGrid: 'Pillar grid', featureGrid: 'Feature grid', splitList: 'Split list', chipList: 'Chip list', testimonials: 'Testimonials', faq: 'FAQ', callout: 'Callout', relatedServices: 'Related services', cta: 'CTA band', richText: 'Rich text', contact: 'Contact', media: 'Media', imageText: 'Image and text', gallery: 'Gallery', logoStrip: 'Logo strip', video: 'Video',
+  hero: 'Hero', incidentBar: 'Incident bar', pillarGrid: 'Pillar grid', featureGrid: 'Feature grid', splitList: 'Split list', chipList: 'Chip list', testimonials: 'Testimonials', quote: 'Quote', faq: 'FAQ', callout: 'Callout', relatedServices: 'Related services', cta: 'CTA band', richText: 'Rich text', contact: 'Contact', media: 'Media', imageText: 'Image and text', gallery: 'Gallery', logoStrip: 'Logo strip', video: 'Video',
 }
 
 const descriptions: Record<Block['type'], string> = {
-  hero: 'Page introduction with optional actions and support panel.', incidentBar: 'Time-sensitive status message with an optional action.', pillarGrid: 'Linked service or capability pillars.', featureGrid: 'Scannable feature cards.', splitList: 'Paired title and body rows.', chipList: 'Compact set of topics or tags.', testimonials: 'Permission-confirmed customer quotations.', faq: 'Expandable questions and answers.', callout: 'Highlighted supporting message and action.', relatedServices: 'Links to existing related pages.', cta: 'Closing action band.', richText: 'Long-form body copy.', contact: 'Contact details and optional inquiry form.', media: 'Single image or file with caption.', imageText: 'Image paired with a heading and body.', gallery: 'Ordered set of images.', logoStrip: 'Partner or certification logos.', video: 'Video with poster, captions, and transcript.',
+  hero: 'Page introduction with optional image, actions, and support panel.', incidentBar: 'Time-sensitive status message with an optional action.', pillarGrid: 'Linked service or capability pillars.', featureGrid: 'Scannable feature cards.', splitList: 'Paired title and body rows.', chipList: 'Compact set of topics or tags.', testimonials: 'Permission-confirmed customer quotations.', quote: 'Attributed quotation.', faq: 'Expandable questions and answers.', callout: 'Highlighted supporting message and action.', relatedServices: 'Links to existing related pages.', cta: 'Closing action band.', richText: 'Long-form body copy.', contact: 'Contact details and optional inquiry form.', media: 'Single image or file with caption.', imageText: 'Image paired with a heading and body.', gallery: 'Ordered set of images.', logoStrip: 'Partner or certification logos.', video: 'Video with poster, captions, and transcript.',
 }
 
-/** Direct structural editor controls intentionally cover only blocks with
- * generated editable content. Recipes have their own complete surface below. */
-export const insertableBlockTypes = ['hero', 'incidentBar', 'featureGrid', 'splitList', 'chipList', 'faq', 'callout', 'richText', 'contact'] as const satisfies readonly Block['type'][]
+/** Direct structural editor controls cover every contract block. Required
+ * media, page, and consent values are supplied from the editor context. */
+export const insertableBlockTypes = blockTypes
 /** Every contract block can be part of a recipe. Blocks that need a real
  * record (or an explicit testimonial consent assertion) advertise those
  * fields below rather than disappearing from the recipe picker. */
@@ -70,6 +70,7 @@ export function recipeBlockReferences(blocks: readonly Block[]): RecipeReference
   const references: RecipeReference[] = []
   const asset = (id: string, mimePrefix: Extract<RecipeReference, { collection: 'assets' }>['mimePrefix']) => references.push({ collection: 'assets', id, mimePrefix })
   for (const block of blocks) {
+    if (block.type === 'hero' && block.mediaId) asset(block.mediaId, 'image/')
     if (block.type === 'relatedServices') block.pageIds.forEach((id) => references.push({ collection: 'pages', id }))
     if (block.type === 'media' || block.type === 'imageText') asset(block.mediaId, 'image/')
     if (block.type === 'gallery' || block.type === 'logoStrip') block.mediaIds.forEach((id) => asset(id, 'image/'))
@@ -118,7 +119,7 @@ export function recipeBlocks(template: string, selected: unknown, existing: unkn
       pillarGrid: { ...base, heading: 'Draft pillars', items: [{ title: 'Draft item', body: 'Replace this neutral draft text before review.', href: '/' }] },
       featureGrid: { ...base, heading: 'Draft features', items: [{ title: 'Draft item', body: 'Replace this neutral draft text before review.' }] },
       splitList: { ...base, heading: 'Draft list', items: [{ title: 'Draft item', body: 'Replace this neutral draft text before review.' }] },
-      chipList: { ...base, heading: 'Draft topics', chips: ['Draft topic'] }, testimonials: { ...base }, faq: { ...base, heading: 'Draft questions', items: [{ question: 'Draft question?', answer: 'Replace this neutral draft answer before review.' }] },
+      chipList: { ...base, heading: 'Draft topics', chips: ['Draft topic'] }, testimonials: { ...base }, quote: { ...base, quote: 'Replace this attributed quotation before review.', attribution: 'Draft attribution' }, faq: { ...base, heading: 'Draft questions', items: [{ question: 'Draft question?', answer: 'Replace this neutral draft answer before review.' }] },
       callout: { ...base, heading: 'Draft callout', body: 'Replace this neutral draft text before review.' }, relatedServices: { ...base }, cta: { ...base, heading: 'Draft action', body: 'Replace this neutral draft text before review.', cta: { label: 'Draft action', href: '/' } }, richText: { ...base, body: 'Replace this neutral draft text before review.' }, contact: { ...base, heading: 'Draft contact', body: 'Replace this neutral draft text before review.', inquiryForm: false },
       media: { ...base }, imageText: { ...base, heading: 'Draft image heading', body: 'Replace this neutral draft text before review.' }, gallery: { ...base }, logoStrip: { ...base }, video: { ...base },
     }

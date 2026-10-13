@@ -297,6 +297,7 @@ describe('ENG-006/ENG-026 full page draft editor', () => {
         `${type} default must satisfy the contract`,
       ).toBe(true)
     }
+    expect(blockDefault('hero', references)).not.toHaveProperty('mediaId')
   })
 
   it('captures one validated whole-page update and safely replays the same request', async () => {

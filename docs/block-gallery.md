@@ -1,7 +1,7 @@
 # Block gallery and recipes
 
 Owners and Editors open `/block-gallery` to inspect the active published theme.
-The card grid contains all eighteen contract blocks. Template buttons keep
+The card grid contains all nineteen contract blocks. Template buttons keep
 disallowed blocks visible for reference and disable their recipe action. Each
 card exposes schema-derived field limits, permitted templates, and links to
 draft pages using that block.
@@ -30,6 +30,14 @@ metadata supports template requirements such as a service parent or job details.
 `get_block_library` supplies field metadata, template policy, section presets,
 appearance tokens and explicit required selections. Supplying unsupported
 fields or identity overrides fails validation.
+
+`add_block` accepts the same complete recipe selection as the gallery: all
+nineteen types, including quote, media, gallery, video, related services and
+CTA. Reference-backed blocks require existing authorized records; testimonials
+still require explicit consent. Quote and optional Hero `mediaId` require
+contract 1.9.0, as do related services and CTA on article pages. Select an
+installed compatible theme and review that contract transition before using
+these additions on a site pinned to an older contract.
 
 ## Renderer artifacts
 

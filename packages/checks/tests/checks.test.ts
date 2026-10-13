@@ -54,9 +54,9 @@ describe('ENG-028 regression helpers', () => {
 describe('ENG-011 deterministic readiness report', () => {
   const asOf = '2026-10-02T12:00:00.000Z'
 
-  it('passes the neutral fixture with a stable AI-unavailable status', () => {
+  it('passes the neutral fixture with an honest deterministic AI-not-run status', () => {
     const result = checkSiteSnapshot(neutralFixture, { asOf })
-    expect(result).toMatchObject({ version: 1, asOf, publishable: true, issues: [], stalePages: [], ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE' } })
+    expect(result).toMatchObject({ version: 1, asOf, publishable: true, issues: [], stalePages: [], ai: { status: 'not-run', code: 'AI_CHECKS_NOT_RUN' } })
   })
 
   it('returns contract failures as publish blockers with exact field paths', () => {

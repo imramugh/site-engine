@@ -9,10 +9,10 @@ export type ThemeComponents = { headerClass(context: ThemeRenderContext): string
 /** Additive capability metadata for themes that implement the full visual
  * contract. Existing 1.x descriptors remain valid when they omit it. */
 export type ThemeAppearanceCapabilities = { widths: readonly Appearance['width'][]; spacings: readonly Appearance['spacing'][]; logoTones: readonly Appearance['logoTone'][] };
-export type ThemeDescriptor = { name: string; contract: typeof CONTRACT_VERSION; supportedTemplates: readonly string[]; supportedBlocks: readonly Block['type'][]; backgrounds: readonly string[]; motionIntents: readonly string[]; appearance?: ThemeAppearanceCapabilities; motion: ThemeMotion; tokens: ThemeTokens; classes: { page: string; block: string; header: string; footer: string }; components: ThemeComponents };
+export type ThemeDescriptor = { name: string; contract: typeof SUPPORTED_CONTRACT_VERSIONS[number]; supportedTemplates: readonly string[]; supportedBlocks: readonly Block['type'][]; backgrounds: readonly string[]; motionIntents: readonly string[]; appearance?: ThemeAppearanceCapabilities; motion: ThemeMotion; tokens: ThemeTokens; classes: { page: string; block: string; header: string; footer: string }; components: ThemeComponents };
 export const starterTheme: ThemeDescriptor = {
   name: 'starter', contract: CONTRACT_VERSION, supportedTemplates: TemplateSchema.options,
-  supportedBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'],
+  supportedBlocks: ['hero', 'incidentBar', 'pillarGrid', 'featureGrid', 'splitList', 'chipList', 'testimonials', 'quote', 'faq', 'callout', 'relatedServices', 'cta', 'richText', 'contact', 'media', 'imageText', 'gallery', 'logoStrip', 'video'],
   backgrounds: BackgroundSchema.options, motionIntents: MotionIntentSchema.options,
   appearance: { widths: WidthSchema.options, spacings: SpacingSchema.options, logoTones: LogoToneSchema.options },
   motion: {

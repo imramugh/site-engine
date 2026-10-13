@@ -86,7 +86,7 @@ const owns = (value: Record<string, unknown>, key: string) => Object.prototype.h
 const same = (left: unknown, right: unknown) => stable(left) === stable(right)
 
 /** Applies only fields changed by the editor, preserving independently queued fields. */
-function mergeCapturedChange(current: Record<string, unknown> | undefined, change: Change): Record<string, unknown> | null {
+function mergeCapturedChange(current: Record<string, unknown> | undefined, change: Change, includePublicMediaMetadata = false): Record<string, unknown> | null {
   if (change.before === null) {
     if (current) throw new Error('This approval would overwrite a record in the queued baseline. Refresh the change set before approval.')
     return change.after === null ? null : structuredClone(change.after)
@@ -96,7 +96,7 @@ function mergeCapturedChange(current: Record<string, unknown> | undefined, chang
   // Baseline media is already a portable reference, with `variants` rather
   // than Payload upload `sizes`. Re-projecting it would lose file identities
   // and focal points and prevent a valid replacement/removal from reversing.
-  const currentSnapshot = change.collection === 'assets' ? publicAssetSnapshot(current) : capturedSnapshot(change.collection, current)
+  const currentSnapshot = change.collection === 'assets' ? publicAssetSnapshot(current, includePublicMediaMetadata) : capturedSnapshot(change.collection, current)
   if (!currentSnapshot) throw new Error('This approval does not apply to the queued baseline. Refresh the change set before approval.')
   if (change.after === null) {
     if (!same(currentSnapshot, change.before)) throw new Error('This approval conflicts with the queued baseline. Refresh the change set before approval.')
@@ -121,6 +121,26 @@ function validateCapturedAssetIntegrity(change: Change): void {
   if (change.after !== null && change.afterHash !== null && canonicalHash(change.after) !== change.afterHash) throw new Error('The captured change is invalid. Refresh the change set before approval.')
 }
 
+/** Resolves editor-held media IDs to the immutable public media references
+ * carried by a candidate snapshot. This is also used by current-draft views. */
+export function projectSiteSettings(settings: Record<string, unknown>, media: readonly Record<string, unknown>[]): Record<string, unknown> {
+  const projected = structuredClone(settings)
+  const byID = new Map(media.map((asset) => [String(asset.id), asset]))
+  const resolve = (value: unknown, label: string) => {
+    const asset = byID.get(idOf(value) ?? '')
+    if (!asset) throw new Error(`Site settings ${label} must reference an included asset.`)
+    return structuredClone(asset)
+  }
+  if (projected.logo !== undefined && projected.logo !== null) projected.logo = resolve(projected.logo, 'logo')
+  if (projected.logos && typeof projected.logos === 'object') {
+    const logos = Object.entries(projected.logos as Record<string, unknown>).flatMap(([field, value]) => value === null ? [] : [[field, resolve(value, `semantic logo ${field}`)]])
+    if (logos.length) projected.logos = Object.fromEntries(logos)
+    else delete projected.logos
+  }
+  for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy']) if (projected[field] === null) delete projected[field]
+  return projected
+}
+
 export function buildCandidate(base: SiteSnapshot, changes: Change[], includedChangeKeys: readonly string[], versions: Versions): SiteSnapshot {
   const pages = new Map(base.pages.map((page) => [page.id, structuredClone(page)]))
   const sections = new Map(base.settings.sections.map((section) => [section.id, structuredClone(section)]))
@@ -128,6 +148,11 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
   const media = new Map(base.media.map((asset) => [asset.id, structuredClone(asset)]))
   let selectedTheme = structuredClone(base.settings.theme); const themeSettings = structuredClone(base.settings.themeSettings ?? {})
   let selectedThemeTransition = false
+  const themeChange = changes.find((change) => includedChangeKeys.includes(`${change.collection}:${change.id}`) && change.collection === 'theme-settings' && change.after?.selection)
+  const targetContractVersion = themeChange?.after?.selection && typeof themeChange.after.selection === 'object' && typeof (themeChange.after.selection as Record<string, unknown>).contract === 'string'
+    ? String((themeChange.after.selection as Record<string, unknown>).contract)
+    : base.settings.contractVersion
+  const includePublicMediaMetadata = targetContractVersion === '1.9.0'
   let siteSettings = structuredClone(base.settings) as Record<string, unknown>
   let styleGuide = structuredClone(base.styleGuide) as Record<string, unknown> | undefined
   const included = new Set(includedChangeKeys)
@@ -181,36 +206,13 @@ export function buildCandidate(base: SiteSnapshot, changes: Change[], includedCh
     }
     if (change.collection === 'assets') {
       validateCapturedAssetIntegrity(change)
-      const publicChange: Change = { ...change, before: change.before && publicAssetSnapshot(change.before), after: change.after && publicAssetSnapshot(change.after), beforeHash: change.before ? canonicalHash(publicAssetSnapshot(change.before)) : null, afterHash: change.after ? canonicalHash(publicAssetSnapshot(change.after)) : null }
-      const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, publicChange)
+      const publicChange: Change = { ...change, before: change.before && publicAssetSnapshot(change.before, includePublicMediaMetadata), after: change.after && publicAssetSnapshot(change.after, includePublicMediaMetadata), beforeHash: change.before ? canonicalHash(publicAssetSnapshot(change.before, includePublicMediaMetadata)) : null, afterHash: change.after ? canonicalHash(publicAssetSnapshot(change.after, includePublicMediaMetadata)) : null }
+      const merged = mergeCapturedChange(media.get(change.id) as Record<string, unknown> | undefined, publicChange, includePublicMediaMetadata)
       if (merged === null) media.delete(change.id)
       else media.set(change.id, { id: change.id, ...merged } as SiteSnapshot['media'][number])
     }
   }
-  const canonicalSiteAsset = (value: unknown, label: string) => {
-    const assetID = idOf(value)
-    const asset = assetID ? media.get(assetID) : undefined
-    if (!asset) throw new Error(`Site settings ${label} must reference an included asset.`)
-    // A baseline may already hold a frozen MediaReference while editor captures
-    // hold relationship IDs. Always resolve both through candidate media so an
-    // old object cannot carry a stale digest or other metadata into a snapshot.
-    return asset
-  }
-  if (siteSettings.logo !== undefined && siteSettings.logo !== null) {
-    siteSettings.logo = canonicalSiteAsset(siteSettings.logo, 'logo')
-  }
-  if (siteSettings.logos && typeof siteSettings.logos === 'object') {
-    const logos = Object.entries(siteSettings.logos as Record<string, unknown>).flatMap(([field, value]) => value === null
-      ? []
-      : [[field, canonicalSiteAsset(value, `semantic logo ${field}`)]])
-    if (logos.length) siteSettings.logos = Object.fromEntries(logos)
-    else delete siteSettings.logos
-  }
-  // Payload represents omitted optional singleton fields as null. The public
-  // snapshot contract intentionally represents omission, not nullability.
-  for (const field of ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy']) {
-    if (siteSettings[field] === null) delete siteSettings[field]
-  }
+  siteSettings = projectSiteSettings(siteSettings, [...media.values()])
   // Keep editor-maintained navigation distinct from derived section membership.
   // Captures use null to represent an explicit editor clear. The immutable
   // public contract represents optional page metadata by omission.

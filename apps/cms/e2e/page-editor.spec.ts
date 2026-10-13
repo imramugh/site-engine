@@ -128,9 +128,9 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   const hero = editor.page.locator('[data-page-editor-block]').first()
   await hero.locator('summary').click()
   const heroOptionalActions = hero.getByRole('button', {
-    name: /^(\+ )?(Eyebrow|Cta|Secondary Cta|Phone Cta|Support Panel)$/,
+    name: /^(\+ )?(Eyebrow|Cta|Secondary Cta|Phone Cta|Media|Support Panel)$/,
   })
-  await expect(heroOptionalActions).toHaveCount(5)
+  await expect(heroOptionalActions).toHaveCount(6)
   for (const action of await heroOptionalActions.all()) {
     await expect(action).toBeVisible()
     expect(
@@ -140,6 +140,10 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
       }),
     ).toEqual({ background: 'rgb(255, 255, 255)', color: 'rgb(15, 27, 38)' })
   }
+  await hero.getByRole('button', { name: '+ Media' }).click()
+  await expect(hero.getByLabel('Media', { exact: true })).toBeVisible()
+  await hero.getByRole('button', { name: 'Remove Media' }).click()
+  await expect(hero.getByLabel('Media', { exact: true })).toHaveCount(0)
 
   await editor.page.getByText('Page fields', { exact: false }).first().click()
   await editor.page
@@ -148,7 +152,7 @@ test('ENG-006/ENG-026 edits an ordered page, renders the saved draft, and submit
   await editor.page.getByRole('button', { name: 'Add block' }).click()
   let dialog = editor.page.getByRole('dialog', { name: 'Add a block' })
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused()
-  await expect(dialog.locator('[data-page-block-type]')).toHaveCount(18)
+  await expect(dialog.locator('[data-page-block-type]')).toHaveCount(19)
   // Media-dependent recipes become available after earlier upload scenarios.
   // The required FAQ flow must remain available independently of those assets.
   await expect(dialog.locator('[data-page-block-type="faq"]')).toBeEnabled()

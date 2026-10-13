@@ -36,6 +36,7 @@ const blocks = [
   "splitList",
   "chipList",
   "testimonials",
+  "quote",
   "faq",
   "callout",
   "relatedServices",
@@ -268,6 +269,7 @@ function fixture(contractVersion = "1.7.0") {
           },
         ],
       }),
+      block(70, "quote", { quote: "Neutral attributed quote.", attribution: "Neutral author" }),
       block(8, "faq", {
         heading: "Questions",
         items: [{ question: "Question?", answer: "Neutral answer." }],
