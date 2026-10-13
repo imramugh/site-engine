@@ -21,7 +21,7 @@ const temp = await mkdtemp(join(tmpdir(), "site-engine-packed-conformance-"));
 try {
   const packs = join(temp, "packs"); await mkdir(packs);
   for (const packageDir of ["packages/contract", "packages/engine", "packages/theme-starter", "packages/theme-conformance"]) await tarball(packageDir, packs);
-  const zod = join(root, "node_modules/.pnpm/zod@4.6.5/node_modules/zod"); await run(zod, ["pack", "--pack-destination", packs]);
+  const zod = join(root, "node_modules/.pnpm/zod@4.6.7/node_modules/zod"); await run(zod, ["pack", "--pack-destination", packs]);
   const contract = await file(packs, "site-engine-contract-"); const engine = await file(packs, "site-engine-engine-"); const starter = await file(packs, "site-engine-theme-starter-"); const harness = await file(packs, "site-engine-theme-conformance-"); const zodTar = await file(packs, "zod-");
   const consumer = join(temp, "consumer"); await mkdir(consumer);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ name: "packed-theme-conformance-consumer", private: true, dependencies: { "@site-engine/contract": contract, "@site-engine/engine": engine, "@site-engine/theme-starter": starter, "@site-engine/theme-conformance": harness } }));
@@ -42,7 +42,7 @@ try {
   const cli = join(consumer, "node_modules/@site-engine/theme-conformance/scripts/theme-conformance.mjs");
   const evidence = join(temp, "evidence");
   const positive = await execFile(process.execPath, [cli, "@site-engine/theme-starter", "--artifacts-dir", evidence], { cwd: consumer });
-  const result = JSON.parse(positive.stdout.trim().split("\n").at(-1)); if (result.blocks !== 18 || result.cases !== 14) throw new Error(`Unexpected packed result: ${positive.stdout}`);
+  const result = JSON.parse(positive.stdout.trim().split("\n").at(-1)); if (result.blocks !== 19 || result.cases !== 14) throw new Error(`Unexpected packed result: ${positive.stdout}`);
   const checkerLogo = join(consumer, "node_modules/@site-engine/theme-conformance/harness/public/media/sample-logo.svg");
   const validLogo = await readFile(checkerLogo, "utf8");
   // A white glyph on the default paper surface must fail even though the image

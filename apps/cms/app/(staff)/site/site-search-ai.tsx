@@ -34,7 +34,7 @@ export function SiteSearchAI({ settings, guide, busy, canSave, contractVersion, 
   }, [revisionKey])
   const policy = settings.crawlerPolicy ?? defaultPolicy
   const updatePolicy = (field: keyof typeof defaultPolicy, checked: boolean) => setSettings({ ...settings, crawlerPolicy: { ...policy, [field]: checked } })
-  const supported = contractVersion === '1.7.0' || contractVersion === '1.8.0'
+  const supported = contractVersion === '1.7.0' || contractVersion === '1.8.0' || contractVersion === '1.9.0'
 
   return <section className={styles.searchWorkspace} data-site-panel="search" data-site-search-ai>
     <form onSubmit={event => {
@@ -65,7 +65,7 @@ export function SiteSearchAI({ settings, guide, busy, canSave, contractVersion, 
 
           <section className={styles.searchCard} data-site-search-card="description-style">
             <header><h2>Site description and style</h2></header>
-            <label><span className={styles.fieldLabel}><strong>Short description</strong><small aria-hidden="true">used for llms.txt and profiles</small></span><textarea maxLength={160} value={settings.seoDescription ?? ''} onChange={event => setSettings({ ...settings, seoDescription: event.target.value || null })} /></label>
+            <label><span className={styles.fieldLabel}><strong>Short description</strong><small aria-hidden="true">used for llms.txt and profiles</small></span><textarea maxLength={300} value={settings.seoDescription ?? ''} onChange={event => setSettings({ ...settings, seoDescription: event.target.value || null })} /></label>
             <label><span className={styles.fieldLabel}><strong>Words to avoid</strong><small aria-hidden="true">style warnings</small></span><input value={bannedText} onChange={event => setBannedText(event.target.value)} placeholder="Enter words or phrases, separated by commas" /></label>
             <label>Spelling<select value={guide.canadianSpelling} onChange={event => setGuide({ ...guide, canadianSpelling: event.target.value as Guide['canadianSpelling'] })}><option value="warn">Canadian English (en-CA)</option><option value="off">No spelling preference</option></select></label>
           </section>

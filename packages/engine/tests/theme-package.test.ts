@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ThemeManifestSchema } from '@site-engine/contract'
 import { validateThemePackage } from '../src/theme-package.js'
-import { parseThemeRegistry } from '../src/theme-registry.js'
+import { manifestDigest, parseThemeRegistry } from '../src/theme-registry.js'
 
 const required = ThemeManifestSchema.parse({ name: 'neutral-test', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js' }).standardBlocks
 const execFile = promisify(execFileCallback)
@@ -18,6 +18,12 @@ async function fixture(change: (manifest: Record<string, unknown>, root: string)
   await writeFile(join(root, 'dist/index.js'), 'export {}'); await writeFile(join(root, 'dist/index.d.ts'), 'export {}'); await writeFile(join(root, 'src/components/Layout.astro'), '<slot />'); await writeFile(join(root, 'src/components/BlockRenderer.astro'), '<slot />'); await writeFile(join(root, 'package.json'), '{"name":"neutral-test","exports":{".":{"types":"./dist/index.d.ts"}}}'); await change(manifest, root); await writeFile(join(root, 'theme.json'), JSON.stringify(manifest)); return root
 }
 describe('theme package validator', () => {
+  it('keeps omitted legacy block declarations canonical while requiring quote to be explicit', () => {
+    const legacy = ThemeManifestSchema.parse({ name: 'neutral', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js' })
+    expect(legacy.standardBlocks).not.toContain('quote')
+    expect(manifestDigest(legacy)).toBe('596a5fcf2c3b42536a76da41e3548d8f834436a1ee6db3469491de97a368b675')
+    expect(ThemeManifestSchema.parse({ ...legacy, contract: '1.9.0', standardBlocks: [...legacy.standardBlocks, 'quote'] }).standardBlocks).toContain('quote')
+  })
   it('accepts a complete extracted package and reports immutable file receipts matching the registry digest', async () => { const root = await fixture(); try { const result = await validateThemePackage(root); expect(result.receipt.files).toHaveProperty('./dist/index.js'); expect(result.receipt.manifestFileDigest).not.toEqual(result.receipt.manifestDigest); expect(parseThemeRegistry([result.install]).get('neutral-test')?.get('1.0.0')?.manifestDigest).toBe(result.receipt.manifestDigest) } finally { await rm(root, { recursive: true, force: true }) } })
   it('rejects absent explicit surface, contradictory declarations, missing files, traversal, symlinks, and duplicate artifacts', async () => { for (const change of [async (m: any) => delete m.contractSurface, (m: any) => { m.standardBlocks = ['hero'] }, async (m: any) => { delete m.standardBlocks }, async (m: any) => { m.entry = './dist/missing.js' }, async (_m: any, root: string) => { await rm(join(root, 'dist/index.d.ts')) }, (m: any) => { m.contractSurface.components.layout = '../escape.astro' }, (m: any) => { m.contractSurface.assets = ['./dist/index.js'] }, async (_m: any, root: string) => { await rm(join(root, 'src/components/Layout.astro')); await symlink('/etc/hosts', join(root, 'src/components/Layout.astro')) }]) { const root = await fixture(change); try { await expect(validateThemePackage(root)).rejects.toThrow(); } finally { await rm(root, { recursive: true, force: true }) } } })
   it('runs the operator CLI and emits JSON only after validation', async () => { const root = await fixture(); try { const { stdout, stderr } = await execFile(process.execPath, [join(packageRoot, 'dist/theme-package-cli.js'), root]); expect(stderr).toBe(''); expect(JSON.parse(stdout)).toMatchObject({ install: { manifest: { name: 'neutral-test' } }, receipt: { files: { './dist/index.js': expect.any(String) } } }) } finally { await rm(root, { recursive: true, force: true }) } })

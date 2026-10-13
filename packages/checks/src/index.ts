@@ -78,7 +78,7 @@ export type QualityReport = {
   blockers: readonly QualityIssue[];
   warnings: readonly QualityIssue[];
   stalePages: readonly StalePage[];
-  ai: { status: 'unavailable'; code: 'AI_PROVIDER_UNAVAILABLE'; message: string };
+  ai: { status: 'unavailable' | 'not-run'; code: 'AI_PROVIDER_UNAVAILABLE' | 'AI_CHECKS_NOT_RUN'; message: string };
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -145,8 +145,8 @@ function resolvedAsOf(snapshot: SiteSnapshot, requested: string | Date | undefin
 
 /**
  * Performs deterministic, content-only readiness checks. It deliberately does
- * not call an AI provider: callers always receive an explicit unavailable AI
- * status until a separately configured provider is approved.
+ * not call an AI provider and reports that fact. Callers may separately
+ * attach configured-provider availability without invoking a provider.
  */
 export function checkSiteSnapshot(input: unknown, options: QualityCheckOptions = {}): QualityReport {
   const parsed = SiteSnapshotSchema.safeParse(input);
@@ -195,6 +195,6 @@ function collectLinks(page: Page): { href: string; field: string; blockId?: stri
   for (const [index, block] of page.blocks.entries()) { if (block.hidden) continue; const field = `blocks.${index}`; if ('cta' in block && block.cta) links.push({ href: block.cta.href, field: `${field}.cta.href`, blockId: block.id }); if (block.type === 'hero') { if (block.secondaryCta) links.push({ href: block.secondaryCta.href, field: `${field}.secondaryCta.href`, blockId: block.id }); if (block.supportPanel?.cta) links.push({ href: block.supportPanel.cta.href, field: `${field}.supportPanel.cta.href`, blockId: block.id }); } if (block.type === 'pillarGrid') for (const [itemIndex, item] of block.items.entries()) { links.push({ href: item.href, field: `${field}.items.${itemIndex}.href`, blockId: block.id }); for (const [linkIndex, link] of (item.links ?? []).entries()) links.push({ href: link.href, field: `${field}.items.${itemIndex}.links.${linkIndex}.href`, blockId: block.id }); } if (block.type === 'relatedServices') for (const [linkIndex, link] of (block.links ?? []).entries()) links.push({ href: link.href, field: `${field}.links.${linkIndex}.href`, blockId: block.id }); for (const value of blockText(block)) for (const href of markdownLinks(value)) links.push({ href, field, blockId: block.id }); }
   return links;
 }
-function blockText(block: Block): string[] { const values: string[] = []; if ('body' in block && typeof block.body === 'string') values.push(block.body); if (block.type === 'hero' && block.supportPanel) values.push(block.supportPanel.heading, block.supportPanel.body); if (block.type === 'faq') values.push(...block.items.flatMap((item) => [item.question, item.answer])); return values; }
+function blockText(block: Block): string[] { const values: string[] = []; if ('body' in block && typeof block.body === 'string') values.push(block.body); if (block.type === 'hero' && block.supportPanel) values.push(block.supportPanel.heading, block.supportPanel.body); if (block.type === 'quote') values.push(block.quote, block.attribution, block.role ?? ''); if (block.type === 'faq') values.push(...block.items.flatMap((item) => [item.question, item.answer])); return values; }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-function report(asOf: string, issues: QualityIssue[], stalePages: StalePage[]): QualityReport { const ordered = issues.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code)); const blockers = ordered.filter((value) => value.severity === 'blocker'); return { version: 1, asOf, publishable: blockers.length === 0, issues: ordered, blockers, warnings: ordered.filter((value) => value.severity === 'warning'), stalePages: stalePages.sort((left, right) => left.path.localeCompare(right.path)), ai: { status: 'unavailable', code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI checks are unavailable because no approved provider is configured.' } }; }
+function report(asOf: string, issues: QualityIssue[], stalePages: StalePage[]): QualityReport { const ordered = issues.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code)); const blockers = ordered.filter((value) => value.severity === 'blocker'); return { version: 1, asOf, publishable: blockers.length === 0, issues: ordered, blockers, warnings: ordered.filter((value) => value.severity === 'warning'), stalePages: stalePages.sort((left, right) => left.path.localeCompare(right.path)), ai: { status: 'not-run', code: 'AI_CHECKS_NOT_RUN', message: 'Deterministic checks do not run an AI provider. Request an AI suggestion separately.' } }; }

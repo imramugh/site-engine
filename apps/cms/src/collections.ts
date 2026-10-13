@@ -397,7 +397,7 @@ export const Assets: CollectionConfig = {
     { name: 'decorative', type: 'checkbox', defaultValue: false },
     { name: 'caption', type: 'textarea', maxLength: 300 },
     { name: 'credit', type: 'text', maxLength: 240 },
-    { name: 'tags', type: 'text', hasMany: true, maxRows: 12 },
+    { name: 'tags', type: 'text', hasMany: true, maxRows: 12, maxLength: 80 },
     { name: 'focalX', type: 'number', min: 0, max: 100, defaultValue: 50 },
     { name: 'focalY', type: 'number', min: 0, max: 100, defaultValue: 50 },
     { name: 'currentFileVersion', type: 'relationship', relationTo: 'asset-file-versions', admin: { readOnly: true, hidden: true } },
@@ -1151,7 +1151,7 @@ export const SiteSettings: CollectionConfig = {
       { name: 'fullLockupLight', type: 'relationship', relationTo: 'assets' }, { name: 'fullLockupDark', type: 'relationship', relationTo: 'assets' },
       { name: 'symbolLight', type: 'relationship', relationTo: 'assets' }, { name: 'symbolDark', type: 'relationship', relationTo: 'assets' },
     ] },
-    { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 160 },
+    { name: 'contactEmail', type: 'email' }, { name: 'contactPhone', type: 'text', maxLength: 40 }, { name: 'seoDescription', type: 'text', maxLength: 300 },
     { name: 'address', type: 'group', fields: [
       { name: 'streetAddress', type: 'text', maxLength: 240 }, { name: 'addressLocality', type: 'text', maxLength: 100 },
       { name: 'addressRegion', type: 'text', maxLength: 100 }, { name: 'postalCode', type: 'text', maxLength: 24 },

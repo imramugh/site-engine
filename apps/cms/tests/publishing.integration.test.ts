@@ -233,16 +233,30 @@ describe('ENG-029 immutable approval snapshots and durable publish outbox', () =
     expect((snapshot.manifest as unknown as ReturnType<typeof baseline>).pages.find((page) => page.id === job!.id)?.status).toBe('archived')
   })
 
-  it('keeps captured media metadata private and rejects tampered original asset captures', () => {
+  it('projects approved media metadata only with the 1.9 public contract and rejects tampered captures', () => {
     const base = baseline()
+    base.settings.contractVersion = '1.9.0'
     const asset = { id: randomUUID(), filename: 'public-media.png', mimeType: 'image/png', width: 4, height: 4, alt: 'Public media', decorative: false }
     const captured = { ...asset, caption: 'Internal caption', credit: 'Internal credit', tags: ['internal'] }
     const change = { collection: 'assets', id: asset.id, before: null, after: captured, beforeHash: null, afterHash: canonicalHash(captured) }
-    const candidate = buildCandidate(base, [change] as never, [`assets:${asset.id}`], versions)
+    const currentVersions = { ...versions, contractVersion: '1.9.0' }
+    const candidate = buildCandidate(base, [change] as never, [`assets:${asset.id}`], currentVersions)
     expect(candidate.media).toEqual(expect.arrayContaining([expect.objectContaining(asset)]))
-    expect(JSON.stringify(candidate.media)).not.toMatch(/caption|credit|tags/)
-    expect(() => buildCandidate(base, [{ ...change, after: { ...captured, tags: ['tampered'] } }] as never, [`assets:${asset.id}`], versions)).toThrow('captured change is invalid')
-    expect(() => buildCandidate(base, [{ ...change, before: asset, beforeHash: '0'.repeat(64) }] as never, [`assets:${asset.id}`], versions)).toThrow('captured baseline is invalid')
+    expect(candidate.media).toEqual(expect.arrayContaining([expect.objectContaining({ caption: 'Internal caption', credit: 'Internal credit', tags: ['internal'] })]))
+    const legacyBase = structuredClone(base); legacyBase.settings.contractVersion = '1.0.0'
+    const legacyCandidate = buildCandidate(legacyBase, [change] as never, [`assets:${asset.id}`], versions)
+    expect(legacyCandidate.media.find((media) => media.id === asset.id)).toEqual(expect.not.objectContaining({ caption: expect.anything(), credit: expect.anything(), tags: expect.anything() }))
+    const promotedBase = structuredClone(legacyBase)
+    const priorTheme = { id: 'starter', version: '1.8.0', contract: '1.8.0', manifestDigest: 'a'.repeat(64) }
+    const nextTheme = { ...priorTheme, version: '1.9.0', contract: '1.9.0', manifestDigest: 'b'.repeat(64) }
+    promotedBase.settings.contractVersion = '1.8.0'
+    promotedBase.settings.theme = priorTheme
+    const themeChange = { collection: 'theme-settings', id: randomUUID(), before: { selection: priorTheme, settings: {} }, after: { selection: nextTheme, settings: {} }, beforeHash: canonicalHash({ selection: priorTheme, settings: {} }), afterHash: canonicalHash({ selection: nextTheme, settings: {} }) }
+    const promoted = buildCandidate(promotedBase, [change, themeChange] as never, [`assets:${asset.id}`, `theme-settings:${themeChange.id}`], currentVersions)
+    expect(promoted.settings.contractVersion).toBe('1.9.0')
+    expect(promoted.media.find((media) => media.id === asset.id)).toEqual(expect.objectContaining({ caption: 'Internal caption', credit: 'Internal credit', tags: ['internal'] }))
+    expect(() => buildCandidate(base, [{ ...change, after: { ...captured, tags: ['tampered'] } }] as never, [`assets:${asset.id}`], currentVersions)).toThrow('captured change is invalid')
+    expect(() => buildCandidate(base, [{ ...change, before: asset, beforeHash: '0'.repeat(64) }] as never, [`assets:${asset.id}`], currentVersions)).toThrow('captured baseline is invalid')
   })
 
   it('freezes a future approved release without advancing or exposing the publish queue, and retries exactly once', async () => {

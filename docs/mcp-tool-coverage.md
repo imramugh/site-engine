@@ -24,9 +24,23 @@ explicit change set, current revision/page hash where applicable, contract
 validation and returned checks. Administrative theme/site writes also require
 Owner permission. A rollback prepares another reviewable draft.
 
-The [block gallery and recipe workflow](block-gallery.md) documents all eighteen
+The [block gallery and recipe workflow](block-gallery.md) documents all nineteen
 recipe block types, explicit media/consent selections, schema-derived metadata,
 template filtering and the human review boundary.
+
+Settings use `mcp:content:write` with the Owner role; no additional settings
+scope is required. Settings writes resolve stored semantic logo IDs against
+authorized media and validate the merged draft before capture. A schema failure
+returns `invalid_settings`, code `SCHEMA_INVALID`, and an `issues` array with
+field paths such as `settings.seoDescription`. Failed writes leave the draft
+revision and settings hash unchanged. Refresh both after each successful write.
+Contract 1.9.0 permits site descriptions up to 300 characters; page-specific SEO
+descriptions retain their 160-character limit.
+
+Current-draft audits project CMS records into the public contract: semantic logo
+UUIDs become media objects, and contract 1.9 media preserve nonempty caption,
+credit and tags. Historical published contracts retain their original media
+shape. These transformations do not relax publication or stale-revision checks.
 
 Draft/read scopes expose no approval or publication capability. `mcp:content:publish`
 is separately granted only to an enabled Owner or Approver with a valid OAuth-backed
@@ -72,6 +86,11 @@ retrieval never sends, approves, publishes, or changes a record; a separately
 authorized tool call is required for any later draft workflow.
 
 ## Suggestions
+
+`audit_page` and draft readiness run deterministic checks. Their AI status reports
+provider availability separately: a connected configured provider yields
+`AI_CHECKS_NOT_RUN`, not a claim that an AI review passed. Explicit suggestion
+calls below are the operations that can incur provider usage.
 
 The four `suggest_*` calls require content-read and content-write scopes plus an
 editing role. They queue a durable suggestion using the Owner-configured route

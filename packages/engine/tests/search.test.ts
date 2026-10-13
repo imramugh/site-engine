@@ -25,4 +25,14 @@ describe('ENG-024 static search index', () => {
       url: '/',
     })
   })
+
+  it('indexes visible attributed quote text', () => {
+    const snapshot = structuredClone(neutralFixture)
+    snapshot.settings.contractVersion = '1.9.0'
+    const home = snapshot.pages[0]!
+    home.blocks.push({ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', type: 'quote', quote: 'A searchable neutral quotation.', attribution: 'Neutral author', role: 'Example role', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } })
+    const document = buildSearchIndex(snapshot).documents.find((candidate) => candidate.url === '/')!
+    expect(document.body).toContain('A searchable neutral quotation.')
+    expect(document.body).toContain('Neutral author')
+  })
 })

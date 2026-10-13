@@ -7,7 +7,7 @@ import { createGalleryFixture, galleryHash } from '../src/gallery-library.mjs'
 
 test('gallery variations preserve the complete conformance fixture and valid unique identities', async () => {
   const theme = JSON.parse(await readFile(new URL('../../theme-starter/theme.json', import.meta.url), 'utf8'))
-  const original = createConformanceFixture()
+  const original = createConformanceFixture('1.9.0')
   const before = galleryHash(original)
   const options = { backgrounds: theme.contractSurface.backgrounds, presets: theme.motion.presets, presetIntents: Object.fromEntries(Object.entries(theme.motion.intentFallbacks).map(([intent, preset]) => [preset, intent])), motionBlocks: ['hero', 'featureGrid', 'faq'] }
   const fixture = createGalleryFixture(original, options)
@@ -44,5 +44,8 @@ test('gallery variations preserve the complete conformance fixture and valid uni
 test('conformance fixtures use the candidate theme contract while retaining the legacy default', () => {
   assert.equal(createConformanceFixture().settings.contractVersion, '1.7.0')
   assert.equal(createConformanceFixture('1.8.0').settings.contractVersion, '1.8.0')
+  assert(!createConformanceFixture().pages.find(page => page.slug === 'matrix').blocks.some(block => block.type === 'quote'))
+  assert(createConformanceFixture('1.9.0').pages.find(page => page.slug === 'matrix').blocks.some(block => block.type === 'quote'))
   SiteSnapshotSchema.parse(createConformanceFixture('1.8.0'))
+  SiteSnapshotSchema.parse(createConformanceFixture('1.9.0'))
 })

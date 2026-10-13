@@ -37,6 +37,7 @@ const blocks = [
   "splitList",
   "chipList",
   "testimonials",
+  "quote",
   "faq",
   "callout",
   "relatedServices",
@@ -212,6 +213,7 @@ function fixture(contractVersion = "1.7.0") {
         captionsMediaId: id(205),
         transcript: "Neutral transcript.",
       }),
+      ...(contractVersion === "1.9.0" ? [block(70, "quote", { quote: "Neutral attributed quote.", attribution: "Neutral author" })] : []),
     ],
   };
   const templates = [

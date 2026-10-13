@@ -2,6 +2,7 @@ import { installAxe } from './axe'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const origin = `https://127.0.0.1:${Number(process.env.CMS_E2E_PORT ?? 4300)}`
+const approvedSiteDescription = 'A reviewed CMS site description that deliberately exceeds the former 160 character boundary while remaining concise enough for the approved 300 character setting limit.!'
 
 async function ownerPage(browser: Browser) {
   const context = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
@@ -19,13 +20,13 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const owner = await ownerPage(browser)
   const themeDraft = await owner.page.request.post('/api/themes', {
     headers: { origin, 'content-type': 'application/json' },
-    data: { id: 'search-browser-theme', version: '1.8.0', changeSetName: 'Search and AI 1.8 browser draft' },
+    data: { id: 'gallery-browser-theme', version: '1.9.0', changeSetName: 'Search and AI 1.9 browser draft' },
   })
   expect(themeDraft.status(), await themeDraft.text()).toBe(201)
 
   await owner.page.setViewportSize({ width: 1440, height: 1000 })
   await owner.page.goto('/site')
-  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.8 browser draft · open' })
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.9 browser draft · open' })
   await owner.page.getByLabel('Business name').fill('Search and AI browser site')
   await owner.page.getByText('Additional site settings', { exact: true }).click()
   const homepage = owner.page.getByLabel('Homepage')
@@ -39,7 +40,7 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   // Reload after establishing the reviewed Site baseline so the reference
   // screenshots show the workspace itself rather than a transient save notice.
   await owner.page.reload()
-  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.8 browser draft · open' })
+  await owner.page.getByLabel('Save changes to').selectOption({ label: 'Search and AI 1.9 browser draft · open' })
   await owner.page.getByRole('button', { name: 'Search and AI' }).click()
   const workspace = owner.page.locator('[data-site-search-ai]')
   await expect(workspace).toBeVisible()
@@ -50,7 +51,9 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   await expect(workspace.getByLabel('AI model training')).toBeChecked()
   await expect(workspace).toContainText('Robots.txt is a request to supported crawlers, not access enforcement.')
   await workspace.getByLabel('AI model training').uncheck()
-  await workspace.getByLabel('Short description').fill('A reviewed description for public crawler and AI discovery artifacts.')
+  await expect(workspace.getByLabel('Short description')).toHaveAttribute('maxlength', '300')
+  expect(approvedSiteDescription).toHaveLength(169)
+  await workspace.getByLabel('Short description').fill(approvedSiteDescription)
   await workspace.getByLabel('Words to avoid').fill('empty promise, unsupported claim')
   await workspace.getByLabel('Spelling').selectOption('warn')
 
@@ -91,9 +94,28 @@ test('Search and AI presents the source cards truthfully at desktop and mobile s
   const sets = await owner.page.request.get('/api/editorial/list').then(response => response.json()) as {
     sets: Array<{ id: string; name: string; state: string; changes: Array<{ collection: string }> }>
   }
-  const captured = sets.sets.find(item => item.name === 'Search and AI 1.8 browser draft')
+  const captured = sets.sets.find(item => item.name === 'Search and AI 1.9 browser draft')
   expect(captured).toMatchObject({ state: 'open' })
   expect(captured?.changes.map(change => change.collection)).toEqual(expect.arrayContaining(['site-settings', 'style-guides']))
+
+  const current = await owner.page.request.get('/api/site-workspace').then(response => response.json()) as {
+    settingsHash: string
+    guideHash: string
+    settings: { searchEnabled: boolean; crawlerPolicy: { searchEngines: boolean; aiSearchAndAnswers: boolean; aiModelTraining: boolean } | null }
+    guide: { bannedPhrases: string[]; preferredTerms: Array<{ avoid: string; prefer: string }>; canadianSpelling: 'off' | 'warn'; maximumSentenceWords: number; minimumReadingEase: number }
+    changeSets: Array<{ id: string; revision: number }>
+  }
+  const selectedSet = current.changeSets.find(item => item.id === captured!.id)!
+  const invalid = await owner.page.request.post('/api/site-workspace', {
+    headers: { origin, 'content-type': 'application/json' },
+    data: {
+      action: 'search-ai', changeSetID: selectedSet.id, expectedRevision: selectedSet.revision,
+      expectedSettingsHash: current.settingsHash, expectedGuideHash: current.guideHash,
+      value: { settings: { seoDescription: 'x'.repeat(301), searchEnabled: current.settings.searchEnabled, crawlerPolicy: current.settings.crawlerPolicy }, guide: current.guide },
+    },
+  })
+  expect(invalid.status(), await invalid.text()).toBe(400)
+  await expect(invalid.json()).resolves.toMatchObject({ error: 'The short site description must be 300 characters or fewer.' })
 
   const discarded = await owner.page.request.post('/api/editorial/discard', {
     headers: { origin, 'content-type': 'application/json' },

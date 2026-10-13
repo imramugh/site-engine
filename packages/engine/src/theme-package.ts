@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, realpath } from 'node:fs/promises'
 import { join, resolve, relative, sep } from 'node:path'
-import { BackgroundSchema, LogoToneSchema, TemplateSchema, ThemeInstallSchema, ThemeManifestSchema } from '@site-engine/contract'
+import { BackgroundSchema, BlockSchemas, LogoToneSchema, TemplateSchema, ThemeInstallSchema, ThemeManifestSchema } from '@site-engine/contract'
 import { manifestDigest } from './theme-registry.js'
 
-const blocks = ThemeManifestSchema.parse({ name: 'contract-surface', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js' }).standardBlocks.slice().sort()
+const legacyBlocks = ThemeManifestSchema.parse({ name: 'contract-surface', version: '1.0.0', contract: '1.0.0', entry: './dist/index.js' }).standardBlocks.slice().sort()
+const blocksForContract = (contract: string) => (contract === '1.9.0' ? Object.keys(BlockSchemas) : legacyBlocks).slice().sort()
 const same = (actual: readonly string[], expected: readonly string[]) => actual.length === expected.length && new Set(actual).size === actual.length && actual.slice().sort().every((value, index) => value === expected.slice().sort()[index])
 const fileDigest = (value: Buffer) => createHash('sha256').update(value).digest('hex')
 async function regular(root: string, path: string) {
@@ -24,7 +25,7 @@ export async function validateThemePackage(directory: string) {
   if (!rawManifest || typeof rawManifest !== 'object' || !Array.isArray((rawManifest as Record<string, unknown>).standardBlocks)) throw new Error('New theme installs must explicitly declare standardBlocks.')
   const manifest = ThemeManifestSchema.parse(rawManifest); const surface = manifest.contractSurface
   if (!surface) throw new Error('New theme installs require contractSurface version 1.')
-  if (!same(manifest.standardBlocks, surface.standardBlocks) || !same(surface.standardBlocks, blocks) || !same(surface.templates, [...TemplateSchema.options].sort()) || !same(surface.backgrounds, [...BackgroundSchema.options].sort()) || !same(surface.logoTones, [...LogoToneSchema.options].sort())) throw new Error('contractSurface must declare each required contract value exactly once.')
+  if (!same(manifest.standardBlocks, surface.standardBlocks) || !same(surface.standardBlocks, blocksForContract(manifest.contract)) || !same(surface.templates, [...TemplateSchema.options].sort()) || !same(surface.backgrounds, [...BackgroundSchema.options].sort()) || !same(surface.logoTones, [...LogoToneSchema.options].sort())) throw new Error('contractSurface must declare each required contract value exactly once.')
   const declared = [manifest.entry, surface.components.layout, surface.components.blockRenderer, ...(surface.assets ?? [])]
   const packageTypes = rawPackage && typeof rawPackage === 'object' && (rawPackage as { exports?: { '.': { types?: unknown } } }).exports?.['.']?.types
   if (typeof packageTypes === 'string') declared.push(packageTypes)

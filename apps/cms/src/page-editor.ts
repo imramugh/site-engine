@@ -291,8 +291,8 @@ async function preparePageEditorSave(input: {
   if (desired.kicker || desired.lede || desired.lastReviewed || desired.jobPosting?.workMode) {
     const previewContext = await previewThemeContext({ payload, changeSets: [set], initialBaseline: input.initialBaseline, req })
     const contractVersion = previewContext.changeSetContractVersions[save.changeSetID] ?? ''
-    if ((desired.kicker || desired.lede || desired.lastReviewed) && !['1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0'].includes(contractVersion)) throw new Error('PAGE_METADATA_UNSUPPORTED')
-    if (desired.jobPosting?.workMode && contractVersion !== '1.8.0') throw new Error('JOB_WORK_MODE_UNSUPPORTED')
+    if ((desired.kicker || desired.lede || desired.lastReviewed) && !['1.4.0', '1.5.0', '1.6.0', '1.7.0', '1.8.0', '1.9.0'].includes(contractVersion)) throw new Error('PAGE_METADATA_UNSUPPORTED')
+    if (desired.jobPosting?.workMode && !['1.8.0', '1.9.0'].includes(contractVersion)) throw new Error('JOB_WORK_MODE_UNSUPPORTED')
   }
   const current = pageEditorProjection(page)
   return { desired, page, set, current, currentHash: pageEditorHash(current), desiredHash: pageEditorHash(desired) }

@@ -106,7 +106,7 @@ export async function assertReferencedAssetsAreAccessible(payload: Payload, req:
 export function snapshotMediaReference(asset: AssetLike, includeFocalPoint = true) {
   const current = asset.currentFile && typeof asset.currentFile === 'object' && !Array.isArray(asset.currentFile) ? asset.currentFile as FileIdentity : undefined
   const source = current?.filename ? current : asset
-  if (!source.filename || !source.mimeType || !source.width || !source.height) throw new Error(`Asset ${asset.id} is missing immutable upload metadata.`)
+  if (!source.filename || !source.mimeType || (source.mimeType.startsWith('image/') && (!source.width || !source.height))) throw new Error(`Asset ${asset.id} is missing immutable upload metadata.`)
   const original = trustedMedia(source.filename)
   const variants = Object.fromEntries(Object.entries(MEDIA_VARIANTS).flatMap(([name, expected]) => {
     const variant = source.sizes?.[name]
@@ -122,8 +122,7 @@ export function snapshotMediaReference(asset: AssetLike, includeFocalPoint = tru
     alt: asset.alt ?? undefined,
     decorative: asset.decorative === true,
     ...(includeFocalPoint ? { focalX: canonicalFocalPoint(asset.focalX), focalY: canonicalFocalPoint(asset.focalY) } : {}),
-    width: source.width,
-    height: source.height,
+    ...(source.width && source.height ? { width: source.width, height: source.height } : {}),
     mimeType: source.mimeType,
   }
 }

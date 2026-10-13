@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -284,7 +284,7 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     expect(structuredJson(pageAudit)).toMatchObject({ source: 'current-editable-draft', pageId: qualityPage.id, publishable: false, blockers: [expect.objectContaining({ code: 'HEADING_H1_COUNT', severity: 'blocker' })], warnings: expect.arrayContaining([expect.objectContaining({ code: 'STYLE_BANNED_PHRASE', severity: 'warning' })]) })
     const currentContractBlockers = (structuredJson(pageAudit) as { blockers: Array<{ message: string }> }).blockers.map((item) => item.message)
     expect(currentContractBlockers).not.toEqual(expect.arrayContaining([expect.stringContaining('contract version')]))
-    expect(CONTRACT_VERSION).toBe('1.8.0')
+    expect(CONTRACT_VERSION).toBe('1.9.0')
     expect(structuredJson(stalePages)).toMatchObject({ source: 'current-editable-draft', items: expect.arrayContaining([expect.objectContaining({ id: qualityPage.id, reviewAgeDays: expect.any(Number) })]), page: 1, nextCursor: null })
     const staleFirst = structuredJson(await approverClient.client.callTool({ name: 'list_stale_pages', arguments: { limit: 1 } })) as { items: Array<{ id: string }>; nextCursor: string | null }
     expect(staleFirst.nextCursor).toBe('p:2')
@@ -499,8 +499,44 @@ test('real MCP SDK clients receive bounded allowed content and remain isolated',
     const fixedAsset = await payload.create({ collection: 'assets', data: { alt: 'Fixed SDK test image' }, file: { data: fixedAssetBytes, mimetype: 'image/png', name: 'fixed-sdk.png', size: fixedAssetBytes.length }, overrideAccess: true })
     await payload.update({ collection: 'pages', id: page.id, data: { blocks: [...afterFields.blocks, { id: fixedID, type: 'media', mediaId: fixedAsset.id, hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
     const beforeFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; const beforeFixed = pageEditorProjection(beforeFixedRecord)
-    expect(resultJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } }))).toEqual({ error: 'fixed_block' })
-    const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; expect(pageEditorProjection(afterFixedRecord)).toEqual(beforeFixed)
+    const hiddenMedia = structuredJson(await editorClient.client.callTool({ name: 'hide_block', arguments: { pageId: page.id, changeSetId: contentSet.id, expectedChangeSetRevision: pageFieldsResult.draft.changeSetRevision, expectedPageHash: pageEditorHash(beforeFixed), blockId: fixedID, hidden: true } })) as { draft: { changeSetRevision: number } }
+    const afterFixedRecord = await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>; const afterFixed = pageEditorProjection(afterFixedRecord)
+    expect(afterFixed.blocks.find((block) => block.id === fixedID)?.hidden).toBe(true)
+    const videoFilename = `fixed-sdk-${randomUUID()}.webm`; const captionsFilename = `fixed-sdk-${randomUUID()}.vtt`
+    mkdirSync(process.env.MEDIA_STORAGE_DIR!, { recursive: true }); writeFileSync(join(process.env.MEDIA_STORAGE_DIR!, videoFilename), Buffer.from('synthetic video fixture')); writeFileSync(join(process.env.MEDIA_STORAGE_DIR!, captionsFilename), 'WEBVTT\n')
+    const videoAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK video', filename: videoFilename, mimeType: 'video/webm' } }) as { id: string }
+    const captionsAsset = await payload.db.create({ collection: 'assets', data: { id: randomUUID(), alt: 'Fixed SDK captions', filename: captionsFilename, mimeType: 'text/vtt' } }) as { id: string }
+    const serviceSection = await payload.create({ collection: 'sections', data: { name: `Direct services ${randomUUID()}`, slug: `direct-services-${randomUUID().slice(0, 8)}`, allowedTemplates: ['pillar', 'service'], pageIds: [] }, overrideAccess: true, context: { editorialInternal: true } })
+    const servicePillar = await payload.create({ collection: 'pages', data: { title: 'Direct services', summary: 'A synthetic pillar page for direct related-services reference coverage.', slug: `direct-pillar-${randomUUID().slice(0, 8)}`, sectionId: serviceSection.id, template: 'pillar', blocks: [{ id: randomUUID(), type: 'featureGrid', heading: 'Direct services', items: [{ title: 'Direct service', body: 'A synthetic service.' }], hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+    const relatedService = await payload.create({ collection: 'pages', data: { title: 'Direct related service', summary: 'A synthetic service page used for direct related-services reference coverage.', slug: `direct-service-${randomUUID().slice(0, 8)}`, sectionId: serviceSection.id, parentId: servicePillar.id, template: 'service', blocks: [{ id: randomUUID(), type: 'hero', heading: 'Direct service', body: 'A synthetic service page.', hidden: false, appearance: { background: 'default', width: 'content', spacing: 'default', motionIntent: 'none', logoTone: 'default' } }] }, overrideAccess: true, context: { editorialInternal: true } })
+    // Use an isolated editor and request bucket: this deliberately exercises
+    // every direct block type without weakening the MCP rate limit covered
+    // elsewhere in this suite.
+    const directEditor = await payload.create({ collection: 'users', data: { email: `mcp-direct-blocks-${randomUUID()}@example.test`, name: 'MCP Direct Blocks', roles: ['editor'] }, overrideAccess: true })
+    const directSession = await sessionFor(directEditor.id); const directToken = `mcp-direct-blocks-${randomUUID()}`
+    tokens.set(directToken, { clientId: `mcp-direct-blocks-client-${randomUUID()}`, userId: directEditor.id, sessionId: directSession.id, scopes: ['mcp:content:read', 'mcp:content:write'] })
+    const directClient = await clientFor(directToken)
+    const directReferenceSet = resultJson(await directClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP direct block references' } })) as { id: string; revision: number }
+    const directBlocks = [
+      { type: 'hero', fields: { heading: 'Direct hero', body: 'A direct hero with a real asset.', mediaId: fixedAsset.id } }, { type: 'incidentBar', fields: { message: 'Direct status message.' } },
+      { type: 'pillarGrid', fields: { heading: 'Direct pillars', items: [{ title: 'Pillar', body: 'Direct item.', href: '/' }] } }, { type: 'featureGrid', fields: { heading: 'Direct features', items: [{ title: 'Feature', body: 'Direct item.' }] } },
+      { type: 'splitList', fields: { heading: 'Direct list', items: [{ title: 'Item', body: 'Direct item.' }] } }, { type: 'chipList', fields: { chips: ['Direct'] } },
+      { type: 'testimonials', fields: { items: [{ quote: 'A direct confirmed testimonial.', attribution: 'Synthetic customer', permissionConfirmed: true }] } }, { type: 'quote', fields: { quote: 'A direct attributed quotation.', attribution: 'Synthetic source' } },
+      { type: 'faq', fields: { heading: 'Direct questions', items: [{ question: 'Question?', answer: 'Direct answer.' }] } }, { type: 'callout', fields: { heading: 'Direct callout', body: 'Direct supporting text.' } },
+      { type: 'relatedServices', fields: { heading: 'Direct services', pageIds: [relatedService.id] } }, { type: 'cta', fields: { heading: 'Direct action', body: 'Direct action text.', cta: { label: 'Continue', href: '/' } } },
+      { type: 'richText', fields: { body: 'Direct rich text.' } }, { type: 'contact', fields: { heading: 'Direct contact', body: 'Direct contact text.' } }, { type: 'media', fields: { mediaId: fixedAsset.id } },
+      { type: 'imageText', fields: { heading: 'Direct image', body: 'Direct image text.', mediaId: fixedAsset.id } }, { type: 'gallery', fields: { mediaIds: [fixedAsset.id] } }, { type: 'logoStrip', fields: { mediaIds: [fixedAsset.id] } },
+      { type: 'video', fields: { mediaId: videoAsset.id, posterMediaId: fixedAsset.id, captionsMediaId: captionsAsset.id, transcript: 'Direct transcript.' } },
+    ] as const
+    let directRevision = directReferenceSet.revision; let directDraft = afterFixed
+    for (const block of directBlocks) {
+      const inserted = structuredJson(await directClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block } })) as { draft: { changeSetRevision: number } }
+      directRevision = inserted.draft.changeSetRevision
+      directDraft = pageEditorProjection(await payload.findByID({ collection: 'pages', id: page.id, draft: true, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>)
+    }
+    expect(directDraft.blocks.slice(-directBlocks.length).map((block) => block.type)).toEqual(directBlocks.map((block) => block.type))
+    expect(resultJson(await directClient.client.callTool({ name: 'add_block', arguments: { pageId: page.id, changeSetId: directReferenceSet.id, expectedChangeSetRevision: directRevision, expectedPageHash: pageEditorHash(directDraft), index: directDraft.blocks.length, block: { type: 'media', fields: { mediaId: randomUUID() } } } }))).toEqual({ error: 'recipe_reference_unavailable' })
+    await directClient.transport.close()
     const recipeSet = resultJson(await editorClient.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP recipe' } })) as { id: string; revision: number }
     const recipeArguments = { changeSetId: recipeSet.id, expectedChangeSetRevision: recipeSet.revision, requestKey: randomUUID(), title: 'Recipe page', summary: 'A synthetic page created from an ordered MCP recipe.', slug: 'recipe-page', sectionId: section.id, template: 'standard', blocks: [
       { type: 'callout', appearance: { background: 'accent', width: 'wide', spacing: 'compact', motionIntent: 'subtle', logoTone: 'inverse', backgroundImage: { mediaId: fixedAsset.id, overlay: 0.5 } } },
@@ -561,12 +597,34 @@ test('MCP site and theme tools keep Owner draft mutations revisioned and scoped'
     const names = (await ownerSdk.client.listTools()).tools.map(tool => tool.name)
     expect(names).toEqual(expect.arrayContaining(['update_nav_overrides', 'update_site_settings', 'list_themes', 'get_theme_compatibility', 'switch_theme', 'update_theme_settings', 'create_redirect']))
     await expect(editorSdk.client.callTool({ name: 'get_site_settings', arguments: {} })).resolves.toMatchObject({ isError: true })
-    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; homepageId: string }
+    const logoBytes = await sharp({ create: { width: 20, height: 20, channels: 3, background: '#2468ac' } }).png().toBuffer()
+    const logo = await payload.create({ collection: 'assets', data: { alt: 'MCP semantic logo', decorative: false, caption: 'MCP audit metadata', credit: 'Synthetic fixture', tags: ['mcp-audit'] }, file: { data: logoBytes, mimetype: 'image/png', name: `mcp-logo-${randomUUID()}.png`, size: logoBytes.length }, overrideAccess: true, context: { editorialInternal: true } })
+    const activeSettings = (await payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true })).docs[0]!
+    await payload.update({ collection: 'site-settings', id: activeSettings.id, data: { logos: { primaryLight: logo.id, primaryDark: logo.id, fullLockupLight: logo.id, fullLockupDark: logo.id, symbolLight: logo.id, symbolDark: logo.id }, seoDescription: null }, draft: true, overrideAccess: true, context: { editorialInternal: true } })
+    const state = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; homepageId: string; logos?: Record<string, string> }
+    expect(state.logos).toEqual({ primaryLight: logo.id, primaryDark: logo.id, fullLockupLight: logo.id, fullLockupDark: logo.id, symbolLight: logo.id, symbolDark: logo.id })
+    const auditWithSemanticMedia = structuredJson(await ownerSdk.client.callTool({ name: 'audit_page', arguments: { id: state.homepageId } })) as { blockers: Array<{ code: string; path: string }> }
+    expect(auditWithSemanticMedia.blockers.filter(item => item.code === 'SCHEMA_INVALID')).toEqual([])
     const created = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP site controls' } })) as { id: string; revision: number }
     const add = [{ location: 'header' as const, reference: { kind: 'page' as const, id: state.homepageId, label: `MCP ${randomUUID()}` } }]
     const updated = structuredJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } })) as { revision: number; draft: { navigation?: unknown } }
     expect(updated).toMatchObject({ changeSetId: created.id, revision: created.revision + 1, draft: { navigation: expect.any(Object) } })
     expect(resultJson(await ownerSdk.client.callTool({ name: 'update_nav_overrides', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, add } }))).toEqual({ error: 'revision_conflict' })
+    const settingsState = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string; seoDescription: string | null }
+    const settingsSet = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP SEO settings' } })) as { id: string; revision: number }
+    const description = 'A reviewed MCP site description that deliberately exceeds the former 160 character boundary while remaining concise enough for the approved 300 character setting limit.!'
+    expect(description).toHaveLength(169)
+    const settingsUpdate = structuredJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: settingsSet.id, expectedChangeSetRevision: settingsSet.revision, expectedSettingsHash: settingsState.settingsHash, settings: { seoDescription: description } } })) as { revision: number; draft: { seoDescription?: string } }
+    expect(settingsUpdate).toMatchObject({ revision: settingsSet.revision + 1, draft: { seoDescription: description } })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: settingsSet.id, expectedChangeSetRevision: settingsUpdate.revision, expectedSettingsHash: settingsState.settingsHash, settings: { seoDescription: description } } }))).toEqual({ error: 'stale_settings' })
+    const invalidSet = resultJson(await ownerSdk.client.callTool({ name: 'create_change_set', arguments: { name: 'MCP invalid settings' } })) as { id: string; revision: number }
+    const freshSettings = resultJson(await ownerSdk.client.callTool({ name: 'get_site_settings', arguments: {} })) as { settingsHash: string }
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: invalidSet.id, expectedChangeSetRevision: invalidSet.revision, expectedSettingsHash: freshSettings.settingsHash, settings: { unsupported: true } } }))).toEqual({ error: 'invalid_settings', code: 'SCHEMA_INVALID', issues: [{ path: 'settings.unsupported', message: 'Unsupported site setting.', code: 'SCHEMA_INVALID' }] })
+    const tooLong = 'a'.repeat(301)
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: invalidSet.id, expectedChangeSetRevision: invalidSet.revision, expectedSettingsHash: freshSettings.settingsHash, settings: { seoDescription: tooLong } } }))).toMatchObject({ error: 'invalid_settings', code: 'SCHEMA_INVALID', issues: [expect.objectContaining({ path: 'settings.seoDescription', code: 'SCHEMA_INVALID' })] })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: invalidSet.id, expectedChangeSetRevision: invalidSet.revision, expectedSettingsHash: freshSettings.settingsHash, settings: { logos: { primaryLight: 'not-a-uuid' } } } }))).toMatchObject({ error: 'invalid_settings', code: 'SCHEMA_INVALID', issues: [expect.objectContaining({ path: 'settings.logos.primaryLight', code: 'SCHEMA_INVALID' })] })
+    expect(resultJson(await ownerSdk.client.callTool({ name: 'update_site_settings', arguments: { changeSetId: invalidSet.id, expectedChangeSetRevision: invalidSet.revision, expectedSettingsHash: freshSettings.settingsHash, settings: { logos: { primaryLight: randomUUID() } } } }))).toEqual({ error: 'invalid_settings', code: 'SCHEMA_INVALID', issues: [{ path: 'settings.logos.primaryLight', message: 'Referenced logo asset is unavailable.', code: 'SCHEMA_INVALID' }] })
+    expect(await payload.findByID({ collection: 'change-sets', id: invalidSet.id, depth: 0, overrideAccess: true })).toMatchObject({ revision: invalidSet.revision, changes: [] })
     const redirect = structuredJson(await ownerSdk.client.callTool({ name: 'create_redirect', arguments: { changeSetId: created.id, expectedChangeSetRevision: updated.revision, requestKey: randomUUID(), from: `/mcp-site-${randomUUID()}`, to: '/' } })) as { revision: number; draft: { from: string; to: string } }
     expect(redirect).toMatchObject({ revision: updated.revision + 1, draft: { to: '/' } })
     expect(resultJson(await ownerSdk.client.callTool({ name: 'list_themes', arguments: {} }))).toMatchObject({ themes: expect.any(Array) })
@@ -598,7 +656,7 @@ test('MCP rolls back captured owner settings when its injected readiness evaluat
       payload.find({ collection: 'theme-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),
     ])
     const response = await rejectedClient.callTool({ name: 'update_site_settings', arguments: { changeSetId: created.id, expectedChangeSetRevision: created.revision, expectedSettingsHash: state.settingsHash, settings: { siteName: `${state.siteName} rollback` } } })
-    expect(resultJson(response)).toEqual({ error: 'write_failed' })
+    expect(resultJson(response)).toEqual({ error: 'draft_checks_failed' })
     const [afterSet, afterSettings, afterThemes] = await Promise.all([
       payload.findByID({ collection: 'change-sets', id: created.id, depth: 0, overrideAccess: true }),
       payload.find({ collection: 'site-settings', where: { key: { equals: 'active' } }, limit: 1, depth: 0, draft: true, overrideAccess: true }),

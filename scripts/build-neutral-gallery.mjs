@@ -29,8 +29,7 @@ const pathKey = `${name}-v${version.replaceAll('.', '-')}`
 const base = `/admin-branding/assets/gallery-libraries/${pathKey}`
 const output = join(root, 'apps/cms/public', base)
 const indexPath = join(root, 'apps/cms/public/admin-branding/gallery-libraries.json')
-const source = createConformanceFixture()
-source.settings.contractVersion = contract
+const source = createConformanceFixture(contract)
 // Contract 1.4 supports the contact form but not its 1.5 topic/consent
 // presentation. The neutral fixture must be valid for the pinned renderer.
 if (Number(contract.split('.')[1]) < 5) for (const page of source.pages) for (const block of page.blocks) {
@@ -62,7 +61,9 @@ const routeFor = page => {
   return `renders${route.path.replace(/\/$/, '')}/index.html`
 }
 const pageBySlug = slug => fixture.pages.find(page => page.slug === slug)
-const blocks = Object.keys(BlockSchemas).map(id => ({ id, label: id.replace(/([a-z])([A-Z])/g, '$1 $2'), block: id, route: routeFor(fixture.pages.find(page => page.blocks.some(block => block.type === id))) }))
+const blocks = Object.keys(BlockSchemas)
+  .filter(id => manifest.standardBlocks.includes(id) && fixture.pages.some(page => page.blocks.some(block => block.type === id)))
+  .map(id => ({ id, label: id.replace(/([a-z])([A-Z])/g, '$1 $2'), block: id, route: routeFor(fixture.pages.find(page => page.blocks.some(block => block.type === id))) }))
 const templates = TemplateSchema.options.map(id => ({ id, label: id, route: routeFor(fixture.pages.find(page => page.template === id)) }))
 const backgrounds = BackgroundSchema.options.map(id => ({ id, label: id, route: routeFor(pageBySlug(`gallery-background-${id}`)) }))
 const motionSlug = (id, type) => `gallery-motion-${id}-${type.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}`

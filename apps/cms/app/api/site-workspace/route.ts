@@ -159,11 +159,11 @@ async function POSTHandler(request: Request) {
         if (!value || !value.settings || !value.guide || Object.keys(value.settings).some(key => !['seoDescription', 'searchEnabled', 'crawlerPolicy'].includes(key)) || Object.keys(value.guide).some(key => !['bannedPhrases','preferredTerms','canadianSpelling','maximumSentenceWords','minimumReadingEase'].includes(key))) throw new Error('Unsupported Search and AI setting.')
         const policy = cleanCrawlerPolicy(value.settings.crawlerPolicy)
         const description = value.settings.seoDescription
-        if (description !== null && (typeof description !== 'string' || !description.trim() || description.trim().length > 160)) throw new Error('The short site description must be 160 characters or fewer.')
+        if (description !== null && (typeof description !== 'string' || !description.trim() || description.trim().length > 300)) throw new Error('The short site description must be 300 characters or fewer.')
         if (typeof value.settings.searchEnabled !== 'boolean') throw new Error('Public search preference is required.')
         if (!['off', 'warn'].includes(String(value.guide.canadianSpelling)) || !Number.isInteger(value.guide.maximumSentenceWords) || Number(value.guide.maximumSentenceWords) < 5 || Number(value.guide.maximumSentenceWords) > 100 || !Number.isInteger(value.guide.minimumReadingEase) || Number(value.guide.minimumReadingEase) < 0 || Number(value.guide.minimumReadingEase) > 121) throw new Error('Writing guidance values are outside the supported range.')
         const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
-        if (!['1.7.0', '1.8.0'].includes(preview.changeSetContractVersions[String(set.id)] ?? '')) throw new Error('Search and AI crawler preferences require a selected contract 1.7 or newer theme in the same change set.')
+        if (!['1.7.0', '1.8.0', '1.9.0'].includes(preview.changeSetContractVersions[String(set.id)] ?? '')) throw new Error('Search and AI crawler preferences require a selected contract 1.7 or newer theme in the same change set.')
         await payload.update({ collection: 'site-settings', id: settingsDoc.id, data: { seoDescription: typeof description === 'string' ? description.trim() : null, searchEnabled: value.settings.searchEnabled, crawlerPolicy: policy }, draft: true, overrideAccess: false, user: actor as never, req })
         // The capture hook performs its own internal change-set update using
         // this request. Restore the caller's capture context before writing
@@ -183,8 +183,8 @@ async function POSTHandler(request: Request) {
         if (uses16 || uses17) {
           const preview = await previewThemeContext({ payload, changeSets: [set], initialBaseline: await loadInitialPreviewBaseline(), req })
           const selectedContract = preview.changeSetContractVersions[String(set.id)]
-          if (uses16 && !['1.6.0', '1.7.0', '1.8.0'].includes(selectedContract ?? '')) throw new Error('This Navigation design requires a selected contract 1.6 or newer theme in the same change set.')
-          if (uses17 && !['1.7.0', '1.8.0'].includes(selectedContract ?? '')) throw new Error('Crawler preferences require a selected contract 1.7 or newer theme in the same change set.')
+          if (uses16 && !['1.6.0', '1.7.0', '1.8.0', '1.9.0'].includes(selectedContract ?? '')) throw new Error('This Navigation design requires a selected contract 1.6 or newer theme in the same change set.')
+          if (uses17 && !['1.7.0', '1.8.0', '1.9.0'].includes(selectedContract ?? '')) throw new Error('Crawler preferences require a selected contract 1.7 or newer theme in the same change set.')
         }
         const data = { ...value, logos: value.logos ?? { primaryLight: null, primaryDark: null, fullLockupLight: null, fullLockupDark: null, symbolLight: null, symbolDark: null }, address: value.address ?? { streetAddress: null, addressLocality: null, addressRegion: null, postalCode: null, addressCountry: null }, incident: value.incident ?? { label: null, guidance: null }, key: 'active' }
         if (current) await payload.update({ collection: 'site-settings', id: current.id, data, draft: true, overrideAccess: false, user: actor as never, req })

@@ -3,16 +3,16 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createHash, randomUUID } from 'node:crypto'
 import { getPayload } from 'payload'
 import { z } from 'zod'
-import { AppearanceOptions, AppearanceSchema, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
+import { AppearanceOptions, AppearanceSchema, BlockSchemas, BusinessCaseSchema, CONTRACT_VERSION, JobPostingSchema, SectionPresets, SiteSettingsDraftSchema, TemplateAllowedBlocks, TemplateSchema } from '@site-engine/contract'
 import { checkSiteSnapshot } from '@site-engine/checks'
 import { compatibilityReport, getInstalledTheme, installedThemes as listInstalledThemes, loadThemeRegistry } from '@site-engine/engine/theme-registry'
 import config from '../payload.config'
-import { changeSetQuality, createNamedChangeSet, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
+import { changeSetQuality, createNamedChangeSet, publicAssetSnapshot, snapshot as capturedSnapshot, transitionChangeSet } from './editorial'
 import { withPayloadTransaction } from './auth-transaction'
 import { blockCatalog, deterministicRecipeBlockID, recipeBlockReferences, recipeBlocks, recipeRequiredSelections } from './block-gallery'
 import { galleryCatalog, sectionPresetCatalog, templateCatalog } from './block-gallery-catalog'
 import { executePageEditorSave, pageEditorHash, pageEditorProjection } from './page-editor'
-import { canonicalHash } from './publishing'
+import { canonicalHash, projectSiteSettings } from './publishing'
 import { prepareReply, sendMcpReply } from './mail-replies'
 import { authorizationUsable } from './mail-authorizations'
 import { hasFreshAuthentication, sessionIsUsable } from './identity'
@@ -29,9 +29,15 @@ import { auditInvocationResult, auditInvocationStart, containsOverrideAccess, in
 import { archivePage, normalizedRedirect, validateRedirectSet } from './redirect-lifecycle'
 import type { RemoteImage } from './media-url-ingestion'
 import { loadPublishedPreviewBaseline } from './review-preview'
+import { attachConfiguredAIStatus } from './ai-quality-status'
+import { compatibilityForTheme, selectionCandidate, type ThemeSelection } from './theme-selection'
 
 const limit = new Map<string, { count: number; reset: number }>()
 const maxBodyBytes = 32_768
+type SettingsIssue = { path: string; message: string; code: 'SCHEMA_INVALID' }
+class SettingsValidationError extends Error {
+  constructor(readonly issues: SettingsIssue[]) { super('invalid_settings') }
+}
 const knownMethods = new Set([
   'initialize', 'notifications/initialized', 'tools/list', 'tools/call',
   'resources/list', 'resources/templates/list', 'resources/read',
@@ -245,7 +251,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     const selection = setting?.selection as { id?: unknown } | null ?? null; const settings = setting?.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}
     const activeSettings = typeof selection?.id === 'string' && settings[selection.id] && typeof settings[selection.id] === 'object' ? settings[selection.id] : {}
     if (!manifest) return { status: 'not-configured', selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: [] }
-    return { selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityReport(manifest, theme.manifest) })) }
+    return { selection, selectionHash: canonicalHash(selection), settings, settingsHash: canonicalHash(settings), activeSettings, activeSettingsHash: canonicalHash(activeSettings), themes: listInstalledThemes(await loadThemeRegistry()).map((theme) => ({ id: theme.manifest.name, version: theme.manifest.version, contract: theme.manifest.contract, standardBlocks: theme.manifest.standardBlocks, settingKeys: theme.manifest.settingKeys, compatibility: compatibilityForTheme(manifest, theme) })) }
   }
   const galleryThemeMetadata = async () => {
     const baseline = await loadPublishedPreviewBaseline(payload)
@@ -262,7 +268,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     const installed = getInstalledTheme(registry, id, version)
     if (!installed) return { error: 'theme_not_installed' }
     if (!manifest) return { status: 'not-configured', id, version }
-    return { id, version, contract: installed.manifest.contract, compatibility: compatibilityReport(manifest, installed.manifest) }
+    return { id, version, contract: installed.manifest.contract, compatibility: compatibilityForTheme(manifest, installed) }
   }
   const frozenPageQuality = async (id: string) => {
     const manifest = await publishedManifest() as { styleGuide?: unknown; pages?: Array<{ id?: unknown }> } | undefined
@@ -281,7 +287,8 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     ])
     const captured = (collection: Parameters<typeof capturedSnapshot>[0], doc: unknown) => capturedSnapshot(collection, doc as Record<string, unknown>) ?? {}
     const withoutNulls = (value: Record<string, unknown>, fields: string[]) => { const normalized = { ...value }; for (const field of fields) if (normalized[field] === null) delete normalized[field]; return normalized }
-    const settings = withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy'])
+    const capturedMedia = assets.docs.map((doc) => publicAssetSnapshot({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) }, true))
+    const settings = projectSiteSettings(withoutNulls(captured('site-settings', siteSettings.docs[0]), ['legalName', 'homepageId', 'logo', 'logos', 'organizationType', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'seoDescription', 'crawlerPolicy']), capturedMedia)
     const guide = guides.docs[0] ? captured('style-guides', guides.docs[0]) : undefined
     const rawPages = new Map(pages.docs.map((doc) => [String((doc as { id: unknown }).id), doc as unknown as Record<string, unknown>]))
     const currentPages: Array<Record<string, unknown>> = pages.docs.map((doc) => {
@@ -303,7 +310,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
       settings: { contractVersion: CONTRACT_VERSION, siteName: 'Untitled site', defaultLocale: 'en', ...settings, sections: sections.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('sections', doc) })) },
       pages: currentPages,
       redirects: redirects.docs.map((doc) => captured('redirects', doc)),
-      media: assets.docs.map((doc) => ({ id: String((doc as { id: unknown }).id), ...captured('assets', doc) })),
+      media: capturedMedia,
       changeSets: [],
       ...(guide ? { styleGuide: guide } : {}),
     } }
@@ -311,7 +318,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const currentQuality = async () => {
     const { manifest, rawPages } = await currentEditableManifest()
     const style = manifest.styleGuide as NonNullable<Parameters<typeof checkSiteSnapshot>[1]>['style']
-    return { manifest, rawPages, report: checkSiteSnapshot(manifest, { asOf: new Date(), style }) }
+    return { manifest, rawPages, report: await attachConfiguredAIStatus(payload, checkSiteSnapshot(manifest, { asOf: new Date(), style })) }
   }
   const auditPage = async (id: string) => {
     const quality = await currentQuality()
@@ -429,7 +436,10 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
   const searchOutput = z.object({ items: z.array(z.object({ id: z.string().uuid(), title: z.string(), slug: z.string(), summary: z.string(), template: z.enum(TemplateSchema.options) }).strict()).max(25) }).strict()
   const qualityIssueOutput = z.object({ code: z.string(), severity: z.enum(['blocker', 'warning']), path: z.string(), message: z.string(), remediation: z.string(), pageId: z.string().uuid().optional(), blockId: z.string().uuid().optional() }).strict()
   const stalePageOutput = z.object({ id: z.string().uuid(), title: z.string(), path: z.string(), reviewAgeDays: z.number().int().nonnegative() }).strict()
-  const aiQualityOutput = z.object({ status: z.literal('unavailable'), code: z.literal('AI_PROVIDER_UNAVAILABLE'), message: z.string() }).strict()
+  const aiQualityOutput = z.discriminatedUnion('status', [
+    z.object({ status: z.literal('unavailable'), code: z.literal('AI_PROVIDER_UNAVAILABLE'), message: z.string() }).strict(),
+    z.object({ status: z.literal('not-run'), code: z.literal('AI_CHECKS_NOT_RUN'), message: z.string() }).strict(),
+  ])
   const auditPageOutput = z.object({ source: z.literal('current-editable-draft'), pageId: z.string().uuid(), pageHash: z.string().regex(/^[a-f0-9]{64}$/), contentHash: z.string().regex(/^[a-f0-9]{64}$/), asOf: z.string().datetime(), publishable: z.boolean(), blockers: z.array(qualityIssueOutput), warnings: z.array(qualityIssueOutput), stalePage: stalePageOutput.nullable(), ai: aiQualityOutput }).strict()
   const stalePagesInput = z.object({ limit: z.number().int().min(1).max(100).optional(), cursor: z.string().regex(/^p:[1-9][0-9]{0,5}$/).optional() }).strict()
   const stalePagesOutput = z.object({ source: z.literal('current-editable-draft'), asOf: z.string().datetime(), items: z.array(stalePageOutput).max(100), page: z.number().int().min(1), nextCursor: z.string().nullable() }).strict()
@@ -622,7 +632,9 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     req.headers.set('x-site-engine-change-set', changeSetId)
     return set
   }
-  const ownerWriteFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'stale_settings', 'theme_not_installed', 'theme_incompatible'])
+  const ownerWriteFailure = (error: unknown) => error instanceof SettingsValidationError
+    ? { isError: true, ...text({ error: 'invalid_settings', code: 'SCHEMA_INVALID', issues: error.issues }) }
+    : mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'stale_settings', 'draft_checks_failed', 'theme_not_installed', 'theme_incompatible'])
   const checkedMutation = async (req: Parameters<typeof withPayloadTransaction>[1] extends (req: infer Request) => unknown ? Request : never, id: string, doc: Record<string, unknown>) => {
     const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true, req }) as { revision?: number; changes?: unknown[] }
     const quality = await evaluateChangeSetQuality(payload, req, Array.isArray(set.changes) ? set.changes as Parameters<typeof changeSetQuality>[2] : [])
@@ -643,8 +655,16 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
         const before = capturedSnapshot('site-settings', existing) ?? {}
         if (canonicalHash(before) !== expectedSettingsHash) throw new Error('stale_settings')
         const allowed = new Set(['siteName', 'legalName', 'homepageId', 'defaultLocale', 'organizationType', 'logo', 'logos', 'contactEmail', 'contactPhone', 'address', 'linkedIn', 'incident', 'navigation', 'navigationOps', 'seoDescription', 'searchEnabled', 'crawlerPolicy'])
-        if (!Object.keys(data).length || Object.keys(data).some(key => !allowed.has(key))) throw new Error('invalid_settings')
-        const operations = data.navigationOps as { add?: Array<{ location: 'header' | 'footer'; reference: { kind: 'page' | 'section'; id: string; label: string; style?: 'link' | 'button' } }>; remove?: string[] } | undefined
+        if (!Object.keys(data).length) throw new SettingsValidationError([{ path: 'settings', message: 'Provide at least one supported site setting.', code: 'SCHEMA_INVALID' }])
+        const unknownKey = Object.keys(data).find(key => !allowed.has(key))
+        if (unknownKey) throw new SettingsValidationError([{ path: `settings.${unknownKey}`, message: 'Unsupported site setting.', code: 'SCHEMA_INVALID' }])
+        const navigationOperations = z.object({
+          add: z.array(z.object({ location: z.enum(['header', 'footer']), reference: z.object({ kind: z.enum(['page', 'section']), id: z.string().uuid(), label: z.string().min(1).max(80), style: z.enum(['link', 'button']).optional() }).strict() }).strict()).max(6).optional(),
+          remove: z.array(z.string().regex(/^\/[a-z0-9-]+\/$/)).max(12).optional(),
+        }).strict().refine(value => Boolean(value.add?.length || value.remove?.length), { message: 'Provide at least one add or remove operation.' })
+        const operationsResult = data.navigationOps === undefined ? { success: true as const, data: undefined } : navigationOperations.safeParse(data.navigationOps)
+        if (!operationsResult.success) throw new SettingsValidationError([{ path: 'settings.navigationOps', message: 'Navigation operations are invalid.', code: 'SCHEMA_INVALID' }])
+        const operations = operationsResult.data
         const nextData = { ...data }; delete nextData.navigationOps
         let navigation = before.navigation
         if (operations) {
@@ -666,10 +686,23 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
           currentNav.footer = footer; navigation = currentNav
         }
         const next = { ...before, ...nextData, ...(operations ? { navigation } : {}), key: 'active' }
+        const { key: _key, ...editable } = next
+        const parsed = SiteSettingsDraftSchema.safeParse(editable)
+        if (!parsed.success) throw new SettingsValidationError(parsed.error.issues.map((issue) => ({ path: `settings${issue.path.length ? `.${issue.path.join('.')}` : ''}`, message: issue.message, code: 'SCHEMA_INVALID' as const })))
+        // Only validate relationship IDs supplied by this request. Existing
+        // settings remain Payload's concern, while callers get a useful,
+        // field-scoped response when a requested semantic logo is unavailable.
+        if (Object.prototype.hasOwnProperty.call(nextData, 'logos') && parsed.data.logos) for (const [field, id] of Object.entries(parsed.data.logos)) {
+          if (!id) continue
+          try {
+            const asset = await payload.findByID({ collection: 'assets', id, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as { deletedAt?: unknown }
+            if (asset.deletedAt) throw new Error('unavailable')
+          } catch { throw new SettingsValidationError([{ path: `settings.logos.${field}`, message: 'Referenced logo asset is unavailable.', code: 'SCHEMA_INVALID' }]) }
+        }
         const doc = existing
-          ? payload.update({ collection: 'site-settings', id: String(existing.id), data: next as never, draft: true, user: current as never, overrideAccess: false, req })
-          : payload.create({ collection: 'site-settings', data: next as never, draft: true, user: current as never, overrideAccess: false, req })
-        return checkedMutation(req, changeSetId, capturedSnapshot('site-settings', await doc as unknown as Record<string, unknown>) ?? {})
+          ? await payload.update({ collection: 'site-settings', id: String(existing.id), data: { ...parsed.data, key: 'active' } as never, draft: true, user: current as never, overrideAccess: false, req })
+          : await payload.create({ collection: 'site-settings', data: { ...parsed.data, key: 'active' } as never, draft: true, user: current as never, overrideAccess: false, req })
+        return checkedMutation(req, changeSetId, capturedSnapshot('site-settings', doc as unknown as Record<string, unknown>) ?? {})
       })
       return structured(result)
     } catch (error) { return ownerWriteFailure(error) }
@@ -692,8 +725,8 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
         if (canonicalHash(before) !== expectedSelectionHash) throw new Error('stale_settings')
         const installed = getInstalledTheme(registry, id, version)
         if (!installed) throw new Error('theme_not_installed')
-        if (manifest && !compatibilityReport(manifest, installed.manifest).compatible) throw new Error('theme_incompatible')
         const selection = { id: installed.manifest.name, version: installed.manifest.version, contract: installed.manifest.contract, manifestDigest: installed.manifestDigest }
+        if (manifest && !compatibilityReport(selectionCandidate(manifest, selection as ThemeSelection), installed.manifest).compatible) throw new Error('theme_incompatible')
         const settings = { ...(setting?.settings && typeof setting.settings === 'object' ? setting.settings as Record<string, unknown> : {}), [selection.id]: (setting?.settings as Record<string, unknown> | undefined)?.[selection.id] ?? {} }
         const doc = setting ? await payload.update({ collection: 'theme-settings', id: String(setting.id), data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req }) : await payload.create({ collection: 'theme-settings', data: { selection, settings }, draft: true, user: current as never, overrideAccess: false, req })
         return checkedMutation(req, changeSetId, capturedSnapshot('theme-settings', doc as unknown as Record<string, unknown>) ?? {})
@@ -795,7 +828,7 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
       return structured(result)
     } catch (error) { return mutationFailure(error, 'write_failed', ['revision_conflict', 'change_set_unavailable', 'STALE_SECTION_EDIT']) }
   })
-  const structureFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'fixed_block', 'invalid_order', 'invalid_block', 'items_not_supported', 'invalid_item_index'])
+  const structureFailure = (error: unknown) => mutationFailure(error, 'write_failed', ['STALE_PAGE_EDIT', 'STALE_CHANGE_SET', 'block_not_found', 'fixed_block', 'invalid_order', 'invalid_block', 'items_not_supported', 'invalid_item_index', 'recipe_reference_unavailable'])
   const editableStructure = (block: { type: string }) => blockCatalog.some((item) => item.type === block.type && item.insertable)
   const blockSave = async (tool: string, pageId: string, changeSetId: string, expectedChangeSetRevision: number, expectedPageHash: string, mutate: (draft: ReturnType<typeof pageEditorProjection>, existingRecord: Record<string, unknown>) => { batch: Record<string, unknown>; diff: Record<string, unknown> }) => {
     const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false }) as unknown as Record<string, unknown>
@@ -806,15 +839,29 @@ export async function handleMcp(request: Request, dependencies: McpHandlerDepend
     return structured({ draft: { pageId: result.pageID, changeSetId: result.changeSetID, pageHash: result.pageHash, changeSetRevision: result.changeSetRevision, replayed: result.replayed, noOp: result.noOp }, checks: quality.checks, warnings: quality.warnings, readiness: quality.readiness })
   }
   const blockWriteSchema = { pageId: z.string().uuid(), changeSetId: z.string().uuid(), expectedChangeSetRevision: z.number().int().nonnegative(), expectedPageHash: z.string().regex(/^[a-f0-9]{64}$/) }
-  const addBlock = z.object({ type: z.enum(['hero', 'incidentBar', 'featureGrid', 'splitList', 'chipList', 'faq', 'callout', 'richText', 'contact']), appearance: recipeAppearance.optional() }).strict()
-  server.registerTool('add_block', { title: 'Add block', description: `Add one supported generated draft block at a position through an explicit revisioned change set. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, index: z.number().int().nonnegative().max(40), block: addBlock }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, index, block }) => {
+  // Direct insertion follows the same strict, complete recipe surface as page
+  // creation. This prevents the narrower structural editor from silently
+  // excluding blocks that need explicit fields or existing references.
+  const addBlock = recipeSelection
+  server.registerTool('add_block', { title: 'Add block', description: `Add one supported draft block at a position through an explicit revisioned change set. Blocks that reference content require explicit valid fields and accessible records. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, index: z.number().int().nonnegative().max(40), block: addBlock }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, index, block }) => {
     if (!write) return denied(contentWriteScope)
-    try { return await blockSave('add_block', pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, (draft, existingRecord) => {
+    try {
+      // Validate external references before the mutation. The collection hook
+      // remains the transactional final authority if a record changes between
+      // this read and the page save.
+      await withPayloadTransaction(payload, async (req) => {
+        req.user = current as never
+        const existing = await payload.findByID({ collection: 'pages', id: pageId, depth: 0, draft: true, user: current as never, overrideAccess: false, req }) as unknown as Record<string, unknown>
+        const inserted = recipeBlocks(String(existing.template), [block], pageEditorProjection(existing).blocks, () => randomUUID())[0]!
+        await recipeReferencesAccessible(req, { blocks: [inserted] })
+      })
+      return await blockSave('add_block', pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, (draft, existingRecord) => {
       if (index > draft.blocks.length || draft.blocks.length >= 40) throw new Error('invalid_order')
       const inserted = recipeBlocks(String(existingRecord.template), [block], draft.blocks, () => randomUUID())[0]!
       draft.blocks.splice(index, 0, inserted)
       return { batch: { pageId, changeSetId, index, blockId: inserted.id }, diff: { blocks: [{ id: inserted.id, before: null, after: inserted }] } }
-    }) } catch (error) { return structureFailure(error) }
+      })
+    } catch (error) { return structureFailure(error) }
   })
   server.registerTool('remove_block', { title: 'Remove block', description: `Remove one editable draft block through an explicit revisioned change set. Fixed and generated blocks cannot be removed. ${toolLimits}`, inputSchema: z.object({ ...blockWriteSchema, blockId: z.string().uuid() }).strict(), _meta: { securitySchemes: writeSecurity.securitySchemes, authorization: writeSecurity } }, async ({ pageId, changeSetId, expectedChangeSetRevision, expectedPageHash, blockId }) => {
     if (!write) return denied(contentWriteScope)
