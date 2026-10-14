@@ -51,8 +51,10 @@ test('a submitted review prepares, checks, regenerates its exact selection, and 
     await new Promise((resolve) => setTimeout(resolve, 2_500))
     expect(prepareAttempts).toBe(1)
 
+    const comparisonPrepared = reviewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/editorial/prepare-preview' && response.request().method() === 'POST' && response.status() === 200)
     await retryComparison.click()
     await expect.poll(() => prepareAttempts).toBe(2)
+    await comparisonPrepared
     await expect(reviewer.page.getByRole('button', { name: 'Prepare comparison', exact: true })).toHaveCount(0)
     await expect(reviewer.page.getByRole('button', { name: 'Run readiness checks', exact: true })).toHaveCount(0)
 
@@ -77,21 +79,26 @@ test('a submitted review prepares, checks, regenerates its exact selection, and 
     const approve = reviewer.page.getByRole('button', { name: 'Approve and publish', exact: true })
     await expect(approve).toBeEnabled({ timeout: 30_000 })
     await expect(reviewer.page.getByRole('button', { name: 'Reject', exact: true })).toBeEnabled()
+    const originalPreview = await reviewer.page.getByTitle('Proposed comparison', { exact: true }).getAttribute('src')
+    expect(originalPreview).toMatch(/^\/preview\/changes\/[0-9a-f-]+\/proposed\//)
 
     const secondaryChoice = reviewer.page.getByLabel(`Include Page Automatic review secondary page ${marker}`)
     await expect(secondaryChoice).toBeChecked()
+    const subsetPrepared = reviewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/editorial/prepare-preview' && response.request().method() === 'POST' && response.status() === 200)
     await secondaryChoice.uncheck()
     await expect(approve).toBeDisabled()
     await expect.poll(() => prepareAttempts).toBe(3)
+    await subsetPrepared
     const rerendered = await reviewer.page.request.post('/__e2e/direct-preview-worker')
     expect(rerendered.ok(), await rerendered.text()).toBeTruthy()
     await expect(approve).toBeEnabled({ timeout: 30_000 })
 
+    const restoredPrepared = reviewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/editorial/prepare-preview' && response.request().method() === 'POST' && response.status() === 200)
     await secondaryChoice.check()
     await expect(approve).toBeDisabled()
     await expect.poll(() => prepareAttempts).toBe(4)
-    const restored = await reviewer.page.request.post('/__e2e/direct-preview-worker')
-    expect(restored.ok(), await restored.text()).toBeTruthy()
+    await restoredPrepared
+    await expect(reviewer.page.getByTitle('Proposed comparison', { exact: true })).toHaveAttribute('src', originalPreview!)
     await expect(approve).toBeEnabled({ timeout: 30_000 })
 
     await reviewer.page.getByRole('button', { name: 'Reject', exact: true }).click()
