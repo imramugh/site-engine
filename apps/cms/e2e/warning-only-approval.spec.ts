@@ -22,7 +22,7 @@ test('a warning-only readiness report remains visible and approval queues public
   // which unrelated browser journeys have published earlier in this suite.
   await expect(page.getByText(`${report.warnings.length} advisory warning${report.warnings.length === 1 ? '' : 's'}`, { exact: true })).toBeVisible()
   await expect(page.locator('details').filter({ hasText: 'Content uses banned phrase' })).toContainText('forbidden synthetic phrase')
-  const approve = page.getByRole('button', { name: 'Approve and queue publish' })
+  const approve = page.getByRole('button', { name: 'Approve and publish' })
   await expect(approve).toBeEnabled()
   await approve.click()
   await expect(page.getByRole('status')).toContainText('queued')
