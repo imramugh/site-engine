@@ -15,6 +15,7 @@ export type AutomaticReview = {
 type Options = {
   review: AutomaticReview | undefined
   selectedKeys: string[]
+  selectionReady?: boolean
   refresh: () => Promise<void>
 }
 
@@ -25,7 +26,7 @@ const sameKeys = (left: string[], right: string[]) => left.length === right.leng
  * validates every immutable review proof. One exact revision/selection is
  * attempted once; failures deliberately wait for an explicit retry.
  */
-export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }: Options) {
+export function useAutomaticReviewPreparation({ review, selectedKeys, selectionReady = true, refresh }: Options) {
   const attempted = useRef('')
   const currentKey = useRef('')
   const [error, setError] = useState<string>()
@@ -33,7 +34,7 @@ export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }:
   // The selection state initializes after the selected review is rendered.
   // Use its captured keys during that single render so opening a submitted
   // review cannot miss the automatic preparation trigger.
-  const effectiveKeys = selectedKeys.length ? selectedKeys : review?.changeKeys ?? []
+  const effectiveKeys = selectionReady ? selectedKeys : review?.changeKeys ?? []
   const selectionMatchesPreview = Boolean(review?.preview?.includedChangeKeys && sameKeys(effectiveKeys, review.preview.includedChangeKeys))
   const key = review ? `${review.id}:${review.revision}:${[...effectiveKeys].sort().join(',')}` : ''
 
@@ -54,7 +55,7 @@ export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }:
       await refresh()
     } catch {
       if (currentKey.current === key) setError('The protected comparison could not be prepared. Retry when the service is available.')
-    } finally { setPreparing(false) }
+    } finally { if (currentKey.current === key) setPreparing(false) }
   }, [effectiveKeys, key, refresh, review])
 
   useEffect(() => { void prepare() }, [prepare])
