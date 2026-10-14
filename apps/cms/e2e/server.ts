@@ -833,7 +833,16 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
       const release = releases.docs[0] as unknown as { id?: string; sequence?: number; snapshot?: Record<string, unknown> } | undefined
       const snapshot = release?.snapshot
       if (!release || !snapshot || typeof snapshot !== 'object' || typeof snapshot.id !== 'string') throw new Error('Published review baseline is missing.')
+      // A queued release is the candidate assembly baseline, while the
+      // installed release is the immutable live comparison. Keep both inputs
+      // aligned with prepareReviewPreview so this fixture exercises the real
+      // currentness guard rather than fabricating a stale proof.
+      const published = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+      const liveRelease = published.docs[0] as unknown as { sequence?: number; snapshot?: Record<string, unknown> } | undefined
+      const liveSnapshot = liveRelease?.snapshot
+      if (!liveRelease || !liveSnapshot || typeof liveSnapshot !== 'object' || typeof liveSnapshot.id !== 'string') throw new Error('Installed review baseline is missing.')
       const baseline = structuredClone(snapshot.manifest) as Record<string, unknown>
+      const live = structuredClone(liveSnapshot.manifest) as Record<string, unknown>
       const source = await payload.findByID({ collection: 'change-sets', id: onPageReviewSetID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
       const page = (baseline.pages as Array<Record<string, unknown>>).find((item) => item.id === onPageReviewPageID)
       if (!page) throw new Error('Warning-only review page is missing from the published baseline.')
@@ -846,11 +855,19 @@ function forwardCMS(request: IncomingMessage, response: ServerResponse): void {
         { collection: 'style-guides', id: randomUUID(), before: baseline.styleGuide ?? null, after: { ...(baseline.styleGuide as Record<string, unknown> | undefined), bannedPhrases: [warningPhrase] }, beforeHash: baseline.styleGuide ? canonicalHash(baseline.styleGuide) : null, afterHash: null },
       ]
       const includedChangeKeys = changes.map((change) => `${change.collection}:${change.id}`)
-      const versionPins = { themeVersion: String(snapshot.themeVersion), engineVersion: String(snapshot.engineVersion), contractVersion: String((baseline.settings as { contractVersion: string }).contractVersion) }
+      const liveThemeVersion = String((live.settings as { theme?: { version?: string } }).theme?.version ?? liveSnapshot.themeVersion)
+      const liveContractVersion = String((live.settings as { contractVersion?: string }).contractVersion ?? liveSnapshot.contractVersion)
+      const versionPins = {
+        themeVersion: String((baseline.settings as { theme?: { version?: string } }).theme?.version ?? snapshot.themeVersion),
+        engineVersion: String(snapshot.engineVersion),
+        contractVersion: String((baseline.settings as { contractVersion: string }).contractVersion),
+        ...(liveThemeVersion === String((baseline.settings as { theme?: { version?: string } }).theme?.version ?? snapshot.themeVersion) ? {} : { liveThemeVersion }),
+        ...(liveContractVersion === String((baseline.settings as { contractVersion: string }).contractVersion) ? {} : { liveContractVersion }),
+      }
       const proposedManifest = buildCandidate(baseline as never, changes as never, includedChangeKeys, versionPins)
       const id = randomUUID(); const jobID = randomUUID(); const changeHash = canonicalHash(changes)
       await payload.create({ collection: 'change-sets', data: { id, name: 'Warning-only readiness review', actor: String(source.actor), state: 'submitted', revision: 1, submittedAt: new Date().toISOString(), changes, preview: { status: 'pending', jobID, revision: 1, changeHash, baselineSnapshotID: snapshot.id, baselineSequence: Number(release.sequence), includedChangeKeys, versionPins } }, overrideAccess: true, context: { editorialInternal: true } })
-      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: snapshot.id, liveSequence: Number(release.sequence), liveManifest: baseline, proposedManifest, liveManifestHash: canonicalHash(baseline), proposedManifestHash: canonicalHash(proposedManifest), versionPins, status: 'pending', attempts: 0 }, overrideAccess: true, context: { editorialInternal: true } })
+      await payload.create({ collection: 'preview-render-jobs', data: { id: jobID, changeSet: id, reviewRevision: 1, changeHash, includedChangeKeys, baselineSnapshot: snapshot.id, baselineSequence: Number(release.sequence), liveSnapshot: liveSnapshot.id, liveSequence: Number(liveRelease.sequence), liveManifest: live, proposedManifest, liveManifestHash: canonicalHash(live), proposedManifestHash: canonicalHash(proposedManifest), versionPins, status: 'pending', attempts: 0 }, overrideAccess: true, context: { editorialInternal: true } })
       const job = await withPayloadTransaction(payload, req => claimPreviewRenderJob(payload, req))
       if (!job || String(job.id) !== jobID) throw new Error('Unable to claim warning-only review job.')
       const api = async (action: string, body: Record<string, unknown> = {}) => {

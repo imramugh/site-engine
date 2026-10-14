@@ -180,7 +180,7 @@ test('reviewers inspect and act on the actual rendered page while access and imm
 
   await reviewer.page.setViewportSize({ width: 1440, height: 960 })
   await reviewer.page.getByRole('button', { name: 'Approve and publish' }).click()
-  await expect(reviewer.page.getByRole('status')).toContainText('Publication queued')
+  await expect(reviewer.page.getByRole('status').filter({ hasText: 'Publication queued. Waiting for the publish worker.' })).toBeVisible()
   await expect(reviewer.page.getByRole('button', { name: 'Approve and publish' })).toHaveCount(0)
   const state = await reviewer.page.request.get('/__e2e/publish-state').then((response) => response.json()) as { outbox?: { status?: string } }
   expect(state.outbox?.status).toBe('pending')
