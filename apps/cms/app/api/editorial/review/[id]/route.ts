@@ -53,6 +53,7 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
     if (pageID && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pageID)) return Response.json({ error: 'A valid review page is required.' }, { status: 400, headers: privateHeaders })
     let review
     let failedPreview
+    let terminalReview
     try { review = await loadReviewModeData(payload, id, { pageID }) }
     catch (error) {
       // Failed diagnostics are a narrow, current-review presentation. Never
@@ -66,6 +67,8 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       // bootstrap state. Keep stale and failed evidence on their strict paths.
       if (set.state === 'submitted' && typeof jobID !== 'string') {
         review = undefined
+      } else if (set.state === 'rejected' || set.state === 'changes-requested') {
+        terminalReview = { id: String(set.id), name: String(set.name), state: String(set.state) }
       } else {
       if (typeof jobID !== 'string' || preview?.status === 'ready') throw error
       const job = await payload.findByID({ collection: 'preview-render-jobs', id: jobID, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
@@ -98,7 +101,7 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       preview: { status: typeof preview?.status === 'string' ? preview.status : 'pending', ...(typeof preview?.jobID === 'string' ? { jobID: preview.jobID } : {}), ...(Array.isArray(preview?.includedChangeKeys) ? { includedChangeKeys: preview.includedChangeKeys.filter((key): key is string => typeof key === 'string') } : {}) },
     } : undefined
     const sessionAuthorized = await sessionStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
-    return Response.json(failedPreview ? { failedPreview, sessionAuthorized, publication } : { review: staleReview ? undefined : review, staleReview, pendingReview, publication, sessionAuthorized }, { headers: privateHeaders })
+    return Response.json(failedPreview ? { failedPreview, sessionAuthorized, publication } : { review: staleReview ? undefined : review, staleReview, pendingReview, terminalReview, publication, sessionAuthorized }, { headers: privateHeaders })
   } catch (error) {
     if (isAuthenticationSQLiteContention(error)) throw error
     const text = error instanceof Error ? error.message : 'Unable to load this review.'
