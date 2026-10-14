@@ -110,3 +110,67 @@ test('a submitted review prepares, checks, regenerates its exact selection, and 
     await Promise.all([reviewer.context.close(), anonymous.close()])
   }
 })
+
+test('opening an unprepared review directly prepares its comparison and rejection preserves the public release', async ({ browser }) => {
+  test.setTimeout(180_000)
+  const reviewer = await signedIn(browser, 'synthetic-on-page-reviewer-session-token')
+  const anonymous = await browser.newContext({ baseURL: origin, ignoreHTTPSErrors: true })
+  const marker = randomUUID().slice(0, 8)
+  const headers = { origin, 'content-type': 'application/json' }
+  const publicPath = '/on-page-review/review-target'
+
+  try {
+    const [publicBefore, publishStateBefore] = await Promise.all([
+      anonymous.request.get(publicPath),
+      anonymous.request.get('/__e2e/publish-state'),
+    ])
+    expect(publicBefore.ok()).toBeTruthy()
+    expect(publishStateBefore.ok()).toBeTruthy()
+    const [publicBeforeHTML, publicReleaseBefore] = await Promise.all([
+      publicBefore.text(),
+      publishStateBefore.json() as Promise<unknown>,
+    ])
+
+    const created = await reviewer.page.request.post('/api/editorial/create', { headers, data: { name: `Direct automatic review ${marker}` } })
+    expect(created.ok(), await created.text()).toBeTruthy()
+    const set = await created.json() as { id: string }
+    const changeHeaders = { ...headers, 'x-site-engine-change-set': set.id }
+    const section = await reviewer.page.request.post('/api/sections', { headers: changeHeaders, data: { name: `Direct automatic review section ${marker}`, summary: 'Synthetic section for the direct automatic review acceptance flow.', slug: `direct-automatic-review-${marker}`, allowedTemplates: ['landing'] } })
+    expect(section.status(), await section.text()).toBe(201)
+    const sectionID = (await section.json() as { doc: { id: string } }).doc.id
+    const page = await reviewer.page.request.post('/api/pages?draft=true', { headers: changeHeaders, data: { title: `Direct automatic review page ${marker}`, summary: 'A synthetic valid page for opening an unprepared review directly.', slug: `direct-review-target-${marker}`, sectionId: sectionID, template: 'landing', blocks: [{ id: randomUUID(), type: 'hero', heading: `Direct automatic review heading ${marker}`, body: 'The direct review route must prepare and render this exact protected comparison without using the editorial workspace.', hidden: false, appearance }] } })
+    expect(page.status(), await page.text()).toBe(201)
+    const submitted = await reviewer.page.request.post('/api/editorial/submit', { headers, data: { id: set.id } })
+    expect(submitted.ok(), await submitted.text()).toBeTruthy()
+
+    const comparisonPrepared = reviewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/editorial/prepare-preview' && response.request().method() === 'POST' && response.status() === 200)
+    await reviewer.page.goto(`/review/${set.id}`)
+    await comparisonPrepared
+    const rendered = await reviewer.page.request.post('/__e2e/direct-preview-worker')
+    expect(rendered.ok(), await rendered.text()).toBeTruthy()
+
+    await expect(reviewer.page.getByTitle('Live page', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(reviewer.page.getByTitle('Proposed page', { exact: true })).toBeVisible()
+    const approve = reviewer.page.getByRole('button', { name: 'Approve and publish', exact: true })
+    await expect(approve).toBeEnabled({ timeout: 30_000 })
+    const reject = reviewer.page.getByRole('button', { name: 'Reject', exact: true })
+    await expect(reject).toBeEnabled()
+
+    const rejected = reviewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/editorial/reject' && response.request().method() === 'POST' && response.status() === 200)
+    await reject.click()
+    await rejected
+    await expect(reviewer.page.locator('section[aria-label="Review outcome"]')).toBeVisible()
+    await expect(reviewer.page.getByRole('status')).toHaveText('Change set rejected. The current live page is unchanged.')
+
+    const [publicAfter, publishStateAfter] = await Promise.all([
+      anonymous.request.get(publicPath),
+      anonymous.request.get('/__e2e/publish-state'),
+    ])
+    expect(publicAfter.ok()).toBeTruthy()
+    expect(publishStateAfter.ok()).toBeTruthy()
+    expect(await publicAfter.text()).toBe(publicBeforeHTML)
+    expect(await publishStateAfter.json()).toEqual(publicReleaseBefore)
+  } finally {
+    await Promise.all([reviewer.context.close(), anonymous.close()])
+  }
+})
