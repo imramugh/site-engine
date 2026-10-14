@@ -35,6 +35,10 @@ async function currentBaseline(payload: Awaited<ReturnType<typeof getPayload>>) 
   const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
   return releases.docs[0] ? { snapshotID: relationID(releases.docs[0].snapshot), sequence: Number(releases.docs[0].sequence) } : undefined
 }
+async function currentLive(payload: Awaited<ReturnType<typeof getPayload>>) {
+  const releases = await payload.find({ collection: 'published-releases', sort: '-sequence', limit: 1, depth: 1, overrideAccess: true })
+  return releases.docs[0] ? { snapshotID: relationID(releases.docs[0].snapshot), sequence: Number(releases.docs[0].sequence) } : undefined
+}
 
 async function GETHandler(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
@@ -78,6 +82,15 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
     const set = await payload.findByID({ collection: 'change-sets', id, depth: 0, overrideAccess: true }) as unknown as Record<string, unknown>
     const preview = set.preview as Record<string, unknown> | undefined
     const revision = Number(set.revision)
+    const baseline = review && set.state === 'submitted' ? await currentBaseline(payload) : undefined
+    const live = review && set.state === 'submitted' ? await currentLive(payload) : undefined
+    const currentBaselineMatches = !baseline ? preview?.baselineSnapshotID === undefined && Number(preview?.baselineSequence) === 0 : preview?.baselineSnapshotID === baseline.snapshotID && Number(preview?.baselineSequence) === baseline.sequence
+    const currentLiveMatches = !live ? preview?.liveSnapshotID === undefined && Number(preview?.liveSequence) === 0 : preview?.liveSnapshotID === live.snapshotID && Number(preview?.liveSequence) === live.sequence
+    const staleReview = review && set.state === 'submitted' && (!currentBaselineMatches || !currentLiveMatches) ? {
+      id: String(set.id), name: String(set.name), state: 'submitted', revision,
+      includedChangeKeys: Array.isArray(preview?.includedChangeKeys) ? preview.includedChangeKeys.filter((key): key is string => typeof key === 'string') : [],
+      message: 'The live publication baseline changed after this comparison. Prepare a current comparison before approval.',
+    } : undefined
     const publication = await publicationForReview(payload, id, revision)
     const pendingReview = !review && !failedPreview && set.state === 'submitted' ? {
       id: String(set.id), name: String(set.name), state: 'submitted', revision,
@@ -85,7 +98,7 @@ async function GETHandler(request: Request, context: { params: Promise<{ id: str
       preview: { status: typeof preview?.status === 'string' ? preview.status : 'pending', ...(typeof preview?.jobID === 'string' ? { jobID: preview.jobID } : {}), ...(Array.isArray(preview?.includedChangeKeys) ? { includedChangeKeys: preview.includedChangeKeys.filter((key): key is string => typeof key === 'string') } : {}) },
     } : undefined
     const sessionAuthorized = await sessionStaff(['owner', 'approver'])({ req: { payload, user, headers: request.headers } as never })
-    return Response.json(failedPreview ? { failedPreview, sessionAuthorized, publication } : { review, pendingReview, publication, sessionAuthorized }, { headers: privateHeaders })
+    return Response.json(failedPreview ? { failedPreview, sessionAuthorized, publication } : { review: staleReview ? undefined : review, staleReview, pendingReview, publication, sessionAuthorized }, { headers: privateHeaders })
   } catch (error) {
     if (isAuthenticationSQLiteContention(error)) throw error
     const text = error instanceof Error ? error.message : 'Unable to load this review.'

@@ -9,7 +9,8 @@ type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
 type PendingReview = { id: string; name: string; state: 'submitted'; revision: number; changeKeys: string[]; preview: { status: string; jobID?: string; includedChangeKeys?: string[] } }
 type Publication = { status: 'queued' | 'publishing' | 'published' | 'failed'; errorCode?: string }
-type Data = { review?: ReviewModeData; pendingReview?: PendingReview; failedPreview?: { id: string; name: string; state: string; revision: number; includedChangeKeys: string[]; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; publication?: Publication; sessionAuthorized: boolean }
+type StaleReview = { id: string; name: string; state: 'submitted'; revision: number; includedChangeKeys: string[]; message: string }
+type Data = { review?: ReviewModeData; pendingReview?: PendingReview; staleReview?: StaleReview; failedPreview?: { id: string; name: string; state: string; revision: number; includedChangeKeys: string[]; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; publication?: Publication; sessionAuthorized: boolean }
 
 function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 760 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
@@ -147,13 +148,13 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
       await load()
     } catch { setMessage('Unable to complete this action. Your comment is still available to retry.') } finally { setActing(false) }
   }
-  async function retryFailedPreview() {
-    const failed = data?.failedPreview
-    if (!failed || !failed.includedChangeKeys.length || acting) return
+  async function retryComparison(target: { id: string; includedChangeKeys: string[] }) {
+    if (!target.includedChangeKeys.length || acting) return
     setActing(true); setMessage('')
-    try { const response = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: failed.id, includedChangeKeys: failed.includedChangeKeys }) }); const body = await response.json() as { error?: string }; if (!response.ok) { setMessage(body.error ?? 'Correct the blocking issue and submit a new review.'); return }; await load() } catch { setMessage('The comparison could not be retried. Correct the blocking issue and try again.') } finally { setActing(false) }
+    try { const response = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(target) }); const body = await response.json() as { error?: string }; if (!response.ok) { setMessage(body.error ?? 'Correct the blocking issue and submit a new review.'); return }; await load() } catch { setMessage('The comparison could not be retried. Correct the blocking issue and try again.') } finally { setActing(false) }
   }
-  if (data?.failedPreview) return <main className={styles.loading}><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}<button type="button" disabled={acting || !data.failedPreview.includedChangeKeys.length} onClick={() => void retryFailedPreview()}>Retry comparison</button><a href="/editorial">Return to Reviews</a></section></main>
+  if (data?.failedPreview) return <main className={styles.loading}><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}<button type="button" disabled={acting || !data.failedPreview.includedChangeKeys.length} onClick={() => void retryComparison(data.failedPreview!)}>Retry comparison</button><a href="/editorial">Return to Reviews</a></section></main>
+  if (data?.staleReview) return <main className={styles.loading}><section aria-label="Stale review"><h1>{data.staleReview.name}</h1><p role="alert">{data.staleReview.message}</p><button type="button" disabled={acting || !data.staleReview.includedChangeKeys.length} onClick={() => void retryComparison(data.staleReview!)}>Prepare current comparison</button><a href="/editorial">Return to Reviews</a></section></main>
   if (loading) return <main className={styles.loading} aria-busy="true">Loading protected review…</main>
   if (pending) return <main className={styles.loading} aria-busy="true"><section aria-label="Preparing protected review"><h1>{pending.name}</h1><p role="status">{automatic.preparing ? 'Preparing the protected comparison…' : 'Waiting for the protected renderer…'}</p>{automatic.error && <><p role="alert">{automatic.error}</p><button type="button" onClick={automatic.retry}>Retry comparison</button></>}</section></main>
   if (!review) return <main className={styles.loading}><h1>Review unavailable</h1><p role="alert">{message}</p><a href="/editorial">Return to Reviews</a></main>
@@ -176,7 +177,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
       <button className={styles.panelButton} type="button" aria-expanded={panel} onClick={() => setPanel((open) => !open)}>{panel ? 'Hide details' : 'Details and actions'}</button>
     </header>
     {message && <p className={styles.notice} role="status" aria-live="polite">{message}</p>}
-    {publication && <p className={styles.notice} role={publication.status === 'failed' ? 'alert' : 'status'}>{publication.status === 'queued' ? 'Publication queued. Waiting for the publish worker.' : publication.status === 'publishing' ? 'Publishing the approved immutable snapshot…' : publication.status === 'published' ? 'Published. The immutable snapshot is live.' : `Publication failed${publication.errorCode ? ` (${publication.errorCode})` : ''}. The public site is unchanged.`}</p>}
+    {publication && <p className={styles.notice} role={publication.status === 'failed' ? 'alert' : 'status'}>{publication.status === 'queued' ? 'Publication queued. Waiting for the publish worker.' : publication.status === 'publishing' ? 'Publishing the approved immutable snapshot…' : publication.status === 'published' ? 'Published. The immutable snapshot is live.' : <>Publication could not be confirmed{publication.errorCode ? ` (${publication.errorCode})` : ''}. <a href="/operations">Open Operations for details and retry.</a></>}</p>}
     <div className={styles.content}>
       <section className={styles.canvas} aria-label="Rendered page comparison" data-review-mode={mode} data-device={device}>
         <div className={styles.frames} data-single={mode !== 'side'}>

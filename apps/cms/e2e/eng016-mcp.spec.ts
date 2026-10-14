@@ -82,7 +82,7 @@ test('ENG-016 Editor assistant discovers, drafts, and submits a revisioned block
     await expect(review).toContainText('submitted')
     await review.click()
     await expect(browserSession.page.getByRole('region', { name: 'Change set detail' })).toContainText('Assistant-prepared review heading')
-    await expect(browserSession.page.getByRole('button', { name: /Approve and queue publish/ })).toHaveCount(0)
+    await expect(browserSession.page.getByRole('button', { name: /Approve and publish/ })).toHaveCount(0)
     await installAxe(browserSession.page)
     expect(await browserSession.page.evaluate(async () => (await (window as unknown as { axe: typeof import('axe-core') }).axe.run('main', { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } })).violations)).toEqual([])
   } finally {

@@ -36,7 +36,7 @@ export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }:
   useEffect(() => { currentKey.current = key; setError(undefined); setPreparing(false) }, [key])
 
   const prepare = useCallback(async (retry = false) => {
-    if (!review || review.state !== 'submitted' || !selectedKeys.length || review.blocked) return
+    if (!review || review.state !== 'submitted' || !selectedKeys.length || (review.blocked && !retry)) return
     if (!retry && attempted.current === key) return
     attempted.current = key
     setPreparing(true); setError(undefined)

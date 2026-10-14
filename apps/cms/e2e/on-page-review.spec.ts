@@ -165,9 +165,7 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   await expect(reviewer.page.getByRole('status')).toContainText('still available')
   await reviewer.page.getByRole('button', { name: 'Add comment' }).click()
   await expect(comment).toHaveValue('')
-  await reviewer.page.getByRole('button', { name: 'Run readiness checks' }).click()
-  await expect(reviewer.page.getByRole('status')).toContainText('Readiness checks completed')
-  await expect(reviewer.page.getByRole('button', { name: 'Approve and queue publish' })).toBeEnabled()
+  await expect(reviewer.page.getByRole('button', { name: 'Approve and publish' })).toBeEnabled({ timeout: 10_000 })
   await expect(reviewer.page.getByRole('button', { name: 'Request changes' })).toBeVisible()
   await expect(reviewer.page.getByRole('button', { name: 'Reject' })).toBeVisible()
 
@@ -181,9 +179,9 @@ test('reviewers inspect and act on the actual rendered page while access and imm
   await reviewer.page.screenshot({ path: 'artifacts/on-page-review-390.png', fullPage: true })
 
   await reviewer.page.setViewportSize({ width: 1440, height: 960 })
-  await reviewer.page.getByRole('button', { name: 'Approve and queue publish' }).click()
-  await expect(reviewer.page.getByRole('status')).toContainText('immutable snapshot is queued')
-  await expect(reviewer.page.getByRole('button', { name: 'Approve and queue publish' })).toHaveCount(0)
+  await reviewer.page.getByRole('button', { name: 'Approve and publish' }).click()
+  await expect(reviewer.page.getByRole('status')).toContainText('Publication queued')
+  await expect(reviewer.page.getByRole('button', { name: 'Approve and publish' })).toHaveCount(0)
   const state = await reviewer.page.request.get('/__e2e/publish-state').then((response) => response.json()) as { outbox?: { status?: string } }
   expect(state.outbox?.status).toBe('pending')
   const transitioned = await reviewer.page.request.get(publicPath)
