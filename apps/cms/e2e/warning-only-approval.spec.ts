@@ -25,6 +25,6 @@ test('a warning-only readiness report remains visible and approval queues public
   const approve = page.getByRole('button', { name: 'Approve and publish' })
   await expect(approve).toBeEnabled()
   await approve.click()
-  await expect(page.getByRole('status')).toContainText('queued')
+  await expect(page.getByRole('status').filter({ hasText: 'Publication queued. Waiting for the publish worker.' })).toBeVisible()
   await context.close()
 })
