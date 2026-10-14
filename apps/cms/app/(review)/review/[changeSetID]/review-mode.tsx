@@ -84,8 +84,8 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [acting, setActing] = useState(false)
-  const qualityAttempted = useRef(new Set<string>())
-  const [qualityError, setQualityError] = useState('')
+  const qualityAttempted = useRef<string | null>(null)
+  const [qualityError, setQualityError] = useState<{ key: string; message: string } | null>(null)
   const [qualityRetry, setQualityRetry] = useState(0)
   const load = useCallback(async () => {
     try {
@@ -110,19 +110,20 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
     selectedKeys: pending?.preview.includedChangeKeys ?? pending?.changeKeys ?? [],
     refresh: load,
   })
+  const qualityKey = review ? `${review.id}:${review.revision}:${review.previewJobID}` : ''
+  const qualityErrorMessage = qualityError?.key === qualityKey ? qualityError.message : ''
   useEffect(() => {
-    const qualityKey = review ? `${review.id}:${review.revision}:${review.previewJobID}` : ''
-    if (!review || review.state !== 'submitted' || review.approvalProof || qualityAttempted.current.has(qualityKey)) return
-    qualityAttempted.current.add(qualityKey); setQualityError('')
+    if (!review || !qualityKey || review.state !== 'submitted' || review.approvalProof || qualityAttempted.current === qualityKey) return
+    qualityAttempted.current = qualityKey; setQualityError(null)
     void fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: review.id }) }).then(async (response) => {
       if (!response.ok) {
         const body = await response.json() as { error?: string }
-        setQualityError(body.error ?? 'Readiness checks need attention before approval.')
+        if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: body.error ?? 'Readiness checks need attention before approval.' })
         return
       }
-      await load()
-    }).catch(() => setQualityError('Readiness checks could not run. Retry readiness checks.'))
-  }, [load, qualityRetry, review])
+      if (qualityAttempted.current === qualityKey) await load()
+    }).catch(() => { if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: 'Readiness checks could not run. Retry readiness checks.' }) })
+  }, [load, qualityKey, qualityRetry, review])
   useEffect(() => {
     if (!data?.publication || !['queued', 'publishing'].includes(data.publication.status)) return
     const timer = window.setInterval(() => void load(), 2_000)
@@ -198,7 +199,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
           {report?.blockers?.map((item) => <p role="alert" key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}
           {Boolean(report?.warnings?.length) && <details className={styles.warningDetails}><summary>{report!.warnings!.length} advisory warning{report!.warnings!.length === 1 ? '' : 's'}</summary>{report!.warnings!.map((item) => <p key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}</details>}
           {!review.quality?.checks?.length && <p>Readiness checks have not run for this comparison.</p>}
-          {qualityError && <p role="alert">{qualityError} <button type="button" onClick={() => { qualityAttempted.current.delete(`${review.id}:${review.revision}:${review.previewJobID}`); setQualityRetry((value) => value + 1) }}>Retry readiness checks</button></p>}
+          {qualityErrorMessage && <p role="alert">{qualityErrorMessage} <button type="button" onClick={() => { qualityAttempted.current = null; setQualityRetry((value) => value + 1) }}>Retry readiness checks</button></p>}
         </section>
         <section className={styles.comments}><h2>Comments</h2>{review.reviewComments.length ? review.reviewComments.map((item) => <article key={item.id}><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString()}</small></article>) : <p>No review comments.</p>}
           {submitted && <><label htmlFor="page-review-comment">Add a comment</label><textarea id="page-review-comment" rows={3} maxLength={2000} value={comment} onChange={(event) => setComment(event.target.value)} /><button type="button" disabled={acting || !comment.trim()} onClick={() => void action('comment')}>Add comment</button></>}
