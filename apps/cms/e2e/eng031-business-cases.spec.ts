@@ -38,6 +38,7 @@ test('ENG-031 schedules an approved business case and keeps an invalidated appro
     await expect(proposed.getByRole('heading', { name: 'Scheduled case study', exact: true })).toBeVisible()
     await expect(proposed.getByRole('region', { name: 'Case study details', exact: true })).toContainText('Synthetic services')
     const scheduledFor = localDateTime(new Date(Date.now() + 5 * 60_000))
+    await reviewer.page.getByText('Other actions', { exact: true }).click()
     await reviewer.page.locator('input[type="datetime-local"]').fill(scheduledFor)
     await reviewer.page.getByRole('button', { name: 'Approve and schedule publish', exact: true }).click()
     await expect(reviewer.page.getByRole('status')).toContainText('Approved immutable snapshot scheduled for UTC dispatch.')
