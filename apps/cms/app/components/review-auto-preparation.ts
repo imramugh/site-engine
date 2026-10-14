@@ -30,18 +30,22 @@ export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }:
   const currentKey = useRef('')
   const [error, setError] = useState<string>()
   const [preparing, setPreparing] = useState(false)
-  const selectionMatchesPreview = Boolean(review?.preview?.includedChangeKeys && sameKeys(selectedKeys, review.preview.includedChangeKeys))
-  const key = review ? `${review.id}:${review.revision}:${[...selectedKeys].sort().join(',')}` : ''
+  // The selection state initializes after the selected review is rendered.
+  // Use its captured keys during that single render so opening a submitted
+  // review cannot miss the automatic preparation trigger.
+  const effectiveKeys = selectedKeys.length ? selectedKeys : review?.changeKeys ?? []
+  const selectionMatchesPreview = Boolean(review?.preview?.includedChangeKeys && sameKeys(effectiveKeys, review.preview.includedChangeKeys))
+  const key = review ? `${review.id}:${review.revision}:${[...effectiveKeys].sort().join(',')}` : ''
 
   useEffect(() => { currentKey.current = key; setError(undefined); setPreparing(false) }, [key])
 
   const prepare = useCallback(async (retry = false) => {
-    if (!review || review.state !== 'submitted' || !selectedKeys.length || (review.blocked && !retry)) return
+    if (!review || review.state !== 'submitted' || !effectiveKeys.length || (review.blocked && !retry)) return
     if (!retry && attempted.current === key) return
     attempted.current = key
     setPreparing(true); setError(undefined)
     try {
-      const response = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: review.id, includedChangeKeys: selectedKeys }) })
+      const response = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: review.id, includedChangeKeys: effectiveKeys }) })
       const body = await response.json() as { error?: string }
       if (!response.ok) {
         if (currentKey.current === key) setError(body.error ?? 'The protected comparison could not be prepared.')
@@ -51,7 +55,7 @@ export function useAutomaticReviewPreparation({ review, selectedKeys, refresh }:
     } catch {
       if (currentKey.current === key) setError('The protected comparison could not be prepared. Retry when the service is available.')
     } finally { setPreparing(false) }
-  }, [key, refresh, review, selectedKeys])
+  }, [effectiveKeys, key, refresh, review])
 
   useEffect(() => { void prepare() }, [prepare])
   useEffect(() => {

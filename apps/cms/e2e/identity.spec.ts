@@ -462,7 +462,7 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   expect(await rendered.json()).toMatchObject({ status: 'completed' })
   await expect(owner.getByRole('button', { name: 'Approve and publish' })).toBeVisible({ timeout: 10_000 })
   const beforeSchedule = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }
-  const future = '2031-01-02T03:04'; await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()
+  const future = '2031-01-02T03:04'; await owner.getByText('Other actions', { exact: true }).click(); await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and publish' }).click()
   await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); const schedule = owner.locator('[data-editorial-schedules] li').first(); await expect(schedule).toContainText('Jan 1, 2031, 10:04 p.m. EST'); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).not.toBeVisible(); await schedule.getByText('Technical details').click(); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
   owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.locator('[data-editorial-schedules] li').first()).toContainText('Jan 1, 2031, 11:04 p.m. EST')
