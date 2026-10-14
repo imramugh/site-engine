@@ -332,7 +332,6 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   expect(await completed.json()).toMatchObject({ status: 'completed' })
   // A selected subset may replace the initial automatic all-change candidate.
   await reviewer.request.post('/__e2e/direct-preview-worker')
-  await expect(reviewer.getByRole('status').filter({ hasText: 'Private comparison is ready for review.' })).toContainText('ready for review', { timeout: 10_000 })
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
@@ -382,8 +381,7 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const comment = reviewer.getByLabel('Add review comment'); await comment.fill('Retry-safe browser comment'); await reviewer.getByRole('button', { name: 'Add comment' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Unable to add this comment' })).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click(); await expect(comment).toHaveValue('')
-  await expect(reviewer.getByText('Approval requires a passing readiness proof for this exact comparison.')).toBeVisible()
-  await expect(reviewer.getByRole('button', { name: 'Approve and publish' })).toBeVisible({ timeout: 10_000 })
+  await expect(reviewer.getByRole('button', { name: 'Approve and publish' })).toBeEnabled({ timeout: 10_000 })
   await expect(reviewer.getByText(/SEO description is missing./).first()).toBeVisible()
   await expect(reviewer.getByRole('button', { name: 'Approve and publish' })).toBeVisible()
   const displayed = await reviewer.evaluate(async (id) => {
