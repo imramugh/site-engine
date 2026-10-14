@@ -323,15 +323,15 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const excludedSection = reviewer.getByLabel(/Include Section On-page review browser section/)
   await expect(excludedSection).toBeChecked()
   await excludedSection.uncheck()
-  await reviewer.getByRole('button', { name: 'Prepare comparison' }).click()
-  await expect(reviewer.getByRole('main').getByRole('status')).toContainText('Private comparison queued')
+  await expect(reviewer.getByText('Preparing protected comparison…')).toBeVisible({ timeout: 10_000 })
   // The fixture runs the same preview worker used by a normal review.  That
   // worker emits the immutable, job-bound screenshot evidence manifest rather
   // than fabricating a completion callback from the browser.
   const completed = await reviewer.request.post('/__e2e/direct-preview-worker')
   expect(completed.ok(), await completed.text()).toBeTruthy()
   expect(await completed.json()).toMatchObject({ status: 'completed' })
-  await expect(reviewer.getByRole('status').filter({ hasText: 'Private comparison is ready for review.' })).toContainText('ready for review', { timeout: 10_000 })
+  // A selected subset may replace the initial automatic all-change candidate.
+  await reviewer.request.post('/__e2e/direct-preview-worker')
   await expect(reviewer.getByTitle('Live comparison')).toBeVisible({ timeout: 10_000 })
   await expect(reviewer.getByTitle('Proposed comparison')).toBeVisible()
   await expect(reviewer.getByTitle('Proposed comparison')).toHaveAttribute('src', /\/workflow-browser\/workflow-page$/)
@@ -381,11 +381,9 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   const comment = reviewer.getByLabel('Add review comment'); await comment.fill('Retry-safe browser comment'); await reviewer.getByRole('button', { name: 'Add comment' }).click()
   await expect(reviewer.getByRole('status').filter({ hasText: 'Unable to add this comment' })).toContainText('Unable to add this comment'); await expect(comment).toHaveValue('Retry-safe browser comment')
   await reviewer.getByRole('button', { name: 'Add comment' }).click(); await expect(comment).toHaveValue('')
-  await expect(reviewer.getByText('Approval requires a passing readiness proof for this exact comparison.')).toBeVisible()
-  await reviewer.getByRole('button', { name: 'Run readiness checks' }).click()
-  await expect(reviewer.getByRole('status').filter({ hasText: 'Deterministic readiness checks completed' })).toContainText('completed')
+  await expect(reviewer.getByRole('button', { name: 'Approve and publish' })).toBeEnabled({ timeout: 10_000 })
   await expect(reviewer.getByText(/SEO description is missing./).first()).toBeVisible()
-  await expect(reviewer.getByRole('button', { name: 'Approve and queue publish' })).toBeVisible()
+  await expect(reviewer.getByRole('button', { name: 'Approve and publish' })).toBeVisible()
   const displayed = await reviewer.evaluate(async (id) => {
     const response = await fetch('/api/editorial/list', { cache: 'no-store' })
     const body = await response.json() as { sets: Array<{ id: string; quality?: { proof?: Record<string, unknown> } }> }
@@ -402,8 +400,8 @@ test('editorial UI shows field diffs and routes review actions through CSRF-prot
   // established session.
   const sessionOlderThanFifteenMinutes = await reviewer.request.post('/__e2e/session/stale')
   expect(sessionOlderThanFifteenMinutes.status(), await sessionOlderThanFifteenMinutes.text()).toBe(204)
-  await reviewer.getByRole('button', { name: 'Approve and queue publish' }).click()
-  await expect(reviewer.getByRole('status').filter({ hasText: 'Approved snapshot queued' })).toContainText('publish worker')
+  await reviewer.getByRole('button', { name: 'Approve and publish' }).click()
+  await expect(reviewer.getByRole('status').filter({ hasText: 'Publication queued' })).toContainText('Publication queued')
   const queued = await reviewer.request.get('/__e2e/publish-state')
   expect(queued.ok(), await queued.text()).toBeTruthy()
   await expect(queued.json()).resolves.toMatchObject({ outbox: { status: 'pending' }, releaseCount: beforeApproval.releaseCount })
@@ -454,15 +452,15 @@ test('an owner schedules, reschedules, and cancels a reviewed future publication
   expect(editorList).toBe(403)
   const ownerContext = await browser.newContext({ baseURL: cmsOrigin, ignoreHTTPSErrors: true }); const owner = await ownerContext.newPage()
   await signInLocalOwner(owner, scheduleOwnerRecoveryCode, scheduleOwnerEmail); await owner.goto('/admin/editorial'); await owner.clock.install({ time: new Date('2030-01-01T00:00:00.000Z') })
-  await owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"]`).click(); await owner.getByRole('button', { name: 'Prepare comparison' }).click()
+  await owner.locator(`[data-editorial-queue-item][data-change-set-id="${scheduledSetID}"]`).click(); await expect(owner.getByText('Preparing protected comparison…')).toBeVisible({ timeout: 10_000 })
   // Keep this schedule fixture on the renderer path so preview completion
   // includes real, immutable screenshot evidence for the claimed job.
   const rendered = await owner.request.post('/__e2e/direct-preview-worker')
   expect(rendered.ok(), await rendered.text()).toBeTruthy()
   expect(await rendered.json()).toMatchObject({ status: 'completed' })
-  await expect(owner.getByRole('button', { name: 'Run readiness checks' })).toBeVisible({ timeout: 10_000 }); await owner.getByRole('button', { name: 'Run readiness checks' }).click()
+  await expect(owner.getByRole('button', { name: 'Approve and publish' })).toBeVisible({ timeout: 10_000 })
   const beforeSchedule = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }
-  const future = '2031-01-02T03:04'; await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()
+  const future = '2031-01-02T03:04'; await owner.getByText('Other actions', { exact: true }).click(); await owner.locator('input[type="datetime-local"]').fill(future); await owner.getByRole('button', { name: 'Approve and schedule publish' }).click()
   await expect(owner.getByRole('main').getByRole('status')).toContainText('scheduled for UTC dispatch'); const schedule = owner.locator('[data-editorial-schedules] li').first(); await expect(schedule).toContainText('Jan 1, 2031, 10:04 p.m. EST'); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).not.toBeVisible(); await schedule.getByText('Technical details').click(); await expect(schedule.getByText('UTC: 2031-01-02T03:04:00.000Z')).toBeVisible()
   const state = await (await owner.request.get('/__e2e/publish-state')).json() as { outbox?: unknown }; expect(state.outbox).toEqual(beforeSchedule.outbox)
   owner.once('dialog', dialog => dialog.accept('2031-01-02T04:04')); await owner.getByRole('button', { name: 'Reschedule' }).click(); await expect(owner.locator('[data-editorial-schedules] li').first()).toContainText('Jan 1, 2031, 11:04 p.m. EST')

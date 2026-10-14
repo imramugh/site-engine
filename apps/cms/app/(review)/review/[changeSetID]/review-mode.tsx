@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReviewModeData } from '../../../../src/review-mode'
 import styles from './review-mode.module.css'
+import { useAutomaticReviewPreparation } from '../../../components/review-auto-preparation'
 
 type Mode = 'live' | 'proposed' | 'side'
 type Device = 'desktop' | 'mobile'
-type Data = { review?: ReviewModeData; failedPreview?: { id: string; name: string; state: string; revision: number; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; sessionAuthorized: boolean }
+type PendingReview = { id: string; name: string; state: 'submitted'; revision: number; changeKeys: string[]; preview: { status: string; jobID?: string; includedChangeKeys?: string[] } }
+type Publication = { status: 'queued' | 'publishing' | 'published' | 'failed'; errorCode?: string }
+type StaleReview = { id: string; name: string; state: 'submitted'; revision: number; includedChangeKeys: string[]; message: string }
+type Data = { review?: ReviewModeData; pendingReview?: PendingReview; staleReview?: StaleReview; terminalReview?: { id: string; name: string; state: string }; failedPreview?: { id: string; name: string; state: string; revision: number; includedChangeKeys: string[]; diagnostics: Array<{ code: string; path: string; message: string; pageId?: string; blockId?: string }> }; publication?: Publication; sessionAuthorized: boolean }
 
 function ReviewFrame({ title, src, width, changed, active, variant, onReady }: { title: string; src: string; width: 1440 | 760 | 390; changed: ReviewModeData['changedBlocks']; active?: string; variant: 'live' | 'proposed'; onReady: (available: Set<string>) => void }) {
   const shell = useRef<HTMLDivElement>(null)
@@ -80,12 +84,15 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [acting, setActing] = useState(false)
+  const qualityAttempted = useRef<string | null>(null)
+  const [qualityError, setQualityError] = useState<{ key: string; message: string } | null>(null)
+  const [qualityRetry, setQualityRetry] = useState(0)
   const load = useCallback(async () => {
     try {
       const selection = pageID ? `?pageID=${encodeURIComponent(pageID)}` : ''
       const response = await fetch(`/api/editorial/review/${encodeURIComponent(changeSetID)}${selection}`, { cache: 'no-store' })
       const body = await response.json() as Data & { error?: string }
-      if (!response.ok) { setMessage(body.error ?? 'This review is unavailable.'); return }
+      if (!response.ok) { setData(null); setMessage(body.error ?? 'This comparison is no longer current. Return to Reviews and prepare a current review.'); return }
       setData(body)
     } catch { setMessage('Unable to load this review. Try again.') } finally { setLoading(false) }
   }, [changeSetID, pageID])
@@ -97,6 +104,31 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
     return () => media.removeEventListener('change', update)
   }, [])
   const review = data?.review
+  const pending = data?.pendingReview
+  const automatic = useAutomaticReviewPreparation({
+    review: pending ? { ...pending, ready: false } : review ? { id: review.id, state: review.state, revision: review.revision, changeKeys: [], preview: { status: 'ready', jobID: review.previewJobID }, ready: true } : undefined,
+    selectedKeys: pending?.preview.includedChangeKeys ?? pending?.changeKeys ?? [],
+    refresh: load,
+  })
+  const qualityKey = review ? `${review.id}:${review.revision}:${review.previewJobID}` : ''
+  const qualityErrorMessage = qualityError?.key === qualityKey ? qualityError.message : ''
+  useEffect(() => {
+    if (!review || !qualityKey || review.state !== 'submitted' || review.approvalProof || qualityAttempted.current === qualityKey) return
+    qualityAttempted.current = qualityKey; setQualityError(null)
+    void fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: review.id }) }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json() as { error?: string }
+        if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: body.error ?? 'Readiness checks need attention before approval.' })
+        return
+      }
+      if (qualityAttempted.current === qualityKey) await load()
+    }).catch(() => { if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: 'Readiness checks could not run. Retry readiness checks.' }) })
+  }, [load, qualityKey, qualityRetry, review])
+  useEffect(() => {
+    if (!data?.publication || !['queued', 'publishing'].includes(data.publication.status)) return
+    const timer = window.setInterval(() => void load(), 2_000)
+    return () => window.clearInterval(timer)
+  }, [data?.publication?.status, load])
   const rememberAvailable = useCallback((pane: 'live' | 'proposed', found: Set<string>) => setAvailableByPane((current) => {
     const previous = current[pane]
     if (previous.size === found.size && [...found].every((id) => previous.has(id))) return current
@@ -113,16 +145,25 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
       const body = await response.json() as { error?: string }
       if (!response.ok) { setMessage(body.error ?? (name === 'comment' ? 'Unable to add this comment. Your text is still available to retry.' : 'The review action was not accepted.')); return }
       if (name === 'comment') setComment('')
-      setMessage(name === 'approve' ? 'Approved. The immutable snapshot is queued for publication.' : name === 'request-changes' ? 'Changes requested. The current live page is unchanged.' : name === 'reject' ? 'Change set rejected. The current live page is unchanged.' : name === 'run-quality' ? 'Readiness checks completed for this exact comparison.' : 'Comment added.')
+      setMessage(name === 'approve' ? 'Approved. Publication is queued; this page will report the worker result.' : name === 'request-changes' ? 'Changes requested. The current live page is unchanged.' : name === 'reject' ? 'Change set rejected. The current live page is unchanged.' : name === 'run-quality' ? 'Readiness checks completed for this exact comparison.' : 'Comment added.')
       await load()
     } catch { setMessage('Unable to complete this action. Your comment is still available to retry.') } finally { setActing(false) }
   }
-  if (data?.failedPreview) return <main className={styles.loading}><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}<a href="/editorial">Return to Reviews</a></section></main>
+  async function retryComparison(target: { id: string; includedChangeKeys: string[] }) {
+    if (!target.includedChangeKeys.length || acting) return
+    setActing(true); setMessage('')
+    try { const response = await fetch('/api/editorial/prepare-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(target) }); const body = await response.json() as { error?: string }; if (!response.ok) { setMessage(body.error ?? 'Correct the blocking issue and submit a new review.'); return }; await load() } catch { setMessage('The comparison could not be retried. Correct the blocking issue and try again.') } finally { setActing(false) }
+  }
+  if (data?.failedPreview) return <main className={styles.loading}><section aria-label="Failed preview diagnostics"><h1>{data.failedPreview.name}</h1><p role="alert">The private renderer found blocking readiness issues. Approval and publication are unavailable.</p>{message && <p role="status">{message}</p>}{data.failedPreview.diagnostics.map((item, index) => <p role="alert" key={`${item.code}-${index}`}>{item.message}<small>{item.code} · {item.path}{item.blockId ? ` · ${item.blockId}` : ''}</small></p>)}<button type="button" disabled={acting || !data.failedPreview.includedChangeKeys.length} onClick={() => void retryComparison(data.failedPreview!)}>Retry comparison</button><a href="/editorial">Return to Reviews</a></section></main>
+  if (data?.staleReview) return <main className={styles.loading}><section aria-label="Stale review"><h1>{data.staleReview.name}</h1><p role="alert">{data.staleReview.message}</p>{message && <p role="status">{message}</p>}<button type="button" disabled={acting || !data.staleReview.includedChangeKeys.length} onClick={() => void retryComparison(data.staleReview!)}>Prepare current comparison</button><a href="/editorial">Return to Reviews</a></section></main>
+  if (data?.terminalReview) return <main className={styles.loading}><section aria-label="Review outcome"><h1>{data.terminalReview.name}</h1><p role="status">{data.terminalReview.state === 'rejected' ? 'Change set rejected. The current live page is unchanged.' : 'Changes requested. The current live page is unchanged.'}</p><a href="/editorial">Return to Reviews</a></section></main>
   if (loading) return <main className={styles.loading} aria-busy="true">Loading protected review…</main>
+  if (pending) return <main className={styles.loading} aria-busy="true"><section aria-label="Preparing protected review"><h1>{pending.name}</h1><p role="status">{automatic.preparing ? 'Preparing the protected comparison…' : 'Waiting for the protected renderer…'}</p>{automatic.error && <><p role="alert">{automatic.error}</p><button type="button" onClick={automatic.retry}>Retry comparison</button></>}</section></main>
   if (!review) return <main className={styles.loading}><h1>Review unavailable</h1><p role="alert">{message}</p><a href="/editorial">Return to Reviews</a></main>
   const report = review.quality?.proof?.report
   const submitted = review.state === 'submitted'
   const publishable = report?.publishable === true && Boolean(review.approvalProof)
+  const publication = data.publication
   const path = review.path === '/' ? '' : review.path
   const width = device === 'mobile' || narrow ? 390 : mode === 'side' ? 760 : 1440
   const available = mode === 'live' ? availableByPane.live : mode === 'proposed' ? availableByPane.proposed : new Set([...availableByPane.live, ...availableByPane.proposed])
@@ -138,6 +179,7 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
       <button className={styles.panelButton} type="button" aria-expanded={panel} onClick={() => setPanel((open) => !open)}>{panel ? 'Hide details' : 'Details and actions'}</button>
     </header>
     {message && <p className={styles.notice} role="status" aria-live="polite">{message}</p>}
+    {publication && <p className={styles.notice} role={publication.status === 'failed' ? 'alert' : 'status'}>{publication.status === 'queued' ? 'Publication queued. Waiting for the publish worker.' : publication.status === 'publishing' ? 'Publishing the approved immutable snapshot…' : publication.status === 'published' ? 'Published. The immutable snapshot is live.' : <>Publication could not be confirmed{publication.errorCode ? ` (${publication.errorCode})` : ''}. <a href="/operations">Open Operations for details and retry.</a></>}</p>}
     <div className={styles.content}>
       <section className={styles.canvas} aria-label="Rendered page comparison" data-review-mode={mode} data-device={device}>
         <div className={styles.frames} data-single={mode !== 'side'}>
@@ -157,13 +199,13 @@ export function OnPageReview({ changeSetID, pageID }: { changeSetID: string; pag
           {report?.blockers?.map((item) => <p role="alert" key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}
           {Boolean(report?.warnings?.length) && <details className={styles.warningDetails}><summary>{report!.warnings!.length} advisory warning{report!.warnings!.length === 1 ? '' : 's'}</summary>{report!.warnings!.map((item) => <p key={`${item.code}-${item.path}`}>{item.message}<small>{item.code} · {item.path}</small></p>)}</details>}
           {!review.quality?.checks?.length && <p>Readiness checks have not run for this comparison.</p>}
-          {submitted && <button type="button" disabled={acting} onClick={() => void action('run-quality')}>Run readiness checks</button>}
+          {qualityErrorMessage && <p role="alert">{qualityErrorMessage} <button type="button" onClick={() => { qualityAttempted.current = null; setQualityRetry((value) => value + 1) }}>Retry readiness checks</button></p>}
         </section>
         <section className={styles.comments}><h2>Comments</h2>{review.reviewComments.length ? review.reviewComments.map((item) => <article key={item.id}><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString()}</small></article>) : <p>No review comments.</p>}
           {submitted && <><label htmlFor="page-review-comment">Add a comment</label><textarea id="page-review-comment" rows={3} maxLength={2000} value={comment} onChange={(event) => setComment(event.target.value)} /><button type="button" disabled={acting || !comment.trim()} onClick={() => void action('comment')}>Add comment</button></>}
         </section>
         {submitted && <section className={styles.actions} aria-label="Review actions" data-page-review-actions><h2>Decision</h2>
-          <button className={styles.approve} type="button" disabled={acting || !publishable || !data.sessionAuthorized} onClick={() => void action('approve')}>Approve and queue publish</button>
+          <button className={styles.approve} type="button" disabled={acting || !publishable || !data.sessionAuthorized} onClick={() => void action('approve')}>Approve and publish</button>
           {!publishable && <small>Approval requires passing readiness checks for this exact comparison.</small>}
           <button type="button" disabled={acting} onClick={() => void action('request-changes')}>Request changes</button>
           <button className={styles.reject} type="button" disabled={acting} onClick={() => void action('reject')}>Reject</button>

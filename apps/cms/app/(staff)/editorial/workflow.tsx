@@ -1,20 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import styles from './workflow.module.css'
 import { PreviewFrame } from './preview-frame'
+import { useAutomaticReviewPreparation } from '../../components/review-auto-preparation'
 import { belongsToReviewView, changeKind, changeTitle, readableValue, relevantDiffs, words } from '../../../src/review-presentation'
 
 type Change = { collection: string; id: string; before: unknown; after: unknown }
 type Conflict = { collection: string; id: string; before: Record<string, unknown> | null; proposed: Record<string, unknown> | null; current: Record<string, unknown> | null; currentHash: string | null; canReapply: boolean }
 type ReadinessProof = { revision: number; changeHash: string; contentHash: string; includedChangeKeys: string[]; baselineSnapshotID?: string; baselineSequence: number; previewJobID: string; versionPins: { themeVersion: string; engineVersion: string; contractVersion: string; liveThemeVersion?: string; liveContractVersion?: string }; report?: { publishable?: boolean; blockers?: { code: string; path: string; message: string }[]; warnings?: { code: string; path: string; message: string }[] } }
-type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[]; proof?: ReadinessProof }; preview?: { status?: string; jobID?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[]; presentation: { actorLabel: string; sourceLabel: string; occurredAt: string | null; affectedPageCount: number; checkSummary: string; warningCount: number } }
+type ChangeSet = { id: string; name: string; state: string; revision: number; actor?: string; changes?: Change[]; quality?: { checks?: { name: string; status: string; errors?: { message: string }[] }[]; warnings?: string[]; proof?: ReadinessProof }; preview?: { status?: string; jobID?: string; includedChangeKeys?: string[]; errorCode?: string }; publication?: { status: 'queued' | 'publishing' | 'published' | 'failed'; errorCode?: string }; reviewComments?: { id: string; author: string; body: string; createdAt: string }[]; presentation: { actorLabel: string; sourceLabel: string; occurredAt: string | null; affectedPageCount: number; checkSummary: string; warningCount: number } }
 type ScheduledPublication = { id: string; scheduledFor: string; state: string; dispatchReason?: string; snapshot?: { contentHash?: string } }
 type Data = { sets: ChangeSet[]; actor: { id: string; roles: string[] }; schedules?: ScheduledPublication[]; totalDocs?: number; schedulePage?: number; scheduleTotalPages?: number }
 
 function fields(change: Change) { return relevantDiffs(change) }
 const localDate = (value: string | null | undefined) => !value || !Number.isFinite(new Date(value).getTime()) ? 'Time unavailable' : new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Toronto', timeZoneName: 'short' }).format(new Date(value))
 const pageCount = (count: number) => `${count} ${count === 1 ? 'page' : 'pages'}`
+const sameKeys = (left: string[] | undefined, right: string[]) => Boolean(left && left.length === right.length && [...left].sort().every((key, index) => key === [...right].sort()[index]))
 const scheduleState = (state: string) => ({ scheduled: 'Scheduled', cancelled: 'Cancelled', stale: 'Needs review', enqueued: 'Queued for publishing', failed: 'Publish failed', completed: 'Published' }[state] ?? state)
 const scheduleOutcome = (state: string, reason?: string) => {
   if (state === 'completed') return 'This scheduled publication was published successfully.'
@@ -38,6 +40,7 @@ export function EditorialWorkflow() {
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop')
   const [comment, setComment] = useState('')
   const [includedChangeKeys, setIncludedChangeKeys] = useState<Set<string>>(new Set())
+  const [selectionReady, setSelectionReady] = useState(false)
   const [scheduledFor, setScheduledFor] = useState('')
   const [schedulePage, setSchedulePage] = useState(1)
   const [previewPath, setPreviewPath] = useState('/')
@@ -45,6 +48,13 @@ export function EditorialWorkflow() {
   const [conflicts, setConflicts] = useState<Conflict[] | null>(null)
   const [conflictRevision, setConflictRevision] = useState<number | null>(null)
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'retain-current' | 'reapply-proposed'>>({})
+  // One automatic attempt belongs to the currently displayed immutable job.
+  // A selection can return to an earlier completed job after another preview
+  // has replaced the stored quality proof, so retaining every past job here
+  // would leave that restored comparison permanently unapprovable.
+  const qualityAttempted = useRef<string | null>(null)
+  const [qualityError, setQualityError] = useState<{ key: string; message: string } | null>(null)
+  const [qualityRetry, setQualityRetry] = useState(0)
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true)
     try {
@@ -71,9 +81,28 @@ export function EditorialWorkflow() {
   const visibleSets = data?.sets.filter((item) => belongsToReviewView(item.state, queueView)) ?? []
   const pendingCount = data?.sets.filter((item) => belongsToReviewView(item.state, 'pending')).length ?? 0
   const historyCount = data?.sets.filter((item) => belongsToReviewView(item.state, 'history')).length ?? 0
-  const set = visibleSets.find((item) => item.id === selected) ?? visibleSets[0]
+  // Keep the exact review detail after a decision even when the pending queue
+  // no longer lists it; its publication outcome belongs to that review.
+  const set = data?.sets.find((item) => item.id === selected) ?? visibleSets[0]
   const selectedID = set?.id ?? null
-  useEffect(() => { setIncludedChangeKeys(new Set(set?.changes?.map((change) => `${change.collection}:${change.id}`) ?? [])) }, [set?.id, set?.revision])
+  useEffect(() => { setSelectionReady(false); setIncludedChangeKeys(new Set(set?.preview?.includedChangeKeys ?? set?.changes?.map((change) => `${change.collection}:${change.id}`) ?? [])); setSelectionReady(true) }, [set?.id, set?.revision])
+  const reviewer = Boolean(data?.actor.roles.some((role) => role === 'owner' || role === 'approver'))
+  const automatic = useAutomaticReviewPreparation({ review: reviewer && set ? { id: set.id, state: set.state, revision: set.revision, changeKeys: set.changes?.map((change) => `${change.collection}:${change.id}`) ?? [], preview: set.preview, ready: set.preview?.status === 'ready', blocked: set.preview?.status === 'failed' || set.preview?.status === 'stale' } : undefined, selectedKeys: [...includedChangeKeys], selectionReady, refresh: () => load(true) })
+  const exactProof = Boolean(set?.preview?.status === 'ready' && set.quality?.proof && set.preview?.jobID === set.quality.proof.previewJobID && set.quality.proof.revision === set.revision && sameKeys(set.quality.proof.includedChangeKeys, [...includedChangeKeys]))
+  const qualityKey = set?.preview?.jobID ? `${set.id}:${set.revision}:${set.preview.jobID}` : ''
+  const qualityErrorMessage = qualityError?.key === qualityKey ? qualityError.message : ''
+  useEffect(() => {
+    if (!reviewer || !set || !qualityKey || set.state !== 'submitted' || set.preview?.status !== 'ready' || exactProof || set.quality?.proof?.report?.publishable === false || qualityAttempted.current === qualityKey) return
+    qualityAttempted.current = qualityKey; setQualityError(null)
+    void fetch('/api/editorial/run-quality', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: set.id }) }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json() as { error?: string }
+        if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: body.error ?? 'Readiness checks need attention before approval.' })
+        return
+      }
+      if (qualityAttempted.current === qualityKey) await load(true)
+    }).catch(() => { if (qualityAttempted.current === qualityKey) setQualityError({ key: qualityKey, message: 'Readiness checks could not run. Retry readiness checks.' }) })
+  }, [exactProof, load, qualityKey, qualityRetry, reviewer, set])
   useEffect(() => {
     setConflicts(null); setConflictRevision(null); setConflictChoices({})
     if (!set || !['open', 'submitted', 'changes-requested', 'stale'].includes(set.state) || data?.actor.id !== set.actor) return
@@ -82,14 +111,28 @@ export function EditorialWorkflow() {
     return () => { active = false }
   }, [set?.id, set?.state, set?.revision, set?.actor, data?.actor.id])
   useEffect(() => { if (set?.preview?.status === 'ready' && message.startsWith('Private comparison queued')) setMessage('Private comparison is ready for review.') }, [set?.preview?.status, message])
-  useEffect(() => { if (!set?.preview?.jobID || set.preview.status === 'ready') return; const timer = window.setInterval(() => void load(true), 4_000); return () => window.clearInterval(timer) }, [set?.id, set?.preview?.jobID, set?.preview?.status, load])
+  useEffect(() => { if (!set?.preview?.jobID || !['pending', 'processing'].includes(set.preview.status ?? '')) return; const timer = window.setInterval(() => void load(true), 4_000); return () => window.clearInterval(timer) }, [set?.id, set?.preview?.jobID, set?.preview?.status, load])
+  useEffect(() => { if (!set?.publication || !['queued', 'publishing'].includes(set.publication.status)) return; const timer = window.setInterval(() => void load(true), 2_000); return () => window.clearInterval(timer) }, [load, set?.id, set?.publication?.status])
+  useEffect(() => {
+    if (!reviewer || !set?.preview?.jobID || set.preview.status !== 'ready') return
+    let active = true
+    const checkCurrent = async () => {
+      const response = await fetch(`/api/editorial/review/${encodeURIComponent(set.id)}`, { cache: 'no-store' }).catch(() => undefined)
+      const body = response?.ok ? await response.json() as { staleReview?: unknown } : undefined
+      if (!active || !body?.staleReview) return
+      setMessage('This comparison is no longer current because the live baseline changed. Prepare a current comparison before approving.')
+      setData((current) => current ? { ...current, sets: current.sets.map((item) => item.id === set.id ? { ...item, preview: { ...item.preview, status: 'stale' } } : item) } : current)
+    }
+    void checkCurrent()
+    window.addEventListener('focus', checkCurrent)
+    return () => { active = false; window.removeEventListener('focus', checkCurrent) }
+  }, [reviewer, set?.id, set?.preview?.jobID, set?.preview?.status])
   useEffect(() => {
     if (set?.preview?.status !== 'ready' || !set.preview.jobID) { setPreviewPath('/'); return }
     let active = true
     void fetch(`/api/editorial/preview-route?jobID=${encodeURIComponent(set.preview.jobID)}`, { cache: 'no-store' }).then(async (response) => response.ok ? response.json() as Promise<{ path?: string }> : { path: '/' }).then((body) => { if (active && typeof body.path === 'string' && /^\/(?:[a-z0-9-]+\/)*[a-z0-9-]*$/.test(body.path)) setPreviewPath(body.path || '/') }).catch(() => { if (active) setPreviewPath('/') })
     return () => { active = false }
   }, [set?.preview?.jobID, set?.preview?.status])
-  const reviewer = Boolean(data?.actor.roles.some((role) => role === 'owner' || role === 'approver'))
   const owns = Boolean(set && data?.actor.id === set.actor)
   const primaryChange = set?.changes?.find((change) => change.collection === 'pages') ?? set?.changes?.[0]
   const reviewTitle = primaryChange ? changeTitle(primaryChange) : set?.name
@@ -156,13 +199,15 @@ export function EditorialWorkflow() {
       <header className={styles.reviewHeader}>
         <div><span className={styles.reviewKicker}>Review</span><h2>{reviewTitle}</h2><p>{set.name} · {set.changes?.length ?? 0} captured change{set.changes?.length === 1 ? '' : 's'} · revision {set.revision}</p></div>
         <strong data-editorial-state={set.state}>{set.state}</strong>
+        {set.publication && <p role={set.publication.status === 'failed' ? 'alert' : 'status'}>{set.publication.status === 'queued' ? 'Publication queued.' : set.publication.status === 'publishing' ? 'Publishing approved snapshot…' : set.publication.status === 'published' ? 'Published.' : <>Publication could not be confirmed{set.publication.errorCode ? ` (${set.publication.errorCode})` : ''}. <a href="/operations">Open Operations for details and retry.</a></>}</p>}
         {set.preview?.status === 'ready' && <div className={styles.controls} data-editorial-view-controls role="group" aria-label="Comparison view"><button onClick={() => setMode('side-by-side')} aria-pressed={mode === 'side-by-side'}>Side by side</button><button onClick={() => setMode('live')} aria-pressed={mode === 'live'}>Live</button><button onClick={() => setMode('proposed')} aria-pressed={mode === 'proposed'}>Proposed</button><span className={styles.deviceControls} data-editorial-device-controls><button onClick={() => setDevice('desktop')} aria-pressed={device === 'desktop'}>Desktop</button><button onClick={() => setDevice('mobile')} aria-pressed={device === 'mobile'}>Mobile</button></span></div>}
       </header>
       {set.state === 'stale' && <p className={styles.reviewAlert} role="alert">This change set is stale. Resolve any changed draft, then refresh it before review.</p>}
       <div className={styles.reviewBody}>
         <section className={styles.canvas} data-editorial-comparison aria-label="Private comparison">
-          {!set.preview?.jobID && <div className={styles.emptyCanvas}><h3>Comparison not prepared</h3><p>Select the captured changes, then prepare a protected renderer comparison.</p></div>}
-          {set.preview?.jobID && set.preview.status !== 'ready' && <div className={styles.emptyCanvas}><h3>Preparing comparison</h3><p>The protected renderer is queued. Frames appear only after it finishes.</p></div>}
+          {!set.preview?.jobID && <div className={styles.emptyCanvas}><h3>Preparing comparison</h3><p>The protected renderer starts automatically for this submitted review.</p></div>}
+          {set.preview?.jobID && (set.preview.status === 'failed' || set.preview.status === 'stale') && <div className={styles.emptyCanvas}><h3>Comparison needs attention</h3><p role="alert">{set.preview.status === 'stale' ? 'The live publication baseline changed. Prepare a current comparison before approval.' : `The protected renderer failed${set.preview.errorCode ? ` (${set.preview.errorCode})` : ''}. Correct the issue, then retry the comparison.`}</p></div>}
+          {set.preview?.jobID && set.preview.status !== 'ready' && set.preview.status !== 'failed' && set.preview.status !== 'stale' && <div className={styles.emptyCanvas}><h3>Preparing comparison</h3><p>The protected renderer is queued. Frames appear only after it finishes.</p></div>}
           {set.preview?.jobID && set.preview.status === 'ready' && <div className={styles.frames} data-editorial-frames data-device={device}>{mode !== 'proposed' && <div className={styles.frame} data-editorial-frame="live"><span>Live</span><PreviewFrame title="Live comparison" src={`/preview/changes/${set.preview.jobID}/live${previewPath}`} width={device === 'mobile' ? 390 : 760} /></div>}{mode !== 'live' && <div className={styles.frame} data-editorial-frame="proposed"><span>Proposed</span><PreviewFrame title="Proposed comparison" src={`/preview/changes/${set.preview.jobID}/proposed${previewPath}`} width={device === 'mobile' ? 390 : 760} /></div>}</div>}
         </section>
         <aside className={styles.rail} aria-label="Review details">
@@ -170,8 +215,8 @@ export function EditorialWorkflow() {
           {reviewer && set.state === 'submitted' && Boolean(set.changes?.length) && <fieldset className={styles.selection} data-editorial-selection><legend>Included changes</legend>{set.changes?.map((change) => { const key = `${change.collection}:${change.id}`; const count = fields(change).length; return <label key={key}><input aria-label={`Include ${changeKind(change.collection)} ${changeTitle(change)}`} type="checkbox" checked={includedChangeKeys.has(key)} onChange={() => setIncludedChangeKeys((current) => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next })} /><span>{changeTitle(change)} <small>{count} field{count === 1 ? '' : 's'}</small></span></label> })}</fieldset>}
           {owns && set.state === 'stale' && <section className={styles.changes} data-editorial-conflicts aria-label="Draft conflicts"><h3>Draft conflicts</h3>{conflicts === null ? <p>Loading the original, proposed, and current draft values…</p> : conflicts.length === 0 ? <p>No draft conflict was found. Refresh this aged change set.</p> : <>{conflicts.map((conflict) => { const key = `${conflict.collection}:${conflict.id}`; const fields = [...new Set([...Object.keys(conflict.before ?? {}), ...Object.keys(conflict.proposed ?? {}), ...Object.keys(conflict.current ?? {})])].filter((field) => readableValue(conflict.proposed?.[field]) !== readableValue(conflict.current?.[field]) || readableValue(conflict.before?.[field]) !== readableValue(conflict.proposed?.[field])); return <article key={key}><h4>{changeTitle({ collection: conflict.collection, id: conflict.id, before: conflict.before, after: conflict.proposed })}</h4>{fields.map((field) => <div className={styles.fieldChange} key={field}><strong>{words(field)}</strong><div><span>Original</span><p>{readableValue(conflict.before?.[field])}</p></div><div><span>Proposed</span><p>{readableValue(conflict.proposed?.[field])}</p></div><div><span>Current draft</span><p>{readableValue(conflict.current?.[field])}</p></div></div>)}<fieldset><legend>Resolution</legend><label><input type="radio" name={`resolution-${key}`} checked={conflictChoices[key] === 'retain-current'} onChange={() => setConflictChoices((current) => ({ ...current, [key]: 'retain-current' }))} />Retain current draft</label>{conflict.canReapply && <label><input type="radio" name={`resolution-${key}`} checked={conflictChoices[key] === 'reapply-proposed'} onChange={() => setConflictChoices((current) => ({ ...current, [key]: 'reapply-proposed' }))} />Reapply proposed fields</label>}</fieldset></article> })}<button disabled={acting || conflicts.some((conflict) => !conflictChoices[`${conflict.collection}:${conflict.id}`])} onClick={() => void resolveConflicts()}>Resolve draft conflicts</button></>}</section>}
           {Boolean(set.changes?.length) && <section className={styles.changes} data-editorial-change-rail tabIndex={0} aria-label="Captured changes"><h3 data-editorial-diffs>Changes</h3>{set.changes?.map((change) => <article key={`${change.collection}-${change.id}`}><h4>{changeTitle(change)}</h4><p className={styles.changeKind}>{changeKind(change.collection)}</p>{fields(change).map(([field, before, after]) => <div className={styles.fieldChange} key={field}><strong>{words(field)}</strong><div><span>From</span><p>{readableValue(before)}</p></div><div><span>To</span><p>{readableValue(after)}</p></div></div>)}</article>)}</section>}
-          {(set.quality?.checks?.length || set.quality?.proof?.report?.blockers?.length || set.quality?.proof?.report?.warnings?.length || set.quality?.warnings?.length) ? <section className={styles.checks} tabIndex={0} aria-label="Quality checks"><h3>Checks</h3>{set.quality?.checks?.map((check) => <div className={styles.check} key={check.name}><strong data-check-status={check.status}>{check.status === 'passed' ? '✓' : '!'}</strong><span>{words(check.name)}</span>{check.errors?.map((error, index) => <p key={index} role="alert">{error.message}</p>)}</div>)}{!set.quality?.proof?.report?.warnings?.length && set.quality?.warnings?.map((warning) => <p key={warning}>{warning}</p>)}{set.quality?.proof?.report?.blockers?.map((blocker) => <p key={`${blocker.code}-${blocker.path}`} role="alert">{blocker.message}</p>)}{set.quality?.proof?.report?.warnings?.map((warning) => <p key={`${warning.code}-${warning.path}`}>{warning.message}</p>)}</section> : null}
-          {hasActions && <section className={styles.actions} data-editorial-actions aria-label="Workflow actions"><h3>Actions</h3>{owns && (set.state === 'open' || set.state === 'changes-requested') && <button data-editorial-primary className={styles.primary} disabled={acting} onClick={() => action('submit')}>Submit for review</button>}{reviewer && set.state === 'submitted' && <><button disabled={acting} onClick={() => action('prepare-preview')}>Prepare comparison</button>{set.preview?.status === 'ready' && <button disabled={acting} onClick={() => action('run-quality')}>Run readiness checks</button>}{set.quality?.proof?.report?.publishable === true && <><label className={styles.scheduleLabel}>Schedule for local time (optional)<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><small>Leave blank to queue immediately. Scheduled times convert to UTC.</small><button data-editorial-primary className={styles.primary} disabled={acting} onClick={() => action('approve')}>{scheduledFor ? 'Approve and schedule publish' : 'Approve and queue publish'}</button></>}{set.preview?.status === 'ready' && set.quality?.proof?.report?.publishable !== true && <p role="status">Approval requires a passing readiness proof for this exact comparison.</p>}<button disabled={acting} onClick={() => action('request-changes')}>Request changes</button><button className={styles.quiet} disabled={acting} onClick={() => action('reject')}>Reject</button></>}{owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'stale') && <button disabled={acting} onClick={() => action('refresh')}>Refresh</button>}{owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'rejected') && <button className={styles.quiet} disabled={acting} onClick={() => action('discard')}>Discard</button>}</section>}
+          {(set.quality?.checks?.length || set.quality?.proof?.report?.blockers?.length || set.quality?.proof?.report?.warnings?.length || set.quality?.warnings?.length || qualityErrorMessage) ? <section className={styles.checks} tabIndex={0} aria-label="Quality checks"><h3>Checks</h3>{set.quality?.checks?.map((check) => <div className={styles.check} key={check.name}><strong data-check-status={check.status}>{check.status === 'passed' ? '✓' : '!'}</strong><span>{words(check.name)}</span>{check.errors?.map((error, index) => <p key={index} role="alert">{error.message}</p>)}</div>)}{!set.quality?.proof?.report?.warnings?.length && set.quality?.warnings?.map((warning) => <p key={warning}>{warning}</p>)}{set.quality?.proof?.report?.blockers?.map((blocker) => <p key={`${blocker.code}-${blocker.path}`} role="alert">{blocker.message}</p>)}{set.quality?.proof?.report?.warnings?.map((warning) => <p key={`${warning.code}-${warning.path}`}>{warning.message}</p>)}{qualityErrorMessage && <p role="alert">{qualityErrorMessage} <button type="button" onClick={() => { qualityAttempted.current = null; setQualityRetry((value) => value + 1) }}>Retry readiness checks</button></p>}</section> : null}
+          {hasActions && <section className={styles.actions} data-editorial-actions aria-label="Workflow actions"><h3>Actions</h3>{owns && (set.state === 'open' || set.state === 'changes-requested') && <button data-editorial-primary className={styles.primary} disabled={acting} onClick={() => action('submit')}>Submit for review</button>}{reviewer && set.state === 'submitted' && <>{automatic.error && <p role="alert">{automatic.error} <button type="button" disabled={acting} onClick={automatic.retry}>Retry comparison</button></p>}{(set.preview?.status === 'failed' || set.preview?.status === 'stale') && <p role="alert"><button type="button" disabled={acting} onClick={automatic.retry}>{set.preview.status === 'stale' ? 'Prepare current comparison' : 'Retry comparison'}</button></p>}{automatic.preparing && <p role="status">Preparing protected comparison…</p>}{set.quality?.proof?.report?.publishable === true && <button data-editorial-primary className={styles.primary} disabled={acting || automatic.preparing || !automatic.selectionMatchesPreview || !exactProof} onClick={() => action('approve')}>{scheduledFor ? 'Approve and schedule publish' : 'Approve and publish'}</button>}{set.preview?.status === 'ready' && (set.quality?.proof?.report?.publishable !== true || !automatic.selectionMatchesPreview || !exactProof) && <p role="status">Approval requires a passing readiness proof for this exact comparison.</p>}<button className={styles.quiet} disabled={acting} onClick={() => action('reject')}>Reject</button><details><summary>Other actions</summary><label className={styles.scheduleLabel}>Schedule for local time (optional)<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><button disabled={acting} onClick={() => action('request-changes')}>Request changes</button></details></>}{owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'stale') && <button disabled={acting} onClick={() => action('refresh')}>Refresh</button>}{owns && (set.state === 'open' || set.state === 'changes-requested' || set.state === 'rejected') && <button className={styles.quiet} disabled={acting} onClick={() => action('discard')}>Discard</button>}</section>}
           {reviewer && <section className={styles.comments} data-editorial-comments aria-label="Review comments"><h3>Comments</h3>{set.reviewComments?.length ? <div className={styles.commentList}>{set.reviewComments.map((item) => <article key={item.id}><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString()}</small></article>)}</div> : <p>No review comments.</p>}<label htmlFor="review-comment">Add a comment</label><textarea id="review-comment" aria-label="Add review comment" value={comment} onChange={(event) => setComment(event.target.value)} /><button disabled={acting || !comment.trim()} onClick={() => void addComment()}>Add comment</button></section>}
         </aside>
       </div>

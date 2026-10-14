@@ -1,6 +1,8 @@
 .editor { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
 .selectors { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
 .selectors label, .workspace label { display: grid; gap: .35rem; }
+.selectors label { inline-size: min(100%, 28rem); min-inline-size: 0; }
+.selectors select { inline-size: 100%; max-inline-size: 100%; }
 .unsaved { border-left: .25rem solid currentColor; padding: .6rem .8rem; font-weight: 600; }
 .workspace { display: grid; grid-template-columns: minmax(18rem, 1fr) minmax(20rem, 1fr); gap: 1.5rem; align-items: start; }
 .workspace section { min-width: 0; }

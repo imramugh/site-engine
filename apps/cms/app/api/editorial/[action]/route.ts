@@ -221,12 +221,29 @@ async function GETHandler(request: Request, context: { params: Promise<{ action:
     const actorIDs = [...new Set(result.docs.map(set => relationID(set.actor)).filter((id): id is string => Boolean(id)))]
     const users = actorIDs.length ? await payload.find({ collection: 'users', where: { id: { in: actorIDs } }, limit: actorIDs.length, depth: 0, overrideAccess: true }) : { docs: [] }
     const names = new Map(users.docs.flatMap(user => typeof user.name === 'string' && user.name.trim() ? [[String(user.id), user.name.trim()] as const] : []))
+    const ids = result.docs.map((set) => String(set.id))
+    const previewIDs = result.docs.flatMap((set) => {
+      const preview = set.preview as { jobID?: unknown } | undefined
+      return typeof preview?.jobID === 'string' ? [preview.jobID] : []
+    })
+    const previewJobs = previewIDs.length ? await payload.find({ collection: 'preview-render-jobs', where: { id: { in: previewIDs } }, limit: previewIDs.length, depth: 0, overrideAccess: true }) : { docs: [] }
+    const previewState = new Map((previewJobs.docs as unknown as Array<{ id: string; status?: unknown; errorCode?: unknown }>).map((job) => [job.id, { status: typeof job.status === 'string' ? job.status : undefined, errorCode: typeof job.errorCode === 'string' ? job.errorCode : undefined }]))
+    // This read is bounded to the listed change sets, never a global recent
+    // publication window, so an older selected review keeps its own outcome.
+    const jobs = ids.length ? await payload.find({ collection: 'publish-outbox', where: { changeSet: { in: ids } }, sort: '-sequence', limit: 1000, depth: 0, overrideAccess: true }) : { docs: [] }
+    const publication = new Map<string, { status: 'queued' | 'publishing' | 'published' | 'failed'; errorCode?: string }>()
+    for (const job of jobs.docs as unknown as Array<{ changeSet?: unknown; reviewRevision?: unknown; status?: unknown; errorCode?: unknown }>) {
+      const id = relationID(job.changeSet); const state = job.status
+      if (!id || publication.has(`${id}:${Number(job.reviewRevision)}`)) continue
+      publication.set(`${id}:${Number(job.reviewRevision)}`, { status: state === 'completed' ? 'published' : state === 'processing' ? 'publishing' : state === 'failed' ? 'failed' : 'queued', ...(typeof job.errorCode === 'string' ? { errorCode: job.errorCode } : {}) })
+    }
     const sets = result.docs.map(raw => {
       const set = raw as unknown as Record<string, unknown>
       return {
         id: set.id, name: set.name, state: set.state, revision: set.revision, actor: relationID(set.actor), changes: set.changes,
-        quality: set.quality, preview: set.preview, reviewComments: set.reviewComments, submittedAt: set.submittedAt, reviewedAt: set.reviewedAt,
+        quality: set.quality, preview: (() => { const preview = set.preview as Record<string, unknown> | undefined; const current = typeof preview?.jobID === 'string' ? previewState.get(preview.jobID) : undefined; return preview ? { ...preview, ...(current?.status && current.status !== 'completed' ? { status: current.status } : {}), ...(current?.errorCode ? { errorCode: current.errorCode } : {}) } : undefined })(), reviewComments: set.reviewComments, submittedAt: set.submittedAt, reviewedAt: set.reviewedAt,
         staleAt: set.staleAt, summary: set.summary, createdAt: set.createdAt, updatedAt: set.updatedAt,
+        publication: publication.get(`${String(set.id)}:${Number(set.revision)}`),
         presentation: reviewPresentation(set, names, actor.id),
       }
     })
