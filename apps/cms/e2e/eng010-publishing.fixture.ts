@@ -10,6 +10,6 @@ export async function readyAndApprove(page: Awaited<ReturnType<typeof reviewer>>
   const seeded = await page.request.post('/__e2e/warning-only-review'); if (!seeded.ok()) throw new Error(await seeded.text())
   const { id } = await seeded.json() as { id: string }
   await page.goto(`/review/${id}`); await page.getByRole('button', { name: 'Approve and publish' }).click()
-  await expect(page.getByRole('status')).toContainText('Publication queued')
+  await expect(page.getByRole('status').filter({ hasText: 'Publication queued. Waiting for the publish worker.' })).toBeVisible()
   return id
 }
